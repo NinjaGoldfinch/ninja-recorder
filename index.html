@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ninja-recorder</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <main class="container">
+      <header class="app-header">
+        <h1>ninja-recorder</h1>
+        <p class="subtitle">League of Legends VOD library</p>
+      </header>
+
+      <section id="library">
+        <div id="library-empty" class="empty-state">
+          <p>No recordings yet.</p>
+          <p class="hint">
+            Recordings will appear here once the recorder is wired up to the
+            League Client (Phase 2+).
+          </p>
+        </div>
+        <ul id="library-list" class="library-list" hidden></ul>
+      </section>
+
+      <section class="dev-panel">
+        <h2>Dev panel — stub recorder smoke test</h2>
+        <div class="row">
+          <button id="start-btn" type="button">Start recording</button>
+          <button id="stop-btn" type="button" disabled>Stop recording</button>
+          <button id="refresh-btn" type="button">Refresh library</button>
+        </div>
+        <p id="status-msg" class="status"></p>
+      </section>
+    </main>
+  </body>
+</html>

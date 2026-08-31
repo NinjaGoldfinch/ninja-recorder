@@ -10,7 +10,14 @@ Cargo.lock.orig
 # Node / frontend
 node_modules/
 dist/
+dist-ssr/
 .vite/
+*.local
+
+# Logs
+logs
+*.log
+npm-debug.log*
 
 # Recordings & local data — never commit video or user data
 *.mp4
