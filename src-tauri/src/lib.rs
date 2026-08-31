@@ -1,3 +1,4 @@
+mod lcu;
 mod recorder;
 
 use recorder::{stub::StubRecorder, RecordConfig, Recorder};
@@ -67,9 +68,71 @@ fn list_recordings(app: tauri::AppHandle) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
+#[derive(serde::Serialize)]
+struct LcuStatus {
+    connected: bool,
+    phase: Option<String>,
+    summoner: Option<String>,
+    error: Option<String>,
+}
+
+/// One-shot LCU status check for the dev panel: is the client running, and
+/// if so, what's its current gameflow phase / summoner. Phase 3's state
+/// machine is what keeps this live continuously via `lcu::gameflow::watch`;
+/// this command is just a smoke test that the client + auth + parsing work.
+#[tauri::command]
+async fn lcu_status() -> LcuStatus {
+    let lockfile = match lcu::lockfile::discover() {
+        Ok(Some(lf)) => lf,
+        Ok(None) => {
+            return LcuStatus {
+                connected: false,
+                phase: None,
+                summoner: None,
+                error: None,
+            }
+        }
+        Err(e) => {
+            return LcuStatus {
+                connected: false,
+                phase: None,
+                summoner: None,
+                error: Some(e.to_string()),
+            }
+        }
+    };
+
+    let client = match lcu::LcuHttpClient::new(&lockfile) {
+        Ok(c) => c,
+        Err(e) => {
+            return LcuStatus {
+                connected: false,
+                phase: None,
+                summoner: None,
+                error: Some(e.to_string()),
+            }
+        }
+    };
+
+    let phase = client
+        .get_json::<lcu::GameflowPhase>("/lol-gameflow/v1/gameflow-phase")
+        .await;
+    let summoner = client
+        .get_json::<lcu::match_data::CurrentSummoner>("/lol-summoner/v1/current-summoner")
+        .await;
+
+    LcuStatus {
+        connected: true,
+        phase: phase.ok().map(|p| format!("{:?}", p)),
+        summoner: summoner.ok().map(|s| s.display_name),
+        error: None,
+    }
+}
+
 /// Timestamp for default filenames. Not a general-purpose clock — swapped
-/// for real match metadata (game id, champion) once the LCU client (Phase 2)
-/// lands.
+/// for real match metadata (game id, champion) once the state machine
+/// (Phase 3) drives recording from gameflow events instead of a manual
+/// button.
 fn chrono_stamp() -> u128 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -89,7 +152,8 @@ pub fn run() {
             start_recording,
             stop_recording,
             is_recording,
-            list_recordings
+            list_recordings,
+            lcu_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

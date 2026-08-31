@@ -83,7 +83,7 @@ Two official local HTTP APIs. Both use self-signed TLS on localhost — pin/acce
 
 ### 3.1 LCU API (the client)
 
-- **Discovery:** parse the `lockfile` in the League install dir (Windows) or `~/Library/Application Support/Riot Games/League of Legends/lockfile` (macOS). Format: `name:pid:port:password:protocol`. Watch for the file appearing/disappearing — the client restarts, ports change.
+- **Discovery:** parse the `lockfile` next to the running client. macOS: `/Applications/League of Legends.app/Contents/LoL/lockfile`. Windows: install dir is user-configurable, so resolve it via `%PROGRAMDATA%\Riot Games\RiotClientInstalls.json`'s `associated_client` map first, falling back to the conventional `C:\Riot Games\League of Legends\lockfile`. Format: `name:pid:port:password:protocol`. Watch for the file appearing/disappearing — the client restarts, ports change. Implemented in `src-tauri/src/lcu/lockfile.rs`, with an `NINJA_RECORDER_LOCKFILE_PATH` env override for tests/non-standard installs.
 - **Auth:** HTTP Basic, user `riot`, password from the lockfile.
 - **Key endpoints:**
   - `GET /lol-gameflow/v1/gameflow-phase` — `None / Lobby / ChampSelect / InProgress / EndOfGame / ...`. Our record trigger. Also subscribable via the LCU WebSocket (`/lol-gameflow_v1_gameflow-phase` event) — prefer the WebSocket over polling.

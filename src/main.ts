@@ -6,6 +6,15 @@ let refreshBtn: HTMLButtonElement | null;
 let statusMsg: HTMLElement | null;
 let libraryEmpty: HTMLElement | null;
 let libraryList: HTMLUListElement | null;
+let lcuCheckBtn: HTMLButtonElement | null;
+let lcuStatusMsg: HTMLElement | null;
+
+interface LcuStatus {
+  connected: boolean;
+  phase: string | null;
+  summoner: string | null;
+  error: string | null;
+}
 
 function setStatus(text: string) {
   if (statusMsg) statusMsg.textContent = text;
@@ -58,6 +67,24 @@ async function stopRecording() {
   }
 }
 
+async function checkLcuStatus() {
+  if (!lcuStatusMsg) return;
+  lcuStatusMsg.textContent = "Checking…";
+  try {
+    const status = await invoke<LcuStatus>("lcu_status");
+    if (status.error) {
+      lcuStatusMsg.textContent = `Error: ${status.error}`;
+    } else if (!status.connected) {
+      lcuStatusMsg.textContent =
+        "League Client not running (no lockfile found).";
+    } else {
+      lcuStatusMsg.textContent = `Connected. Summoner: ${status.summoner ?? "?"}. Phase: ${status.phase ?? "?"}.`;
+    }
+  } catch (err) {
+    lcuStatusMsg.textContent = `Failed to check: ${err}`;
+  }
+}
+
 function escapeHtml(value: string): string {
   const div = document.createElement("div");
   div.textContent = value;
@@ -71,10 +98,13 @@ window.addEventListener("DOMContentLoaded", () => {
   statusMsg = document.querySelector("#status-msg");
   libraryEmpty = document.querySelector("#library-empty");
   libraryList = document.querySelector("#library-list");
+  lcuCheckBtn = document.querySelector("#lcu-check-btn");
+  lcuStatusMsg = document.querySelector("#lcu-status-msg");
 
   startBtn?.addEventListener("click", startRecording);
   stopBtn?.addEventListener("click", stopRecording);
   refreshBtn?.addEventListener("click", refreshLibrary);
+  lcuCheckBtn?.addEventListener("click", checkLcuStatus);
 
   refreshLibrary();
 });
