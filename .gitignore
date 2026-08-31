@@ -1,0 +1,36 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock.orig
+
+# Tauri
+/src-tauri/target/
+/src-tauri/gen/
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+
+# Recordings & local data — never commit video or user data
+*.mp4
+*.mkv
+*.rofl
+*.sqlite
+*.sqlite3
+*.db
+
+# Fixture videos are the exception: small sample clips live in fixtures/
+!fixtures/*.mp4
+
+# Secrets
+.env
+.env.*
+*client_secret*.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
