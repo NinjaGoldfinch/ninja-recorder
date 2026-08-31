@@ -63,10 +63,15 @@ Tracked as GitHub issues — each phase is an issue.
 Primary development happens on macOS against the stub recorder (League runs natively on macOS and both local APIs behave identically — Practice Tool generates real events). The capture backend is developed on Windows via `cargo run`; installers are produced by CI, not built locally.
 
 ```bash
-# prerequisites: Rust stable, Tauri v2 CLI
-cargo install tauri-cli
-cargo tauri dev
+# prerequisites: Rust stable, Node.js
+npm install
+npm run tauri dev
 ```
+
+The Rust project lives at `src-tauri/Cargo.toml`, not the repo root — bare
+`cargo` commands (`cargo check`, `cargo test`) must be run from `src-tauri/`,
+e.g. `cd src-tauri && cargo test`. `npm run tauri dev` handles this for you
+from the repo root.
 
 ## Non-negotiable constraints
 
