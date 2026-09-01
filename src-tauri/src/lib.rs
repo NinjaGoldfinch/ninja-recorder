@@ -235,7 +235,7 @@ pub fn run() {
                     // of propagating it out of `setup`.
                     let init = app
                         .path()
-                        .resolve("libobs/extprocess_recorder.exe", BaseDirectory::Executable)
+                        .resolve("libobs/extprocess_recorder.exe", BaseDirectory::Resource)
                         .map_err(|e| e.to_string())
                         .and_then(|path| {
                             recorder::libobs::LibObsRecorder::new(path).map_err(|e| e.to_string())
