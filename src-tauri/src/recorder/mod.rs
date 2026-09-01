@@ -48,3 +48,26 @@ pub trait Recorder: Send {
     fn stop(&mut self) -> Result<PathBuf, RecorderError>;
     fn is_recording(&self) -> bool;
 }
+
+/// Stands in for the real backend when it fails to initialize (Windows
+/// only — see `libobs::LibObsRecorder::new`). Startup must not fail just
+/// because capture is unavailable: LCU polling, the VOD library, and the
+/// review UI don't depend on it, so the app should still open and only
+/// surface the original error if/when the user tries to record.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub struct FailedRecorder(pub String);
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+impl Recorder for FailedRecorder {
+    fn start(&mut self, _config: RecordConfig) -> Result<(), RecorderError> {
+        Err(RecorderError::Backend(self.0.clone()))
+    }
+
+    fn stop(&mut self) -> Result<PathBuf, RecorderError> {
+        Err(RecorderError::NotRecording)
+    }
+
+    fn is_recording(&self) -> bool {
+        false
+    }
+}

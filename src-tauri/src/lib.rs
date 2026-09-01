@@ -174,10 +174,27 @@ pub fn run() {
                 #[cfg(target_os = "windows")]
                 {
                     use tauri::path::BaseDirectory;
-                    let extprocess_recorder_path = app
+                    // Init failure here (missing/unstaged libobs files, no
+                    // usable GPU, etc.) must not take the whole app down —
+                    // only recording depends on this. Fall back to a
+                    // recorder that surfaces the error on `start` instead
+                    // of propagating it out of `setup`.
+                    let init = app
                         .path()
-                        .resolve("libobs/extprocess_recorder.exe", BaseDirectory::Executable)?;
-                    Box::new(recorder::libobs::LibObsRecorder::new(extprocess_recorder_path)?)
+                        .resolve("libobs/extprocess_recorder.exe", BaseDirectory::Executable)
+                        .map_err(|e| e.to_string())
+                        .and_then(|path| {
+                            recorder::libobs::LibObsRecorder::new(path).map_err(|e| e.to_string())
+                        });
+                    match init {
+                        Ok(recorder) => Box::new(recorder),
+                        Err(e) => {
+                            eprintln!(
+                                "[recorder] libobs backend failed to initialize, recording disabled: {e}"
+                            );
+                            Box::new(recorder::FailedRecorder(e))
+                        }
+                    }
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
