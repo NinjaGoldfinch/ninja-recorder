@@ -1,12 +1,16 @@
+mod fixtures;
 mod lcu;
+mod live_client;
 mod recorder;
+mod state_machine;
 
 use recorder::{stub::StubRecorder, RecordConfig, Recorder};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
 struct AppState {
-    recorder: Mutex<Box<dyn Recorder>>,
+    recorder: Arc<Mutex<Box<dyn Recorder>>>,
+    supervisor: Arc<state_machine::Supervisor>,
 }
 
 fn recordings_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
@@ -129,10 +133,10 @@ async fn lcu_status() -> LcuStatus {
     }
 }
 
-/// Timestamp for default filenames. Not a general-purpose clock — swapped
-/// for real match metadata (game id, champion) once the state machine
-/// (Phase 3) drives recording from gameflow events instead of a manual
-/// button.
+/// Timestamp for default filenames. Only used by the manual dev-panel
+/// start button now — the state machine (Phase 3) has its own copy since
+/// it drives recording independently, from gameflow events rather than a
+/// button click.
 fn chrono_stamp() -> u128 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -141,19 +145,38 @@ fn chrono_stamp() -> u128 {
         .unwrap_or(0)
 }
 
+/// Current game state and the most recently finished recording (if any),
+/// for the dev panel. The real, always-on driver is `Supervisor::start`,
+/// spawned once at app startup below — this command just reads its status.
+#[tauri::command]
+fn game_state_status(state: tauri::State<AppState>) -> state_machine::SupervisorStatus {
+    state.supervisor.status()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .manage(AppState {
-            recorder: Mutex::new(Box::new(StubRecorder::new())),
+        .setup(|app| {
+            let recorder: Arc<Mutex<Box<dyn Recorder>>> =
+                Arc::new(Mutex::new(Box::new(StubRecorder::new())));
+            let dir = recordings_dir(app.handle())?;
+            let supervisor = state_machine::Supervisor::new(Arc::clone(&recorder), dir);
+            supervisor.start();
+
+            app.manage(AppState {
+                recorder,
+                supervisor,
+            });
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             start_recording,
             stop_recording,
             is_recording,
             list_recordings,
-            lcu_status
+            lcu_status,
+            game_state_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

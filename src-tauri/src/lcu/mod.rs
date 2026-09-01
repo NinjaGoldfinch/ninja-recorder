@@ -6,7 +6,6 @@
 //! VOD metadata.
 
 pub mod client;
-pub mod fixtures;
 pub mod gameflow;
 pub mod lockfile;
 pub mod match_data;

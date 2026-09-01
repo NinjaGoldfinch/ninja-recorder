@@ -8,12 +8,33 @@ let libraryEmpty: HTMLElement | null;
 let libraryList: HTMLUListElement | null;
 let lcuCheckBtn: HTMLButtonElement | null;
 let lcuStatusMsg: HTMLElement | null;
+let gameStateBtn: HTMLButtonElement | null;
+let gameStateMsg: HTMLElement | null;
 
 interface LcuStatus {
   connected: boolean;
   phase: string | null;
   summoner: string | null;
   error: string | null;
+}
+
+interface SessionMarker {
+  kind: string;
+  game_time_s: number;
+  video_time_s: number;
+  payload: unknown;
+}
+
+interface FinalizedRecording {
+  path: string;
+  markers: SessionMarker[];
+}
+
+type GameState = "Idle" | "ClientRunning" | "WaitingForGame" | "Recording" | "Finalizing";
+
+interface SupervisorStatus {
+  state: GameState;
+  last_finalized: FinalizedRecording | null;
 }
 
 function setStatus(text: string) {
@@ -85,6 +106,23 @@ async function checkLcuStatus() {
   }
 }
 
+async function checkGameState() {
+  if (!gameStateMsg) return;
+  gameStateMsg.textContent = "Checking…";
+  try {
+    const status = await invoke<SupervisorStatus>("game_state_status");
+    let text = `State: ${status.state}.`;
+    if (status.last_finalized) {
+      text += ` Last recording: ${status.last_finalized.path} (${status.last_finalized.markers.length} markers).`;
+    } else {
+      text += " No recording finalized yet.";
+    }
+    gameStateMsg.textContent = text;
+  } catch (err) {
+    gameStateMsg.textContent = `Failed to check: ${err}`;
+  }
+}
+
 function escapeHtml(value: string): string {
   const div = document.createElement("div");
   div.textContent = value;
@@ -100,11 +138,14 @@ window.addEventListener("DOMContentLoaded", () => {
   libraryList = document.querySelector("#library-list");
   lcuCheckBtn = document.querySelector("#lcu-check-btn");
   lcuStatusMsg = document.querySelector("#lcu-status-msg");
+  gameStateBtn = document.querySelector("#game-state-btn");
+  gameStateMsg = document.querySelector("#game-state-msg");
 
   startBtn?.addEventListener("click", startRecording);
   stopBtn?.addEventListener("click", stopRecording);
   refreshBtn?.addEventListener("click", refreshLibrary);
   lcuCheckBtn?.addEventListener("click", checkLcuStatus);
+  gameStateBtn?.addEventListener("click", checkGameState);
 
   refreshLibrary();
 });

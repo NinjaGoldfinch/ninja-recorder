@@ -1,12 +1,11 @@
 //! Gameflow phase tracking: LCU WebSocket subscription with a polling
 //! fallback if the socket can't be established. DEVELOPMENT.md §3.1, §3.4.
 //!
-//! `watch` isn't called anywhere yet — it's consumed by the Phase 3 state
-//! machine, which drives it continuously and owns the lockfile-change
-//! lifecycle (when to start/stop/restart it). Allowing dead_code here
-//! rather than wiring a throwaway supervisor early, since none of this is
-//! verifiable without a real LCU connection (DEVELOPMENT.md §9).
-#![allow(dead_code)]
+//! `watch` is driven continuously by the state machine's supervisor
+//! (`state_machine::supervisor`), which owns the lockfile-change lifecycle
+//! (when to start/stop/restart it). Not verified against a real LCU
+//! connection yet — no League client is installed on the machine this was
+//! written on (DEVELOPMENT.md §9).
 
 use super::client::{basic_auth_header, LcuHttpClient};
 use super::lockfile::LockfileInfo;

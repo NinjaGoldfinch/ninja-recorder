@@ -1,8 +1,8 @@
-//! Optional fixture recording. When `NINJA_RECORDER_RECORD_FIXTURES` is
-//! set, every LCU response this client sees is written to
-//! `fixtures/lcu/<endpoint>.json`, so real response shapes can be replayed
-//! in tests without a live client running. Off by default — never runs in
-//! a normal session. DEVELOPMENT.md §3.3.
+//! Optional fixture recording, shared by every API client (LCU, Live
+//! Client Data). When `NINJA_RECORDER_RECORD_FIXTURES` is set, every
+//! response is written to `fixtures/<group>/<endpoint>.json`, so real
+//! response shapes can be replayed in tests without a live client running.
+//! Off by default — never runs in a normal session. DEVELOPMENT.md §3.3.
 
 use std::path::PathBuf;
 
@@ -10,15 +10,16 @@ pub fn enabled() -> bool {
     std::env::var_os("NINJA_RECORDER_RECORD_FIXTURES").is_some()
 }
 
-/// Records `raw_json` (pretty-printed if valid JSON) under a filename
-/// derived from `name` (typically the request path). No-op unless fixture
-/// recording is enabled; failures are swallowed — this must never break a
-/// real request.
-pub fn record(name: &str, raw_json: &str) {
+/// Records `raw_json` (pretty-printed if valid JSON) under
+/// `fixtures/<group>/<name>.json`. `group` separates namespaces that could
+/// otherwise collide (LCU paths vs. Live Client Data paths). No-op unless
+/// fixture recording is enabled; failures are swallowed — this must never
+/// break a real request.
+pub fn record(group: &str, name: &str, raw_json: &str) {
     if !enabled() {
         return;
     }
-    let dir = fixtures_dir();
+    let dir = fixtures_dir(group);
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
@@ -43,11 +44,11 @@ fn sanitize(name: &str) -> String {
     }
 }
 
-fn fixtures_dir() -> PathBuf {
+fn fixtures_dir(group: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("fixtures")
-        .join("lcu")
+        .join(group)
 }
 
 #[cfg(test)]

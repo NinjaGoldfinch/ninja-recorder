@@ -1,0 +1,134 @@
+{
+  "activePlayer": {
+    "summonerName": "",
+    "riotIdGameName": "Ninja",
+    "riotIdTagLine": "NA1",
+    "level": 11,
+    "currentGold": 450.0
+  },
+  "allPlayers": [
+    {
+      "summonerName": "",
+      "riotIdGameName": "Ninja",
+      "riotIdTagLine": "NA1",
+      "championName": "Ahri",
+      "team": "ORDER",
+      "isBot": false,
+      "isDead": false
+    },
+    {
+      "summonerName": "",
+      "riotIdGameName": "Blitz",
+      "riotIdTagLine": "NA1",
+      "championName": "Garen",
+      "team": "ORDER",
+      "isBot": false,
+      "isDead": false
+    },
+    {
+      "summonerName": "",
+      "riotIdGameName": "EnemyA",
+      "riotIdTagLine": "NA1",
+      "championName": "Zed",
+      "team": "CHAOS",
+      "isBot": false,
+      "isDead": false
+    },
+    {
+      "summonerName": "",
+      "riotIdGameName": "EnemyB",
+      "riotIdTagLine": "NA1",
+      "championName": "Lux",
+      "team": "CHAOS",
+      "isBot": false,
+      "isDead": false
+    }
+  ],
+  "events": {
+    "Events": [
+      { "EventID": 0, "EventName": "GameStart", "EventTime": 0.0 },
+      { "EventID": 1, "EventName": "MinionsSpawning", "EventTime": 65.0 },
+      {
+        "EventID": 2,
+        "EventName": "FirstBlood",
+        "EventTime": 210.5,
+        "Recipient": "Ninja#NA1"
+      },
+      {
+        "EventID": 3,
+        "EventName": "ChampionKill",
+        "EventTime": 210.5,
+        "KillerName": "Ninja#NA1",
+        "VictimName": "EnemyB#NA1",
+        "Assisters": ["Blitz#NA1"]
+      },
+      {
+        "EventID": 4,
+        "EventName": "ChampionKill",
+        "EventTime": 340.0,
+        "KillerName": "EnemyA#NA1",
+        "VictimName": "Ninja#NA1",
+        "Assisters": []
+      },
+      {
+        "EventID": 5,
+        "EventName": "ChampionKill",
+        "EventTime": 355.2,
+        "KillerName": "Blitz#NA1",
+        "VictimName": "EnemyA#NA1",
+        "Assisters": ["Ninja#NA1"]
+      },
+      {
+        "EventID": 6,
+        "EventName": "ChampionKill",
+        "EventTime": 400.0,
+        "KillerName": "EnemyB#NA1",
+        "VictimName": "EnemyA#NA1",
+        "Assisters": []
+      },
+      {
+        "EventID": 7,
+        "EventName": "TurretKilled",
+        "EventTime": 480.0,
+        "KillerName": "Ninja#NA1",
+        "TurretKilled": "Turret_T2_L_03_A"
+      },
+      {
+        "EventID": 8,
+        "EventName": "DragonKill",
+        "EventTime": 540.0,
+        "KillerName": "Blitz#NA1",
+        "DragonType": "Infernal",
+        "Assisters": ["Ninja#NA1"]
+      },
+      {
+        "EventID": 9,
+        "EventName": "HeraldKill",
+        "EventTime": 900.0,
+        "KillerName": "EnemyA#NA1",
+        "Assisters": ["EnemyB#NA1"]
+      },
+      {
+        "EventID": 10,
+        "EventName": "BaronKill",
+        "EventTime": 1500.0,
+        "KillerName": "Ninja#NA1",
+        "Assisters": ["Blitz#NA1"]
+      },
+      {
+        "EventID": 11,
+        "EventName": "Ace",
+        "EventTime": 1510.0,
+        "Acer": "Ninja#NA1",
+        "AcingTeam": "ORDER"
+      }
+    ]
+  },
+  "gameData": {
+    "gameMode": "CLASSIC",
+    "gameTime": 1512.3,
+    "mapName": "Map11",
+    "mapNumber": 11,
+    "mapTerrain": "Default"
+  }
+}

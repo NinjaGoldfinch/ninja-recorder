@@ -5,8 +5,8 @@
 //! `danger_accept_invalid_certs`, never anything global. See
 //! DEVELOPMENT.md §3.1.
 
-use super::fixtures;
 use super::lockfile::LockfileInfo;
+use crate::fixtures;
 use serde::de::DeserializeOwned;
 
 #[derive(Debug, thiserror::Error)]
@@ -55,7 +55,7 @@ impl LcuHttpClient {
             .text()
             .await?;
 
-        fixtures::record(path, &text);
+        fixtures::record("lcu", path, &text);
 
         Ok(serde_json::from_str(&text)?)
     }

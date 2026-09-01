@@ -5,10 +5,9 @@
 //! is the source of truth for "is the client running"; its contents are
 //! everything needed to talk to the LCU API.
 //!
-//! `watch`/`LockfileState`/`ws_url` aren't called anywhere yet — the
-//! Phase 3 state machine is what drives lockfile watching continuously.
-//! `discover` (used by `lcu_status`) is exercised today.
-#![allow(dead_code)]
+//! `watch` is driven continuously by the state machine's supervisor
+//! (`state_machine::supervisor::Supervisor::start`); `discover` is also
+//! used directly by the one-shot `lcu_status` dev command.
 
 #[cfg(target_os = "windows")]
 use serde::Deserialize;

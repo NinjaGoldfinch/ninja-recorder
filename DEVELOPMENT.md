@@ -107,13 +107,19 @@ Every API response shape we depend on gets captured to `fixtures/` (JSON) the fi
 
 ```
 Idle ──(lockfile appears)──▶ ClientRunning
-ClientRunning ──(phase: InProgress)──▶ WaitingForGame
+ClientRunning ──(phase: InProgress | Reconnect)──▶ WaitingForGame
 WaitingForGame ──(port 2999 responds)──▶ Recording   [Recorder::start]
-Recording ──(phase: EndOfGame | 2999 gone)──▶ Finalizing [Recorder::stop, fetch match data, write DB]
+Recording ──(phase: EndOfGame | 2999 gone)──▶ Finalizing [Recorder::stop]
 Finalizing ──▶ ClientRunning
 ```
 
-Edge cases that must not lose footage or wedge the state machine: game crash mid-match, client crash, reconnect to in-progress game (start recording late), practice tool, spectator mode (decide: don't record), machine sleep.
+Implemented as a pure transition function (`state_machine::machine::StateMachine::handle`, 11 unit tests covering the edge cases below) driven by a thin async supervisor (`state_machine::supervisor::Supervisor`) that spawns/aborts the lockfile/gameflow/Live-Client-Data watchers per `Action` and calls `Recorder::start`/`stop`. The pure part is fully tested; the supervisor's async glue is not — no League client is installed on the machine this was built on, so nothing here has touched a real LCU or Live Client Data connection yet (verification pending Phase 8, or earlier if League gets installed sooner).
+
+Finalizing currently only stops the recorder and time-aligns whatever markers were collected — it does not yet call `lcu::fetch_match_summary` or write a DB row (no DB exists until Phase 4, and resolving *which* `gameId` just finished needs LCU endpoint research this machine can't verify live). The finalized recording + markers are held in memory and exposed via the `game_state_status` command for now.
+
+Edge cases handled by the pure transition function (see its tests): game crash mid-match (Live Client Data stops responding), client crash (lockfile disappears) at every stage, reconnect to an in-progress game (state machine has no memory of *how* it entered `WaitingForGame`, so a reconnect behaves identically to a fresh game start — recording begins once Live Client Data becomes reachable, later than a from-the-start recording would), practice tool (goes through the same `Reconnect`/`InProgress` phases as a real game), dodges/cancelled champ select (bounces `WaitingForGame` back to `ClientRunning` without ever recording), and a client restart mid-finalize (picked up correctly regardless of ordering against `FinalizeComplete`).
+
+Two edge cases from the original list are *not* verified: **spectator mode** — the state machine simply doesn't special-case any phase name beyond `InProgress`/`Reconnect`/end-of-game ones, so if gameflow reports a distinct phase while spectating, it won't trigger recording; but if it turns out spectating also reports `InProgress`, this would incorrectly record it, and that can only be confirmed live. **Machine sleep** — not simulated in this environment at all; the poller's backoff and lockfile-watch would likely eventually recover state after wake, but this needs real testing on the Windows machine (Phase 8).
 
 ---
 
