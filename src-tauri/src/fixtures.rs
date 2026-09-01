@@ -1,10 +1,26 @@
 //! Optional fixture recording, shared by every API client (LCU, Live
 //! Client Data). When `NINJA_RECORDER_RECORD_FIXTURES` is set, every
-//! response is written to `fixtures/<group>/<endpoint>.json`, so real
+//! response is written to `<base>/<group>/<endpoint>.json`, so real
 //! response shapes can be replayed in tests without a live client running.
 //! Off by default — never runs in a normal session. DEVELOPMENT.md §3.3.
 
 use std::path::PathBuf;
+use std::sync::OnceLock;
+
+static BASE_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Sets the directory fixtures are written under. Call once at startup
+/// with a runtime-resolved, writable location — the app data dir, in
+/// practice — before any watcher/poller starts. Without this, the
+/// fallback in `fixtures_dir` (a path relative to where the source tree
+/// was compiled) only exists on the machine that built the binary, which
+/// makes fixture recording silently do nothing on an installed copy: the
+/// path doesn't exist, `create_dir_all` fails, and `record`'s errors are
+/// swallowed by design. Safe to call more than once; only the first call
+/// takes effect.
+pub fn set_base_dir(dir: PathBuf) {
+    let _ = BASE_DIR.set(dir);
+}
 
 pub fn enabled() -> bool {
     std::env::var_os("NINJA_RECORDER_RECORD_FIXTURES").is_some()
@@ -45,10 +61,16 @@ fn sanitize(name: &str) -> String {
 }
 
 fn fixtures_dir(group: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("fixtures")
-        .join(group)
+    let base = BASE_DIR.get_or_init(|| {
+        // Dev-from-source fallback: writes into the repo's own fixtures/
+        // dir, matching where `cargo tauri dev` reads sample fixtures
+        // from. Only reachable if `set_base_dir` is never called — the
+        // real app always calls it during startup before this can run.
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("fixtures")
+    });
+    base.join(group)
 }
 
 #[cfg(test)]

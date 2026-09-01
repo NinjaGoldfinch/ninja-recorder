@@ -1,6 +1,6 @@
 [package]
 name = "ninja-recorder"
-version = "0.4.1"
+version = "0.4.2"
 description = "Lightweight League of Legends VOD recorder"
 authors = ["ninja"]
 edition = "2021"
