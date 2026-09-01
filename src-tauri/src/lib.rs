@@ -172,6 +172,10 @@ pub fn run() {
                 Arc::new(Mutex::new(Box::new(StubRecorder::new())));
             let dir = recordings_dir(app.handle())?;
 
+            // Must happen before the supervisor starts polling — see
+            // fixtures::set_base_dir's doc comment.
+            fixtures::set_base_dir(app.path().app_data_dir()?.join("fixtures"));
+
             let db_path = app.path().app_data_dir()?.join("library.sqlite3");
             std::fs::create_dir_all(db_path.parent().expect("db path always has a parent"))?;
             let db = Arc::new(db::Db::open(&db_path)?);
