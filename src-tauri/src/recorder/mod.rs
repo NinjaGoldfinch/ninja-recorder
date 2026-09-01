@@ -3,6 +3,8 @@
 //! lives behind this trait. Nothing above this module may depend on libobs
 //! types directly; see DEVELOPMENT.md §2.2.
 
+#[cfg(target_os = "windows")]
+pub mod libobs;
 pub mod stub;
 
 use std::path::PathBuf;
@@ -24,6 +26,16 @@ pub enum RecorderError {
     NotRecording,
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    /// Capture-backend failure that isn't one of the above — libobs/IPC
+    /// errors, no usable hardware encoder found, etc. Carries a message
+    /// rather than the backend's own error type so this enum (and every
+    /// caller matching on it) stays libobs-free per this module's header.
+    /// Only constructed by the Windows backend — `StubRecorder` never
+    /// fails this way — so it's legitimately dead code on every other
+    /// platform.
+    #[error("recorder backend error: {0}")]
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    Backend(String),
 }
 
 pub trait Recorder: Send {

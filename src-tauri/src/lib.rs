@@ -168,8 +168,21 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let recorder: Arc<Mutex<Box<dyn Recorder>>> =
-                Arc::new(Mutex::new(Box::new(StubRecorder::new())));
+            let backend: Box<dyn Recorder> = {
+                #[cfg(target_os = "windows")]
+                {
+                    use tauri::path::BaseDirectory;
+                    let extprocess_recorder_path = app
+                        .path()
+                        .resolve("libobs/extprocess_recorder.exe", BaseDirectory::Executable)?;
+                    Box::new(recorder::libobs::LibObsRecorder::new(extprocess_recorder_path)?)
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    Box::new(StubRecorder::new())
+                }
+            };
+            let recorder: Arc<Mutex<Box<dyn Recorder>>> = Arc::new(Mutex::new(backend));
             let dir = recordings_dir(app.handle())?;
 
             // Must happen before the supervisor starts polling — see
