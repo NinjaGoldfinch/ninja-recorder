@@ -50,6 +50,8 @@ let backBtn: HTMLButtonElement | null;
 let reviewTitle: HTMLElement | null;
 let video: HTMLVideoElement | null;
 let videoError: HTMLElement | null;
+let videoErrorText: HTMLElement | null;
+let videoErrorDetail: HTMLElement | null;
 let frameBackBtn: HTMLButtonElement | null;
 let frameFwdBtn: HTMLButtonElement | null;
 let rateSelect: HTMLSelectElement | null;
@@ -57,6 +59,7 @@ let timelineEl: HTMLElement | null;
 let markerListEl: HTMLElement | null;
 
 let currentMarkers: MarkerRow[] = [];
+let currentRecordingPath: string | null = null;
 
 export function initReview() {
   reviewView = document.querySelector("#review-view");
@@ -65,6 +68,8 @@ export function initReview() {
   reviewTitle = document.querySelector("#review-title");
   video = document.querySelector("#review-video");
   videoError = document.querySelector("#review-video-error");
+  videoErrorText = document.querySelector("#review-video-error-text");
+  videoErrorDetail = document.querySelector("#review-video-error-detail");
   frameBackBtn = document.querySelector("#frame-back-btn");
   frameFwdBtn = document.querySelector("#frame-fwd-btn");
   rateSelect = document.querySelector("#playback-rate-select");
@@ -78,9 +83,7 @@ export function initReview() {
     if (video && rateSelect) video.playbackRate = Number(rateSelect.value);
   });
   video?.addEventListener("loadedmetadata", renderTimeline);
-  video?.addEventListener("error", () => {
-    if (videoError) videoError.hidden = false;
-  });
+  video?.addEventListener("error", showVideoError);
 
   timelineEl?.addEventListener("click", (e) => {
     const target = (e.target as HTMLElement).closest<HTMLElement>("[data-time]");
@@ -92,6 +95,50 @@ export function initReview() {
   });
 
   document.addEventListener("keydown", handleHotkey);
+}
+
+const MEDIA_ERROR_LABELS: Record<number, string> = {
+  1: "Aborted",
+  2: "Network error",
+  3: "Decode error — the container loaded but the codec inside it isn't supported",
+  4: "Source not supported — wrong format, or the file couldn't be reached at all",
+};
+
+/**
+ * Surfaces the actual `MediaError` rather than a canned guess — a
+ * "no playable video" message that's always about the stub placeholder
+ * (DEVELOPMENT.md's dev-only fixture path) was actively misleading once
+ * real files started getting reviewed: it told people to drop a clip in
+ * as `fixtures/sample.mp4`, a path that only exists when running from
+ * source, not in an installed build.
+ */
+function showVideoError() {
+  if (!videoError || !video) return;
+  videoError.hidden = false;
+
+  const err = video.error;
+  const isMkv = currentRecordingPath?.toLowerCase().endsWith(".mkv") ?? false;
+
+  if (videoErrorText) {
+    if (isMkv) {
+      // High-confidence special case: WebView2's <video> element has no
+      // Matroska demuxer at all, so an .mkv fails here regardless of how
+      // valid its contents are — most likely to bite anyone testing with
+      // an OBS recording, since .mkv is OBS's crash-safe default output.
+      videoErrorText.textContent =
+        "This is an .mkv file — browsers (including WebView2) can't play Matroska containers natively, no matter what's encoded inside. Remux it to .mp4 (e.g. \"ffmpeg -i in.mkv -c copy out.mp4\", no re-encode needed) and try again.";
+    } else {
+      videoErrorText.textContent = err
+        ? `This recording's video couldn't be played (${MEDIA_ERROR_LABELS[err.code] ?? `error code ${err.code}`}).`
+        : "This recording's video couldn't be played.";
+    }
+  }
+  if (videoErrorDetail) {
+    const parts: string[] = [];
+    if (err?.message) parts.push(err.message);
+    parts.push(`src: ${video.currentSrc || video.src}`);
+    videoErrorDetail.textContent = parts.join(" — ");
+  }
 }
 
 function stepFrame(direction: 1 | -1) {
@@ -240,8 +287,11 @@ function escapeHtml(value: string): string {
 export async function openReview(row: RecordingRow) {
   if (!reviewView || !libraryView || !video) return;
 
+  currentRecordingPath = row.path;
   if (reviewTitle) reviewTitle.textContent = row.champion ?? `Recording #${row.id}`;
   if (videoError) videoError.hidden = true;
+  if (videoErrorText) videoErrorText.textContent = "";
+  if (videoErrorDetail) videoErrorDetail.textContent = "";
   video.src = convertFileSrc(row.path);
   video.playbackRate = rateSelect ? Number(rateSelect.value) : 1;
 
@@ -270,6 +320,7 @@ function closeReview() {
   video.pause();
   video.removeAttribute("src");
   video.load();
+  currentRecordingPath = null;
   reviewView.hidden = true;
   libraryView.hidden = false;
 }
