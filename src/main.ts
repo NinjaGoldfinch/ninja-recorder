@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { initReview, openReview, type RecordingRow } from "./review";
 
 let startBtn: HTMLButtonElement | null;
 let stopBtn: HTMLButtonElement | null;
@@ -11,6 +12,10 @@ let lcuCheckBtn: HTMLButtonElement | null;
 let lcuStatusMsg: HTMLElement | null;
 let gameStateBtn: HTMLButtonElement | null;
 let gameStateMsg: HTMLElement | null;
+let filterChampion: HTMLInputElement | null;
+let filterOutcome: HTMLSelectElement | null;
+let filterPinned: HTMLInputElement | null;
+let sortSelect: HTMLSelectElement | null;
 
 interface LcuStatus {
   connected: boolean;
@@ -32,24 +37,6 @@ interface FinalizedRecording {
   markers: SessionMarker[];
 }
 
-interface RecordingRow {
-  id: number;
-  path: string;
-  started_at: number;
-  duration_s: number | null;
-  game_id: number | null;
-  queue: number | null;
-  champion: string | null;
-  role: string | null;
-  win: boolean | null;
-  kda_k: number | null;
-  kda_d: number | null;
-  kda_a: number | null;
-  patch: string | null;
-  pinned: boolean;
-  size_bytes: number;
-}
-
 interface ReconcileReport {
   orphans_removed: number;
   imported: number;
@@ -62,6 +49,10 @@ interface SupervisorStatus {
   last_finalized: FinalizedRecording | null;
 }
 
+// The full set fetched from the DB; filters/sort below operate on this
+// in-memory rather than re-querying, since the dataset is small and local.
+let allRecordings: RecordingRow[] = [];
+
 function setStatus(text: string) {
   if (statusMsg) statusMsg.textContent = text;
 }
@@ -70,28 +61,94 @@ function basename(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
 }
 
+function formatKda(row: RecordingRow): string {
+  if (row.kda_k === null || row.kda_d === null || row.kda_a === null) {
+    return "—/—/—";
+  }
+  return `${row.kda_k}/${row.kda_d}/${row.kda_a}`;
+}
+
+function formatOutcomeBadge(win: boolean | null): string {
+  if (win === null) return "";
+  return win
+    ? `<span class="badge badge-win">Win</span>`
+    : `<span class="badge badge-loss">Loss</span>`;
+}
+
 function formatRecordingRow(row: RecordingRow): string {
   const when = new Date(row.started_at).toLocaleString();
-  const pinned = row.pinned ? " 📌" : "";
-  const champion = row.champion ? ` — ${escapeHtml(row.champion)}` : "";
-  return `<li>${escapeHtml(basename(row.path))}${champion} <span class="hint">(${when})</span>${pinned}</li>`;
+  const pinned = row.pinned ? `<span title="Pinned">📌</span>` : "";
+  const champion = row.champion
+    ? escapeHtml(row.champion)
+    : escapeHtml(basename(row.path));
+  const queue = row.queue !== null ? `<span>Queue ${row.queue}</span>` : "";
+
+  return `
+    <li data-id="${row.id}" tabindex="0">
+      <div class="library-row-main">
+        <span class="library-row-title">${champion}</span>
+        ${formatOutcomeBadge(row.win)}
+      </div>
+      <div class="library-row-meta">
+        <span>${formatKda(row)}</span>
+        ${queue}
+        <span class="hint">${when}</span>
+        ${pinned}
+      </div>
+    </li>`;
+}
+
+function currentSort(): string {
+  return sortSelect?.value ?? "newest";
+}
+
+function applyFiltersAndRender() {
+  if (!libraryList || !libraryEmpty) return;
+
+  const championFilter = (filterChampion?.value ?? "").trim().toLowerCase();
+  const outcomeFilter = filterOutcome?.value ?? "all";
+  const pinnedOnly = filterPinned?.checked ?? false;
+
+  let rows = allRecordings.filter((row) => {
+    if (championFilter && !(row.champion ?? "").toLowerCase().includes(championFilter)) {
+      return false;
+    }
+    if (outcomeFilter === "wins" && row.win !== true) return false;
+    if (outcomeFilter === "losses" && row.win !== false) return false;
+    if (pinnedOnly && !row.pinned) return false;
+    return true;
+  });
+
+  rows = rows.slice().sort((a, b) => {
+    switch (currentSort()) {
+      case "oldest":
+        return a.started_at - b.started_at;
+      case "longest":
+        return (b.duration_s ?? 0) - (a.duration_s ?? 0);
+      case "champion":
+        return (a.champion ?? "").localeCompare(b.champion ?? "");
+      case "newest":
+      default:
+        return b.started_at - a.started_at;
+    }
+  });
+
+  if (rows.length === 0) {
+    libraryEmpty.hidden = false;
+    libraryList.hidden = true;
+    libraryList.innerHTML = "";
+    return;
+  }
+
+  libraryEmpty.hidden = true;
+  libraryList.hidden = false;
+  libraryList.innerHTML = rows.map(formatRecordingRow).join("");
 }
 
 async function refreshLibrary() {
   try {
-    const rows = await invoke<RecordingRow[]>("list_recordings");
-    if (!libraryList || !libraryEmpty) return;
-
-    if (rows.length === 0) {
-      libraryEmpty.hidden = false;
-      libraryList.hidden = true;
-      libraryList.innerHTML = "";
-      return;
-    }
-
-    libraryEmpty.hidden = true;
-    libraryList.hidden = false;
-    libraryList.innerHTML = rows.map(formatRecordingRow).join("");
+    allRecordings = await invoke<RecordingRow[]>("list_recordings");
+    applyFiltersAndRender();
   } catch (err) {
     setStatus(`Failed to list recordings: ${err}`);
   }
@@ -191,8 +248,11 @@ window.addEventListener("DOMContentLoaded", () => {
   lcuStatusMsg = document.querySelector("#lcu-status-msg");
   gameStateBtn = document.querySelector("#game-state-btn");
   gameStateMsg = document.querySelector("#game-state-msg");
-
   rescanBtn = document.querySelector("#rescan-btn");
+  filterChampion = document.querySelector("#filter-champion");
+  filterOutcome = document.querySelector("#filter-outcome");
+  filterPinned = document.querySelector("#filter-pinned");
+  sortSelect = document.querySelector("#sort-select");
 
   startBtn?.addEventListener("click", startRecording);
   stopBtn?.addEventListener("click", stopRecording);
@@ -201,5 +261,18 @@ window.addEventListener("DOMContentLoaded", () => {
   lcuCheckBtn?.addEventListener("click", checkLcuStatus);
   gameStateBtn?.addEventListener("click", checkGameState);
 
+  filterChampion?.addEventListener("input", applyFiltersAndRender);
+  filterOutcome?.addEventListener("change", applyFiltersAndRender);
+  filterPinned?.addEventListener("change", applyFiltersAndRender);
+  sortSelect?.addEventListener("change", applyFiltersAndRender);
+
+  libraryList?.addEventListener("click", (e) => {
+    const li = (e.target as HTMLElement).closest<HTMLLIElement>("li[data-id]");
+    if (!li) return;
+    const row = allRecordings.find((r) => r.id === Number(li.dataset.id));
+    if (row) openReview(row);
+  });
+
+  initReview();
   refreshLibrary();
 });

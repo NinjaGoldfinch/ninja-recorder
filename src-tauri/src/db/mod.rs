@@ -103,6 +103,16 @@ pub struct RecordingRow {
     pub size_bytes: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MarkerRow {
+    pub id: i64,
+    pub recording_id: i64,
+    pub game_time_s: f64,
+    pub video_time_s: f64,
+    pub kind: String,
+    pub payload_json: String,
+}
+
 pub struct Db {
     conn: Mutex<Connection>,
 }
@@ -222,6 +232,27 @@ impl Db {
         .map_err(DbError::from)
     }
 
+    /// Markers for one recording, ordered by position in the video —
+    /// what the review timeline (Phase 5) renders.
+    pub fn get_markers(&self, recording_id: i64) -> Result<Vec<MarkerRow>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, recording_id, game_time_s, video_time_s, kind, payload_json
+             FROM markers WHERE recording_id = ?1 ORDER BY video_time_s ASC",
+        )?;
+        let rows = stmt.query_map([recording_id], |row| {
+            Ok(MarkerRow {
+                id: row.get(0)?,
+                recording_id: row.get(1)?,
+                game_time_s: row.get(2)?,
+                video_time_s: row.get(3)?,
+                kind: row.get(4)?,
+                payload_json: row.get(5)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+    }
+
     pub fn delete_recording(&self, id: i64) -> Result<(), DbError> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM recordings WHERE id = ?1", [id])?;
@@ -325,6 +356,42 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn get_markers_returns_them_ordered_by_video_time() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db
+            .insert_recording(&NewRecording {
+                path: "/game.mp4".into(),
+                started_at: 1,
+                ..Default::default()
+            })
+            .unwrap();
+
+        // Inserted out of order — get_markers must sort them.
+        db.insert_markers(id, &[marker("death", 20.0), marker("kill", 10.0)])
+            .unwrap();
+
+        let markers = db.get_markers(id).unwrap();
+        assert_eq!(markers.len(), 2);
+        assert_eq!(markers[0].kind, "kill");
+        assert_eq!(markers[0].game_time_s, 10.0);
+        assert_eq!(markers[1].kind, "death");
+    }
+
+    #[test]
+    fn get_markers_for_recording_with_none_is_empty() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db
+            .insert_recording(&NewRecording {
+                path: "/quiet-game.mp4".into(),
+                started_at: 1,
+                ..Default::default()
+            })
+            .unwrap();
+
+        assert!(db.get_markers(id).unwrap().is_empty());
     }
 
     #[test]

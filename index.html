@@ -10,51 +10,127 @@
 
   <body>
     <main class="container">
-      <header class="app-header">
-        <h1>ninja-recorder</h1>
-        <p class="subtitle">League of Legends VOD library</p>
-      </header>
+      <div id="library-view">
+        <header class="app-header">
+          <h1>ninja-recorder</h1>
+          <p class="subtitle">League of Legends VOD library</p>
+        </header>
 
-      <section id="library">
-        <div id="library-empty" class="empty-state">
-          <p>No recordings yet.</p>
-          <p class="hint">
-            Recordings appear here once a game finishes — or any video file
-            dropped into the recordings folder, via "Rescan folder" below.
+        <section id="library">
+          <div class="filter-bar">
+            <input
+              type="search"
+              id="filter-champion"
+              placeholder="Filter by champion…"
+            />
+            <select id="filter-outcome">
+              <option value="all">All results</option>
+              <option value="wins">Wins only</option>
+              <option value="losses">Losses only</option>
+            </select>
+            <label class="checkbox-label">
+              <input type="checkbox" id="filter-pinned" />
+              Pinned only
+            </label>
+            <select id="sort-select">
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+              <option value="longest">Longest first</option>
+              <option value="champion">Champion (A–Z)</option>
+            </select>
+          </div>
+
+          <div id="library-empty" class="empty-state">
+            <p>No recordings yet.</p>
+            <p class="hint">
+              Recordings appear here once a game finishes — or any video
+              file dropped into the recordings folder, via "Rescan folder"
+              below.
+            </p>
+          </div>
+          <ul id="library-list" class="library-list" hidden></ul>
+        </section>
+
+        <section class="dev-panel">
+          <h2>Dev panel — stub recorder smoke test</h2>
+          <div class="row">
+            <button id="start-btn" type="button">Start recording</button>
+            <button id="stop-btn" type="button" disabled>
+              Stop recording
+            </button>
+            <button id="refresh-btn" type="button">Refresh library</button>
+            <button id="rescan-btn" type="button">Rescan folder</button>
+          </div>
+          <p id="status-msg" class="status"></p>
+        </section>
+
+        <section class="dev-panel">
+          <h2>Dev panel — LCU status</h2>
+          <div class="row">
+            <button id="lcu-check-btn" type="button">
+              Check League Client
+            </button>
+          </div>
+          <p id="lcu-status-msg" class="status">Not checked yet.</p>
+        </section>
+
+        <section class="dev-panel">
+          <h2>Dev panel — game state machine</h2>
+          <div class="row">
+            <button id="game-state-btn" type="button">
+              Check game state
+            </button>
+          </div>
+          <p id="game-state-msg" class="status">
+            Not checked yet. Always running in the background once the app
+            starts — this just reads its current status.
+          </p>
+        </section>
+      </div>
+
+      <section id="review-view" class="review-view" hidden>
+        <div class="review-header">
+          <button id="back-to-library-btn" type="button" class="back-btn">
+            &larr; Back to library
+          </button>
+          <h2 id="review-title"></h2>
+        </div>
+
+        <div class="player-wrap">
+          <video id="review-video" controls></video>
+          <p id="review-video-error" class="video-error" hidden>
+            This recording has no playable video (the stub recorder wrote a
+            placeholder file, not real footage). Drop a real short clip in
+            as <code>fixtures/sample.mp4</code> to test playback.
           </p>
         </div>
-        <ul id="library-list" class="library-list" hidden></ul>
-      </section>
 
-      <section class="dev-panel">
-        <h2>Dev panel — stub recorder smoke test</h2>
-        <div class="row">
-          <button id="start-btn" type="button">Start recording</button>
-          <button id="stop-btn" type="button" disabled>Stop recording</button>
-          <button id="refresh-btn" type="button">Refresh library</button>
-          <button id="rescan-btn" type="button">Rescan folder</button>
+        <div class="player-controls">
+          <button id="frame-back-btn" type="button" title="Step back one frame">
+            ⏮ Frame
+          </button>
+          <button id="frame-fwd-btn" type="button" title="Step forward one frame">
+            Frame ⏭
+          </button>
+          <label>
+            Speed
+            <select id="playback-rate-select">
+              <option value="0.25">0.25×</option>
+              <option value="0.5">0.5×</option>
+              <option value="1" selected>1×</option>
+              <option value="1.5">1.5×</option>
+              <option value="2">2×</option>
+            </select>
+          </label>
         </div>
-        <p id="status-msg" class="status"></p>
-      </section>
 
-      <section class="dev-panel">
-        <h2>Dev panel — LCU status</h2>
-        <div class="row">
-          <button id="lcu-check-btn" type="button">Check League Client</button>
-        </div>
-        <p id="lcu-status-msg" class="status">
-          Not checked yet.
-        </p>
-      </section>
+        <div id="marker-timeline" class="marker-timeline"></div>
 
-      <section class="dev-panel">
-        <h2>Dev panel — game state machine</h2>
-        <div class="row">
-          <button id="game-state-btn" type="button">Check game state</button>
-        </div>
-        <p id="game-state-msg" class="status">
-          Not checked yet. Always running in the background once the app
-          starts — this just reads its current status.
+        <ul id="marker-list" class="marker-list"></ul>
+
+        <p class="hint">
+          Hotkeys (while reviewing): <kbd>[</kbd> / <kbd>]</kbd> prev/next
+          marker, <kbd>d</kbd> / <kbd>D</kbd> prev/next death.
         </p>
       </section>
     </main>

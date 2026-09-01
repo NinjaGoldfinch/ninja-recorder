@@ -41,3 +41,7 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# Claude Code session-local state (launch.json itself is a real project
+# file and stays tracked)
+.claude/*.lock

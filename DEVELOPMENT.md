@@ -147,6 +147,10 @@ Implemented in `src-tauri/src/db/` (`Db` + `reconcile`), migrations via `rusqlit
 - Custom timeline component: marker glyphs per event kind, click-to-jump, "next death" / "prev death" hotkeys.
 - Later: clip export (`ffmpeg -ss .. -to .. -c copy` — stream copy, no re-encode; ship a minimal ffmpeg binary or use libobs's muxer).
 
+Implemented in `src/review.ts` + `index.html`'s `#review-view`. The video loads via Tauri's asset protocol (`convertFileSrc`, scoped in `tauri.conf.json` to `$APPDATA/recordings/*` — needed the `protocol-asset` Cargo feature, not just config). Frame-step is a ±1/30s time nudge, not true frame-accurate seeking — no per-recording frame rate is probed anywhere yet, so this is an approximation good enough for review, not for precision editing. Closely-spaced markers (common near a teamfight) alternate a vertical lane on the timeline so their glyphs don't visually collide. The library list, filters, and sort are all client-side over the already-fetched row set — fine at solo-user library sizes, would need real pagination/querying if that stops being true.
+
+Verified: layout/CSS visually in a browser (with injected mock data, since a plain browser tab has no Tauri IPC bridge to exercise real `invoke` calls) and a full `cargo tauri dev` launch (asset-protocol config + new `get_recording_markers` command, no capability/schema errors, stable). **Not verified**: actual video playback (no real MP4 fixture available in this environment — drop one in as `fixtures/sample.mp4` to test) and the hotkey→seek interaction against real marker data (needs a loaded recording, which needs either a live app session or a real video file to click through manually).
+
 ---
 
 ## 6. Disk management (launch feature, not a later one)
