@@ -167,13 +167,37 @@ impl Db {
         Ok(())
     }
 
+    /// Upserts on `path` rather than a plain `INSERT`: `reconcile` (folder
+    /// scan, run at startup and on-demand) can't tell an in-progress
+    /// recording's not-yet-finalized file apart from a genuinely untracked
+    /// one, so it may already have imported this exact path as an
+    /// "unknown recording" by the time the real finalize gets here. A
+    /// plain `INSERT` would then fail the `UNIQUE` constraint on `path`
+    /// and silently drop the DB row (`stop_recording`'s `recording_id:
+    /// None` case) even though the recording itself succeeded. The real
+    /// finalize data should win over reconcile's guessed one either way.
     pub fn insert_recording(&self, new: &NewRecording) -> Result<i64, DbError> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
+        conn.query_row(
             "INSERT INTO recordings
                 (path, started_at, duration_s, game_id, queue, champion, role,
                  win, kda_k, kda_d, kda_a, patch, pinned, size_bytes)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+             ON CONFLICT(path) DO UPDATE SET
+                started_at = excluded.started_at,
+                duration_s = excluded.duration_s,
+                game_id    = excluded.game_id,
+                queue      = excluded.queue,
+                champion   = excluded.champion,
+                role       = excluded.role,
+                win        = excluded.win,
+                kda_k      = excluded.kda_k,
+                kda_d      = excluded.kda_d,
+                kda_a      = excluded.kda_a,
+                patch      = excluded.patch,
+                pinned     = excluded.pinned,
+                size_bytes = excluded.size_bytes
+             RETURNING id",
             params![
                 new.path,
                 new.started_at,
@@ -190,8 +214,9 @@ impl Db {
                 new.pinned,
                 new.size_bytes,
             ],
-        )?;
-        Ok(conn.last_insert_rowid())
+            |row| row.get(0),
+        )
+        .map_err(DbError::from)
     }
 
     /// Inserts all `markers` for `recording_id` in one transaction.
@@ -382,22 +407,38 @@ mod tests {
         assert_eq!(rows[1].path, "/a.mp4");
     }
 
+    /// Reconcile (folder-scan) and a recording's own finalize can both
+    /// try to insert the same path — reconcile can't distinguish a
+    /// not-yet-finalized in-progress file from a genuinely untracked one,
+    /// so it may import it first. The later insert must win with its
+    /// (more authoritative) data instead of erroring and losing the row
+    /// finalize needs to attach markers to.
     #[test]
-    fn duplicate_path_is_rejected() {
+    fn duplicate_path_upserts_instead_of_erroring() {
         let db = Db::open_in_memory().unwrap();
-        db.insert_recording(&NewRecording {
-            path: "/dup.mp4".into(),
-            started_at: 1,
-            ..Default::default()
-        })
-        .unwrap();
+        let first_id = db
+            .insert_recording(&NewRecording {
+                path: "/dup.mp4".into(),
+                started_at: 1,
+                champion: None,
+                ..Default::default()
+            })
+            .unwrap();
 
-        let result = db.insert_recording(&NewRecording {
-            path: "/dup.mp4".into(),
-            started_at: 2,
-            ..Default::default()
-        });
-        assert!(result.is_err());
+        let second_id = db
+            .insert_recording(&NewRecording {
+                path: "/dup.mp4".into(),
+                started_at: 2,
+                champion: Some("Ahri".into()),
+                ..Default::default()
+            })
+            .unwrap();
+
+        assert_eq!(first_id, second_id, "upsert should keep the same row id");
+        let rows = db.list_recordings().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].started_at, 2);
+        assert_eq!(rows[0].champion, Some("Ahri".to_string()));
     }
 
     #[test]
