@@ -52,7 +52,7 @@ Tracked as GitHub issues — each phase is an issue.
 | 4 | SQLite VOD library + data model | macOS/any |
 | 5 | Review UI: player, marker timeline, VOD browser | macOS/any |
 | 6 | libobs capture backend (WGC + hardware encode) | **Windows** |
-| 7 | GitHub Actions Windows build → installer artifact | CI |
+| 7 | GitHub Actions: test + build installers (Windows + macOS) on every push/PR, tag-triggered release | CI |
 | 8 | Integration test on real hardware + Vanguard verification | **Windows** |
 | 9 | Disk retention policy (max size / max age / pinned VODs) | any |
 | 10 | YouTube upload (OAuth desktop flow, resumable upload) | any |
