@@ -177,6 +177,14 @@ Verified: layout/CSS visually in a browser (with injected mock data, since a pla
 - Enforce on app start and after each `Finalizing`.
 - Show current usage in the UI; never delete without the policy being visible to the user.
 
+Implemented in `src-tauri/src/retention.rs`, following the same pure-function-plus-thin-I/O-wrapper shape as `db::reconcile` and `state_machine::machine`: `select_for_deletion` is a pure decision (no I/O, unit-tested directly) over a `RecordingRow` slice + `RetentionPolicy` + an injected "now," and `enforce`/`enforce_now` apply it against the real DB and filesystem. Age is checked first (anything over the limit goes regardless of size), then size (oldest non-pinned recordings removed until under the cap) — usage totals include pinned recordings' bytes (they still occupy disk), but only non-pinned rows are ever deletion candidates.
+
+The policy itself lives in a single-row `settings` table (`db/mod.rs`'s second migration), defaulting to 50 GiB / 30 days rather than unlimited — this is meant to protect the user out of the box, not only once they find a settings screen, matching this section's "launch feature, not a later one." Either limit can be turned off independently (`NULL` = unbounded) via the library UI's "Retention policy" disclosure, which also shows current usage (`get_disk_usage`) right above it so nothing is deleted as a surprise. Enforcement runs at app startup (`lib.rs`'s `setup`, after reconcile) and after every finalize (`state_machine::supervisor::stop_recording`), plus immediately when the policy is changed from the UI (`set_retention_policy`) so a newly-tightened limit doesn't wait for the next finalize to take effect.
+
+Record-start preflight (`retention::has_room_to_record`, via the `fs2` crate — std has no free-space API) refuses to start a new recording under 1 GiB free on the recordings volume, checked from both `Supervisor::start_recording` (the real path) and the dev panel's manual `start_recording` command. Fails open on a stat error rather than block recording over a check that couldn't even run.
+
+Pinning is wired end-to-end now too: the library list's 📌 was display-only through Phase 5; clicking it calls `set_pinned` and refreshes.
+
 ---
 
 ## 7. YouTube upload (phase 10)

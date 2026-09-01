@@ -47,6 +47,55 @@ body {
   color: #888;
 }
 
+.disk-usage {
+  margin-bottom: 1.25rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  background-color: #fff;
+}
+
+.disk-usage-text {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #444;
+}
+
+.retention-settings {
+  margin-top: 0.5rem;
+}
+
+.retention-settings summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: #396cd8;
+}
+
+.retention-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 0.75rem;
+}
+
+.retention-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.retention-field input[type="number"] {
+  width: 5rem;
+  padding: 0.35em 0.5em;
+  border-radius: 6px;
+  border: 1px solid #ddd;
+  background-color: #fff;
+  font-size: 0.9rem;
+}
+
 .filter-bar {
   display: flex;
   flex-wrap: wrap;
@@ -127,6 +176,26 @@ body {
 .badge-loss {
   background-color: rgba(229, 57, 53, 0.15);
   color: #c62828;
+}
+
+.pin-btn {
+  padding: 0 0.3em;
+  border: none;
+  background: none;
+  font-size: 0.9rem;
+  line-height: 1;
+  opacity: 0.35;
+  filter: grayscale(1);
+}
+
+.pin-btn:hover:not(:disabled) {
+  opacity: 0.7;
+  filter: none;
+}
+
+.pin-btn.pinned {
+  opacity: 1;
+  filter: none;
 }
 
 .dev-panel {
@@ -350,10 +419,24 @@ kbd {
 
   .filter-bar input,
   .filter-bar select,
-  .player-controls select {
+  .player-controls select,
+  .retention-field input[type="number"] {
     background-color: #2a2a2a;
     border-color: #444;
     color: #f6f6f6;
+  }
+
+  .disk-usage {
+    background-color: #222;
+    border-color: #333;
+  }
+
+  .disk-usage-text {
+    color: #ccc;
+  }
+
+  .retention-field {
+    color: #bbb;
   }
 
   .checkbox-label {

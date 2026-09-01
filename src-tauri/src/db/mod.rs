@@ -9,7 +9,7 @@ pub mod reconcile;
 
 use rusqlite::{params, Connection, OptionalExtension};
 use rusqlite_migration::{Migrations, M};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::{LazyLock, Mutex};
 
@@ -54,6 +54,21 @@ static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
         );
 
         CREATE INDEX idx_markers_recording_id ON markers(recording_id);
+        ",
+    ), M::up(
+        "
+        -- Single-row settings table (Phase 9 / DEVELOPMENT.md §6). Defaults
+        -- to 50 GiB / 30 days rather than unlimited: disk retention is a
+        -- launch feature specifically because unbounded capture fills an
+        -- SSD in weeks, so it should protect the user out of the box, not
+        -- only once they find a settings screen.
+        CREATE TABLE settings (
+            id               INTEGER PRIMARY KEY CHECK (id = 1),
+            max_total_bytes  INTEGER DEFAULT 53687091200, -- 50 GiB
+            max_age_days     INTEGER DEFAULT 30
+        );
+
+        INSERT INTO settings (id) VALUES (1);
         ",
     )])
 });
@@ -101,6 +116,14 @@ pub struct RecordingRow {
     pub patch: Option<String>,
     pub pinned: bool,
     pub size_bytes: i64,
+}
+
+/// Disk retention policy (Phase 9 / DEVELOPMENT.md §6): `None` means that
+/// dimension is unbounded. Mirrors the single-row `settings` table.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct RetentionPolicy {
+    pub max_total_bytes: Option<i64>,
+    pub max_age_days: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -256,6 +279,50 @@ impl Db {
     pub fn delete_recording(&self, id: i64) -> Result<(), DbError> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM recordings WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    pub fn set_pinned(&self, id: i64, pinned: bool) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE recordings SET pinned = ?1 WHERE id = ?2",
+            params![pinned, id],
+        )?;
+        Ok(())
+    }
+
+    /// Sum of `size_bytes` across every recording, pinned or not — this is
+    /// disk *usage*, which pinned files still count toward even though
+    /// they're exempt from retention deletion.
+    pub fn total_size_bytes(&self) -> Result<i64, DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row("SELECT COALESCE(SUM(size_bytes), 0) FROM recordings", [], |r| {
+            r.get(0)
+        })
+        .map_err(DbError::from)
+    }
+
+    pub fn get_retention_policy(&self) -> Result<RetentionPolicy, DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT max_total_bytes, max_age_days FROM settings WHERE id = 1",
+            [],
+            |row| {
+                Ok(RetentionPolicy {
+                    max_total_bytes: row.get(0)?,
+                    max_age_days: row.get(1)?,
+                })
+            },
+        )
+        .map_err(DbError::from)
+    }
+
+    pub fn set_retention_policy(&self, policy: &RetentionPolicy) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE settings SET max_total_bytes = ?1, max_age_days = ?2 WHERE id = 1",
+            params![policy.max_total_bytes, policy.max_age_days],
+        )?;
         Ok(())
     }
 }
@@ -427,5 +494,62 @@ mod tests {
 
         assert!(db.find_by_path("/known.mp4").unwrap().is_some());
         assert!(db.find_by_path("/unknown.mp4").unwrap().is_none());
+    }
+
+    #[test]
+    fn set_pinned_updates_the_row() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db
+            .insert_recording(&NewRecording {
+                path: "/game.mp4".into(),
+                started_at: 1,
+                ..Default::default()
+            })
+            .unwrap();
+
+        db.set_pinned(id, true).unwrap();
+        assert!(db.list_recordings().unwrap()[0].pinned);
+
+        db.set_pinned(id, false).unwrap();
+        assert!(!db.list_recordings().unwrap()[0].pinned);
+    }
+
+    #[test]
+    fn total_size_bytes_sums_across_recordings() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/a.mp4".into(),
+            started_at: 1,
+            size_bytes: 100,
+            ..Default::default()
+        })
+        .unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/b.mp4".into(),
+            started_at: 2,
+            size_bytes: 250,
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert_eq!(db.total_size_bytes().unwrap(), 350);
+    }
+
+    #[test]
+    fn retention_policy_defaults_and_round_trips() {
+        let db = Db::open_in_memory().unwrap();
+
+        // Seeded defaults from the migration — 50 GiB / 30 days, not
+        // unlimited (see the migration's comment for why).
+        let defaults = db.get_retention_policy().unwrap();
+        assert_eq!(defaults.max_total_bytes, Some(53_687_091_200));
+        assert_eq!(defaults.max_age_days, Some(30));
+
+        let updated = RetentionPolicy {
+            max_total_bytes: None,
+            max_age_days: Some(7),
+        };
+        db.set_retention_policy(&updated).unwrap();
+        assert_eq!(db.get_retention_policy().unwrap(), updated);
     }
 }

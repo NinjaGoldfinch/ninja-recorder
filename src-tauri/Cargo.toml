@@ -35,6 +35,9 @@ futures-util = "0.3"
 base64 = "0.22"
 rusqlite = { version = "0.32", features = ["bundled"] }
 rusqlite_migration = "1"
+# Cross-platform free-disk-space query for the record-start preflight check
+# (Phase 9 / DEVELOPMENT.md §6) — std has no such API.
+fs2 = "0.4"
 
 # Real capture backend (Phase 6). Fork of github.com/FFFFFFFXXXXXXX/libobs-recorder
 # that swaps the injection-based `game_capture` source for `window_capture`
