@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Release (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: --bundles nsis
+          - platform: macos-latest
+            args: --bundles dmg
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # Both matrix legs publish to the same release (matched by tagName);
+      # tauri-action creates it on the first leg to finish and appends
+      # assets from the other. Draft so a broken build doesn't go public
+      # before it's reviewed — publish manually from the Releases page.
+      - name: Build and publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "ninja-recorder ${{ github.ref_name }}"
+          releaseBody: |
+            Unsigned build: Windows SmartScreen and macOS Gatekeeper will
+            both warn on first run (no code-signing certificate configured
+            yet). See the installer for your platform below.
+
+            macOS builds only exercise the stub recorder from Phase 1 —
+            real game capture is Windows-only (DEVELOPMENT.md §1.1) and
+            isn't built yet (Phase 6).
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}

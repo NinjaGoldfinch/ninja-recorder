@@ -182,6 +182,7 @@ markers:     id, recording_id, game_time_s, video_time_s, kind, payload_json
 
 - **Never cross-compile the Windows build from macOS.** libobs linking + DLL bundling + installer generation via `cargo-xwin` is a fight with no payoff. GitHub Actions `windows-latest` builds the installer (NSIS); download the artifact.
 - Vanguard verification (capture works during a real Vanguard-protected game, no flags) is a one-time check per significant capture change, not an iterative loop — capture iterates against any window (browser, video loop), no League needed.
+- **CI** ([`.github/workflows/`](../.github/workflows/)): `ci.yml` runs tests + clippy on every push to `main` and every PR (Windows + macOS, matrix), then builds installers natively on each platform and uploads them as workflow artifacts (7-day retention) — a PR's own build is downloadable from its Actions run. `release.yml` triggers on `v*.*.*` tags and publishes a draft GitHub Release with both installers via [`tauri-action`](https://github.com/tauri-apps/tauri-action). Neither build is code-signed yet (no cert configured) — Windows SmartScreen and macOS Gatekeeper both warn on first run. macOS builds only exercise the stub recorder; they're a dev/testing convenience, not a shipping target (§1.1).
 
 ---
 
