@@ -333,12 +333,21 @@ mod tests {
     use crate::recorder::stub::StubRecorder;
 
     fn test_supervisor() -> (Arc<Supervisor>, PathBuf) {
+        // `line!()` here would be constant across every call site (it's
+        // evaluated where the macro appears, not where the function is
+        // called), so every test sharing this helper would get the exact
+        // same temp dir — since the test harness runs tests in parallel,
+        // one test's `remove_dir_all` teardown could then delete the
+        // directory out from under another test still recording. A
+        // per-call counter keeps each test's directory unique.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let recorder: Arc<Mutex<Box<dyn Recorder>>> =
             Arc::new(Mutex::new(Box::new(StubRecorder::new())));
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
             "ninja-recorder-supervisor-test-{}-{}",
             std::process::id(),
-            line!()
+            n
         ));
         let db = Arc::new(Db::open_in_memory().unwrap());
         (Supervisor::new(recorder, dir.clone(), db), dir)
