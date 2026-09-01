@@ -202,6 +202,7 @@ button:disabled {
 #review-video {
   display: block;
   width: 100%;
+  min-height: 320px;
   max-height: 60vh;
   background-color: #000;
 }
@@ -215,6 +216,7 @@ button:disabled {
   justify-content: center;
   gap: 0.5rem;
   padding: 2rem;
+  overflow-y: auto;
   text-align: center;
   color: #eee;
   background-color: rgba(0, 0, 0, 0.85);
