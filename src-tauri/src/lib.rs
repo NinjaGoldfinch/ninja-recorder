@@ -70,6 +70,18 @@ fn rescan_recordings(state: tauri::State<AppState>) -> Result<db::reconcile::Rec
     db::reconcile::reconcile(&state.db, &state.recordings_dir).map_err(|e| e.to_string())
 }
 
+/// Markers for the review timeline (Phase 5).
+#[tauri::command]
+fn get_recording_markers(
+    state: tauri::State<AppState>,
+    recording_id: i64,
+) -> Result<Vec<db::MarkerRow>, String> {
+    state
+        .db
+        .get_markers(recording_id)
+        .map_err(|e| e.to_string())
+}
+
 #[derive(serde::Serialize)]
 struct LcuStatus {
     connected: bool,
@@ -193,6 +205,7 @@ pub fn run() {
             is_recording,
             list_recordings,
             rescan_recordings,
+            get_recording_markers,
             lcu_status,
             game_state_status
         ])
