@@ -1,5 +1,15 @@
 name: Release
 
+# Publishes installers for a tagged commit without rebuilding them: ci.yml's
+# `build` job already compiles both platforms on every push to main with a
+# warm Rust cache and uploads the bundles as artifacts. Rebuilding here via
+# tauri-action was redundant *and* always cold — GitHub Actions cache
+# scoping falls back from a branch to its default branch, but never from a
+# tag, so a tag-triggered build could never see ci.yml's cache and paid a
+# full ~15min compile (mostly Windows) on every release. Reusing the
+# already-built, already-tested artifact instead turns this into a
+# download-and-publish job.
+
 on:
   push:
     tags:
@@ -8,65 +18,49 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   release:
-    name: Release (${{ matrix.platform }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: windows-latest
-            args: --bundles nsis
-          - platform: macos-latest
-            args: --bundles dmg
-    runs-on: ${{ matrix.platform }}
+    name: Release
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      # See ci.yml's matching step for what/why. Runs before tauri-action
-      # so the installer bundles the staged libobs runtime files.
-      - name: Stage libobs capture backend
-        if: matrix.platform == 'windows-latest'
-        shell: pwsh
-        run: |
-          git clone --depth 1 https://github.com/NinjaGoldfinch/libobs-recorder.git ../libobs-recorder-build
-          cargo build --release --manifest-path ../libobs-recorder-build/Cargo.toml --bin extprocess_recorder
-          $dllDir = Get-ChildItem ../libobs-recorder-build/build-helper -Directory -Filter "libobs_*" |
-            Sort-Object Name -Descending | Select-Object -First 1
-          New-Item -ItemType Directory -Force -Path src-tauri/target/libobs | Out-Null
-          Copy-Item "$($dllDir.FullName)/*" src-tauri/target/libobs -Recurse -Force
-          Copy-Item ../libobs-recorder-build/target/release/extprocess_recorder.exe src-tauri/target/libobs/extprocess_recorder.exe -Force
-
-      # Both matrix legs publish to the same release (matched by tagName);
-      # tauri-action creates it on the first leg to finish and appends
-      # assets from the other. Draft so a broken build doesn't go public
-      # before it's reviewed — publish manually from the Releases page.
-      - name: Build and publish release
-        uses: tauri-apps/tauri-action@v0
+      - name: Find CI run for this commit
+        id: find-run
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RUN_ID=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&status=success" --jq '.workflow_runs[0].id // empty')
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::No successful ci.yml run found for ${GITHUB_SHA}. Push this commit to main and wait for CI to pass before tagging it." >&2
+            exit 1
+          fi
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download Windows bundle
+        uses: actions/download-artifact@v4
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "ninja-recorder ${{ github.ref_name }}"
-          releaseBody: |
+          name: ninja-recorder-windows-latest-${{ github.sha }}
+          path: artifacts/windows
+          run-id: ${{ steps.find-run.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download macOS bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: ninja-recorder-macos-latest-${{ github.sha }}
+          path: artifacts/macos
+          run-id: ${{ steps.find-run.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Draft so a broken build doesn't go public before it's reviewed —
+      # publish manually from the Releases page.
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "ninja-recorder ${{ github.ref_name }}"
+          body: |
             Unsigned build: Windows SmartScreen and macOS Gatekeeper will
             both warn on first run (no code-signing certificate configured
             yet). See the installer for your platform below.
@@ -76,6 +70,8 @@ jobs:
             Windows build includes the Phase 6 libobs capture backend, but
             it hasn't been verified against a real Vanguard-protected game
             yet (DEVELOPMENT.md §9, pending Phase 8).
-          releaseDraft: true
+          draft: true
           prerelease: false
-          args: ${{ matrix.args }}
+          files: |
+            artifacts/windows/**/*.exe
+            artifacts/macos/**/*.dmg
