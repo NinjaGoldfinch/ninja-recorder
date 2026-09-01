@@ -5,7 +5,10 @@
 
 #[cfg(target_os = "windows")]
 pub mod libobs;
-#[cfg(not(target_os = "windows"))]
+// Also compiled on Windows under `cfg(test)`: `state_machine::supervisor`'s
+// unit tests use `StubRecorder` as a platform-agnostic dummy `Recorder`
+// regardless of which real backend the current platform ships.
+#[cfg(any(test, not(target_os = "windows")))]
 pub mod stub;
 
 use std::path::PathBuf;
