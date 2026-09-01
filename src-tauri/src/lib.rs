@@ -5,7 +5,9 @@ mod live_client;
 mod recorder;
 mod state_machine;
 
-use recorder::{stub::StubRecorder, RecordConfig, Recorder};
+#[cfg(not(target_os = "windows"))]
+use recorder::stub::StubRecorder;
+use recorder::{RecordConfig, Recorder};
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
