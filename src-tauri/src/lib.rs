@@ -228,6 +228,14 @@ pub fn run() {
                 #[cfg(target_os = "windows")]
                 {
                     use tauri::path::BaseDirectory;
+                    // Optional: only used to remux each recording to a
+                    // seekable faststart MP4 on stop (see LibObsRecorder's
+                    // `stop`) — `None` if unstaged rather than failing
+                    // init, since recording itself doesn't depend on it.
+                    let ffmpeg_path = app
+                        .path()
+                        .resolve("libobs/ffmpeg.exe", BaseDirectory::Resource)
+                        .ok();
                     // Init failure here (missing/unstaged libobs files, no
                     // usable GPU, etc.) must not take the whole app down —
                     // only recording depends on this. Fall back to a
@@ -238,7 +246,8 @@ pub fn run() {
                         .resolve("libobs/extprocess_recorder.exe", BaseDirectory::Resource)
                         .map_err(|e| e.to_string())
                         .and_then(|path| {
-                            recorder::libobs::LibObsRecorder::new(path).map_err(|e| e.to_string())
+                            recorder::libobs::LibObsRecorder::new(path, ffmpeg_path)
+                                .map_err(|e| e.to_string())
                         });
                     match init {
                         Ok(recorder) => Box::new(recorder),

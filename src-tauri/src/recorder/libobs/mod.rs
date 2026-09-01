@@ -23,7 +23,8 @@ use libobs_recorder::settings::{
     AudioSource, Encoder, Framerate, RateControl, RecorderSettings, Resolution, Window,
 };
 use libobs_recorder::Recorder as LibObs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 use window::{WINDOW_CLASS, WINDOW_PROCESS, WINDOW_TITLE};
 
@@ -48,6 +49,13 @@ fn is_acceptable_encoder(encoder: &Encoder) -> bool {
 pub struct LibObsRecorder {
     inner: LibObs,
     active_path: Option<PathBuf>,
+    /// Resolved by the caller the same way as `extprocess_recorder_path`
+    /// (Tauri's path resolver, bundled as a resource) — `None` if it
+    /// isn't present, in which case `stop` just skips the faststart
+    /// remux and leaves the crash-safe fragmented file as-is. Recording
+    /// must never fail just because this optional finishing step is
+    /// unavailable.
+    ffmpeg_path: Option<PathBuf>,
 }
 
 impl LibObsRecorder {
@@ -55,15 +63,16 @@ impl LibObsRecorder {
     /// worker binary that `libobs-recorder` spawns and talks to over IPC —
     /// crash isolation, so a libobs crash doesn't take the whole app down
     /// mid-game. It has to be resolved by the caller via Tauri's path
-    /// resolver (`BaseDirectory::Executable`) since dev and installed-app
+    /// resolver (`BaseDirectory::Resource`) since dev and installed-app
     /// layouts differ; see the `build.rs`/`tauri.conf.json` comments for
     /// how it gets bundled next to the binary.
-    pub fn new(extprocess_recorder_path: PathBuf) -> Result<Self, RecorderError> {
+    pub fn new(extprocess_recorder_path: PathBuf, ffmpeg_path: Option<PathBuf>) -> Result<Self, RecorderError> {
         let inner = LibObs::new_with_paths(Some(extprocess_recorder_path), None, None, None)
             .map_err(|e| RecorderError::Backend(e.to_string()))?;
         Ok(Self {
             inner,
             active_path: None,
+            ffmpeg_path,
         })
     }
 }
@@ -133,12 +142,59 @@ impl Recorder for LibObsRecorder {
         self.inner
             .stop_recording()
             .map_err(|e| RecorderError::Backend(e.to_string()))?;
+
+        // The fork's muxer settings (see its `intprocess-recorder` source)
+        // write `movflags=frag_keyframe+empty_moov+default_base_moof` —
+        // deliberately crash-safe (no finalize step needed, so a libobs
+        // crash mid-game doesn't corrupt the file) but with no upfront
+        // seek index, which makes most players — including the review
+        // UI's own WebView2 `<video>` — unable to scrub it reliably. Only
+        // worth fixing up now, on a clean stop; a stream-copy remux is
+        // fast and lossless, just rewriting the container's index.
+        if let Some(ffmpeg_path) = &self.ffmpeg_path {
+            if let Err(e) = remux_faststart(ffmpeg_path, &path) {
+                eprintln!(
+                    "[recorder] faststart remux failed, keeping original (unseekable) file: {e}"
+                );
+            }
+        }
+
         Ok(path)
     }
 
     fn is_recording(&self) -> bool {
         self.active_path.is_some()
     }
+}
+
+/// Stream-copies `video_path` through ffmpeg with `-movflags +faststart`
+/// so the `moov` (seek index) ends up at the front of the file instead of
+/// wherever the fragmented writer left it, then atomically replaces the
+/// original. `-c copy` means no re-encode — this only rewrites container
+/// metadata, so it's a fraction of a second even for a long recording.
+fn remux_faststart(ffmpeg_path: &Path, video_path: &Path) -> Result<(), String> {
+    let tmp_path = video_path.with_extension("faststart.tmp.mp4");
+
+    let output = Command::new(ffmpeg_path)
+        .arg("-y") // overwrite tmp_path without prompting if it's left over from a previous crash
+        .arg("-i")
+        .arg(video_path)
+        .args(["-c", "copy", "-movflags", "+faststart"])
+        .arg(&tmp_path)
+        .output()
+        .map_err(|e| format!("failed to launch ffmpeg at {}: {e}", ffmpeg_path.display()))?;
+
+    if !output.status.success() {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(format!(
+            "ffmpeg exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    std::fs::rename(&tmp_path, video_path)
+        .map_err(|e| format!("failed to replace original file with remuxed one: {e}"))
 }
 
 fn wait_for_window_size(max_attempts: u32, interval: Duration) -> Option<Resolution> {

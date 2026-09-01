@@ -103,6 +103,25 @@ jobs:
           Copy-Item "$($dllDir.FullName)/*" src-tauri/target/libobs -Recurse -Force
           Copy-Item ../libobs-recorder-build/target/release/extprocess_recorder.exe src-tauri/target/libobs/extprocess_recorder.exe -Force
 
+      # ffmpeg.exe is bundled into the same `libobs` resource folder so
+      # `LibObsRecorder::stop` (src-tauri/src/recorder/libobs/mod.rs) can
+      # remux each recording to a seekable faststart MP4 after capture —
+      # the crash-safe fragmented format `start()` records with has no
+      # seek index (DEVELOPMENT.md, Phase 6 follow-up). Optional at
+      # runtime (lib.rs resolves it with `.ok()`), so a failed/missing
+      # download here degrades to unseekable-but-playable recordings
+      # rather than breaking the build. BtbN's "latest" release is a
+      # continuously-updated static build, not a pinned version — same
+      # looseness as this job's own unpinned `git clone` above.
+      - name: Stage ffmpeg for faststart remux
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile ffmpeg.zip
+          Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-extracted
+          $bin = Get-ChildItem ffmpeg-extracted -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+          Copy-Item $bin.FullName src-tauri/target/libobs/ffmpeg.exe -Force
+
       # Native build on each platform's own runner — never cross-compiled.
       # DEVELOPMENT.md §9: NSIS on Windows (not MSI, matches the documented
       # installer choice); dmg on macOS is the standard Tauri bundle format
