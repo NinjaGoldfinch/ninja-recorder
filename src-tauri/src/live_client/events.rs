@@ -35,15 +35,22 @@ pub struct ActivePlayer {
 }
 
 impl ActivePlayer {
-    /// Resolves whichever display-name field this API version populates:
-    /// `riotIdGameName` after the Riot ID rollout, `summonerName` on older
-    /// clients. Prefers Riot ID when both are present.
-    pub fn display_name(&self) -> &str {
-        if !self.riot_id_game_name.is_empty() {
-            &self.riot_id_game_name
-        } else {
-            &self.summoner_name
-        }
+    /// Every name this player might be referred to by in event
+    /// Killer/Victim/Assister fields. Confirmed via a live capture
+    /// (Practice Tool, 2026-09-01) that those fields use `summonerName`
+    /// even when `riotIdGameName` is populated too — a Practice Tool
+    /// summoner name happened to be the champion name ("Ahri"), and the
+    /// real ChampionKill events used exactly that, not the Riot ID game
+    /// name ("NinjaGoldfinch"). Matching against every non-empty
+    /// candidate rather than picking one is the robust fix: a real
+    /// (non-Practice-Tool) game hasn't been confirmed to behave the same
+    /// way, and this way it doesn't matter which one the client actually
+    /// uses in any given match type.
+    pub fn candidate_names(&self) -> Vec<&str> {
+        [self.summoner_name.as_str(), self.riot_id_game_name.as_str()]
+            .into_iter()
+            .filter(|n| !n.is_empty())
+            .collect()
     }
 }
 
@@ -135,11 +142,11 @@ pub struct Marker {
 /// is recorded regardless of which team it belongs to, since seeing what
 /// the *enemy* team did (e.g. they took Baron while we were dead) is
 /// useful VOD-review context.
-fn classify_event(event: &GameEvent, our_name: Option<&str>) -> Option<Marker> {
+fn classify_event(event: &GameEvent, our_names: &[&str]) -> Option<Marker> {
     let is_ours = |name: &Option<String>| -> bool {
-        match (name, our_name) {
-            (Some(n), Some(us)) => names_match(n, us),
-            _ => false,
+        match name {
+            Some(n) => our_names.iter().any(|us| names_match(n, us)),
+            None => false,
         }
     };
 
@@ -157,9 +164,10 @@ fn classify_event(event: &GameEvent, our_name: Option<&str>) -> Option<Marker> {
                     game_time_s: event.event_time,
                     payload: serde_json::json!({ "killer": event.killer_name }),
                 })
-            } else if our_name
-                .map(|us| event.assisters.iter().any(|a| names_match(a, us)))
-                .unwrap_or(false)
+            } else if event
+                .assisters
+                .iter()
+                .any(|a| our_names.iter().any(|us| names_match(a, us)))
             {
                 Some(Marker {
                     kind: MarkerKind::Assist,
@@ -216,11 +224,12 @@ fn classify_event(event: &GameEvent, our_name: Option<&str>) -> Option<Marker> {
     }
 }
 
-/// Compares display names leniently: case-insensitive, and ignoring a
-/// `#tagline` suffix if only one side has it. The Live Client Data API's
-/// exact name format (bare summoner name vs. `Name#TAG`) across event
-/// fields vs. `activePlayer`/`allPlayers` hasn't been confirmed against a
-/// live client — this tolerates either without needing to know which.
+/// Compares names leniently: case-insensitive, and ignoring a `#tagline`
+/// suffix if only one side has it. A live capture confirmed event
+/// Killer/Victim/Assister fields are bare names with no tagline at all
+/// (matching `summonerName`, not the `gameName#tagLine`-style `riotId`) —
+/// the `#`-stripping is low-cost tolerance for a format that might still
+/// show up in some other game mode, not a confirmed requirement.
 fn names_match(a: &str, b: &str) -> bool {
     fn base(s: &str) -> String {
         s.split('#').next().unwrap_or(s).trim().to_lowercase()
@@ -242,12 +251,18 @@ impl MarkerTracker {
 
     /// Returns only markers for events not already seen by this tracker.
     pub fn ingest(&mut self, snapshot: &AllGameData) -> Vec<Marker> {
+        let our_names: Vec<&str> = snapshot
+            .active_player
+            .as_ref()
+            .map(|p| p.candidate_names())
+            .unwrap_or_default();
+
         let mut fresh = Vec::new();
         for event in &snapshot.events.events {
             if !self.seen_event_ids.insert(event.event_id) {
                 continue;
             }
-            if let Some(marker) = classify_event(event, snapshot.active_player.as_ref().map(|p| p.display_name())) {
+            if let Some(marker) = classify_event(event, &our_names) {
                 fresh.push(marker);
             }
         }
@@ -316,6 +331,22 @@ mod tests {
         serde_json::from_str(json).unwrap()
     }
 
+    /// Real capture (Practice Tool, 2026-09-01): `activePlayer` had both
+    /// `summonerName` ("Ahri") and `riotIdGameName` ("NinjaGoldfinch")
+    /// populated, but ChampionKill's Killer/Victim used `summonerName`.
+    /// Regression coverage for the bug where preferring `riotIdGameName`
+    /// unconditionally caused every kill/death marker for the player's
+    /// own actions to silently vanish, with no error anywhere — objective
+    /// markers (which don't need identity matching) worked fine, masking
+    /// it until a live user noticed kills/deaths missing from a real game.
+    fn summoner_name_mismatch_fixture() -> AllGameData {
+        let json = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/live-client/summoner-name-mismatch.json"
+        ));
+        serde_json::from_str(json).unwrap()
+    }
+
     #[test]
     fn extracts_our_kill_death_and_assist_but_not_others_kill() {
         let markers = MarkerTracker::new().ingest(&fixture());
@@ -329,6 +360,16 @@ mod tests {
         // that doesn't involve us at all — it must not produce a marker.
         let kill_markers: Vec<_> = markers.iter().filter(|m| m.kind == MarkerKind::Kill).collect();
         assert_eq!(kill_markers.len(), 1, "only our own kill should produce a Kill marker");
+    }
+
+    #[test]
+    fn matches_our_kills_when_events_use_summoner_name_not_riot_id() {
+        let markers = MarkerTracker::new().ingest(&summoner_name_mismatch_fixture());
+        let kinds: Vec<MarkerKind> = markers.iter().map(|m| m.kind).collect();
+
+        assert!(kinds.contains(&MarkerKind::Kill), "kinds were: {kinds:?}");
+        assert!(kinds.contains(&MarkerKind::Death), "kinds were: {kinds:?}");
+        assert!(kinds.contains(&MarkerKind::FirstBlood), "kinds were: {kinds:?}");
     }
 
     #[test]
