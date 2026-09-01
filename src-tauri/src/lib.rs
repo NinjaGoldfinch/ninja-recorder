@@ -1,3 +1,4 @@
+mod db;
 mod fixtures;
 mod lcu;
 mod live_client;
@@ -11,6 +12,8 @@ use tauri::Manager;
 struct AppState {
     recorder: Arc<Mutex<Box<dyn Recorder>>>,
     supervisor: Arc<state_machine::Supervisor>,
+    db: Arc<db::Db>,
+    recordings_dir: std::path::PathBuf,
 }
 
 fn recordings_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
@@ -54,22 +57,17 @@ fn is_recording(state: tauri::State<AppState>) -> Result<bool, String> {
         .is_recording())
 }
 
-/// Placeholder for Phase 4 (SQLite VOD library). Returns what's actually on
-/// disk in the recordings dir so the Phase 1 shell has something real to
-/// list, without a database yet.
 #[tauri::command]
-fn list_recordings(app: tauri::AppHandle) -> Result<Vec<String>, String> {
-    let dir = recordings_dir(&app)?;
-    if !dir.exists() {
-        return Ok(vec![]);
-    }
-    let mut names: Vec<String> = std::fs::read_dir(&dir)
-        .map_err(|e| e.to_string())?
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| entry.file_name().into_string().ok())
-        .collect();
-    names.sort();
-    Ok(names)
+fn list_recordings(state: tauri::State<AppState>) -> Result<Vec<db::RecordingRow>, String> {
+    state.db.list_recordings().map_err(|e| e.to_string())
+}
+
+/// Re-runs folder-scan reconciliation on demand (also runs once at
+/// startup). DEVELOPMENT.md §4 — "the library must survive users touching
+/// the folder."
+#[tauri::command]
+fn rescan_recordings(state: tauri::State<AppState>) -> Result<db::reconcile::ReconcileReport, String> {
+    db::reconcile::reconcile(&state.db, &state.recordings_dir).map_err(|e| e.to_string())
 }
 
 #[derive(serde::Serialize)]
@@ -161,12 +159,31 @@ pub fn run() {
             let recorder: Arc<Mutex<Box<dyn Recorder>>> =
                 Arc::new(Mutex::new(Box::new(StubRecorder::new())));
             let dir = recordings_dir(app.handle())?;
-            let supervisor = state_machine::Supervisor::new(Arc::clone(&recorder), dir);
+
+            let db_path = app.path().app_data_dir()?.join("library.sqlite3");
+            std::fs::create_dir_all(db_path.parent().expect("db path always has a parent"))?;
+            let db = Arc::new(db::Db::open(&db_path)?);
+
+            match db::reconcile::reconcile(&db, &dir) {
+                Ok(report) if report.orphans_removed > 0 || report.imported > 0 => {
+                    println!(
+                        "[db] startup reconcile: removed {} orphan row(s), imported {} untracked file(s)",
+                        report.orphans_removed, report.imported
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => eprintln!("[db] startup reconcile failed: {e}"),
+            }
+
+            let supervisor =
+                state_machine::Supervisor::new(Arc::clone(&recorder), dir.clone(), Arc::clone(&db));
             supervisor.start();
 
             app.manage(AppState {
                 recorder,
                 supervisor,
+                db,
+                recordings_dir: dir,
             });
             Ok(())
         })
@@ -175,6 +192,7 @@ pub fn run() {
             stop_recording,
             is_recording,
             list_recordings,
+            rescan_recordings,
             lcu_status,
             game_state_status
         ])

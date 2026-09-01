@@ -11,6 +11,7 @@
 //! tasks and calls the already-tested `Recorder` trait methods.
 
 use super::machine::{Action, GameState, StateEvent, StateMachine};
+use crate::db::{self, Db};
 use crate::lcu;
 use crate::live_client::{self, AllGameData, Marker, MarkerTracker, TimeAlignment};
 use crate::recorder::{RecordConfig, Recorder};
@@ -28,11 +29,12 @@ pub struct SessionMarker {
 }
 
 /// What the supervisor learned about the most recently finished recording,
-/// surfaced to the frontend via `game_state_status`. Phase 4 will route
-/// this into the SQLite VOD library instead of holding just the latest one
-/// in memory.
+/// surfaced to the frontend via `game_state_status`. Also written to the
+/// SQLite VOD library (`db`) — `recording_id` is `None` only if that write
+/// itself failed, so the in-memory copy still isn't lost.
 #[derive(Debug, Clone, Serialize)]
 pub struct FinalizedRecording {
+    pub recording_id: Option<i64>,
     pub path: String,
     pub markers: Vec<SessionMarker>,
 }
@@ -48,12 +50,17 @@ struct RecordingSession {
     markers: Vec<SessionMarker>,
     alignment: Option<TimeAlignment>,
     record_started_at: Instant,
+    /// Wall-clock capture alongside `record_started_at` — `Instant` is
+    /// monotonic only, not convertible to a real timestamp, but the DB's
+    /// `recordings.started_at` column needs one.
+    started_at_millis: i64,
 }
 
 pub struct Supervisor {
     machine: Mutex<StateMachine>,
     recorder: Arc<Mutex<Box<dyn Recorder>>>,
     recordings_dir: PathBuf,
+    db: Arc<Db>,
     gameflow_task: Mutex<Option<JoinHandle<()>>>,
     live_client_task: Mutex<Option<JoinHandle<()>>>,
     session: Mutex<Option<RecordingSession>>,
@@ -61,11 +68,16 @@ pub struct Supervisor {
 }
 
 impl Supervisor {
-    pub fn new(recorder: Arc<Mutex<Box<dyn Recorder>>>, recordings_dir: PathBuf) -> Arc<Self> {
+    pub fn new(
+        recorder: Arc<Mutex<Box<dyn Recorder>>>,
+        recordings_dir: PathBuf,
+        db: Arc<Db>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             machine: Mutex::new(StateMachine::new()),
             recorder,
             recordings_dir,
+            db,
             gameflow_task: Mutex::new(None),
             live_client_task: Mutex::new(None),
             session: Mutex::new(None),
@@ -223,9 +235,10 @@ impl Supervisor {
     /// than silently wrong; not expected to occur outside that manual
     /// double-start collision.
     fn start_recording(&self) {
+        let started_at_millis = timestamp_millis();
         let config = RecordConfig {
             output_dir: self.recordings_dir.clone(),
-            file_stem: format!("recording-{}", timestamp_millis()),
+            file_stem: format!("recording-{started_at_millis}"),
         };
         match self.recorder.lock().unwrap().start(config) {
             Ok(()) => {
@@ -234,19 +247,62 @@ impl Supervisor {
                     markers: Vec::new(),
                     alignment: None,
                     record_started_at: Instant::now(),
+                    started_at_millis,
                 });
             }
             Err(e) => eprintln!("[state_machine] failed to start recording: {e}"),
         }
     }
 
+    /// Executes `Action::StopRecording`: stops the recorder, then writes
+    /// the recording + its markers to the VOD library DB (DEVELOPMENT.md
+    /// §4). A DB write failure is logged but doesn't lose the in-memory
+    /// copy — `last_finalized` is still set either way, just with
+    /// `recording_id: None`, so nothing already captured is thrown away
+    /// even if the row never made it to disk.
     fn stop_recording(&self) {
         let session = self.session.lock().unwrap().take();
         match self.recorder.lock().unwrap().stop() {
             Ok(path) => {
+                let markers = session.as_ref().map(|s| s.markers.clone()).unwrap_or_default();
+                let started_at = session
+                    .as_ref()
+                    .map(|s| s.started_at_millis)
+                    .unwrap_or_else(timestamp_millis);
+                let path_str = path.display().to_string();
+                let size_bytes = std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0);
+
+                let recording_id = match self.db.insert_recording(&db::NewRecording {
+                    path: path_str.clone(),
+                    started_at,
+                    size_bytes,
+                    ..Default::default()
+                }) {
+                    Ok(id) => {
+                        let new_markers: Vec<db::NewMarker> = markers
+                            .iter()
+                            .map(|m| db::NewMarker {
+                                game_time_s: m.marker.game_time_s,
+                                video_time_s: m.video_time_s,
+                                kind: m.marker.kind.as_str().to_string(),
+                                payload_json: m.marker.payload.to_string(),
+                            })
+                            .collect();
+                        if let Err(e) = self.db.insert_markers(id, &new_markers) {
+                            eprintln!("[state_machine] failed to insert markers for recording {id}: {e}");
+                        }
+                        Some(id)
+                    }
+                    Err(e) => {
+                        eprintln!("[state_machine] failed to insert recording row: {e}");
+                        None
+                    }
+                };
+
                 *self.last_finalized.lock().unwrap() = Some(FinalizedRecording {
-                    path: path.display().to_string(),
-                    markers: session.map(|s| s.markers).unwrap_or_default(),
+                    recording_id,
+                    path: path_str,
+                    markers,
                 });
             }
             Err(e) => eprintln!("[state_machine] failed to stop recording: {e}"),
@@ -254,10 +310,94 @@ impl Supervisor {
     }
 }
 
-fn timestamp_millis() -> u128 {
+fn timestamp_millis() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis())
+        .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    //! `start_recording`/`stop_recording` are the one piece of this
+    //! module's async glue that genuinely can be tested without a live
+    //! LCU/Live Client Data connection: they only touch the (already
+    //! StubRecorder-backed) `Recorder` trait and the DB, both already
+    //! exercised elsewhere. Everything else here (gameflow/lockfile/
+    //! live-client watchers) is deliberately left untested per this
+    //! file's header — no League client is installed on this machine.
+    use super::*;
+    use crate::db::Db;
+    use crate::live_client::MarkerKind;
+    use crate::recorder::stub::StubRecorder;
+
+    fn test_supervisor() -> (Arc<Supervisor>, PathBuf) {
+        let recorder: Arc<Mutex<Box<dyn Recorder>>> =
+            Arc::new(Mutex::new(Box::new(StubRecorder::new())));
+        let dir = std::env::temp_dir().join(format!(
+            "ninja-recorder-supervisor-test-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let db = Arc::new(Db::open_in_memory().unwrap());
+        (Supervisor::new(recorder, dir.clone(), db), dir)
+    }
+
+    #[test]
+    fn stop_recording_writes_recording_and_markers_to_db() {
+        let (sup, dir) = test_supervisor();
+
+        sup.start_recording();
+        assert!(sup.session.lock().unwrap().is_some());
+
+        // Simulate a marker collected mid-recording — normally done by
+        // `on_snapshot`, which needs a live poll to drive it.
+        {
+            let mut guard = sup.session.lock().unwrap();
+            let session = guard.as_mut().unwrap();
+            session.markers.push(SessionMarker {
+                marker: Marker {
+                    kind: MarkerKind::Kill,
+                    game_time_s: 12.5,
+                    payload: serde_json::json!({ "victim": "EnemyA" }),
+                },
+                video_time_s: 15.0,
+            });
+        }
+
+        sup.stop_recording();
+
+        let finalized = sup
+            .status()
+            .last_finalized
+            .expect("stop_recording should set last_finalized");
+        assert!(finalized.recording_id.is_some(), "DB write should have succeeded");
+        assert_eq!(finalized.markers.len(), 1);
+
+        let rows = sup.db.list_recordings().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, finalized.recording_id.unwrap());
+
+        assert!(
+            sup.session.lock().unwrap().is_none(),
+            "session should be cleared after stop"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn stop_recording_without_start_writes_nothing() {
+        let (sup, dir) = test_supervisor();
+
+        // StubRecorder::stop() without a prior start() errors — nothing
+        // should reach the DB.
+        sup.stop_recording();
+
+        assert!(sup.status().last_finalized.is_none());
+        assert!(sup.db.list_recordings().unwrap().is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

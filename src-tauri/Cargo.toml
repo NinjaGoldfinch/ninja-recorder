@@ -29,4 +29,6 @@ tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 native-tls = "0.2"
 futures-util = "0.3"
 base64 = "0.22"
+rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite_migration = "1"
 

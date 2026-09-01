@@ -137,6 +137,8 @@ markers:     id, recording_id, game_time_s, video_time_s, kind, payload_json
 
 - A DB row without its file (user deleted the MP4) is cleaned up on scan; a file without a row is imported as "unknown recording." The library must survive users touching the folder.
 
+Implemented in `src-tauri/src/db/` (`Db` + `reconcile`), migrations via `rusqlite_migration`, `rusqlite`'s `bundled` feature so no system SQLite is required on a fresh machine. Reconciliation runs once at app startup and on demand (`rescan_recordings` command). The state machine's Finalizing step (§3.4) writes a `recordings` row + its `markers` on every stop — `game_id`/`queue`/`champion`/`role`/`win`/`kda_*`/`patch`/`duration_s` all stay `NULL` for now, since that data comes from `lcu::fetch_match_summary`, still unwired per §3.4's noted gap.
+
 ---
 
 ## 5. Review player
