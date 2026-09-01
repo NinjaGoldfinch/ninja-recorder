@@ -80,12 +80,34 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # Builds the out-of-process libobs worker from our capture-backend
+      # fork (github.com/NinjaGoldfinch/libobs-recorder — see
+      # DEVELOPMENT.md §2.1) and stages it + its bundled libobs DLLs at
+      # src-tauri/target/libobs/, where tauri.windows.conf.json picks it up
+      # as a bundle resource and lib.rs's `LibObsRecorder::new` resolves it
+      # from at runtime. Deliberately a step outside Cargo's own dependency
+      # graph, not a Cargo artifact-dependency — that requires nightly
+      # Rust + the unstable `bindeps` flag, which would force the whole
+      # project (including every macOS dev's `cargo check`) onto nightly
+      # just for a Windows-only optional binary. Unverified — see
+      # DEVELOPMENT.md §2.2's Phase 6 status note.
+      - name: Stage libobs capture backend
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/NinjaGoldfinch/libobs-recorder.git ../libobs-recorder-build
+          cargo build --release --manifest-path ../libobs-recorder-build/Cargo.toml --bin extprocess_recorder
+          $dllDir = Get-ChildItem ../libobs-recorder-build/build-helper -Directory -Filter "libobs_*" |
+            Sort-Object Name -Descending | Select-Object -First 1
+          New-Item -ItemType Directory -Force -Path src-tauri/target/libobs | Out-Null
+          Copy-Item "$($dllDir.FullName)/*" src-tauri/target/libobs -Recurse -Force
+          Copy-Item ../libobs-recorder-build/target/release/extprocess_recorder.exe src-tauri/target/libobs/extprocess_recorder.exe -Force
+
       # Native build on each platform's own runner — never cross-compiled.
       # DEVELOPMENT.md §9: NSIS on Windows (not MSI, matches the documented
       # installer choice); dmg on macOS is the standard Tauri bundle format
       # there. macOS builds only exercise the stub recorder (Phase 1) —
-      # real capture is Windows-only (Phase 6) and won't exist on this
-      # platform.
+      # real capture is Windows-only (Phase 6).
       - name: Build app
         run: npm run tauri build -- --bundles ${{ matrix.bundles }}
 
