@@ -81,4 +81,5 @@ from the repo root.
 
 ## License
 
-TBD.
+GPL-2.0-only. The capture backend (Phase 6) embeds [libobs](https://github.com/obsproject/obs-studio) (GPLv2),
+which obligates the whole distributed binary — this isn't a preference, it's inherited from that dependency.

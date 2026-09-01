@@ -40,6 +40,10 @@ libobs gives us, solved: frame pacing, WASAPI loopback audio capture, audio/vide
 
 Reference implementation: [league_record](https://github.com/FFFFFFFXXXXXXX/league_record) (Tauri + libobs + LCU + Live Client Data). Read it before writing capture code.
 
+**Rust bindings: a fork, not the crate as-is.** league_record's libobs FFI/IPC layer is [`libobs-recorder`](https://github.com/FFFFFFFXXXXXXX/libobs-recorder) — solid (out-of-process worker for crash isolation, bindgen bindings kept current with OBS releases, a real encoder-settings API) but its video source is hardcoded to OBS's `game_capture`, which DLL-injects the target process. That's exactly the behavior §1.1 forbids. We depend on [`NinjaGoldfinch/libobs-recorder`](https://github.com/NinjaGoldfinch/libobs-recorder), a patched fork: `game_capture` → `window_capture` forced to `method=2` (Windows.Graphics.Capture), plus `muxer_settings` for fragmented MP4 output (see §2.2's crash-safety rule — this replaces the MKV-remux approach; a fragmented MP4 needs no finalization step, so it stays playable even if the process dies mid-recording). Vendoring the crate directly wasn't viable — its `build-helper` subcrate checks in every historical libobs Windows binary release, ~900 MB — so it's a git dependency like upstream, not copied into this repo.
+
+libobs is GPLv2; linking it makes the whole distributed binary GPL-2.0-only (see [LICENSE](LICENSE)), not a preference.
+
 ### 2.2 The `Recorder` trait
 
 All capture lives behind a narrow trait so libobs stays an implementation detail:
@@ -59,6 +63,18 @@ Backends:
 Rules:
 - No libobs types leak above the trait.
 - Recording output is **MKV remuxed to MP4 on stop** (or fragmented MP4) so a crash mid-game doesn't produce an unplayable file. A recorder crash must never lose the game footage recorded so far.
+
+Implemented in `src-tauri/src/recorder/`: `Recorder`, `RecordConfig`, `RecorderError` in `mod.rs` (unchanged from Phase 1 except adding a `RecorderError::Backend(String)` catch-all for wrapping libobs/IPC failures without leaking their type above the trait); `stub.rs` unchanged; `libobs/mod.rs` + `libobs/window.rs` (Windows-only, `#[cfg(target_os = "windows")]`) are the new Phase 6 backend, wired into `lib.rs`'s `setup` behind the same cfg gate.
+
+`LibObsRecorder` picks the game window (`FindWindowA` on title `"League of Legends (TM) Client"` / class `RiotWindowClass` / process `League of Legends.exe` — same identifiers league_record uses, verified against its actual source) and captures at its real client-area size (`GetClientRect`, retried briefly since the size can report (1,1) for a moment right after the window appears) rather than a hardcoded resolution — DEVELOPMENT.md's "resolution follows the game window" was aspirational until this phase. Encoder choice walks `available_encoders()` (already returned in NVENC→AMD→QSV priority order by the crate) and picks the first **H.264** one, explicitly excluding both `OBS_X264` (§2.4's no-silent-software-fallback rule — `start()` errors instead) and the AV1 variants the crate would otherwise prefer for NVENC (§2.4's WebView2-native-H.264-decode requirement, §5). Audio is `AudioSource::SYSTEM` (default output device loopback); rate control is `CBR(8000)` at 60fps per §2.4's defaults.
+
+**Runtime files: staged outside Cargo, not via artifact-dependencies.** league_record gets `extprocess_recorder.exe` + its libobs DLLs into the build via Cargo's artifact-dependency feature (`artifact = "bin:..."`), which needs nightly Rust + the unstable `bindeps` flag — their whole project builds on nightly (CI: `dtolnay/rust-toolchain@nightly`). We can't do that: `-Z bindeps` syntax in `Cargo.toml` breaks manifest parsing *for every platform*, confirmed locally (`cargo check` on macOS failed until the artifact-dependency lines were removed) — it would force every macOS dev's `cargo check`/`npm run tauri dev` onto nightly + an unstable flag just to support an optional Windows-only binary, which is a real regression against §9's dual-platform dev loop. Instead, CI's "Stage libobs capture backend" step (`.github/workflows/ci.yml` and `release.yml`, Windows leg only) builds the fork's `extprocess_recorder` binary as a fully separate `cargo build` invocation and copies it + the matching `libobs_<version>/` DLL folder into `src-tauri/target/libobs/` directly — no Cargo dependency-graph involvement, ordinary stable Rust throughout. `tauri.windows.conf.json` then bundles that folder as a resource, and `LibObsRecorder::new` (lib.rs) resolves it at runtime via Tauri's path resolver. Anyone doing Phase 6 work locally on the Windows box needs to run the same clone-build-copy sequence by hand before `cargo run`/`npm run tauri dev` until that's scripted for local use too.
+
+**Not verified — no Windows machine touched this code.** Same caveat this doc already applies to the async supervisor glue (§3.4): written and cross-checked against league_record's real, working source (not guessed), but nothing here has run. Specific open questions for the first Windows pass (§9):
+- Does `window_capture` forced to WGC actually produce frames for League's borderless/windowed modes, and does Vanguard tolerate it (the whole point of this fork — needs a real check, not just "should work").
+- The CI staging step's assumption that `Sort-Object Name -Descending` on `libobs_<version>/` directory names picks the newest — string sort, not version-aware, but the fork's directory names so far (`libobs_28.1.1` … `libobs_32.0.4`) happen to sort correctly that way.
+- The `tauri.windows.conf.json` resource path (`target/libobs` → bundled next to the installed .exe) matches league_record's own working config, but its interaction with `cargo tauri dev` — where the running binary is `target/debug/ninja-recorder.exe`, one level deeper than `target/libobs` — is unclear from reading the source alone; may need the staging step to also copy into `target/debug/libobs` for dev mode to work.
+- Encoder priority, window-size retry timing, and the `AudioSource::SYSTEM` choice are first-cut defaults, not tuned against real hardware.
 
 ### 2.3 Alternatives considered (and why not)
 
@@ -198,7 +214,8 @@ Verified: layout/CSS visually in a browser (with injected mock data, since a pla
 |---|---|
 | Riot changes LCU/Live Client endpoints | Unofficial-but-tolerated APIs; fixtures + thin client layer localize breakage. Watch league_record and lcu-driver communities |
 | Vanguard behavior changes re: WGC | WGC is a core OS compositor API used by Xbox Game Bar itself — lowest-risk capture path that exists. No fallback plan needed beyond display capture |
-| libobs Rust bindings immaturity | `libobs-rs` ecosystem is young. Budget time; fallback is a thin C shim over the (stable, C) libobs API. The trait keeps this contained |
+| libobs Rust bindings immaturity | Using a patched fork of `libobs-recorder` (§2.1) rather than raw bindings — but it's still a young, single-maintainer ecosystem and now a fork we own the patch for. Budget time; fallback is a thin C shim over the (stable, C) libobs API. The trait keeps this contained |
+| Our `libobs-recorder` fork falls behind upstream | We only carry a single small commit on top of upstream (capture source + muxer settings); re-basing onto a newer upstream tag is cheap. Watch for upstream libobs version bumps we might want (new encoders, bug fixes) |
 | YouTube quota audit friction | Ship upload as "bring your own consent" early; apply for quota increase well before it matters |
 | Disk-full during recording | Preflight free-space check at record start; stop gracefully + notify rather than corrupt |
 | Window mode edge cases (exclusive fullscreen) | WGC needs a composited surface. Detect and nudge user toward borderless (the League default) |
