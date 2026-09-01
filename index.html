@@ -16,6 +16,32 @@
           <p class="subtitle">League of Legends VOD library</p>
         </header>
 
+        <section id="disk-usage" class="disk-usage">
+          <p id="disk-usage-text" class="disk-usage-text">Loading disk usage…</p>
+          <details class="retention-settings">
+            <summary>Retention policy</summary>
+            <form id="retention-form" class="retention-form">
+              <label class="retention-field">
+                <input type="checkbox" id="retention-size-enabled" />
+                Max total size (GB)
+                <input type="number" id="retention-size-gb" min="1" step="1" disabled />
+              </label>
+              <label class="retention-field">
+                <input type="checkbox" id="retention-age-enabled" />
+                Max age (days)
+                <input type="number" id="retention-age-days" min="1" step="1" disabled />
+              </label>
+              <button type="submit">Save</button>
+              <span id="retention-status" class="status"></span>
+            </form>
+            <p class="hint">
+              Pinned recordings are exempt from both limits. When a limit is
+              hit, the oldest non-pinned recordings are removed first —
+              checked on app start and after every recording finishes.
+            </p>
+          </details>
+        </section>
+
         <section id="library">
           <div class="filter-bar">
             <input

@@ -3,6 +3,7 @@ mod fixtures;
 mod lcu;
 mod live_client;
 mod recorder;
+mod retention;
 mod state_machine;
 
 #[cfg(not(target_os = "windows"))]
@@ -27,8 +28,12 @@ fn recordings_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> 
 
 #[tauri::command]
 fn start_recording(state: tauri::State<AppState>, app: tauri::AppHandle) -> Result<(), String> {
+    let dir = recordings_dir(&app)?;
+    if !retention::has_room_to_record(&dir) {
+        return Err("Not enough free disk space to start recording".to_string());
+    }
     let config = RecordConfig {
-        output_dir: recordings_dir(&app)?,
+        output_dir: dir,
         file_stem: format!("recording-{}", chrono_stamp()),
     };
     state
@@ -81,6 +86,55 @@ fn get_recording_markers(
     state
         .db
         .get_markers(recording_id)
+        .map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize)]
+struct DiskUsage {
+    total_bytes: i64,
+    recording_count: i64,
+    free_bytes: i64,
+}
+
+/// Usage summary for the library UI (Phase 9 / DEVELOPMENT.md §6) — shown
+/// alongside the retention policy so nothing gets deleted as a surprise.
+#[tauri::command]
+fn get_disk_usage(state: tauri::State<AppState>) -> Result<DiskUsage, String> {
+    let total_bytes = state.db.total_size_bytes().map_err(|e| e.to_string())?;
+    let recording_count = state.db.list_recordings().map_err(|e| e.to_string())?.len() as i64;
+    let free_bytes = retention::free_space_bytes(&state.recordings_dir).unwrap_or(0) as i64;
+    Ok(DiskUsage {
+        total_bytes,
+        recording_count,
+        free_bytes,
+    })
+}
+
+#[tauri::command]
+fn get_retention_policy(state: tauri::State<AppState>) -> Result<db::RetentionPolicy, String> {
+    state.db.get_retention_policy().map_err(|e| e.to_string())
+}
+
+/// Saves the policy and immediately re-enforces it — otherwise a
+/// newly-tightened limit wouldn't take effect until the next finalize or
+/// app restart, which would leave the UI's own usage number stale.
+#[tauri::command]
+fn set_retention_policy(
+    state: tauri::State<AppState>,
+    policy: db::RetentionPolicy,
+) -> Result<retention::EnforcementReport, String> {
+    state
+        .db
+        .set_retention_policy(&policy)
+        .map_err(|e| e.to_string())?;
+    retention::enforce_now(&state.db, &policy).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_pinned(state: tauri::State<AppState>, recording_id: i64, pinned: bool) -> Result<(), String> {
+    state
+        .db
+        .set_pinned(recording_id, pinned)
         .map_err(|e| e.to_string())
 }
 
@@ -223,6 +277,24 @@ pub fn run() {
                 Err(e) => eprintln!("[db] startup reconcile failed: {e}"),
             }
 
+            // Retention (Phase 9 / DEVELOPMENT.md §6): enforced here and
+            // again after every finalize (state_machine::supervisor), so a
+            // policy set while the app was closed — or last session's
+            // finalize enforcement never running because the app crashed
+            // — still gets applied on the next launch.
+            match db.get_retention_policy() {
+                Ok(policy) => match retention::enforce_now(&db, &policy) {
+                    Ok(report) if !report.deleted.is_empty() => println!(
+                        "[retention] startup enforcement: removed {} recording(s), freed {} bytes",
+                        report.deleted.len(),
+                        report.freed_bytes
+                    ),
+                    Ok(_) => {}
+                    Err(e) => eprintln!("[retention] startup enforcement failed: {e}"),
+                },
+                Err(e) => eprintln!("[retention] failed to load policy: {e}"),
+            }
+
             let supervisor =
                 state_machine::Supervisor::new(Arc::clone(&recorder), dir.clone(), Arc::clone(&db));
             supervisor.start();
@@ -242,6 +314,10 @@ pub fn run() {
             list_recordings,
             rescan_recordings,
             get_recording_markers,
+            get_disk_usage,
+            get_retention_policy,
+            set_retention_policy,
+            set_pinned,
             lcu_status,
             game_state_status
         ])

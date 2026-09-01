@@ -235,6 +235,11 @@ impl Supervisor {
     /// than silently wrong; not expected to occur outside that manual
     /// double-start collision.
     fn start_recording(&self) {
+        if !crate::retention::has_room_to_record(&self.recordings_dir) {
+            eprintln!("[state_machine] refusing to start recording: insufficient free disk space");
+            return;
+        }
+
         let started_at_millis = timestamp_millis();
         let config = RecordConfig {
             output_dir: self.recordings_dir.clone(),
@@ -304,6 +309,24 @@ impl Supervisor {
                     path: path_str,
                     markers,
                 });
+
+                // Retention (Phase 9 / DEVELOPMENT.md §6): enforced right
+                // after every finalize, in addition to app-start
+                // (lib.rs's `setup`) — this is what actually keeps disk
+                // usage bounded during a long play session where the app
+                // never restarts.
+                match self.db.get_retention_policy() {
+                    Ok(policy) => match crate::retention::enforce_now(&self.db, &policy) {
+                        Ok(report) if !report.deleted.is_empty() => println!(
+                            "[retention] post-finalize enforcement: removed {} recording(s), freed {} bytes",
+                            report.deleted.len(),
+                            report.freed_bytes
+                        ),
+                        Ok(_) => {}
+                        Err(e) => eprintln!("[retention] post-finalize enforcement failed: {e}"),
+                    },
+                    Err(e) => eprintln!("[retention] failed to load policy: {e}"),
+                }
             }
             Err(e) => eprintln!("[state_machine] failed to stop recording: {e}"),
         }

@@ -16,6 +16,13 @@ let filterChampion: HTMLInputElement | null;
 let filterOutcome: HTMLSelectElement | null;
 let filterPinned: HTMLInputElement | null;
 let sortSelect: HTMLSelectElement | null;
+let diskUsageText: HTMLElement | null;
+let retentionForm: HTMLFormElement | null;
+let retentionSizeEnabled: HTMLInputElement | null;
+let retentionSizeGb: HTMLInputElement | null;
+let retentionAgeEnabled: HTMLInputElement | null;
+let retentionAgeDays: HTMLInputElement | null;
+let retentionStatus: HTMLElement | null;
 
 interface LcuStatus {
   connected: boolean;
@@ -41,6 +48,19 @@ interface ReconcileReport {
   orphans_removed: number;
   imported: number;
 }
+
+interface DiskUsage {
+  total_bytes: number;
+  recording_count: number;
+  free_bytes: number;
+}
+
+interface RetentionPolicy {
+  max_total_bytes: number | null;
+  max_age_days: number | null;
+}
+
+const BYTES_PER_GB = 1024 ** 3;
 
 type GameState = "Idle" | "ClientRunning" | "WaitingForGame" | "Recording" | "Finalizing";
 
@@ -75,9 +95,19 @@ function formatOutcomeBadge(win: boolean | null): string {
     : `<span class="badge badge-loss">Loss</span>`;
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes >= BYTES_PER_GB) return `${(bytes / BYTES_PER_GB).toFixed(1)} GB`;
+  return `${Math.round(bytes / 1024 ** 2)} MB`;
+}
+
 function formatRecordingRow(row: RecordingRow): string {
   const when = new Date(row.started_at).toLocaleString();
-  const pinned = row.pinned ? `<span title="Pinned">📌</span>` : "";
+  const pinned = `<button
+      class="pin-btn${row.pinned ? " pinned" : ""}"
+      type="button"
+      data-pin="${row.id}"
+      title="${row.pinned ? "Unpin" : "Pin (exempt from disk retention)"}"
+    >📌</button>`;
   const champion = row.champion
     ? escapeHtml(row.champion)
     : escapeHtml(basename(row.path));
@@ -186,9 +216,75 @@ async function stopRecording() {
     setStatus(`Saved: ${path}`);
     if (startBtn) startBtn.disabled = false;
     if (stopBtn) stopBtn.disabled = true;
-    await refreshLibrary();
+    await Promise.all([refreshLibrary(), refreshDiskUsage()]);
   } catch (err) {
     setStatus(`Failed to stop: ${err}`);
+  }
+}
+
+async function refreshDiskUsage() {
+  if (!diskUsageText) return;
+  try {
+    const usage = await invoke<DiskUsage>("get_disk_usage");
+    diskUsageText.textContent =
+      `${formatBytes(usage.total_bytes)} across ${usage.recording_count} recording(s) — ` +
+      `${formatBytes(usage.free_bytes)} free`;
+  } catch (err) {
+    diskUsageText.textContent = `Failed to load disk usage: ${err}`;
+  }
+}
+
+function applyRetentionPolicyToForm(policy: RetentionPolicy) {
+  if (!retentionSizeEnabled || !retentionSizeGb || !retentionAgeEnabled || !retentionAgeDays) return;
+
+  retentionSizeEnabled.checked = policy.max_total_bytes !== null;
+  retentionSizeGb.disabled = policy.max_total_bytes === null;
+  retentionSizeGb.value =
+    policy.max_total_bytes !== null ? String(Math.round(policy.max_total_bytes / BYTES_PER_GB)) : "";
+
+  retentionAgeEnabled.checked = policy.max_age_days !== null;
+  retentionAgeDays.disabled = policy.max_age_days === null;
+  retentionAgeDays.value = policy.max_age_days !== null ? String(policy.max_age_days) : "";
+}
+
+async function loadRetentionPolicy() {
+  try {
+    const policy = await invoke<RetentionPolicy>("get_retention_policy");
+    applyRetentionPolicyToForm(policy);
+  } catch (err) {
+    if (retentionStatus) retentionStatus.textContent = `Failed to load policy: ${err}`;
+  }
+}
+
+async function saveRetentionPolicy(e: Event) {
+  e.preventDefault();
+  if (!retentionSizeEnabled || !retentionSizeGb || !retentionAgeEnabled || !retentionAgeDays || !retentionStatus) {
+    return;
+  }
+
+  const policy: RetentionPolicy = {
+    max_total_bytes: retentionSizeEnabled.checked
+      ? Math.round(Number(retentionSizeGb.value) * BYTES_PER_GB)
+      : null,
+    max_age_days: retentionAgeEnabled.checked ? Number(retentionAgeDays.value) : null,
+  };
+
+  try {
+    retentionStatus.textContent = "Saving…";
+    await invoke("set_retention_policy", { policy });
+    retentionStatus.textContent = "Saved.";
+    await Promise.all([refreshDiskUsage(), refreshLibrary()]);
+  } catch (err) {
+    retentionStatus.textContent = `Failed to save: ${err}`;
+  }
+}
+
+async function togglePin(row: RecordingRow) {
+  try {
+    await invoke("set_pinned", { recordingId: row.id, pinned: !row.pinned });
+    await refreshLibrary();
+  } catch (err) {
+    setStatus(`Failed to update pin: ${err}`);
   }
 }
 
@@ -253,6 +349,13 @@ window.addEventListener("DOMContentLoaded", () => {
   filterOutcome = document.querySelector("#filter-outcome");
   filterPinned = document.querySelector("#filter-pinned");
   sortSelect = document.querySelector("#sort-select");
+  diskUsageText = document.querySelector("#disk-usage-text");
+  retentionForm = document.querySelector("#retention-form");
+  retentionSizeEnabled = document.querySelector("#retention-size-enabled");
+  retentionSizeGb = document.querySelector("#retention-size-gb");
+  retentionAgeEnabled = document.querySelector("#retention-age-enabled");
+  retentionAgeDays = document.querySelector("#retention-age-days");
+  retentionStatus = document.querySelector("#retention-status");
 
   startBtn?.addEventListener("click", startRecording);
   stopBtn?.addEventListener("click", stopRecording);
@@ -267,12 +370,29 @@ window.addEventListener("DOMContentLoaded", () => {
   sortSelect?.addEventListener("change", applyFiltersAndRender);
 
   libraryList?.addEventListener("click", (e) => {
+    const pinBtn = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-pin]");
+    if (pinBtn) {
+      const row = allRecordings.find((r) => r.id === Number(pinBtn.dataset.pin));
+      if (row) togglePin(row);
+      return;
+    }
+
     const li = (e.target as HTMLElement).closest<HTMLLIElement>("li[data-id]");
     if (!li) return;
     const row = allRecordings.find((r) => r.id === Number(li.dataset.id));
     if (row) openReview(row);
   });
 
+  retentionSizeEnabled?.addEventListener("change", () => {
+    if (retentionSizeGb) retentionSizeGb.disabled = !retentionSizeEnabled?.checked;
+  });
+  retentionAgeEnabled?.addEventListener("change", () => {
+    if (retentionAgeDays) retentionAgeDays.disabled = !retentionAgeEnabled?.checked;
+  });
+  retentionForm?.addEventListener("submit", saveRetentionPolicy);
+
   initReview();
   refreshLibrary();
+  refreshDiskUsage();
+  loadRetentionPolicy();
 });
