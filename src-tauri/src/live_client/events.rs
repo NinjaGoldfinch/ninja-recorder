@@ -101,6 +101,24 @@ pub enum MarkerKind {
     FirstBlood,
 }
 
+impl MarkerKind {
+    /// Matches both the DB `markers.kind` values (DEVELOPMENT.md §4) and
+    /// this enum's own `snake_case` serde representation.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MarkerKind::Kill => "kill",
+            MarkerKind::Death => "death",
+            MarkerKind::Assist => "assist",
+            MarkerKind::Dragon => "dragon",
+            MarkerKind::Baron => "baron",
+            MarkerKind::Herald => "herald",
+            MarkerKind::Turret => "turret",
+            MarkerKind::Ace => "ace",
+            MarkerKind::FirstBlood => "first_blood",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Marker {
     pub kind: MarkerKind,
@@ -271,6 +289,24 @@ impl TimeAlignment {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn as_str_matches_serde_snake_case_representation() {
+        for kind in [
+            MarkerKind::Kill,
+            MarkerKind::Death,
+            MarkerKind::Assist,
+            MarkerKind::Dragon,
+            MarkerKind::Baron,
+            MarkerKind::Herald,
+            MarkerKind::Turret,
+            MarkerKind::Ace,
+            MarkerKind::FirstBlood,
+        ] {
+            let serialized: String = serde_json::to_string(&kind).unwrap();
+            assert_eq!(serialized, format!("\"{}\"", kind.as_str()));
+        }
+    }
 
     fn fixture() -> AllGameData {
         let json = include_str!(concat!(
