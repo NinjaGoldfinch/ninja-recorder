@@ -98,11 +98,10 @@
 
         <div class="player-wrap">
           <video id="review-video" controls></video>
-          <p id="review-video-error" class="video-error" hidden>
-            This recording has no playable video (the stub recorder wrote a
-            placeholder file, not real footage). Drop a real short clip in
-            as <code>fixtures/sample.mp4</code> to test playback.
-          </p>
+          <div id="review-video-error" class="video-error" hidden>
+            <p id="review-video-error-text"></p>
+            <code id="review-video-error-detail"></code>
+          </div>
         </div>
 
         <div class="player-controls">

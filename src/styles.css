@@ -210,18 +210,29 @@ button:disabled {
   position: absolute;
   inset: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 0.5rem;
   padding: 2rem;
   text-align: center;
   color: #eee;
   background-color: rgba(0, 0, 0, 0.85);
 }
 
+.video-error p {
+  margin: 0;
+}
+
 .video-error code {
+  display: block;
+  max-width: 100%;
+  overflow-wrap: break-word;
   background-color: rgba(255, 255, 255, 0.15);
-  padding: 0.1em 0.4em;
+  padding: 0.2em 0.6em;
   border-radius: 4px;
+  font-size: 0.8rem;
+  color: #ccc;
 }
 
 .player-controls {
