@@ -118,6 +118,10 @@ function showVideoError() {
 
   const err = video.error;
   const isMkv = currentRecordingPath?.toLowerCase().endsWith(".mkv") ?? false;
+  // Codes 3 (decode) and 4 (source not supported) on an mp4 that isn't
+  // actually malformed are, in practice, almost always an unsupported
+  // codec inside an otherwise-valid container.
+  const likelyCodecIssue = !isMkv && (err?.code === 3 || err?.code === 4);
 
   if (videoErrorText) {
     if (isMkv) {
@@ -127,6 +131,13 @@ function showVideoError() {
       // an OBS recording, since .mkv is OBS's crash-safe default output.
       videoErrorText.textContent =
         "This is an .mkv file — browsers (including WebView2) can't play Matroska containers natively, no matter what's encoded inside. Remux it to .mp4 (e.g. \"ffmpeg -i in.mkv -c copy out.mp4\", no re-encode needed) and try again.";
+    } else if (likelyCodecIssue) {
+      // H.265/HEVC-in-mp4 is the single most common real-world cause of
+      // this: many capture tools (ShadowPlay, some phones) default to it,
+      // and WebView2 can't decode it without an extra Windows codec pack
+      // that's not installed by default.
+      videoErrorText.textContent =
+        `This recording's video couldn't be played (${MEDIA_ERROR_LABELS[err!.code]}). The most common cause for an otherwise-valid mp4 is H.265/HEVC video — WebView2 needs the "HEVC Video Extensions" from the Microsoft Store to decode it at all, and playback can still be unreliable even then. Re-encoding to H.264 is the more reliable fix: "ffmpeg -i in.mp4 -c:v libx264 -c:a aac out.mp4".`;
     } else {
       videoErrorText.textContent = err
         ? `This recording's video couldn't be played (${MEDIA_ERROR_LABELS[err.code] ?? `error code ${err.code}`}).`
