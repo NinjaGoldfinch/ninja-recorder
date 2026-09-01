@@ -5,6 +5,7 @@
 
 #[cfg(target_os = "windows")]
 pub mod libobs;
+#[cfg(not(target_os = "windows"))]
 pub mod stub;
 
 use std::path::PathBuf;
