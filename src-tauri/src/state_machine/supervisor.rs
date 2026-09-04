@@ -58,6 +58,12 @@ pub struct FinalizedRecording {
 pub struct SupervisorStatus {
     pub state: GameState,
     pub last_finalized: Option<FinalizedRecording>,
+    /// Seconds since capture actually started, or `None` when nothing is
+    /// recording. Read from the session rather than timed by the UI: the
+    /// window can be opened part-way through a game, and a counter that
+    /// starts at zero when the UI first looks would misreport how much has
+    /// been captured.
+    pub recording_elapsed_s: Option<f64>,
 }
 
 struct RecordingSession {
@@ -105,6 +111,12 @@ impl Supervisor {
         SupervisorStatus {
             state: self.machine.lock().unwrap().state.clone(),
             last_finalized: self.last_finalized.lock().unwrap().clone(),
+            recording_elapsed_s: self
+                .session
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|s| s.record_started_at.elapsed().as_secs_f64()),
         }
     }
 

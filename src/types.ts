@@ -73,6 +73,10 @@ export type GameState =
 export interface SupervisorStatus {
   state: GameState;
   last_finalized: FinalizedRecording | null;
+  // Seconds since capture began, straight from the supervisor's session —
+  // not timed in the UI, which would restart from zero if the window were
+  // opened part-way through a game.
+  recording_elapsed_s: number | null;
 }
 
 export interface ReconcileReport {

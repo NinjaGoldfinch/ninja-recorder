@@ -1,6 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type {
-  DiskUsage,
   LcuStatus,
   MarkerRow,
   RecordingRow,
@@ -129,14 +128,8 @@ const FIXTURE_SAMPLES: SampleRow[] = Array.from({ length: 300 }, (_, i) => {
 });
 
 const MOCKS: Record<string, unknown> = {
-  list_recordings: FIXTURE_ROWS,
   get_recording_markers: FIXTURE_MARKERS,
   get_recording_samples: FIXTURE_SAMPLES,
-  get_disk_usage: {
-    total_bytes: FIXTURE_ROWS.reduce((a, r) => a + r.size_bytes, 0),
-    recording_count: FIXTURE_ROWS.length,
-    free_bytes: 214_000_000_000,
-  } satisfies DiskUsage,
   get_retention_policy: { max_total_bytes: 53_687_091_200, max_age_days: 30 },
   preview_retention_policy: { deleted: [], freed_bytes: 0 },
   set_retention_policy: { deleted: [], freed_bytes: 0 },
@@ -152,16 +145,40 @@ const MOCKS: Record<string, unknown> = {
   game_state_status: {
     state: "ClientRunning",
     last_finalized: null,
+    recording_elapsed_s: null,
   } satisfies SupervisorStatus,
 };
 
+// Writes mutate the fixture array rather than no-op'ing, so pin and delete
+// behave the way they will in the real app — a two-step delete that never
+// removes anything is not much of a test.
 async function mock<T>(
   command: string,
-  _args?: Record<string, unknown>,
+  args?: Record<string, unknown>,
 ): Promise<T> {
+  switch (command) {
+    case "list_recordings":
+      return FIXTURE_ROWS as T;
+    case "get_disk_usage":
+      return {
+        total_bytes: FIXTURE_ROWS.reduce((a, r) => a + r.size_bytes, 0),
+        recording_count: FIXTURE_ROWS.length,
+        free_bytes: 214_000_000_000,
+      } as T;
+    case "set_pinned": {
+      const row = FIXTURE_ROWS.find((r) => r.id === args?.recordingId);
+      if (row) row.pinned = Boolean(args?.pinned);
+      return undefined as T;
+    }
+    case "delete_recording": {
+      const at = FIXTURE_ROWS.findIndex((r) => r.id === args?.recordingId);
+      if (at >= 0) FIXTURE_ROWS.splice(at, 1);
+      return undefined as T;
+    }
+    case "set_ui_pref":
+    case "open_recordings_folder":
+      return undefined as T;
+  }
   if (command in MOCKS) return MOCKS[command] as T;
-  // Writes have nothing to return; anything else is a command we forgot.
-  const writes = ["set_pinned", "set_ui_pref", "delete_recording", "open_recordings_folder"];
-  if (writes.includes(command)) return undefined as T;
   throw new Error(`No dev fixture for invoke("${command}")`);
 }

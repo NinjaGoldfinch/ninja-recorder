@@ -3,7 +3,7 @@
 // library's visibility was written in places that knew nothing about each
 // other.
 
-export type View = "library" | "review" | "testing";
+export type View = "library" | "review" | "settings";
 
 const views = new Map<View, HTMLElement>();
 const listeners: ((view: View) => void)[] = [];
