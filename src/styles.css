@@ -1,11 +1,57 @@
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
+/* ---------------------------------------------------------------------
+ * Design tokens
+ *
+ * `data-theme` on <html> is written by theme.ts and is only ever "light" or
+ * "dark" — never absent once the boot script in index.html has run. That is
+ * why there is no `@media (prefers-color-scheme: dark)` block here: the OS
+ * preference is resolved once, in JS, so "System" and an explicit "Light"
+ * on a dark OS both land on a single unambiguous attribute instead of
+ * fighting a media query for specificity.
+ *
+ * Only colour lives per-theme. Radii, spacing, type scale and motion are
+ * defined once — a token that differs between themes for any reason other
+ * than contrast is a bug.
+ * ------------------------------------------------------------------- */
 
-  color: #0f0f0f;
-  background-color: #f6f6f6;
+:root {
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-pill: 999px;
+
+  --sp-1: 0.25rem;
+  --sp-2: 0.5rem;
+  --sp-3: 0.75rem;
+  --sp-4: 1rem;
+  --sp-5: 1.5rem;
+  --sp-6: 2rem;
+
+  --fs-xs: 0.72rem;
+  --fs-sm: 0.8125rem;
+  --fs-md: 0.875rem;
+  --fs-base: 1rem;
+  --fs-lg: 1.125rem;
+  --fs-xl: 1.5rem;
+
+  --dur-fast: 120ms;
+  --dur: 180ms;
+  --ease: cubic-bezier(0.2, 0.6, 0.3, 1);
+
+  --content-max: 1120px;
+
+  --font-sans: -apple-system, "Segoe UI Variable Text", "Segoe UI", system-ui,
+    sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono",
+    monospace;
+
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.5;
+  font-weight: 400;
+  color: var(--text);
+  background-color: var(--bg-app);
+  accent-color: var(--accent);
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -13,10 +59,104 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-app: #f8f6fd;
+  --bg-surface: #ffffff;
+  --bg-surface-2: #f2eefb;
+  --bg-surface-hover: #efe9fb;
+  --bg-inset: #ece6f8;
+
+  --border: #e5def4;
+  --border-strong: #cdc0e9;
+
+  --text: #191233;
+  --text-muted: #5b5177;
+  --text-subtle: #857aa3;
+
+  --accent: #6d3fd4;
+  --accent-hover: #5c31bd;
+  --accent-contrast: #ffffff;
+  --accent-soft: #ebe3fd;
+  --accent-ring: rgba(109, 63, 212, 0.35);
+
+  --win-fg: #1c7c54;
+  --win-bg: #dcf5e9;
+  --loss-fg: #b3253f;
+  --loss-bg: #fde5ea;
+  --rec-fg: #d81b52;
+  --warn-fg: #a8650a;
+
+  --shadow-1: 0 1px 2px rgba(30, 16, 66, 0.06), 0 1px 3px rgba(30, 16, 66, 0.08);
+  --shadow-2: 0 4px 12px rgba(30, 16, 66, 0.1);
+  --shadow-3: 0 10px 28px rgba(30, 16, 66, 0.15);
+
+  /* Marker colours come from review.ts as event semantics, not chrome.
+   * They were picked against a light surface, so they only need lifting
+   * on dark. */
+  --marker-boost: none;
+
+  --glow: radial-gradient(
+    900px 380px at 50% -220px,
+    rgba(109, 63, 212, 0.13),
+    transparent 70%
+  );
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-app: #100d17;
+  --bg-surface: #191524;
+  --bg-surface-2: #221c31;
+  --bg-surface-hover: #292139;
+  --bg-inset: #0b0910;
+
+  --border: #2e2640;
+  --border-strong: #43385c;
+
+  --text: #ece8f6;
+  --text-muted: #ada3c4;
+  --text-subtle: #7d7396;
+
+  /* The light theme's 600-weight accent goes muddy on a dark ground; this
+   * is the same hue lifted until it reads as luminous rather than dim. */
+  --accent: #a880ff;
+  --accent-hover: #bb9bff;
+  --accent-contrast: #170f2b;
+  --accent-soft: rgba(168, 128, 255, 0.16);
+  --accent-ring: rgba(168, 128, 255, 0.45);
+
+  --win-fg: #6ee7b7;
+  --win-bg: rgba(52, 211, 153, 0.14);
+  --loss-fg: #fb7185;
+  --loss-bg: rgba(244, 63, 94, 0.14);
+  --rec-fg: #fb7185;
+  --warn-fg: #f5b544;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.45);
+  --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.55);
+
+  --marker-boost: brightness(1.35) saturate(1.15);
+
+  --glow: radial-gradient(
+    900px 380px at 50% -220px,
+    rgba(168, 128, 255, 0.16),
+    transparent 70%
+  );
+}
+
 body {
   margin: 0;
   display: flex;
   justify-content: center;
+  min-height: 100vh;
+  background-color: var(--bg-app);
+  background-image: var(--glow);
+  background-repeat: no-repeat;
 }
 
 /* The `hidden` attribute means "not rendered", but the UA rule that
@@ -31,117 +171,143 @@ body {
   display: none !important;
 }
 
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-xs);
+}
+
 .container {
   width: 100%;
-  max-width: 960px;
-  padding: 2rem 1.5rem;
+  max-width: var(--content-max);
+  padding: var(--sp-6) var(--sp-5);
 }
 
 .app-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 1rem;
+  gap: var(--sp-4);
 }
 
 .app-header h1 {
   margin: 0;
+  font-size: var(--fs-xl);
+  letter-spacing: -0.02em;
 }
 
 .app-header .subtitle {
-  margin: 0.25rem 0 2rem;
-  color: #666;
+  margin: var(--sp-1) 0 var(--sp-6);
+  color: var(--text-muted);
+  font-size: var(--fs-md);
 }
 
 .empty-state {
-  border: 1px dashed #ccc;
-  border-radius: 8px;
-  padding: 2rem;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  padding: var(--sp-6);
   text-align: center;
-  color: #555;
+  color: var(--text-muted);
 }
 
 .empty-state .hint {
-  font-size: 0.85rem;
-  color: #888;
+  font-size: var(--fs-sm);
+  color: var(--text-subtle);
 }
 
 .disk-usage {
-  margin-bottom: 1.25rem;
-  padding: 0.75rem 1rem;
-  border: 1px solid #e5e5e5;
-  border-radius: 8px;
-  background-color: #fff;
+  margin-bottom: var(--sp-5);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background-color: var(--bg-surface);
+  box-shadow: var(--shadow-1);
 }
 
 .disk-usage-text {
   margin: 0;
-  font-size: 0.9rem;
-  color: #444;
+  font-size: var(--fs-md);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .retention-settings {
-  margin-top: 0.5rem;
+  margin-top: var(--sp-2);
 }
 
 .retention-settings summary {
   cursor: pointer;
-  font-size: 0.85rem;
-  color: #396cd8;
+  font-size: var(--fs-sm);
+  color: var(--accent);
 }
 
 .retention-form {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 1rem;
-  margin-top: 0.75rem;
+  gap: var(--sp-4);
+  margin-top: var(--sp-3);
 }
 
 .retention-field {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  font-size: 0.85rem;
-  color: #555;
-}
-
-.retention-field input[type="number"] {
-  width: 5rem;
-  padding: 0.35em 0.5em;
-  border-radius: 6px;
-  border: 1px solid #ddd;
-  background-color: #fff;
-  font-size: 0.9rem;
+  gap: var(--sp-1);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
 }
 
 .filter-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.75rem;
-  margin-bottom: 1rem;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
 }
 
 .filter-bar input[type="search"] {
   flex: 1 1 200px;
 }
 
-.filter-bar input,
-.filter-bar select {
+input[type="search"],
+input[type="number"],
+select {
   padding: 0.45em 0.7em;
-  border-radius: 6px;
-  border: 1px solid #ddd;
-  background-color: #fff;
-  font-size: 0.9rem;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background-color: var(--bg-surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  transition: border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
+}
+
+input[type="search"]:hover,
+input[type="number"]:hover,
+select:hover {
+  border-color: var(--border-strong);
+}
+
+input[type="search"]:focus-visible,
+input[type="number"]:focus-visible,
+select:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.retention-field input[type="number"] {
+  width: 5rem;
+  padding: 0.35em 0.5em;
 }
 
 .checkbox-label {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  font-size: 0.9rem;
-  color: #555;
+  gap: var(--sp-1);
+  font-size: var(--fs-md);
+  color: var(--text-muted);
   white-space: nowrap;
 }
 
@@ -152,21 +318,21 @@ body {
 }
 
 .library-list li {
-  padding: 0.6rem 0.75rem;
-  border-bottom: 1px solid #e5e5e5;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--r-xs);
 }
 
 .library-list li:hover,
 .library-list li:focus-visible {
-  background-color: rgba(57, 108, 216, 0.08);
+  background-color: var(--bg-surface-hover);
 }
 
 .library-row-main {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--sp-2);
   font-weight: 500;
 }
 
@@ -175,36 +341,38 @@ body {
   align-items: center;
   gap: 0.9rem;
   margin-top: 0.15rem;
-  font-size: 0.85rem;
-  color: #666;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .badge {
   display: inline-block;
   padding: 0.05em 0.5em;
-  border-radius: 999px;
-  font-size: 0.75rem;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-xs);
   font-weight: 600;
 }
 
 .badge-win {
-  background-color: rgba(67, 160, 71, 0.15);
-  color: #2e7d32;
+  background-color: var(--win-bg);
+  color: var(--win-fg);
 }
 
 .badge-loss {
-  background-color: rgba(229, 57, 53, 0.15);
-  color: #c62828;
+  background-color: var(--loss-bg);
+  color: var(--loss-fg);
 }
 
 .pin-btn {
   padding: 0 0.3em;
   border: none;
   background: none;
-  font-size: 0.9rem;
+  font-size: var(--fs-md);
   line-height: 1;
   opacity: 0.35;
   filter: grayscale(1);
+  transition: opacity var(--dur) var(--ease);
 }
 
 .pin-btn:hover:not(:disabled) {
@@ -218,45 +386,49 @@ body {
 }
 
 .dev-panel {
-  margin-top: 1.5rem;
-  padding-top: 1.5rem;
-  border-top: 1px solid #e5e5e5;
+  margin-top: var(--sp-5);
+  padding-top: var(--sp-5);
+  border-top: 1px solid var(--border);
 }
 
 .dev-panel h3 {
-  font-size: 0.9rem;
+  font-size: var(--fs-md);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: #888;
+  color: var(--text-subtle);
 }
 
 .testing-link {
   flex-shrink: 0;
   background: none;
-  color: #888;
-  font-size: 0.85rem;
+  border-color: transparent;
+  color: var(--text-subtle);
+  font-size: var(--fs-sm);
 }
 
 .row {
   display: flex;
-  gap: 0.75rem;
+  gap: var(--sp-3);
   flex-wrap: wrap;
 }
 
 button {
-  border-radius: 6px;
-  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
   padding: 0.5em 1em;
-  font-size: 0.95rem;
+  font-family: inherit;
+  font-size: var(--fs-md);
   font-weight: 500;
   cursor: pointer;
-  background-color: #ffffff;
-  border-color: #ddd;
-  transition: border-color 0.2s;
+  color: var(--text);
+  background-color: var(--bg-surface);
+  transition: border-color var(--dur) var(--ease),
+    background-color var(--dur) var(--ease), color var(--dur) var(--ease);
 }
 
 button:hover:not(:disabled) {
-  border-color: #396cd8;
+  border-color: var(--accent);
+  background-color: var(--bg-surface-hover);
 }
 
 button:disabled {
@@ -266,8 +438,12 @@ button:disabled {
 
 .status {
   min-height: 1.2em;
-  font-size: 0.9rem;
-  color: #444;
+  font-size: var(--fs-md);
+  color: var(--text-muted);
+}
+
+.hint {
+  color: var(--text-subtle);
 }
 
 /* --- Review view ------------------------------------------------ */
@@ -275,12 +451,13 @@ button:disabled {
 .review-header {
   display: flex;
   align-items: center;
-  gap: 1rem;
-  margin-bottom: 1rem;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-4);
 }
 
 .review-header h2 {
   margin: 0;
+  letter-spacing: -0.01em;
 }
 
 .back-btn {
@@ -290,8 +467,9 @@ button:disabled {
 .player-wrap {
   position: relative;
   background-color: #000;
-  border-radius: 8px;
+  border-radius: var(--r-lg);
   overflow: hidden;
+  box-shadow: var(--shadow-2);
 }
 
 #review-video {
@@ -302,6 +480,10 @@ button:disabled {
   background-color: #000;
 }
 
+/* Deliberately NOT tokenised. This overlay sits on top of black video in
+ * both themes, so a light-theme surface colour here would put pale text on
+ * a pale panel over a black frame — and it only ever appears when a video
+ * fails to decode, which is the worst moment to discover it. */
 .video-error {
   position: absolute;
   inset: 0;
@@ -309,8 +491,8 @@ button:disabled {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.5rem;
-  padding: 2rem;
+  gap: var(--sp-2);
+  padding: var(--sp-6);
   overflow-y: auto;
   text-align: center;
   color: #eee;
@@ -327,7 +509,8 @@ button:disabled {
   overflow-wrap: break-word;
   background-color: rgba(255, 255, 255, 0.15);
   padding: 0.2em 0.6em;
-  border-radius: 4px;
+  border-radius: var(--r-xs);
+  font-family: var(--font-mono);
   font-size: 0.8rem;
   color: #ccc;
 }
@@ -335,32 +518,26 @@ button:disabled {
 .player-controls {
   display: flex;
   align-items: center;
-  gap: 1rem;
-  margin: 0.75rem 0;
-  font-size: 0.9rem;
+  gap: var(--sp-4);
+  margin: var(--sp-3) 0;
+  font-size: var(--fs-md);
 }
 
 .player-controls label {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  color: #555;
+  gap: var(--sp-1);
+  color: var(--text-muted);
 }
 
 .player-controls select {
   padding: 0.3em 0.5em;
-  border-radius: 6px;
-  border: 1px solid #ddd;
-  background-color: #fff;
 }
 
 /* --- VOD timeline ----------------------------------------------------
  *
- * Unlike the rest of this file (hard-coded hex, restated wholesale in the
- * dark-mode block at the bottom), this component themes through custom
- * properties. It has enough selectors that duplicating all of them below
- * would be the larger evil, and the per-marker `--marker-color` pattern
- * already established the idiom.
+ * The component keeps its own `--tl-*` names, now defined in terms of the
+ * global tokens rather than hard-coded per theme.
  *
  * `--tl-ahead` / `--tl-behind` are deliberately blue/amber rather than the
  * obvious green/red: a red-green split is the single worst pairing for the
@@ -370,45 +547,43 @@ button:disabled {
  */
 
 .vod-timeline {
-  --tl-bg: #f1f1f3;
-  --tl-grid: #c9c9cf;
-  --tl-text: #666;
-  --tl-line: #5b4fc4;
-  --tl-ahead: rgba(57, 108, 216, 0.35);
-  --tl-behind: rgba(224, 137, 26, 0.35);
-  --tl-playhead: #396cd8;
-  --tl-glyph-bg: #fff;
+  --tl-bg: var(--bg-inset);
+  --tl-grid: var(--border-strong);
+  --tl-text: var(--text-muted);
+  --tl-line: var(--accent);
+  --tl-ahead: rgba(86, 132, 235, 0.32);
+  --tl-behind: rgba(228, 150, 42, 0.32);
+  --tl-playhead: var(--accent);
+  --tl-glyph-bg: var(--bg-surface);
 
   position: relative;
-  margin: 0.5rem 0 1rem;
+  margin: var(--sp-2) 0 var(--sp-4);
 }
 
 .timeline-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  gap: var(--sp-4);
   margin-bottom: 0.35rem;
-  font-size: 0.85rem;
+  font-size: var(--fs-sm);
   color: var(--tl-text);
 }
 
 .timeline-metric-summary {
   min-height: 1.2em;
+  font-variant-numeric: tabular-nums;
 }
 
 .timeline-metric-select {
   padding: 0.2em 0.4em;
-  border-radius: 6px;
-  border: 1px solid #ddd;
-  background-color: #fff;
-  font-size: 0.85rem;
+  font-size: var(--fs-sm);
 }
 
 .timeline-body {
   position: relative;
   height: 5.5rem;
-  border-radius: 6px;
+  border-radius: var(--r-sm);
   background-color: var(--tl-bg);
   cursor: pointer;
   overflow: hidden;
@@ -470,9 +645,10 @@ button:disabled {
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  border: 2px solid var(--marker-color, #999);
+  border: 2px solid var(--marker-color, var(--text-subtle));
   background-color: var(--tl-glyph-bg);
-  font-size: 0.85rem;
+  filter: var(--marker-boost);
+  font-size: var(--fs-sm);
   line-height: 1;
   padding: 0;
   cursor: pointer;
@@ -492,7 +668,7 @@ button:disabled {
   padding: 0 0.15rem;
   border-radius: 0.5rem;
   background-color: var(--tl-playhead);
-  color: #fff;
+  color: var(--accent-contrast);
   font-size: 0.6rem;
   font-weight: 600;
   line-height: 0.95rem;
@@ -525,6 +701,7 @@ button:disabled {
   top: 0.45rem;
   transform: translateX(-50%);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 /* The end labels would otherwise hang half their width past the track and
@@ -561,6 +738,8 @@ button:disabled {
   background-color: var(--tl-playhead);
 }
 
+/* Also intentionally fixed rather than themed: the tooltip floats over the
+ * graph in both modes and needs to stay readable against either. */
 .timeline-tooltip {
   position: absolute;
   bottom: calc(100% - 1.2rem);
@@ -571,10 +750,11 @@ button:disabled {
   gap: 0.2rem;
   max-width: 22rem;
   padding: 0.4rem 0.6rem;
-  border-radius: 6px;
-  background-color: rgba(20, 20, 22, 0.94);
+  border-radius: var(--r-sm);
+  background-color: rgba(16, 13, 23, 0.94);
   color: #f2f2f2;
   font-size: 0.78rem;
+  box-shadow: var(--shadow-2);
   pointer-events: none;
   white-space: nowrap;
 }
@@ -582,7 +762,7 @@ button:disabled {
 .timeline-tooltip .tooltip-row {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--sp-1);
 }
 
 .timeline-tooltip .hint {
@@ -592,7 +772,7 @@ button:disabled {
 
 .time-display {
   font-variant-numeric: tabular-nums;
-  color: #555;
+  color: var(--text-muted);
 }
 
 .icon-btn {
@@ -602,6 +782,7 @@ button:disabled {
 
 .volume-slider {
   width: 6rem;
+  accent-color: var(--accent);
 }
 
 .marker-list {
@@ -610,19 +791,20 @@ button:disabled {
   padding: 0;
   max-height: 16rem;
   overflow-y: auto;
-  border: 1px solid #e5e5e5;
-  border-radius: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background-color: var(--bg-surface);
 }
 
 .marker-list li {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid #eee;
-  border-left: 4px solid var(--marker-color, #999);
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  border-left: 4px solid var(--marker-color, var(--text-subtle));
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: var(--fs-md);
 }
 
 .marker-list li:last-child {
@@ -630,147 +812,28 @@ button:disabled {
 }
 
 .marker-list li:hover {
-  background-color: rgba(57, 108, 216, 0.08);
+  background-color: var(--bg-surface-hover);
 }
 
 .marker-list .hint {
   margin-left: auto;
   flex-shrink: 0;
-  color: #888;
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
 }
 
 .marker-icon {
   flex-shrink: 0;
+  filter: var(--marker-boost);
 }
 
 kbd {
   display: inline-block;
   padding: 0.05em 0.45em;
-  border-radius: 4px;
-  border: 1px solid #ccc;
-  background-color: #f0f0f0;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--border-strong);
+  background-color: var(--bg-surface-2);
+  color: var(--text-muted);
   font-size: 0.85em;
   font-family: inherit;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #1a1a1a;
-  }
-
-  .empty-state {
-    border-color: #444;
-    color: #ccc;
-  }
-
-  .empty-state .hint {
-    color: #999;
-  }
-
-  .filter-bar input,
-  .filter-bar select,
-  .player-controls select,
-  .retention-field input[type="number"] {
-    background-color: #2a2a2a;
-    border-color: #444;
-    color: #f6f6f6;
-  }
-
-  .disk-usage {
-    background-color: #222;
-    border-color: #333;
-  }
-
-  .disk-usage-text {
-    color: #ccc;
-  }
-
-  .retention-field {
-    color: #bbb;
-  }
-
-  .checkbox-label {
-    color: #bbb;
-  }
-
-  .library-list li {
-    border-color: #333;
-  }
-
-  .library-list li:hover,
-  .library-list li:focus-visible {
-    background-color: rgba(255, 255, 255, 0.06);
-  }
-
-  .library-row-meta {
-    color: #999;
-  }
-
-  .badge-win {
-    background-color: rgba(102, 187, 106, 0.2);
-    color: #81c784;
-  }
-
-  .badge-loss {
-    background-color: rgba(239, 83, 80, 0.2);
-    color: #e57373;
-  }
-
-  .dev-panel {
-    border-color: #333;
-  }
-
-  button {
-    background-color: #2f2f2f;
-    color: #f6f6f6;
-    border-color: #444;
-  }
-
-  .vod-timeline {
-    --tl-bg: #232326;
-    --tl-grid: #45454c;
-    --tl-text: #9a9aa2;
-    --tl-line: #a78bfa;
-    --tl-ahead: rgba(96, 148, 255, 0.32);
-    --tl-behind: rgba(240, 160, 60, 0.32);
-    --tl-playhead: #a78bfa;
-    --tl-glyph-bg: #1a1a1a;
-  }
-
-  .timeline-metric-select {
-    background-color: #2f2f2f;
-    border-color: #444;
-    color: #f6f6f6;
-  }
-
-  .time-display {
-    color: #bbb;
-  }
-
-  .marker-list {
-    border-color: #333;
-  }
-
-  .marker-list li {
-    border-bottom-color: #2a2a2a;
-  }
-
-  .marker-list li:hover {
-    background-color: rgba(255, 255, 255, 0.06);
-  }
-
-  .marker-list .hint {
-    color: #888;
-  }
-
-  .player-controls label {
-    color: #bbb;
-  }
-
-  kbd {
-    background-color: #2f2f2f;
-    border-color: #555;
-    color: #eee;
-  }
 }

@@ -1,7 +1,9 @@
 import { call } from "./bridge";
 import { el, escapeHtml } from "./dom";
 import { BYTES_PER_GB, basename, formatBytes } from "./format";
+import { loadPrefs } from "./prefs";
 import { registerView, showView } from "./router";
+import { applyThemePref, initTheme } from "./theme";
 import { initReview, openReview } from "./review";
 import type {
   DiskUsage,
@@ -364,6 +366,9 @@ window.addEventListener("DOMContentLoaded", () => {
     if (retentionAgeDays) retentionAgeDays.disabled = !retentionAgeEnabled?.checked;
   });
   retentionForm?.addEventListener("submit", saveRetentionPolicy);
+
+  initTheme();
+  loadPrefs().then((prefs) => applyThemePref(prefs.theme));
 
   initReview();
   refreshLibrary();

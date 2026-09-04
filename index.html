@@ -1,11 +1,26 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="UTF-8" />
+    <!-- Must stay a plain inline script: `defer` or `type="module"` would
+         run it after first paint, which is the entire flash it exists to
+         prevent. Mirrors prefs.ts's cache key and resolution. -->
+    <script>
+      try {
+        var pref = localStorage.getItem("nr.theme") || "system";
+        var dark =
+          pref === "dark" ||
+          (pref === "system" &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
+      } catch (e) {
+        /* keep the markup default */
+      }
+    </script>
     <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ninja-recorder</title>
-    <script type="module" src="/src/main.ts" defer></script>
+    <script type="module" src="/src/main.ts"></script>
   </head>
 
   <body>
