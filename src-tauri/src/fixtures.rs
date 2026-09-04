@@ -5,9 +5,18 @@
 //! Off by default — never runs in a normal session. DEVELOPMENT.md §3.3.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 static BASE_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Seeded from `NINJA_RECORDER_RECORD_FIXTURES` at startup, then owned by
+/// this flag. Reading the env var on every call would make the setting
+/// immutable for the process lifetime (and mutating the environment at
+/// runtime is process-global and racy with any other reader), so the env
+/// var is the *initial* value and `set_enabled` — used by the dev portal
+/// to flip capture on for a single game — is the running one.
+static ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Sets the directory fixtures are written under. Call once at startup
 /// with a runtime-resolved, writable location — the app data dir, in
@@ -22,8 +31,30 @@ pub fn set_base_dir(dir: PathBuf) {
     let _ = BASE_DIR.set(dir);
 }
 
+/// Reads the initial enabled state from the environment. Call once at
+/// startup, alongside `set_base_dir`.
+pub fn init_from_env() {
+    ENABLED.store(
+        std::env::var_os("NINJA_RECORDER_RECORD_FIXTURES").is_some(),
+        Ordering::Relaxed,
+    );
+}
+
 pub fn enabled() -> bool {
-    std::env::var_os("NINJA_RECORDER_RECORD_FIXTURES").is_some()
+    ENABLED.load(Ordering::Relaxed)
+}
+
+/// Turns capture on or off at runtime (dev portal's Fixtures panel).
+#[cfg(feature = "devtools")]
+pub fn set_enabled(on: bool) {
+    ENABLED.store(on, Ordering::Relaxed);
+}
+
+/// Where fixtures are currently being written, for the dev portal's
+/// listing. `None` before `set_base_dir` has run.
+#[cfg(feature = "devtools")]
+pub fn base_dir() -> Option<PathBuf> {
+    BASE_DIR.get().cloned()
 }
 
 /// Records `raw_json` (pretty-printed if valid JSON) under
@@ -76,6 +107,17 @@ fn fixtures_dir(group: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn enabled_defaults_off_and_follows_set_enabled() {
+        // The static is process-wide, so restore whatever it was.
+        let before = enabled();
+        ENABLED.store(false, Ordering::Relaxed);
+        assert!(!enabled());
+        ENABLED.store(true, Ordering::Relaxed);
+        assert!(enabled());
+        ENABLED.store(before, Ordering::Relaxed);
+    }
 
     #[test]
     fn sanitize_turns_path_into_safe_filename() {

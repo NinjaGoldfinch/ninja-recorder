@@ -16,8 +16,8 @@
             <h1>ninja-recorder</h1>
             <p class="subtitle">League of Legends VOD library</p>
           </div>
-          <button id="open-testing-btn" type="button" class="testing-link">
-            🧪 Testing tools
+          <button id="open-dev-portal-btn" type="button" class="dev-portal-link" hidden>
+            🧪 Dev portal
           </button>
         </header>
 
@@ -185,52 +185,6 @@
         </p>
       </section>
 
-      <section id="testing-view" class="testing-view" hidden>
-        <div class="review-header">
-          <button id="back-to-library-from-testing-btn" type="button" class="back-btn">
-            &larr; Back to library
-          </button>
-          <h2>Testing tools</h2>
-        </div>
-        <p class="hint">
-          Internal tools for developing and debugging the app — not part of
-          the normal recording flow.
-        </p>
-
-        <section class="dev-panel">
-          <h3>Stub recorder smoke test</h3>
-          <div class="row">
-            <button id="start-btn" type="button">Start recording</button>
-            <button id="stop-btn" type="button" disabled>
-              Stop recording
-            </button>
-          </div>
-          <p id="testing-status-msg" class="status"></p>
-        </section>
-
-        <section class="dev-panel">
-          <h3>LCU status</h3>
-          <div class="row">
-            <button id="lcu-check-btn" type="button">
-              Check League Client
-            </button>
-          </div>
-          <p id="lcu-status-msg" class="status">Not checked yet.</p>
-        </section>
-
-        <section class="dev-panel">
-          <h3>Game state machine</h3>
-          <div class="row">
-            <button id="game-state-btn" type="button">
-              Check game state
-            </button>
-          </div>
-          <p id="game-state-msg" class="status">
-            Not checked yet. Always running in the background once the app
-            starts — this just reads its current status.
-          </p>
-        </section>
-      </section>
     </main>
   </body>
 </html>

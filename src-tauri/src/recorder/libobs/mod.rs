@@ -165,6 +165,10 @@ impl Recorder for LibObsRecorder {
     fn is_recording(&self) -> bool {
         self.active_path.is_some()
     }
+
+    fn backend_name(&self) -> String {
+        "libobs".to_string()
+    }
 }
 
 /// Stream-copies `video_path` through ffmpeg with `-movflags +faststart`

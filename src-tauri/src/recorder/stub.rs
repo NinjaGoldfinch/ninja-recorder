@@ -58,6 +58,10 @@ impl Recorder for StubRecorder {
     fn is_recording(&self) -> bool {
         self.active.is_some()
     }
+
+    fn backend_name(&self) -> String {
+        "stub".to_string()
+    }
 }
 
 fn fixture_path() -> Option<PathBuf> {

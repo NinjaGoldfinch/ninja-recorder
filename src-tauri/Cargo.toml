@@ -18,6 +18,14 @@ license = "GPL-2.0-only"
 name = "ninja_recorder_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# Dev portal (dev.html + the `dev_*` commands in `src/dev/`). Off by
+# default so nothing in `src/dev/` — raw SQL execution, row inserts, DB
+# wipe, state-machine injection — is compiled into a shipped installer.
+# Enable for local work with `npm run tauri:dev`, which passes
+# `--features devtools`. Release workflows need no change.
+devtools = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

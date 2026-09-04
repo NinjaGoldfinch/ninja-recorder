@@ -29,8 +29,7 @@ pub enum DbError {
     /// as an opaque nested enum with no room to say which file or what to
     /// do about it.
     #[error(
-        "database schema is v{found}, but this build only knows v{expected} — \
-         it was created by a newer build of the app"
+        "database schema is v{found}, but this build only knows v{expected} —          it was created by a newer build of the app"
     )]
     SchemaTooNew { found: i64, expected: i64 },
 }
@@ -238,6 +237,17 @@ impl Db {
         Ok(Self {
             conn: Mutex::new(conn),
         })
+    }
+
+    /// Raw connection access for the dev portal's SQL console and table
+    /// browser (`dev::sql`). Deliberately feature-gated rather than
+    /// `pub(crate)` outright: everything reachable through this bypasses
+    /// the typed `NewRecording`/`NewMarker` API, the migrations, and the
+    /// `path` upsert rule above, so it must not exist at all in a shipped
+    /// build. Panics on a poisoned lock, matching every other method here.
+    #[cfg(feature = "devtools")]
+    pub(crate) fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.conn.lock().unwrap()
     }
 
     fn init(conn: &mut Connection) -> Result<(), DbError> {

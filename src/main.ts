@@ -1,22 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { initReview, openReview, type RecordingRow } from "./review";
+import { escapeHtml } from "./shared/html";
 
-let startBtn: HTMLButtonElement | null;
-let stopBtn: HTMLButtonElement | null;
 let refreshBtn: HTMLButtonElement | null;
 let rescanBtn: HTMLButtonElement | null;
 let statusMsg: HTMLElement | null;
-let testingStatusMsg: HTMLElement | null;
 let libraryEmpty: HTMLElement | null;
 let libraryList: HTMLUListElement | null;
-let lcuCheckBtn: HTMLButtonElement | null;
-let lcuStatusMsg: HTMLElement | null;
-let gameStateBtn: HTMLButtonElement | null;
-let gameStateMsg: HTMLElement | null;
-let libraryView: HTMLElement | null;
-let testingView: HTMLElement | null;
-let openTestingBtn: HTMLButtonElement | null;
-let backToLibraryFromTestingBtn: HTMLButtonElement | null;
+let devPortalBtn: HTMLButtonElement | null;
 let filterChampion: HTMLInputElement | null;
 let filterOutcome: HTMLSelectElement | null;
 let filterPinned: HTMLInputElement | null;
@@ -28,26 +20,6 @@ let retentionSizeGb: HTMLInputElement | null;
 let retentionAgeEnabled: HTMLInputElement | null;
 let retentionAgeDays: HTMLInputElement | null;
 let retentionStatus: HTMLElement | null;
-
-interface LcuStatus {
-  connected: boolean;
-  phase: string | null;
-  summoner: string | null;
-  error: string | null;
-}
-
-interface SessionMarker {
-  kind: string;
-  game_time_s: number;
-  video_time_s: number;
-  payload: unknown;
-}
-
-interface FinalizedRecording {
-  recording_id: number | null;
-  path: string;
-  markers: SessionMarker[];
-}
 
 interface ReconcileReport {
   orphans_removed: number;
@@ -67,13 +39,6 @@ interface RetentionPolicy {
 
 const BYTES_PER_GB = 1024 ** 3;
 
-type GameState = "Idle" | "ClientRunning" | "WaitingForGame" | "Recording" | "Finalizing";
-
-interface SupervisorStatus {
-  state: GameState;
-  last_finalized: FinalizedRecording | null;
-}
-
 // The full set fetched from the DB; filters/sort below operate on this
 // in-memory rather than re-querying, since the dataset is small and local.
 let allRecordings: RecordingRow[] = [];
@@ -82,20 +47,31 @@ function setStatus(text: string) {
   if (statusMsg) statusMsg.textContent = text;
 }
 
-function setTestingStatus(text: string) {
-  if (testingStatusMsg) testingStatusMsg.textContent = text;
+/**
+ * Opens the dev portal in its own window. The command only exists in a
+ * build with the `devtools` Cargo feature on, so a rejection here is the
+ * expected outcome in a shipped app rather than an error worth showing —
+ * the button hides itself instead, which keeps "is the portal available"
+ * from needing a second flag to stay in sync with the Rust side.
+ */
+async function openDevPortal() {
+  try {
+    await invoke("dev_open_portal");
+  } catch (err) {
+    console.warn("dev portal unavailable:", err);
+    if (devPortalBtn) devPortalBtn.hidden = true;
+  }
 }
 
-function openTestingView() {
-  if (!libraryView || !testingView) return;
-  libraryView.hidden = true;
-  testingView.hidden = false;
-}
-
-function closeTestingView() {
-  if (!libraryView || !testingView) return;
-  testingView.hidden = true;
-  libraryView.hidden = false;
+/** Hides the portal button up front in builds that have no portal. */
+async function probeDevPortal() {
+  if (!devPortalBtn) return;
+  try {
+    const commands = await invoke<string[]>("dev_registered_commands");
+    devPortalBtn.hidden = commands.length === 0;
+  } catch {
+    devPortalBtn.hidden = true;
+  }
 }
 
 function basename(path: string): string {
@@ -218,31 +194,6 @@ async function rescanRecordings() {
   }
 }
 
-async function startRecording() {
-  try {
-    setTestingStatus("Starting…");
-    await invoke("start_recording");
-    setTestingStatus("Recording (stub).");
-    if (startBtn) startBtn.disabled = true;
-    if (stopBtn) stopBtn.disabled = false;
-  } catch (err) {
-    setTestingStatus(`Failed to start: ${err}`);
-  }
-}
-
-async function stopRecording() {
-  try {
-    setTestingStatus("Stopping…");
-    const path = await invoke<string>("stop_recording");
-    setTestingStatus(`Saved: ${path}`);
-    if (startBtn) startBtn.disabled = false;
-    if (stopBtn) stopBtn.disabled = true;
-    await Promise.all([refreshLibrary(), refreshDiskUsage()]);
-  } catch (err) {
-    setTestingStatus(`Failed to stop: ${err}`);
-  }
-}
-
 async function refreshDiskUsage() {
   if (!diskUsageText) return;
   try {
@@ -309,68 +260,13 @@ async function togglePin(row: RecordingRow) {
   }
 }
 
-async function checkLcuStatus() {
-  if (!lcuStatusMsg) return;
-  lcuStatusMsg.textContent = "Checking…";
-  try {
-    const status = await invoke<LcuStatus>("lcu_status");
-    if (status.error) {
-      lcuStatusMsg.textContent = `Error: ${status.error}`;
-    } else if (!status.connected) {
-      lcuStatusMsg.textContent =
-        "League Client not running (no lockfile found).";
-    } else {
-      lcuStatusMsg.textContent = `Connected. Summoner: ${status.summoner ?? "?"}. Phase: ${status.phase ?? "?"}.`;
-    }
-  } catch (err) {
-    lcuStatusMsg.textContent = `Failed to check: ${err}`;
-  }
-}
-
-async function checkGameState() {
-  if (!gameStateMsg) return;
-  gameStateMsg.textContent = "Checking…";
-  try {
-    const status = await invoke<SupervisorStatus>("game_state_status");
-    let text = `State: ${status.state}.`;
-    if (status.last_finalized) {
-      const idNote =
-        status.last_finalized.recording_id !== null
-          ? `db id ${status.last_finalized.recording_id}`
-          : "DB WRITE FAILED";
-      text += ` Last recording: ${status.last_finalized.path} (${status.last_finalized.markers.length} markers, ${idNote}).`;
-    } else {
-      text += " No recording finalized yet.";
-    }
-    gameStateMsg.textContent = text;
-  } catch (err) {
-    gameStateMsg.textContent = `Failed to check: ${err}`;
-  }
-}
-
-function escapeHtml(value: string): string {
-  const div = document.createElement("div");
-  div.textContent = value;
-  return div.innerHTML;
-}
-
 window.addEventListener("DOMContentLoaded", () => {
-  startBtn = document.querySelector("#start-btn");
-  stopBtn = document.querySelector("#stop-btn");
   refreshBtn = document.querySelector("#refresh-btn");
   statusMsg = document.querySelector("#status-msg");
-  testingStatusMsg = document.querySelector("#testing-status-msg");
   libraryEmpty = document.querySelector("#library-empty");
   libraryList = document.querySelector("#library-list");
-  lcuCheckBtn = document.querySelector("#lcu-check-btn");
-  lcuStatusMsg = document.querySelector("#lcu-status-msg");
-  gameStateBtn = document.querySelector("#game-state-btn");
-  gameStateMsg = document.querySelector("#game-state-msg");
   rescanBtn = document.querySelector("#rescan-btn");
-  libraryView = document.querySelector("#library-view");
-  testingView = document.querySelector("#testing-view");
-  openTestingBtn = document.querySelector("#open-testing-btn");
-  backToLibraryFromTestingBtn = document.querySelector("#back-to-library-from-testing-btn");
+  devPortalBtn = document.querySelector("#open-dev-portal-btn");
   filterChampion = document.querySelector("#filter-champion");
   filterOutcome = document.querySelector("#filter-outcome");
   filterPinned = document.querySelector("#filter-pinned");
@@ -383,14 +279,9 @@ window.addEventListener("DOMContentLoaded", () => {
   retentionAgeDays = document.querySelector("#retention-age-days");
   retentionStatus = document.querySelector("#retention-status");
 
-  startBtn?.addEventListener("click", startRecording);
-  stopBtn?.addEventListener("click", stopRecording);
   refreshBtn?.addEventListener("click", refreshLibrary);
   rescanBtn?.addEventListener("click", rescanRecordings);
-  lcuCheckBtn?.addEventListener("click", checkLcuStatus);
-  gameStateBtn?.addEventListener("click", checkGameState);
-  openTestingBtn?.addEventListener("click", openTestingView);
-  backToLibraryFromTestingBtn?.addEventListener("click", closeTestingView);
+  devPortalBtn?.addEventListener("click", openDevPortal);
 
   filterChampion?.addEventListener("input", applyFiltersAndRender);
   filterOutcome?.addEventListener("change", applyFiltersAndRender);
@@ -423,4 +314,18 @@ window.addEventListener("DOMContentLoaded", () => {
   refreshLibrary();
   refreshDiskUsage();
   loadRetentionPolicy();
+  probeDevPortal();
+
+  // The backend pushes this whenever the library changes behind our back
+  // — a finalize, a retention deletion, or a dev-portal write. Without it
+  // a recording that just finished stayed invisible until the user
+  // happened to press Refresh.
+  // `.catch` rather than a bare call: `listen` rejects outright when
+  // there's no Tauri bridge (the app's pages are also servable straight
+  // from the Vite dev server for CSS work), and an unhandled rejection
+  // there is noise that hides real errors in the console.
+  listen("library-changed", () => {
+    refreshLibrary();
+    refreshDiskUsage();
+  }).catch((err) => console.warn("library-changed listener unavailable:", err));
 });

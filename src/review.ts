@@ -1,4 +1,5 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { escapeHtml } from "./shared/html";
 
 export interface RecordingRow {
   id: number;
@@ -810,12 +811,6 @@ function renderMarkerList() {
       </li>`;
     })
     .join("");
-}
-
-function escapeHtml(value: string): string {
-  const div = document.createElement("div");
-  div.textContent = value;
-  return div.innerHTML;
 }
 
 export async function openReview(row: RecordingRow) {

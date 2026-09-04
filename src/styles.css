@@ -230,7 +230,9 @@ body {
   color: #888;
 }
 
-.testing-link {
+/* Deliberately quiet: the dev portal is a developer escape hatch, and in
+ * a shipped build the button is hidden outright (see `probeDevPortal`). */
+.dev-portal-link {
   flex-shrink: 0;
   background: none;
   color: #888;

@@ -81,6 +81,10 @@ pub struct Supervisor {
     live_client_task: Mutex<Option<JoinHandle<()>>>,
     session: Mutex<Option<RecordingSession>>,
     last_finalized: Mutex<Option<FinalizedRecording>>,
+    /// Set once at startup via `attach_app`, rather than taken in `new`,
+    /// so the unit tests below can still build a `Supervisor` without a
+    /// Tauri runtime. `None` simply means nothing is emitted.
+    app: Mutex<Option<tauri::AppHandle>>,
 }
 
 impl Supervisor {
@@ -98,7 +102,27 @@ impl Supervisor {
             live_client_task: Mutex::new(None),
             session: Mutex::new(None),
             last_finalized: Mutex::new(None),
+            app: Mutex::new(None),
         })
+    }
+
+    /// Gives the supervisor a handle to emit on. Called once from
+    /// `lib.rs`'s `setup`, after the app is built.
+    pub fn attach_app(&self, app: tauri::AppHandle) {
+        *self.app.lock().unwrap() = Some(app);
+    }
+
+    /// Tells the frontend the VOD library changed on disk. Until this
+    /// existed the app had no backend-to-frontend push at all, so a
+    /// recording finalized by the supervisor stayed invisible until the
+    /// user happened to press Refresh.
+    fn emit_library_changed(&self) {
+        if let Some(app) = self.app.lock().unwrap().as_ref() {
+            use tauri::Emitter;
+            if let Err(e) = app.emit(crate::LIBRARY_CHANGED_EVENT, ()) {
+                eprintln!("[state_machine] failed to emit library-changed: {e}");
+            }
+        }
     }
 
     pub fn status(&self) -> SupervisorStatus {
@@ -382,10 +406,78 @@ impl Supervisor {
                     },
                     Err(e) => eprintln!("[retention] failed to load policy: {e}"),
                 }
+
+                // After the row, its markers/samples, and any retention
+                // deletions — one notification for the whole finalize.
+                self.emit_library_changed();
             }
             Err(e) => eprintln!("[state_machine] failed to stop recording: {e}"),
         }
     }
+}
+
+/// Dev-portal entry points into the otherwise-private async glue. These
+/// exist because `machine.rs`'s pure transition function is well covered
+/// by unit tests while *this* file — the part that actually spawns
+/// watchers and drives the recorder — has never run against a real LCU
+/// (DEVELOPMENT.md §3.4). Feeding it synthetic events from the dev portal
+/// is the first exercise it gets.
+#[cfg(feature = "devtools")]
+impl Supervisor {
+    /// Feeds one event through the real `dispatch`, executing whatever
+    /// actions it returns for real: watchers are spawned, the recorder is
+    /// started and stopped, DB rows are written. That is the point — this
+    /// is not a dry run.
+    pub fn dev_dispatch(self: &Arc<Self>, event: StateEvent) {
+        self.dispatch(event);
+    }
+
+    /// Feeds one Live Client Data payload through the real marker/sample
+    /// pipeline, exactly as the poller would.
+    pub fn dev_on_snapshot(self: &Arc<Self>, snapshot: AllGameData) {
+        self.on_snapshot(snapshot);
+    }
+
+    /// A read-only view of the in-flight recording session. Nothing else
+    /// exposes this — `SupervisorStatus` only carries the *last finalized*
+    /// recording, so markers and samples accumulating during a recording
+    /// are otherwise invisible until it ends.
+    pub fn dev_session_view(&self) -> Option<DevSessionView> {
+        let guard = self.session.lock().unwrap();
+        let session = guard.as_ref()?;
+        Some(DevSessionView {
+            marker_count: session.markers.len(),
+            sample_count: session.samples.len(),
+            alignment_offset_s: session.alignment.map(|a| a.offset_s()),
+            elapsed_s: session.record_started_at.elapsed().as_secs_f64(),
+            started_at_millis: session.started_at_millis,
+            recent_markers: session.markers.iter().rev().take(20).cloned().collect(),
+            last_sample: session.samples.last().cloned(),
+        })
+    }
+
+    /// Emits `library-changed` on behalf of the dev commands, which mutate
+    /// the DB directly rather than going through a finalize.
+    pub fn dev_emit_library_changed(&self) {
+        self.emit_library_changed();
+    }
+}
+
+/// See `Supervisor::dev_session_view`. `alignment_offset_s` is `None`
+/// until the first snapshot arrives — recording starts before Live Client
+/// Data is reachable, so there is always a window where the session
+/// exists but has no game-time-to-video-time mapping yet.
+#[cfg(feature = "devtools")]
+#[derive(Debug, Clone, Serialize)]
+pub struct DevSessionView {
+    pub marker_count: usize,
+    pub sample_count: usize,
+    pub alignment_offset_s: Option<f64>,
+    pub elapsed_s: f64,
+    pub started_at_millis: i64,
+    /// Newest first, capped — this is polled at 1 Hz by the portal.
+    pub recent_markers: Vec<SessionMarker>,
+    pub last_sample: Option<SessionSample>,
 }
 
 fn timestamp_millis() -> i64 {

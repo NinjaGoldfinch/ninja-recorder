@@ -438,6 +438,14 @@ impl TimeAlignment {
     pub fn video_time_s(&self, game_time_s: f64) -> f64 {
         (game_time_s + self.offset_s).max(0.0)
     }
+
+    /// The raw offset, for the dev portal's live-session readout. Negative
+    /// means recording started *after* game time 0 (a reconnect); positive
+    /// is the normal loading-screen case.
+    #[cfg(feature = "devtools")]
+    pub fn offset_s(&self) -> f64 {
+        self.offset_s
+    }
 }
 
 #[cfg(test)]

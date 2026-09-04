@@ -1,4 +1,6 @@
 mod db;
+#[cfg(feature = "devtools")]
+mod dev;
 mod fixtures;
 mod lcu;
 mod live_client;
@@ -12,11 +14,17 @@ use recorder::{RecordConfig, Recorder};
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
-struct AppState {
-    recorder: Arc<Mutex<Box<dyn Recorder>>>,
-    supervisor: Arc<state_machine::Supervisor>,
-    db: Arc<db::Db>,
-    recordings_dir: std::path::PathBuf,
+/// Emitted whenever the VOD library changes behind the frontend's back —
+/// a finalize, a retention deletion, or any dev-portal write. The library
+/// view listens for it and re-fetches; without it a recording only
+/// appeared after a manual Refresh.
+pub(crate) const LIBRARY_CHANGED_EVENT: &str = "library-changed";
+
+pub(crate) struct AppState {
+    pub(crate) recorder: Arc<Mutex<Box<dyn Recorder>>>,
+    pub(crate) supervisor: Arc<state_machine::Supervisor>,
+    pub(crate) db: Arc<db::Db>,
+    pub(crate) recordings_dir: std::path::PathBuf,
 }
 
 fn recordings_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
@@ -135,13 +143,19 @@ fn get_retention_policy(state: tauri::State<AppState>) -> Result<db::RetentionPo
 #[tauri::command]
 fn set_retention_policy(
     state: tauri::State<AppState>,
+    app: tauri::AppHandle,
     policy: db::RetentionPolicy,
 ) -> Result<retention::EnforcementReport, String> {
     state
         .db
         .set_retention_policy(&policy)
         .map_err(|e| e.to_string())?;
-    retention::enforce_now(&state.db, &policy).map_err(|e| e.to_string())
+    let report = retention::enforce_now(&state.db, &policy).map_err(|e| e.to_string())?;
+    if !report.deleted.is_empty() {
+        use tauri::Emitter;
+        let _ = app.emit(LIBRARY_CHANGED_EVENT, ());
+    }
+    Ok(report)
 }
 
 #[tauri::command]
@@ -235,7 +249,7 @@ fn game_state_status(state: tauri::State<AppState>) -> state_machine::Supervisor
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let backend: Box<dyn Recorder> = {
@@ -278,12 +292,19 @@ pub fn run() {
                     Box::new(StubRecorder::new())
                 }
             };
+            // Which backend you get depends on target OS *and* on whether
+            // libobs managed to initialize, and the difference decides
+            // whether recording works at all — worth one line at startup
+            // rather than only being discoverable by trying to record.
+            println!("[recorder] backend: {}", backend.backend_name());
+
             let recorder: Arc<Mutex<Box<dyn Recorder>>> = Arc::new(Mutex::new(backend));
             let dir = recordings_dir(app.handle())?;
 
             // Must happen before the supervisor starts polling — see
             // fixtures::set_base_dir's doc comment.
             fixtures::set_base_dir(app.path().app_data_dir()?.join("fixtures"));
+            fixtures::init_from_env();
 
             let db_path = app.path().app_data_dir()?.join("library.sqlite3");
             std::fs::create_dir_all(db_path.parent().expect("db path always has a parent"))?;
@@ -346,6 +367,7 @@ pub fn run() {
 
             let supervisor =
                 state_machine::Supervisor::new(Arc::clone(&recorder), dir.clone(), Arc::clone(&db));
+            supervisor.attach_app(app.handle().clone());
             supervisor.start();
 
             app.manage(AppState {
@@ -354,23 +376,79 @@ pub fn run() {
                 db,
                 recordings_dir: dir,
             });
+            #[cfg(feature = "devtools")]
+            app.manage(dev::DevState::default());
             Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            start_recording,
-            stop_recording,
-            is_recording,
-            list_recordings,
-            rescan_recordings,
-            get_recording_markers,
-            get_recording_samples,
-            get_disk_usage,
-            get_retention_policy,
-            set_retention_policy,
-            set_pinned,
-            lcu_status,
-            game_state_status
-        ])
+        });
+
+    // `generate_handler!` takes a literal path list — it can't host a
+    // `#[cfg]` attribute or a macro expansion inside the brackets — so the
+    // two variants are spelled out. The production list must stay
+    // identical between them; `dev_registered_commands` exists so the dev
+    // portal can catch it if they ever drift.
+    #[cfg(not(feature = "devtools"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        start_recording,
+        stop_recording,
+        is_recording,
+        list_recordings,
+        rescan_recordings,
+        get_recording_markers,
+        get_recording_samples,
+        get_disk_usage,
+        get_retention_policy,
+        set_retention_policy,
+        set_pinned,
+        lcu_status,
+        game_state_status
+    ]);
+
+    #[cfg(feature = "devtools")]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        start_recording,
+        stop_recording,
+        is_recording,
+        list_recordings,
+        rescan_recordings,
+        get_recording_markers,
+        get_recording_samples,
+        get_disk_usage,
+        get_retention_policy,
+        set_retention_policy,
+        set_pinned,
+        lcu_status,
+        game_state_status,
+        dev::dev_open_portal,
+        dev::dev_env_info,
+        dev::dev_health,
+        dev::dev_registered_commands,
+        dev::dev_open_data_dir,
+        dev::dev_schema,
+        dev::dev_table_page,
+        dev::dev_sql_query,
+        dev::dev_insert_row,
+        dev::dev_update_row,
+        dev::dev_delete_row,
+        dev::dev_reset_db,
+        dev::dev_seed_library,
+        dev::dev_clear_seeded,
+        dev::dev_retention_preview,
+        dev::dev_dispatch_state_event,
+        dev::dev_inject_snapshot,
+        dev::dev_session_snapshot,
+        dev::dev_replay_start,
+        dev::dev_replay_stop,
+        dev::dev_replay_status,
+        dev::dev_lcu_get,
+        dev::dev_fetch_match_summary,
+        dev::dev_live_client_probe,
+        dev::dev_fixtures_state,
+        dev::dev_fixture_read,
+        dev::dev_fixture_write,
+        dev::dev_set_fixture_recording
+    ]);
+
+    builder
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
