@@ -1,5 +1,16 @@
-import { invoke } from "@tauri-apps/api/core";
-import { initReview, openReview, type RecordingRow } from "./review";
+import { call } from "./bridge";
+import { el, escapeHtml } from "./dom";
+import { BYTES_PER_GB, basename, formatBytes } from "./format";
+import { registerView, showView } from "./router";
+import { initReview, openReview } from "./review";
+import type {
+  DiskUsage,
+  LcuStatus,
+  ReconcileReport,
+  RecordingRow,
+  RetentionPolicy,
+  SupervisorStatus,
+} from "./types";
 
 let startBtn: HTMLButtonElement | null;
 let stopBtn: HTMLButtonElement | null;
@@ -13,8 +24,6 @@ let lcuCheckBtn: HTMLButtonElement | null;
 let lcuStatusMsg: HTMLElement | null;
 let gameStateBtn: HTMLButtonElement | null;
 let gameStateMsg: HTMLElement | null;
-let libraryView: HTMLElement | null;
-let testingView: HTMLElement | null;
 let openTestingBtn: HTMLButtonElement | null;
 let backToLibraryFromTestingBtn: HTMLButtonElement | null;
 let filterChampion: HTMLInputElement | null;
@@ -29,51 +38,6 @@ let retentionAgeEnabled: HTMLInputElement | null;
 let retentionAgeDays: HTMLInputElement | null;
 let retentionStatus: HTMLElement | null;
 
-interface LcuStatus {
-  connected: boolean;
-  phase: string | null;
-  summoner: string | null;
-  error: string | null;
-}
-
-interface SessionMarker {
-  kind: string;
-  game_time_s: number;
-  video_time_s: number;
-  payload: unknown;
-}
-
-interface FinalizedRecording {
-  recording_id: number | null;
-  path: string;
-  markers: SessionMarker[];
-}
-
-interface ReconcileReport {
-  orphans_removed: number;
-  imported: number;
-}
-
-interface DiskUsage {
-  total_bytes: number;
-  recording_count: number;
-  free_bytes: number;
-}
-
-interface RetentionPolicy {
-  max_total_bytes: number | null;
-  max_age_days: number | null;
-}
-
-const BYTES_PER_GB = 1024 ** 3;
-
-type GameState = "Idle" | "ClientRunning" | "WaitingForGame" | "Recording" | "Finalizing";
-
-interface SupervisorStatus {
-  state: GameState;
-  last_finalized: FinalizedRecording | null;
-}
-
 // The full set fetched from the DB; filters/sort below operate on this
 // in-memory rather than re-querying, since the dataset is small and local.
 let allRecordings: RecordingRow[] = [];
@@ -87,19 +51,11 @@ function setTestingStatus(text: string) {
 }
 
 function openTestingView() {
-  if (!libraryView || !testingView) return;
-  libraryView.hidden = true;
-  testingView.hidden = false;
+  showView("testing");
 }
 
 function closeTestingView() {
-  if (!libraryView || !testingView) return;
-  testingView.hidden = true;
-  libraryView.hidden = false;
-}
-
-function basename(path: string): string {
-  return path.split(/[\\/]/).pop() ?? path;
+  showView("library");
 }
 
 function formatKda(row: RecordingRow): string {
@@ -114,11 +70,6 @@ function formatOutcomeBadge(win: boolean | null): string {
   return win
     ? `<span class="badge badge-win">Win</span>`
     : `<span class="badge badge-loss">Loss</span>`;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes >= BYTES_PER_GB) return `${(bytes / BYTES_PER_GB).toFixed(1)} GB`;
-  return `${Math.round(bytes / 1024 ** 2)} MB`;
 }
 
 function formatRecordingRow(row: RecordingRow): string {
@@ -198,7 +149,7 @@ function applyFiltersAndRender() {
 
 async function refreshLibrary() {
   try {
-    allRecordings = await invoke<RecordingRow[]>("list_recordings");
+    allRecordings = await call<RecordingRow[]>("list_recordings");
     applyFiltersAndRender();
   } catch (err) {
     setStatus(`Failed to list recordings: ${err}`);
@@ -208,7 +159,7 @@ async function refreshLibrary() {
 async function rescanRecordings() {
   try {
     setStatus("Rescanning…");
-    const report = await invoke<ReconcileReport>("rescan_recordings");
+    const report = await call<ReconcileReport>("rescan_recordings");
     setStatus(
       `Rescan complete: removed ${report.orphans_removed} orphan row(s), imported ${report.imported} untracked file(s).`,
     );
@@ -221,7 +172,7 @@ async function rescanRecordings() {
 async function startRecording() {
   try {
     setTestingStatus("Starting…");
-    await invoke("start_recording");
+    await call("start_recording");
     setTestingStatus("Recording (stub).");
     if (startBtn) startBtn.disabled = true;
     if (stopBtn) stopBtn.disabled = false;
@@ -233,7 +184,7 @@ async function startRecording() {
 async function stopRecording() {
   try {
     setTestingStatus("Stopping…");
-    const path = await invoke<string>("stop_recording");
+    const path = await call<string>("stop_recording");
     setTestingStatus(`Saved: ${path}`);
     if (startBtn) startBtn.disabled = false;
     if (stopBtn) stopBtn.disabled = true;
@@ -246,7 +197,7 @@ async function stopRecording() {
 async function refreshDiskUsage() {
   if (!diskUsageText) return;
   try {
-    const usage = await invoke<DiskUsage>("get_disk_usage");
+    const usage = await call<DiskUsage>("get_disk_usage");
     diskUsageText.textContent =
       `${formatBytes(usage.total_bytes)} across ${usage.recording_count} recording(s) — ` +
       `${formatBytes(usage.free_bytes)} free`;
@@ -270,7 +221,7 @@ function applyRetentionPolicyToForm(policy: RetentionPolicy) {
 
 async function loadRetentionPolicy() {
   try {
-    const policy = await invoke<RetentionPolicy>("get_retention_policy");
+    const policy = await call<RetentionPolicy>("get_retention_policy");
     applyRetentionPolicyToForm(policy);
   } catch (err) {
     if (retentionStatus) retentionStatus.textContent = `Failed to load policy: ${err}`;
@@ -292,7 +243,7 @@ async function saveRetentionPolicy(e: Event) {
 
   try {
     retentionStatus.textContent = "Saving…";
-    await invoke("set_retention_policy", { policy });
+    await call("set_retention_policy", { policy });
     retentionStatus.textContent = "Saved.";
     await Promise.all([refreshDiskUsage(), refreshLibrary()]);
   } catch (err) {
@@ -302,7 +253,7 @@ async function saveRetentionPolicy(e: Event) {
 
 async function togglePin(row: RecordingRow) {
   try {
-    await invoke("set_pinned", { recordingId: row.id, pinned: !row.pinned });
+    await call("set_pinned", { recordingId: row.id, pinned: !row.pinned });
     await refreshLibrary();
   } catch (err) {
     setStatus(`Failed to update pin: ${err}`);
@@ -313,7 +264,7 @@ async function checkLcuStatus() {
   if (!lcuStatusMsg) return;
   lcuStatusMsg.textContent = "Checking…";
   try {
-    const status = await invoke<LcuStatus>("lcu_status");
+    const status = await call<LcuStatus>("lcu_status");
     if (status.error) {
       lcuStatusMsg.textContent = `Error: ${status.error}`;
     } else if (!status.connected) {
@@ -331,7 +282,7 @@ async function checkGameState() {
   if (!gameStateMsg) return;
   gameStateMsg.textContent = "Checking…";
   try {
-    const status = await invoke<SupervisorStatus>("game_state_status");
+    const status = await call<SupervisorStatus>("game_state_status");
     let text = `State: ${status.state}.`;
     if (status.last_finalized) {
       const idNote =
@@ -348,12 +299,6 @@ async function checkGameState() {
   }
 }
 
-function escapeHtml(value: string): string {
-  const div = document.createElement("div");
-  div.textContent = value;
-  return div.innerHTML;
-}
-
 window.addEventListener("DOMContentLoaded", () => {
   startBtn = document.querySelector("#start-btn");
   stopBtn = document.querySelector("#stop-btn");
@@ -367,8 +312,9 @@ window.addEventListener("DOMContentLoaded", () => {
   gameStateBtn = document.querySelector("#game-state-btn");
   gameStateMsg = document.querySelector("#game-state-msg");
   rescanBtn = document.querySelector("#rescan-btn");
-  libraryView = document.querySelector("#library-view");
-  testingView = document.querySelector("#testing-view");
+  registerView("library", el("#library-view"));
+  registerView("review", el("#review-view"));
+  registerView("testing", el("#testing-view"));
   openTestingBtn = document.querySelector("#open-testing-btn");
   backToLibraryFromTestingBtn = document.querySelector("#back-to-library-from-testing-btn");
   filterChampion = document.querySelector("#filter-champion");
