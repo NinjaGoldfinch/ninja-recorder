@@ -10,12 +10,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Windows-only: GitHub bills macOS runners at 10x wall-clock against the
+  # free plan's 2,000 min/month, and this job's work — tsc, cargo test,
+  # clippy — is platform-independent, so running it twice bought almost
+  # nothing for most of CI's minute spend. The `build` job below still
+  # runs the full matrix natively, so macOS-specific compile breakage
+  # (cfg'd code, the Phase 1 stub recorder) is still caught before a
+  # release — one job later than it used to be. Kept as a single-entry
+  # matrix so re-adding macos-latest here is a one-word change.
   test:
     name: Test (${{ matrix.platform }})
     strategy:
       fail-fast: false
       matrix:
-        platform: [windows-latest, macos-latest]
+        platform: [windows-latest]
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
