@@ -917,11 +917,20 @@ button.armed {
 
 /* --- Stats bar --------------------------------------------------- */
 
+/* Fixed 4-then-2 rather than auto-fit: with exactly four tiles, an
+ * auto-fit track lands on three columns across a wide band of widths and
+ * strands the fourth alone on its own row. */
 .stats-bar {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(4, 1fr);
   gap: var(--sp-3);
   margin-bottom: var(--sp-5);
+}
+
+@media (max-width: 860px) {
+  .stats-bar {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 
 .stat {
