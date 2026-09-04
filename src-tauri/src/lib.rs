@@ -9,6 +9,7 @@ mod state_machine;
 #[cfg(not(target_os = "windows"))]
 use recorder::stub::StubRecorder;
 use recorder::{RecordConfig, Recorder};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
@@ -150,6 +151,61 @@ fn set_pinned(state: tauri::State<AppState>, recording_id: i64, pinned: bool) ->
         .db
         .set_pinned(recording_id, pinned)
         .map_err(|e| e.to_string())
+}
+
+/// Dry run for the settings form: what `set_retention_policy` would delete
+/// if saved with `policy`. Nothing is written.
+#[tauri::command]
+fn preview_retention_policy(
+    state: tauri::State<AppState>,
+    policy: db::RetentionPolicy,
+) -> Result<retention::EnforcementReport, String> {
+    retention::preview(&state.db, &policy).map_err(|e| e.to_string())
+}
+
+/// User-initiated delete of a single recording — file first, then row.
+/// Unlike retention's sweep this reports a file it couldn't remove instead
+/// of dropping the row anyway, so the library still shows what's on disk.
+#[tauri::command]
+fn delete_recording(state: tauri::State<AppState>, recording_id: i64) -> Result<(), String> {
+    let row = state
+        .db
+        .get_recording(recording_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("recording {recording_id} not found"))?;
+    retention::delete_recording_and_file(&state.db, &row).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_recordings_dir(state: tauri::State<AppState>) -> String {
+    state.recordings_dir.display().to_string()
+}
+
+/// Reveals the recordings folder in Finder/Explorer.
+///
+/// Deliberately done here rather than from the frontend with
+/// `@tauri-apps/plugin-opener`: the JS `openPath` command is gated on the
+/// opener scope, which is empty, so it always denies. The Rust function is
+/// a plain call with no ACL involved. The folder is only created on the
+/// first recording, so create it first — `open_path` stats the path and
+/// fails on a fresh install otherwise.
+#[tauri::command]
+fn open_recordings_folder(state: tauri::State<AppState>) -> Result<(), String> {
+    std::fs::create_dir_all(&state.recordings_dir).map_err(|e| e.to_string())?;
+    tauri_plugin_opener::open_path(&state.recordings_dir, None::<&str>).map_err(|e| e.to_string())
+}
+
+/// Every UI preference in one call — the frontend reads the whole set at
+/// boot. Missing keys are absent rather than defaulted: the defaults live
+/// in the frontend, so adding a pref needs no migration.
+#[tauri::command]
+fn get_ui_prefs(state: tauri::State<AppState>) -> Result<HashMap<String, String>, String> {
+    state.db.get_ui_prefs().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_ui_pref(state: tauri::State<AppState>, key: String, value: String) -> Result<(), String> {
+    state.db.set_ui_pref(&key, &value).map_err(|e| e.to_string())
 }
 
 #[derive(serde::Serialize)]
@@ -342,6 +398,12 @@ pub fn run() {
             get_retention_policy,
             set_retention_policy,
             set_pinned,
+            preview_retention_policy,
+            delete_recording,
+            get_recordings_dir,
+            open_recordings_folder,
+            get_ui_prefs,
+            set_ui_pref,
             lcu_status,
             game_state_status
         ])

@@ -18,6 +18,17 @@ pub struct EnforcementReport {
     pub freed_bytes: i64,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum DeleteError {
+    #[error(transparent)]
+    Db(#[from] DbError),
+    #[error("failed to remove {path}: {source}")]
+    Io {
+        path: String,
+        source: std::io::Error,
+    },
+}
+
 /// Pure decision: which recording ids to delete, given the current
 /// library and policy. No I/O — testable without a filesystem or DB, same
 /// shape as `state_machine::machine`'s pure transition function.
@@ -64,6 +75,47 @@ pub fn select_for_deletion(
     to_delete
 }
 
+/// Removes a recording's file and then its DB row. Markers cascade
+/// (`db`'s `ON DELETE CASCADE` plus `PRAGMA foreign_keys = ON`).
+///
+/// A file that's already gone is not an error — the row still has to go,
+/// which is exactly the orphaned-row case `reconcile` cleans up. Any other
+/// io error aborts *before* the row is touched, so a user-initiated delete
+/// can report "couldn't remove the file" with the library left intact
+/// rather than silently dropping the entry and leaking the MP4. Retention
+/// wants the opposite trade-off and opts out explicitly — see `enforce`.
+pub fn delete_recording_and_file(db: &Db, row: &RecordingRow) -> Result<(), DeleteError> {
+    match std::fs::remove_file(&row.path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(DeleteError::Io {
+                path: row.path.clone(),
+                source: e,
+            })
+        }
+    }
+    db.delete_recording(row.id).map_err(DeleteError::from)
+}
+
+/// Dry run: what `enforce` *would* do under `policy`, without touching
+/// anything. Lets the settings UI warn before a tightened limit silently
+/// removes VODs — the policy form is the one place in the app where a
+/// careless edit destroys footage.
+pub fn preview(db: &Db, policy: &RetentionPolicy) -> Result<EnforcementReport, DbError> {
+    let rows = db.list_recordings()?;
+    let deleted = select_for_deletion(&rows, policy, now_millis());
+    let freed_bytes = deleted
+        .iter()
+        .filter_map(|id| rows.iter().find(|r| r.id == *id))
+        .map(|r| r.size_bytes)
+        .sum();
+    Ok(EnforcementReport {
+        deleted,
+        freed_bytes,
+    })
+}
+
 /// Applies `select_for_deletion` against the real DB + filesystem: removes
 /// each selected recording's file (best-effort — a file already gone
 /// doesn't stop its DB row from being removed too) and its DB row.
@@ -76,12 +128,17 @@ pub fn enforce(db: &Db, policy: &RetentionPolicy, now_millis: i64) -> Result<Enf
         let Some(row) = rows.iter().find(|r| r.id == id) else {
             continue;
         };
-        if let Err(e) = std::fs::remove_file(&row.path) {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                eprintln!("[retention] failed to remove {}: {e}", row.path);
+        // Retention runs unattended, so a file it can't remove must not
+        // stall the sweep: log it and drop the row anyway. `reconcile`
+        // re-imports the leftover file later if it's still there.
+        match delete_recording_and_file(db, row) {
+            Ok(()) => {}
+            Err(DeleteError::Io { path, source }) => {
+                eprintln!("[retention] failed to remove {path}: {source}");
+                db.delete_recording(id)?;
             }
+            Err(DeleteError::Db(e)) => return Err(e),
         }
-        db.delete_recording(id)?;
         report.deleted.push(id);
         report.freed_bytes += row.size_bytes;
     }
