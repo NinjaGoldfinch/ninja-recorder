@@ -12,8 +12,13 @@
     <main class="container">
       <div id="library-view">
         <header class="app-header">
-          <h1>ninja-recorder</h1>
-          <p class="subtitle">League of Legends VOD library</p>
+          <div>
+            <h1>ninja-recorder</h1>
+            <p class="subtitle">League of Legends VOD library</p>
+          </div>
+          <button id="open-testing-btn" type="button" class="testing-link">
+            🧪 Testing tools
+          </button>
         </header>
 
         <section id="disk-usage" class="disk-usage">
@@ -64,53 +69,20 @@
               <option value="longest">Longest first</option>
               <option value="champion">Champion (A–Z)</option>
             </select>
+            <button id="refresh-btn" type="button">Refresh</button>
+            <button id="rescan-btn" type="button">Rescan folder</button>
           </div>
+          <p id="status-msg" class="status"></p>
 
           <div id="library-empty" class="empty-state">
             <p>No recordings yet.</p>
             <p class="hint">
               Recordings appear here once a game finishes — or any video
               file dropped into the recordings folder, via "Rescan folder"
-              below.
+              above.
             </p>
           </div>
           <ul id="library-list" class="library-list" hidden></ul>
-        </section>
-
-        <section class="dev-panel">
-          <h2>Dev panel — stub recorder smoke test</h2>
-          <div class="row">
-            <button id="start-btn" type="button">Start recording</button>
-            <button id="stop-btn" type="button" disabled>
-              Stop recording
-            </button>
-            <button id="refresh-btn" type="button">Refresh library</button>
-            <button id="rescan-btn" type="button">Rescan folder</button>
-          </div>
-          <p id="status-msg" class="status"></p>
-        </section>
-
-        <section class="dev-panel">
-          <h2>Dev panel — LCU status</h2>
-          <div class="row">
-            <button id="lcu-check-btn" type="button">
-              Check League Client
-            </button>
-          </div>
-          <p id="lcu-status-msg" class="status">Not checked yet.</p>
-        </section>
-
-        <section class="dev-panel">
-          <h2>Dev panel — game state machine</h2>
-          <div class="row">
-            <button id="game-state-btn" type="button">
-              Check game state
-            </button>
-          </div>
-          <p id="game-state-msg" class="status">
-            Not checked yet. Always running in the background once the app
-            starts — this just reads its current status.
-          </p>
         </section>
       </div>
 
@@ -123,14 +95,47 @@
         </div>
 
         <div class="player-wrap">
-          <video id="review-video" controls></video>
+          <video id="review-video"></video>
           <div id="review-video-error" class="video-error" hidden>
             <p id="review-video-error-text"></p>
             <code id="review-video-error-detail"></code>
           </div>
         </div>
 
+        <div id="vod-timeline" class="vod-timeline">
+          <div class="timeline-head">
+            <span id="timeline-metric-summary" class="timeline-metric-summary"></span>
+            <select
+              id="timeline-metric-select"
+              class="timeline-metric-select"
+              aria-label="Timeline metric"
+            >
+              <option value="gold_diff" selected>Gold diff (est.)</option>
+              <option value="kill_diff">Kill diff</option>
+              <option value="cs_diff">CS diff</option>
+              <option value="none">None</option>
+            </select>
+          </div>
+          <div id="timeline-body" class="timeline-body">
+            <svg
+              id="timeline-graph"
+              class="timeline-graph"
+              viewBox="0 0 1000 100"
+              preserveAspectRatio="none"
+              aria-hidden="true"
+            ></svg>
+            <div id="timeline-glyphs" class="timeline-glyphs"></div>
+            <div id="timeline-ruler" class="timeline-ruler"></div>
+            <div id="timeline-playhead" class="timeline-playhead"></div>
+          </div>
+          <div id="timeline-tooltip" class="timeline-tooltip" hidden></div>
+        </div>
+
         <div class="player-controls">
+          <button id="play-pause-btn" type="button" title="Play / pause (Space)">
+            ▶
+          </button>
+          <span id="time-display" class="time-display">0:00 / 0:00</span>
           <button id="frame-back-btn" type="button" title="Step back one frame">
             ⏮ Frame
           </button>
@@ -147,16 +152,84 @@
               <option value="2">2×</option>
             </select>
           </label>
+          <button id="mute-btn" type="button" class="icon-btn" title="Mute">
+            🔊
+          </button>
+          <input
+            id="volume-slider"
+            class="volume-slider"
+            type="range"
+            min="0"
+            max="1"
+            step="0.05"
+            value="1"
+            aria-label="Volume"
+          />
+          <button
+            id="fullscreen-btn"
+            type="button"
+            class="icon-btn"
+            title="Fullscreen (f)"
+          >
+            ⛶
+          </button>
         </div>
-
-        <div id="marker-timeline" class="marker-timeline"></div>
 
         <ul id="marker-list" class="marker-list"></ul>
 
         <p class="hint">
-          Hotkeys (while reviewing): <kbd>[</kbd> / <kbd>]</kbd> prev/next
-          marker, <kbd>d</kbd> / <kbd>D</kbd> prev/next death.
+          Hotkeys (while reviewing): <kbd>Space</kbd> play/pause,
+          <kbd>&larr;</kbd> / <kbd>&rarr;</kbd> seek 5s, <kbd>[</kbd> /
+          <kbd>]</kbd> prev/next marker, <kbd>d</kbd> / <kbd>D</kbd>
+          prev/next death, <kbd>f</kbd> fullscreen, <kbd>m</kbd> mute.
         </p>
+      </section>
+
+      <section id="testing-view" class="testing-view" hidden>
+        <div class="review-header">
+          <button id="back-to-library-from-testing-btn" type="button" class="back-btn">
+            &larr; Back to library
+          </button>
+          <h2>Testing tools</h2>
+        </div>
+        <p class="hint">
+          Internal tools for developing and debugging the app — not part of
+          the normal recording flow.
+        </p>
+
+        <section class="dev-panel">
+          <h3>Stub recorder smoke test</h3>
+          <div class="row">
+            <button id="start-btn" type="button">Start recording</button>
+            <button id="stop-btn" type="button" disabled>
+              Stop recording
+            </button>
+          </div>
+          <p id="testing-status-msg" class="status"></p>
+        </section>
+
+        <section class="dev-panel">
+          <h3>LCU status</h3>
+          <div class="row">
+            <button id="lcu-check-btn" type="button">
+              Check League Client
+            </button>
+          </div>
+          <p id="lcu-status-msg" class="status">Not checked yet.</p>
+        </section>
+
+        <section class="dev-panel">
+          <h3>Game state machine</h3>
+          <div class="row">
+            <button id="game-state-btn" type="button">
+              Check game state
+            </button>
+          </div>
+          <p id="game-state-msg" class="status">
+            Not checked yet. Always running in the background once the app
+            starts — this just reads its current status.
+          </p>
+        </section>
       </section>
     </main>
   </body>

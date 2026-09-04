@@ -6,12 +6,17 @@ let stopBtn: HTMLButtonElement | null;
 let refreshBtn: HTMLButtonElement | null;
 let rescanBtn: HTMLButtonElement | null;
 let statusMsg: HTMLElement | null;
+let testingStatusMsg: HTMLElement | null;
 let libraryEmpty: HTMLElement | null;
 let libraryList: HTMLUListElement | null;
 let lcuCheckBtn: HTMLButtonElement | null;
 let lcuStatusMsg: HTMLElement | null;
 let gameStateBtn: HTMLButtonElement | null;
 let gameStateMsg: HTMLElement | null;
+let libraryView: HTMLElement | null;
+let testingView: HTMLElement | null;
+let openTestingBtn: HTMLButtonElement | null;
+let backToLibraryFromTestingBtn: HTMLButtonElement | null;
 let filterChampion: HTMLInputElement | null;
 let filterOutcome: HTMLSelectElement | null;
 let filterPinned: HTMLInputElement | null;
@@ -75,6 +80,22 @@ let allRecordings: RecordingRow[] = [];
 
 function setStatus(text: string) {
   if (statusMsg) statusMsg.textContent = text;
+}
+
+function setTestingStatus(text: string) {
+  if (testingStatusMsg) testingStatusMsg.textContent = text;
+}
+
+function openTestingView() {
+  if (!libraryView || !testingView) return;
+  libraryView.hidden = true;
+  testingView.hidden = false;
+}
+
+function closeTestingView() {
+  if (!libraryView || !testingView) return;
+  testingView.hidden = true;
+  libraryView.hidden = false;
 }
 
 function basename(path: string): string {
@@ -199,26 +220,26 @@ async function rescanRecordings() {
 
 async function startRecording() {
   try {
-    setStatus("Starting…");
+    setTestingStatus("Starting…");
     await invoke("start_recording");
-    setStatus("Recording (stub).");
+    setTestingStatus("Recording (stub).");
     if (startBtn) startBtn.disabled = true;
     if (stopBtn) stopBtn.disabled = false;
   } catch (err) {
-    setStatus(`Failed to start: ${err}`);
+    setTestingStatus(`Failed to start: ${err}`);
   }
 }
 
 async function stopRecording() {
   try {
-    setStatus("Stopping…");
+    setTestingStatus("Stopping…");
     const path = await invoke<string>("stop_recording");
-    setStatus(`Saved: ${path}`);
+    setTestingStatus(`Saved: ${path}`);
     if (startBtn) startBtn.disabled = false;
     if (stopBtn) stopBtn.disabled = true;
     await Promise.all([refreshLibrary(), refreshDiskUsage()]);
   } catch (err) {
-    setStatus(`Failed to stop: ${err}`);
+    setTestingStatus(`Failed to stop: ${err}`);
   }
 }
 
@@ -338,6 +359,7 @@ window.addEventListener("DOMContentLoaded", () => {
   stopBtn = document.querySelector("#stop-btn");
   refreshBtn = document.querySelector("#refresh-btn");
   statusMsg = document.querySelector("#status-msg");
+  testingStatusMsg = document.querySelector("#testing-status-msg");
   libraryEmpty = document.querySelector("#library-empty");
   libraryList = document.querySelector("#library-list");
   lcuCheckBtn = document.querySelector("#lcu-check-btn");
@@ -345,6 +367,10 @@ window.addEventListener("DOMContentLoaded", () => {
   gameStateBtn = document.querySelector("#game-state-btn");
   gameStateMsg = document.querySelector("#game-state-msg");
   rescanBtn = document.querySelector("#rescan-btn");
+  libraryView = document.querySelector("#library-view");
+  testingView = document.querySelector("#testing-view");
+  openTestingBtn = document.querySelector("#open-testing-btn");
+  backToLibraryFromTestingBtn = document.querySelector("#back-to-library-from-testing-btn");
   filterChampion = document.querySelector("#filter-champion");
   filterOutcome = document.querySelector("#filter-outcome");
   filterPinned = document.querySelector("#filter-pinned");
@@ -363,6 +389,8 @@ window.addEventListener("DOMContentLoaded", () => {
   rescanBtn?.addEventListener("click", rescanRecordings);
   lcuCheckBtn?.addEventListener("click", checkLcuStatus);
   gameStateBtn?.addEventListener("click", checkGameState);
+  openTestingBtn?.addEventListener("click", openTestingView);
+  backToLibraryFromTestingBtn?.addEventListener("click", closeTestingView);
 
   filterChampion?.addEventListener("input", applyFiltersAndRender);
   filterOutcome?.addEventListener("change", applyFiltersAndRender);

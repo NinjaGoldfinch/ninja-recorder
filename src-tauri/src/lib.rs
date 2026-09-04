@@ -89,6 +89,20 @@ fn get_recording_markers(
         .map_err(|e| e.to_string())
 }
 
+/// Advantage-curve samples for the review timeline's graph. Returns an
+/// empty vec for any recording made before sampling existed — the frontend
+/// treats that as "no metric data" rather than an error.
+#[tauri::command]
+fn get_recording_samples(
+    state: tauri::State<AppState>,
+    recording_id: i64,
+) -> Result<Vec<db::SampleRow>, String> {
+    state
+        .db
+        .get_samples(recording_id)
+        .map_err(|e| e.to_string())
+}
+
 #[derive(serde::Serialize)]
 struct DiskUsage {
     total_bytes: i64,
@@ -323,6 +337,7 @@ pub fn run() {
             list_recordings,
             rescan_recordings,
             get_recording_markers,
+            get_recording_samples,
             get_disk_usage,
             get_retention_policy,
             set_retention_policy,

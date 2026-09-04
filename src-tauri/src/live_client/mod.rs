@@ -6,7 +6,7 @@ pub mod events;
 pub mod poller;
 
 pub use client::LiveClientDataClient;
-pub use events::{AllGameData, Marker, MarkerTracker, TimeAlignment};
+pub use events::{team_diff, AllGameData, Marker, MarkerTracker, TeamDiff, TimeAlignment};
 
 // Re-exported for future consumers (Phase 4 VOD library, Phase 5 review
 // UI) — not used internally yet.
