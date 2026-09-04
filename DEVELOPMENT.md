@@ -165,9 +165,56 @@ Implemented in `src-tauri/src/db/` (`Db` + `reconcile`), migrations via `rusqlit
 - Custom timeline component: marker glyphs per event kind, click-to-jump, "next death" / "prev death" hotkeys.
 - Later: clip export (`ffmpeg -ss .. -to .. -c copy` — stream copy, no re-encode; ship a minimal ffmpeg binary or use libobs's muxer).
 
-Implemented in `src/review.ts` + `index.html`'s `#review-view`. The video loads via Tauri's asset protocol (`convertFileSrc`, scoped in `tauri.conf.json` to `$APPDATA/recordings/*` — needed the `protocol-asset` Cargo feature, not just config). Frame-step is a ±1/30s time nudge, not true frame-accurate seeking — no per-recording frame rate is probed anywhere yet, so this is an approximation good enough for review, not for precision editing. Closely-spaced markers (common near a teamfight) alternate a vertical lane on the timeline so their glyphs don't visually collide. The library list, filters, and sort are all client-side over the already-fetched row set — fine at solo-user library sizes, would need real pagination/querying if that stops being true.
+Implemented in `src/review.ts` + `index.html`'s `#review-view`. The video loads via Tauri's asset protocol (`convertFileSrc`, scoped in `tauri.conf.json` to `$APPDATA/recordings/*` — needed the `protocol-asset` Cargo feature, not just config). Frame-step is a ±1/30s time nudge, not true frame-accurate seeking — no per-recording frame rate is probed anywhere yet, so this is an approximation good enough for review, not for precision editing. Closely-spaced markers (common near a teamfight) collapse into a single cluster glyph rather than colliding, with `MARKER_PRIORITY` deciding which icon the cluster shows. The library grid, filters, sort, and the stats bar above them are all client-side over the already-fetched row set — fine at solo-user library sizes, would need real pagination/querying if that stops being true.
 
 Verified: layout/CSS visually in a browser (with injected mock data, since a plain browser tab has no Tauri IPC bridge to exercise real `invoke` calls) and a full `cargo tauri dev` launch (asset-protocol config + new `get_recording_markers` command, no capability/schema errors, stable). **Not verified**: actual video playback (no real MP4 fixture available in this environment — drop one in as `fixtures/sample.mp4` to test) and the hotkey→seek interaction against real marker data (needs a loaded recording, which needs either a live app session or a real video file to click through manually).
+
+### 5.1 App shell, theming and settings
+
+The frontend is vanilla TS with no framework, split by state ownership
+rather than by widget: `router.ts` owns which view is showing, `theme.ts`
+owns `<html data-theme>`, `prefs.ts` owns the preference cache, `status.ts`
+owns the poll timer, `library.ts` owns the row set and filters, and
+`settings.ts` owns the settings form. `main.ts` is a composition root that
+owns nothing. `dom.ts` and `format.ts` hold shared primitives — including
+`escapeAttr`, which matters because `reconcile` imports any video file the
+user drops in the folder, so a recording's displayed name is not
+necessarily ours.
+
+**Theming.** `data-theme` is written by JS and only ever holds `"light"` or
+`"dark"`; there is no `prefers-color-scheme` media query in the stylesheet.
+Resolving the OS preference once, in one place, keeps a single dark block
+instead of two and makes an explicit "Light" on a dark OS win by
+construction rather than by CSS specificity. The cost is that "System" no
+longer follows the OS for free — `theme.ts` listens on the matchMedia
+`change` event to put that back, and removing that listener is a silent
+regression with no test to catch it.
+
+Preferences live in `settings_kv` (migration 4), a deliberately unseeded
+key/value table: a missing pref means "use the frontend default", so adding
+one needs no migration. They also mirror into `localStorage` for exactly
+one reason — the inline boot script in `index.html` has to pick a theme
+*synchronously*, before first paint, and IPC resolves too late. SQLite
+stays the source of truth and wins any disagreement.
+
+**Status polling.** There are no Tauri events anywhere in this app; every
+backend→frontend signal is pull-only. The header's live state therefore
+comes from a `setTimeout` chain (not `setInterval` — `lcu_status` reads a
+lockfile and makes two HTTPS round trips, and a slow tick would stack
+calls). The interval scales with game state, and the library refreshes
+itself off the `Finalizing` edge and `last_finalized.path` rather than
+polling `list_recordings`, which would rebuild the grid every couple of
+seconds and fight scroll and focus. If Tauri events are ever added on the
+Rust side, this whole file becomes a subscription instead.
+
+**No dev panel.** The stub start/stop, LCU check and game-state buttons are
+gone. The information they exposed is now always on — the header strip, and
+a read-only About block in settings carrying summoner, phase, state, and
+the last finalized path with its marker count and `DB WRITE FAILED` signal.
+`start_recording` / `stop_recording` / `is_recording` stay registered as
+commands (unreferenced from the frontend): `start_recording` carries the
+`has_room_to_record` preflight, and dropping them would make
+`chrono_stamp` dead code, which fails CI's `clippy -D warnings`.
 
 ---
 
@@ -181,11 +228,11 @@ Verified: layout/CSS visually in a browser (with injected mock data, since a pla
 
 Implemented in `src-tauri/src/retention.rs`, following the same pure-function-plus-thin-I/O-wrapper shape as `db::reconcile` and `state_machine::machine`: `select_for_deletion` is a pure decision (no I/O, unit-tested directly) over a `RecordingRow` slice + `RetentionPolicy` + an injected "now," and `enforce`/`enforce_now` apply it against the real DB and filesystem. Age is checked first (anything over the limit goes regardless of size), then size (oldest non-pinned recordings removed until under the cap) — usage totals include pinned recordings' bytes (they still occupy disk), but only non-pinned rows are ever deletion candidates.
 
-The policy itself lives in a single-row `settings` table (`db/mod.rs`'s second migration), defaulting to 50 GiB / 30 days rather than unlimited — this is meant to protect the user out of the box, not only once they find a settings screen, matching this section's "launch feature, not a later one." Either limit can be turned off independently (`NULL` = unbounded) via the library UI's "Retention policy" disclosure, which also shows current usage (`get_disk_usage`) right above it so nothing is deleted as a surprise. Enforcement runs at app startup (`lib.rs`'s `setup`, after reconcile) and after every finalize (`state_machine::supervisor::stop_recording`), plus immediately when the policy is changed from the UI (`set_retention_policy`) so a newly-tightened limit doesn't wait for the next finalize to take effect.
+The policy itself lives in a single-row `settings` table (`db/mod.rs`'s second migration), defaulting to 50 GiB / 30 days rather than unlimited — this is meant to protect the user out of the box, not only once they find a settings screen, matching this section's "launch feature, not a later one." Either limit can be turned off independently (`NULL` = unbounded) from the settings view's Storage section; current usage sits in the library's stats bar so nothing is deleted as a surprise. `preview_retention_policy` runs `select_for_deletion` as a dry run while the form is being edited, so a tightened limit says what it will delete *before* it is saved, and `set_retention_policy`'s `EnforcementReport` — previously returned and discarded — is now shown after it does. Enforcement runs at app startup (`lib.rs`'s `setup`, after reconcile) and after every finalize (`state_machine::supervisor::stop_recording`), plus immediately when the policy is changed from the UI (`set_retention_policy`) so a newly-tightened limit doesn't wait for the next finalize to take effect.
 
 Record-start preflight (`retention::has_room_to_record`, via the `fs2` crate — std has no free-space API) refuses to start a new recording under 1 GiB free on the recordings volume, checked from both `Supervisor::start_recording` (the real path) and the dev panel's manual `start_recording` command. Fails open on a stat error rather than block recording over a check that couldn't even run.
 
-Pinning is wired end-to-end now too: the library list's 📌 was display-only through Phase 5; clicking it calls `set_pinned` and refreshes.
+Pinning is wired end-to-end now too: the library's 📌 was display-only through Phase 5; clicking it calls `set_pinned` and refreshes. Recordings can also be deleted individually via `delete_recording`, which shares `retention::delete_recording_and_file` with the automatic sweep — the two differ deliberately on a file that won't delete: a user-initiated delete reports the failure and leaves the row alone, while `enforce` logs and drops the row anyway so an unattended sweep can't stall.
 
 ---
 
