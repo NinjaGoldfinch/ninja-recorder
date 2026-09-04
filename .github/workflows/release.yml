@@ -25,6 +25,13 @@ jobs:
     name: Release
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 because the notes step below needs full history and
+      # every tag to resolve the previous release and the commit range.
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Find CI run for this commit
         id: find-run
         env:
@@ -53,6 +60,51 @@ jobs:
           run-id: ${{ steps.find-run.outputs.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Notes are derived from the commit range since the previous tag, so
+      # each release describes its own changes instead of repeating a
+      # hardcoded blurb. Uses git log rather than GitHub's own generator
+      # because that one lists merged PRs only, and this repo mixes PRs
+      # with commits pushed straight to main — those would silently go
+      # unlisted. Merge commits and the release's own version-bump commit
+      # are dropped as noise. The standing install caveats are appended
+      # below the changelog; keep them in sync with DEVELOPMENT.md as the
+      # Phase 6/8 status changes.
+      - name: Build release notes
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+          {
+            echo "## What's changed"
+            echo
+            if [ -n "$PREV" ]; then
+              git log --no-merges --invert-grep --grep='^Bump version to' \
+                --pretty=format:'- %s' "${PREV}..${TAG}"
+              echo
+              echo
+              echo "**Full changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${PREV}...${TAG}"
+            else
+              git log --no-merges --invert-grep --grep='^Bump version to' \
+                --pretty=format:'- %s' "${TAG}"
+              echo
+            fi
+            cat <<'CAVEATS'
+
+          ## Before you install
+
+          Unsigned build: Windows SmartScreen and macOS Gatekeeper will both
+          warn on first run (no code-signing certificate configured yet). See
+          the installer for your platform below.
+
+          macOS builds only exercise the stub recorder from Phase 1 — real
+          game capture is Windows-only (DEVELOPMENT.md §1.1). The Windows
+          build includes the Phase 6 libobs capture backend, but it hasn't
+          been verified against a real Vanguard-protected game yet
+          (DEVELOPMENT.md §9, pending Phase 8).
+          CAVEATS
+          } > notes.md
+          echo "--- generated notes ---"
+          cat notes.md
+
       # Draft so a broken build doesn't go public before it's reviewed —
       # publish manually from the Releases page.
       - name: Publish release
@@ -60,16 +112,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: "ninja-recorder ${{ github.ref_name }}"
-          body: |
-            Unsigned build: Windows SmartScreen and macOS Gatekeeper will
-            both warn on first run (no code-signing certificate configured
-            yet). See the installer for your platform below.
-
-            macOS builds only exercise the stub recorder from Phase 1 —
-            real game capture is Windows-only (DEVELOPMENT.md §1.1). The
-            Windows build includes the Phase 6 libobs capture backend, but
-            it hasn't been verified against a real Vanguard-protected game
-            yet (DEVELOPMENT.md §9, pending Phase 8).
+          body_path: notes.md
           draft: true
           prerelease: false
           files: |
