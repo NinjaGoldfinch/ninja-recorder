@@ -287,7 +287,33 @@ pub fn run() {
 
             let db_path = app.path().app_data_dir()?.join("library.sqlite3");
             std::fs::create_dir_all(db_path.parent().expect("db path always has a parent"))?;
-            let db = Arc::new(db::Db::open(&db_path)?);
+            let db = Arc::new(match db::Db::open(&db_path) {
+                Ok(db) => db,
+                // Returning `Err` here would hand this to Tauri's setup
+                // hook, which `expect`s on it — and because that runs
+                // inside a platform callback that can't unwind, the user
+                // gets an abort and thirty frames of backtrace instead of
+                // a reason. Every case is fatal (nothing in the app works
+                // without the library), so print something actionable and
+                // leave quietly.
+                Err(e @ db::DbError::SchemaTooNew { .. }) => {
+                    eprintln!(
+                        "\n[db] cannot open the VOD library: {e}.\n\
+                         \n  {}\n\
+                         \nThis happens after switching to an older branch, or downgrading the\n\
+                         app: migrations only run forward. The file is left untouched. Either go\n\
+                         back to the newer build, or move that file aside to start a fresh\n\
+                         library (its recordings stay on disk and are re-imported by the startup\n\
+                         folder scan — only the metadata is lost).\n",
+                        db_path.display()
+                    );
+                    std::process::exit(1);
+                }
+                Err(e) => {
+                    eprintln!("\n[db] cannot open the VOD library at {}: {e}\n", db_path.display());
+                    std::process::exit(1);
+                }
+            });
 
             match db::reconcile::reconcile(&db, &dir) {
                 Ok(report) if report.orphans_removed > 0 || report.imported > 0 => {

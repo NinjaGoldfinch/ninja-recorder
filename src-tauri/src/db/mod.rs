@@ -21,10 +21,26 @@ pub enum DbError {
     Migration(#[from] rusqlite_migration::Error),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    /// The file on disk is at a higher schema version than this build
+    /// knows about — it was written by a newer build (in practice: another
+    /// branch, or a downgrade). Migrations only run forward, so there is
+    /// nothing this build can do with it. Detected explicitly rather than
+    /// left to `rusqlite_migration`, whose `DatabaseTooFarAhead` surfaces
+    /// as an opaque nested enum with no room to say which file or what to
+    /// do about it.
+    #[error(
+        "database schema is v{found}, but this build only knows v{expected} — \
+         it was created by a newer build of the app"
+    )]
+    SchemaTooNew { found: i64, expected: i64 },
 }
 
-static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
-    Migrations::new(vec![M::up(
+/// The migration list, paired with its own length. Bundled rather than
+/// kept as a separate constant so the "how many migrations does this build
+/// know about" number can't drift from the list it describes — that number
+/// is what `init` compares `PRAGMA user_version` against.
+static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
+    let migrations = vec![M::up(
         "
         CREATE TABLE recordings (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,7 +118,9 @@ static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
 
         CREATE INDEX idx_samples_recording_id ON samples(recording_id);
         ",
-    )])
+    )];
+    let count = migrations.len() as i64;
+    (Migrations::new(migrations), count)
 });
 
 #[derive(Debug, Clone, Default)]
@@ -224,7 +242,22 @@ impl Db {
 
     fn init(conn: &mut Connection) -> Result<(), DbError> {
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        MIGRATIONS.to_latest(conn)?;
+
+        // `rusqlite_migration` would catch this too, but only as
+        // `MigrationDefinition(DatabaseTooFarAhead)` — which reaches the
+        // user as a Rust panic and a backtrace, from inside Tauri's setup
+        // hook. Checking first lets the failure carry both version numbers
+        // and lets `lib.rs` say what to do about it.
+        let (migrations, expected) = &*MIGRATIONS;
+        let found: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if found > *expected {
+            return Err(DbError::SchemaTooNew {
+                found,
+                expected: *expected,
+            });
+        }
+
+        migrations.to_latest(conn)?;
         Ok(())
     }
 
@@ -473,6 +506,48 @@ impl Db {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A database written by a *newer* build must be refused with a
+    /// diagnosable error rather than the library's opaque
+    /// `DatabaseTooFarAhead`. This is reachable just by switching to an
+    /// older branch, and before it was handled it aborted the whole app
+    /// from inside Tauri's setup hook.
+    #[test]
+    fn refuses_a_schema_from_a_newer_build() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        Db::init(&mut conn).unwrap();
+
+        let (_, expected) = &*MIGRATIONS;
+        let ahead = *expected + 1;
+        conn.pragma_update(None, "user_version", ahead).unwrap();
+
+        match Db::init(&mut conn) {
+            Err(DbError::SchemaTooNew { found, expected: known }) => {
+                assert_eq!(found, ahead);
+                assert_eq!(known, *expected);
+            }
+            other => panic!("expected SchemaTooNew, got {other:?}"),
+        }
+    }
+
+    /// The check is one-sided: an older file is exactly what migrations
+    /// are for, and must still be brought forward.
+    #[test]
+    fn still_migrates_a_database_from_an_older_build() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        Db::init(&mut conn).unwrap();
+
+        let (_, expected) = &*MIGRATIONS;
+        assert_eq!(
+            conn.query_row::<i64, _, _>("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap(),
+            *expected,
+            "a fresh database should land on the newest schema"
+        );
+
+        // Re-running against an already-current file is also a no-op.
+        Db::init(&mut conn).unwrap();
+    }
 
     fn marker(kind: &str, game_time_s: f64) -> NewMarker {
         NewMarker {
