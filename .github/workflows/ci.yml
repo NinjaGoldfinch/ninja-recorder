@@ -4,16 +4,78 @@ on:
   push:
     branches: [main]
   pull_request:
-  # So the full matrix — including the push-only devtools bundles below —
-  # can be exercised from a branch before it is merged. Without this the
-  # devtools entries have no trigger except a push to main itself.
+  # So the full matrix — including the devtools bundle below, which pull
+  # requests skip — can be exercised from a branch before it is merged.
+  # A manual run never mints a version or drafts a release; it only builds.
   workflow_dispatch:
 
+# Superseded pull-request runs are cancelled, which is most of the minute
+# saving. Pushes to main are deliberately NOT grouped together: each one
+# owes a draft release, so cancelling an in-flight run because a second
+# commit landed would silently drop that commit's build.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Every push to main gets its own draft release, so the version has to be
+  # settled before anything compiles: it is baked into the binary, the
+  # installer filename and the About block, and a version chosen after the
+  # build would disagree with all three.
+  #
+  # It is derived from the commit's distance to the newest real tag rather
+  # than "highest version seen, plus one". That makes it a pure function of
+  # the commit: two pushes landing at once cannot claim the same version,
+  # and re-running a commit updates its own draft instead of minting a
+  # second one. Draft releases carry no git tag until somebody publishes
+  # them, which is exactly what holds the base still while drafts pile up
+  # — publish one and it becomes the new base, so the count restarts from
+  # a higher minor and the sequence stays monotonic either way.
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.pick.outputs.version }}
+      release: ${{ steps.pick.outputs.release }}
+    steps:
+      # Full history and every tag: the distance below is measured against
+      # them, and a shallow clone would silently under-count.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pick version
+        id: pick
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          base=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+          if [ -n "$base" ]; then
+            n=$(git rev-list --count "${base}..HEAD")
+            base_version=${base#v}
+          else
+            n=$(git rev-list --count HEAD)
+            base_version=0.0.0
+          fi
+          major=${base_version%%.*}
+          minor=$(printf '%s' "$base_version" | cut -d. -f2)
+          version="${major}.$((minor + n)).0"
+
+          # Only a push to main mints a version. Pull requests and manual
+          # runs build at whatever the tree already says, so their
+          # installers stay honest about what they are.
+          if [ "$EVENT" = "push" ] && [ "$n" -gt 0 ]; then
+            release=true
+          else
+            release=false
+            version=$(node -p "require('./package.json').version")
+          fi
+
+          echo "base=${base:-<none>} commits=$n -> version=$version release=$release"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+
   # Windows-only: GitHub bills macOS runners at 10x wall-clock against the
   # free plan's 2,000 min/month, and this job's work — tsc, cargo test,
   # clippy — is platform-independent, so running it twice bought almost
@@ -84,8 +146,12 @@ jobs:
   # full Tauri build each, DEVELOPMENT.md §10) get their own runners
   # rather than running serially after the production bundle in the same
   # job — that second build used to sit squarely on the critical path.
-  # They're skipped on pull_request because release.yml is the only
-  # consumer; PRs get the two production bundles and nothing else.
+  # Pull requests skip it because the draft release is its only consumer.
+  #
+  # Windows-only: the dev portal exists to exercise the backend without
+  # League running, and the macOS build is the Phase 1 stub recorder, so a
+  # macOS devtools installer cost a 10x-billed runner to exercise a stub.
+  # Re-adding it is one more entry in the matrix below.
   build:
     name: Build (${{ matrix.platform }}${{ matrix.devtools && ', devtools' || '' }})
     strategy:
@@ -93,8 +159,9 @@ jobs:
       matrix:
         include: >-
           ${{ fromJSON(github.event_name != 'pull_request'
-          && '[{"platform":"windows-latest","bundles":"nsis"},{"platform":"macos-latest","bundles":"dmg"},{"platform":"windows-latest","bundles":"nsis","devtools":true},{"platform":"macos-latest","bundles":"dmg","devtools":true}]'
+          && '[{"platform":"windows-latest","bundles":"nsis"},{"platform":"macos-latest","bundles":"dmg"},{"platform":"windows-latest","bundles":"nsis","devtools":true}]'
           || '[{"platform":"windows-latest","bundles":"nsis"},{"platform":"macos-latest","bundles":"dmg"}]') }}
+    needs: version
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -115,6 +182,34 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
+
+      # Stamped in, never committed: the release is cut from the artifacts
+      # rather than from a bumped commit, so main keeps no bump commits and
+      # CI never pushes to itself. Deliberately after `Cache Rust`, whose
+      # key is hashed from the committed manifests — editing them first
+      # would mint a new key every run and make the Rust cache permanently
+      # cold. All three files matter: Cargo.toml is what cargo compiles,
+      # tauri.conf.json is what names the installer, and package.json is
+      # what vite bakes into `__APP_VERSION__` for the About block.
+      - name: Set release version
+        if: needs.version.outputs.release == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const v = process.env.VERSION;
+            for (const f of ["package.json", "src-tauri/tauri.conf.json"]) {
+              const j = JSON.parse(fs.readFileSync(f, "utf8"));
+              j.version = v;
+              fs.writeFileSync(f, JSON.stringify(j, null, 2) + "\n");
+            }
+            const toml = "src-tauri/Cargo.toml";
+            fs.writeFileSync(toml, fs.readFileSync(toml, "utf8")
+              .replace(/^version = ".*"$/m, `version = "${v}"`));
+          '
+          echo "building as $VERSION"
 
       # The staged backend is keyed on the exact libobs-recorder revision
       # Cargo.lock links against, which does double duty: it is a stable
@@ -239,3 +334,127 @@ jobs:
           path: src-tauri/target/release/bundle
           retention-days: 7
           if-no-files-found: error
+
+  # Publishes a draft for every commit that lands on main, from the bundles
+  # the matrix above just produced. Nothing is rebuilt and no tag is pushed:
+  # a draft release holds its tag name without creating the ref, so the tag
+  # only comes into existence if somebody publishes the draft — which is
+  # also what keeps `version` above counting from a stable base.
+  #
+  # This replaces the old release.yml, which triggered on a manually pushed
+  # tag and then had to go hunting for the ci.yml run that matched the
+  # commit. Running in the same workflow makes the artifacts local, so the
+  # cross-run download dance and its `actions: read` token are both gone.
+  draft-release:
+    name: Draft release
+    if: needs.version.outputs.release == 'true'
+    needs: [version, test, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # fetch-depth: 0 because the notes step below needs full history and
+      # every tag to resolve the previous release and the commit range.
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Windows bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: ninja-recorder-windows-latest-${{ github.sha }}
+          path: artifacts/windows
+
+      - name: Download macOS bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: ninja-recorder-macos-latest-${{ github.sha }}
+          path: artifacts/macos
+
+      # Attached to the draft only, and expected to be deleted before it is
+      # published — see the `devtools` matrix entry above. `continue-on-error`
+      # so a release can still be cut from a run where the devtools bundle
+      # failed: its absence must never block shipping the real installers.
+      - name: Download Windows devtools bundle
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: ninja-recorder-devtools-windows-latest-${{ github.sha }}
+          path: artifacts/windows-devtools
+
+      # Notes are derived from the commit range since the previous release,
+      # so each draft describes its own changes instead of repeating a
+      # hardcoded blurb. Uses git log rather than GitHub's own generator
+      # because that one lists merged PRs only, and this repo mixes PRs
+      # with commits pushed straight to main — those would silently go
+      # unlisted. Merge commits are dropped as noise, as are the version-bump
+      # commits that older ranges still contain; nothing bumps a version in
+      # the repo any more. The previous release is the newest *tag*, so
+      # while a run of drafts goes unpublished each one accumulates the
+      # whole range since the last published release, which is what you
+      # want to read before deciding to publish. The standing install
+      # caveats are appended below the changelog; keep them in sync with
+      # DEVELOPMENT.md as the Phase 6/8 status changes.
+      - name: Build release notes
+        env:
+          TAG: v${{ needs.version.outputs.version }}
+        run: |
+          PREV=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+          {
+            echo "## What's changed"
+            echo
+            if [ -n "$PREV" ]; then
+              git log --no-merges --invert-grep --grep='^Bump version to' \
+                --pretty=format:'- %s' "${PREV}..${GITHUB_SHA}"
+              echo
+              echo
+              echo "**Full changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${PREV}...${GITHUB_SHA}"
+            else
+              git log --no-merges --invert-grep --grep='^Bump version to' \
+                --pretty=format:'- %s' "${GITHUB_SHA}"
+              echo
+            fi
+            cat <<'CAVEATS'
+
+          ## Before you install
+
+          Unsigned build: Windows SmartScreen and macOS Gatekeeper will both
+          warn on first run (no code-signing certificate configured yet). See
+          the installer for your platform below.
+
+          macOS builds only exercise the stub recorder from Phase 1 — real
+          game capture is Windows-only (DEVELOPMENT.md §1.1). The Windows
+          build includes the Phase 6 libobs capture backend, but it hasn't
+          been verified against a real Vanguard-protected game yet
+          (DEVELOPMENT.md §9, pending Phase 8).
+          CAVEATS
+            cat <<'DEVNOTE'
+
+          <!-- REMOVE THIS BLOCK AND THE *-devtools ASSET BEFORE PUBLISHING -->
+          > **Draft-only:** the `*-devtools` installer above carries the dev
+          > portal (raw SQL execution, arbitrary row writes, database wipe,
+          > state-machine injection). Delete that asset and this block
+          > before making the release public.
+          DEVNOTE
+          } > notes.md
+          echo "--- generated notes ---"
+          cat notes.md
+
+      # Draft so a build never goes public before it's reviewed — publish
+      # manually from the Releases page. `target_commitish` pins which
+      # commit the tag lands on at that point, since the tag does not exist
+      # until then.
+      - name: Publish draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: "ninja-recorder v${{ needs.version.outputs.version }}"
+          body_path: notes.md
+          draft: true
+          prerelease: false
+          files: |
+            artifacts/windows/**/*.exe
+            artifacts/macos/**/*.dmg
+            artifacts/windows-devtools/**/*-devtools.exe
