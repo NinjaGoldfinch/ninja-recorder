@@ -8,9 +8,9 @@
  * table renderer, a JSON view, a confirm dialog, and toasts. There is no
  * component framework here on purpose.
  */
-import { escapeHtml } from "../shared/html";
+import { escapeAttr, escapeHtml } from "../dom";
 
-export { escapeHtml };
+export { escapeAttr, escapeHtml };
 
 export function h(html: string): string {
   return html;
@@ -93,7 +93,7 @@ export function table(
             return `<td class="null">null</td>`;
           }
           const text = typeof cell === "object" ? JSON.stringify(cell) : String(cell);
-          return `<td class="${isNum ? "num" : ""}" title="${escapeHtml(text)}">${escapeHtml(text)}</td>`;
+          return `<td class="${isNum ? "num" : ""}" title="${escapeAttr(text)}">${escapeHtml(text)}</td>`;
         })
         .join("");
       return `<tr class="${options.clickable ? "clickable" : ""}" data-row-index="${i}">${cells}</tr>`;

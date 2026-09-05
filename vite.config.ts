@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import pkg from "./package.json";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
@@ -10,7 +11,8 @@ export default defineConfig(async () => ({
   //
   // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
-
+  // Surfaced in the settings "About" block so the version shown is the one
+  // that was built, not a string someone has to remember to bump twice.
   // The dev portal (dev.html) is a second entry point, built only when
   // opted in — a plain `npm run build` must not be able to leak it into
   // `dist/`, since it pairs with Rust commands that are themselves
@@ -24,6 +26,10 @@ export default defineConfig(async () => ({
         ? { main: "index.html", dev: "dev.html" }
         : { main: "index.html" },
     },
+  },
+
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
   },
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {

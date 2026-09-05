@@ -14,8 +14,10 @@
     "windows": [
       {
         "title": "ninja-recorder",
-        "width": 800,
-        "height": 600
+        "width": 1160,
+        "height": 800,
+        "minWidth": 880,
+        "minHeight": 600
       }
     ],
     "security": {

@@ -10,6 +10,7 @@ pub mod reconcile;
 use rusqlite::{params, Connection, OptionalExtension};
 use rusqlite_migration::{Migrations, M};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{LazyLock, Mutex};
 
@@ -117,6 +118,18 @@ static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
 
         CREATE INDEX idx_samples_recording_id ON samples(recording_id);
         ",
+    ), M::up(
+        "
+        -- Generic key/value store for UI preferences (theme, default sort).
+        -- Deliberately unseeded, unlike migration 2's single-row `settings`:
+        -- retention has to protect the user out of the box, but a missing UI
+        -- pref just means 'use the frontend default', which keeps adding a
+        -- new pref a zero-migration change.
+        CREATE TABLE settings_kv (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        ",
     )];
     let count = migrations.len() as i64;
     (Migrations::new(migrations), count)
@@ -212,6 +225,29 @@ pub struct SampleRow {
     pub cs_diff: Option<i64>,
     pub our_gold: Option<f64>,
     pub our_level: Option<i64>,
+}
+
+/// Shared row mapper for the `recordings` SELECT list used by
+/// `list_recordings` and `get_recording` — the two must stay column-aligned,
+/// so they read the tuple in one place.
+fn row_to_recording(row: &rusqlite::Row) -> rusqlite::Result<RecordingRow> {
+    Ok(RecordingRow {
+        id: row.get(0)?,
+        path: row.get(1)?,
+        started_at: row.get(2)?,
+        duration_s: row.get(3)?,
+        game_id: row.get(4)?,
+        queue: row.get(5)?,
+        champion: row.get(6)?,
+        role: row.get(7)?,
+        win: row.get(8)?,
+        kda_k: row.get(9)?,
+        kda_d: row.get(10)?,
+        kda_a: row.get(11)?,
+        patch: row.get(12)?,
+        pinned: row.get(13)?,
+        size_bytes: row.get(14)?,
+    })
 }
 
 pub struct Db {
@@ -410,25 +446,7 @@ impl Db {
                     win, kda_k, kda_d, kda_a, patch, pinned, size_bytes
              FROM recordings ORDER BY started_at DESC",
         )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(RecordingRow {
-                id: row.get(0)?,
-                path: row.get(1)?,
-                started_at: row.get(2)?,
-                duration_s: row.get(3)?,
-                game_id: row.get(4)?,
-                queue: row.get(5)?,
-                champion: row.get(6)?,
-                role: row.get(7)?,
-                win: row.get(8)?,
-                kda_k: row.get(9)?,
-                kda_d: row.get(10)?,
-                kda_a: row.get(11)?,
-                patch: row.get(12)?,
-                pinned: row.get(13)?,
-                size_bytes: row.get(14)?,
-            })
-        })?;
+        let rows = stmt.query_map([], row_to_recording)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
     }
 
@@ -508,6 +526,43 @@ impl Db {
         conn.execute(
             "UPDATE settings SET max_total_bytes = ?1, max_age_days = ?2 WHERE id = 1",
             params![policy.max_total_bytes, policy.max_age_days],
+        )?;
+        Ok(())
+    }
+
+    /// One recording by id. `find_by_path`'s counterpart — used by the
+    /// user-initiated delete, which needs the row's `path` and `size_bytes`
+    /// before it can remove the file.
+    pub fn get_recording(&self, id: i64) -> Result<Option<RecordingRow>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, path, started_at, duration_s, game_id, queue, champion, role,
+                    win, kda_k, kda_d, kda_a, patch, pinned, size_bytes
+             FROM recordings WHERE id = ?1",
+            [id],
+            row_to_recording,
+        )
+        .optional()
+        .map_err(DbError::from)
+    }
+
+    /// Every UI preference in one round trip — the frontend reads the whole
+    /// set once at boot, so N separate `get_ui_pref` calls would just be
+    /// N times the IPC for the same data.
+    pub fn get_ui_prefs(&self) -> Result<HashMap<String, String>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT key, value FROM settings_kv")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect::<Result<HashMap<_, _>, _>>()
+            .map_err(DbError::from)
+    }
+
+    pub fn set_ui_pref(&self, key: &str, value: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO settings_kv (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
         )?;
         Ok(())
     }
@@ -738,6 +793,63 @@ mod tests {
 
         assert!(db.find_by_path("/known.mp4").unwrap().is_some());
         assert!(db.find_by_path("/unknown.mp4").unwrap().is_none());
+    }
+
+    #[test]
+    fn get_recording_returns_the_whole_row_or_none() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db
+            .insert_recording(&NewRecording {
+                path: "/vod.mp4".into(),
+                started_at: 42,
+                champion: Some("Ahri".into()),
+                size_bytes: 1234,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let row = db.get_recording(id).unwrap().expect("row should exist");
+        assert_eq!(row.path, "/vod.mp4");
+        assert_eq!(row.champion.as_deref(), Some("Ahri"));
+        assert_eq!(row.size_bytes, 1234);
+
+        assert!(db.get_recording(id + 999).unwrap().is_none());
+    }
+
+    #[test]
+    fn ui_pref_round_trips_and_overwrites() {
+        let db = Db::open_in_memory().unwrap();
+
+        db.set_ui_pref("theme", "dark").unwrap();
+        let prefs = db.get_ui_prefs().unwrap();
+        assert_eq!(prefs.get("theme").map(String::as_str), Some("dark"));
+
+        // Upsert, not a second row — the frontend saves on every toggle.
+        db.set_ui_pref("theme", "light").unwrap();
+        let prefs = db.get_ui_prefs().unwrap();
+        assert_eq!(prefs.get("theme").map(String::as_str), Some("light"));
+        assert_eq!(prefs.len(), 1);
+    }
+
+    #[test]
+    fn missing_ui_pref_is_absent_not_an_error() {
+        let db = Db::open_in_memory().unwrap();
+        assert!(db.get_ui_prefs().unwrap().get("never-set").is_none());
+    }
+
+    #[test]
+    fn get_ui_prefs_returns_every_pref_and_starts_empty() {
+        let db = Db::open_in_memory().unwrap();
+        // Migration 4 deliberately seeds nothing: a missing pref means
+        // "use the frontend default".
+        assert!(db.get_ui_prefs().unwrap().is_empty());
+
+        db.set_ui_pref("theme", "dark").unwrap();
+        db.set_ui_pref("defaultSort", "champion").unwrap();
+
+        let prefs = db.get_ui_prefs().unwrap();
+        assert_eq!(prefs.get("theme").map(String::as_str), Some("dark"));
+        assert_eq!(prefs.get("defaultSort").map(String::as_str), Some("champion"));
     }
 
     #[test]

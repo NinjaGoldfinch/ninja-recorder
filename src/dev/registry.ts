@@ -127,6 +127,54 @@ export const COMMANDS: CommandSpec[] = [
     ],
   },
 
+  {
+    name: "preview_retention_policy",
+    group: "Disk",
+    dev: false,
+    description:
+      "Dry run of enforcement under the given policy. Writes nothing — the safe counterpart to set_retention_policy.",
+    args: [
+      { name: "policy", kind: "json", default: { max_total_bytes: 53687091200, max_age_days: 30 } },
+    ],
+  },
+  {
+    name: "delete_recording",
+    group: "Library",
+    dev: false,
+    danger: true,
+    description: "Deletes one recording's row and its file on disk.",
+    args: [{ name: "recordingId", kind: "number" }],
+  },
+  {
+    name: "get_recordings_dir",
+    group: "Disk",
+    dev: false,
+    description: "Absolute path of the recordings directory.",
+  },
+  {
+    name: "open_recordings_folder",
+    group: "Disk",
+    dev: false,
+    description: "Reveals the recordings directory in the OS file manager.",
+  },
+  {
+    name: "get_ui_prefs",
+    group: "Settings",
+    dev: false,
+    description: "Every key/value in the settings_kv store (theme, default sort, \u2026).",
+  },
+  {
+    name: "set_ui_pref",
+    group: "Settings",
+    dev: false,
+    danger: true,
+    description: "Writes one UI preference. Unseeded store — a missing key means 'use the frontend default'.",
+    args: [
+      { name: "key", kind: "string", default: "theme" },
+      { name: "value", kind: "string", default: "dark" },
+    ],
+  },
+
   // --- League ------------------------------------------------------
   {
     name: "lcu_status",
