@@ -640,7 +640,7 @@ mod tests {
         assert_eq!(rows[0].id, id);
         assert_eq!(rows[0].path, "/recordings/one.mp4");
         assert_eq!(rows[0].size_bytes, 12345);
-        assert_eq!(rows[0].pinned, false);
+        assert!(!rows[0].pinned);
         assert_eq!(rows[0].champion, None);
     }
 
@@ -834,7 +834,7 @@ mod tests {
     #[test]
     fn missing_ui_pref_is_absent_not_an_error() {
         let db = Db::open_in_memory().unwrap();
-        assert!(db.get_ui_prefs().unwrap().get("never-set").is_none());
+        assert!(!db.get_ui_prefs().unwrap().contains_key("never-set"));
     }
 
     #[test]
