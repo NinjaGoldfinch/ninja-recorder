@@ -69,6 +69,29 @@ jobs:
       # are dropped as noise. The standing install caveats are appended
       # below the changelog; keep them in sync with DEVELOPMENT.md as the
       # Phase 6/8 status changes.
+      # Attached to the draft only, and expected to be deleted before it is
+      # published — see ci.yml's "Build app (devtools)". `continue-on-error`
+      # so a release can still be cut from a run that predates these
+      # artifacts, or from one where the devtools bundle failed: their
+      # absence must never block shipping the real installers.
+      - name: Download Windows devtools bundle
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: ninja-recorder-devtools-windows-latest-${{ github.sha }}
+          path: artifacts/windows-devtools
+          run-id: ${{ steps.find-run.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download macOS devtools bundle
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: ninja-recorder-devtools-macos-latest-${{ github.sha }}
+          path: artifacts/macos-devtools
+          run-id: ${{ steps.find-run.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build release notes
         run: |
           TAG="${GITHUB_REF_NAME}"
@@ -101,6 +124,14 @@ jobs:
           been verified against a real Vanguard-protected game yet
           (DEVELOPMENT.md §9, pending Phase 8).
           CAVEATS
+            cat <<'DEVNOTE'
+
+          <!-- REMOVE THIS BLOCK AND THE *-devtools ASSETS BEFORE PUBLISHING -->
+          > **Draft-only:** the `*-devtools` installers above carry the dev
+          > portal (raw SQL execution, arbitrary row writes, database wipe,
+          > state-machine injection). Delete those assets and this block
+          > before making the release public.
+          DEVNOTE
           } > notes.md
           echo "--- generated notes ---"
           cat notes.md
@@ -118,3 +149,5 @@ jobs:
           files: |
             artifacts/windows/**/*.exe
             artifacts/macos/**/*.dmg
+            artifacts/windows-devtools/**/*-devtools.exe
+            artifacts/macos-devtools/**/*-devtools.dmg

@@ -157,3 +157,45 @@ jobs:
           path: src-tauri/target/release/bundle
           retention-days: 7
           if-no-files-found: error
+
+      # A second installer with the dev portal compiled in (DEVELOPMENT.md
+      # §10). Only ever attached to the *draft* release and removed before
+      # it goes public — it exposes raw SQL execution, arbitrary row
+      # writes, a DB wipe and state-machine injection, none of which
+      # belongs in a build handed to users.
+      #
+      # Push-only: this is a second full Tauri bundle, so running it on
+      # every PR would roughly double the build job. release.yml reuses
+      # the artifacts from the main-branch run, which is the only place
+      # they're actually needed. Drop the `if:` to have PRs cover it too.
+      #
+      # NINJA_DEVTOOLS reaches vite through tauri's beforeBuildCommand, so
+      # dev.html is emitted; --features devtools compiles the Rust side.
+      - name: Build app (devtools)
+        if: github.event_name == 'push'
+        env:
+          NINJA_DEVTOOLS: "1"
+        run: npm run tauri build -- --bundles ${{ matrix.bundles }} --features devtools
+
+      # The devtools bundle lands on the same filename as the production
+      # one, which would collide when both are attached to a release.
+      - name: Label devtools bundles
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          cd src-tauri/target/release/bundle
+          find . -type f \( -name '*.exe' -o -name '*.dmg' \) -print0 |
+            while IFS= read -r -d '' f; do
+              dir=$(dirname "$f"); base=$(basename "$f")
+              mv "$f" "$dir/${base%.*}-devtools.${base##*.}"
+              echo "labelled: ${base%.*}-devtools.${base##*.}"
+            done
+
+      - name: Upload devtools build artifact
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ninja-recorder-devtools-${{ matrix.platform }}-${{ github.sha }}
+          path: src-tauri/target/release/bundle
+          retention-days: 7
+          if-no-files-found: error
