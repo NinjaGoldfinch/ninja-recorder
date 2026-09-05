@@ -153,11 +153,19 @@ jobs:
   # fails the run. The one thing given up is minutes, not safety — a PR
   # that breaks clippy now still pays for a build it can't use.
   #
-  # The matrix is built by expression so the devtools bundles (a second
-  # full Tauri build each, DEVELOPMENT.md §10) get their own runners
-  # rather than running serially after the production bundle in the same
-  # job — that second build used to sit squarely on the critical path.
-  # Pull requests skip it because the draft release is its only consumer.
+  # The matrix is built by expression so the devtools bundle (a second
+  # full Tauri build, DEVELOPMENT.md §10) gets its own runner rather than
+  # running serially after the production bundle in the same job — that
+  # second build used to sit squarely on the critical path.
+  #
+  # It is never attached to a release. The installer it produces carries
+  # raw SQL execution, arbitrary row writes, a database wipe and
+  # state-machine injection, and a draft asset that must be deleted before
+  # publishing is one forgotten click away from shipping all of that. It
+  # is reachable only as a workflow artifact — from a push to main or a
+  # `workflow_dispatch` run — which expires on its own and can never be
+  # published by accident. Pull requests skip it: it is a second full
+  # Windows bundle, and anyone who wants one can dispatch a run.
   #
   # Windows-only: the dev portal exists to exercise the backend without
   # League running, and the macOS build is the Phase 1 stub recorder, so a
@@ -387,17 +395,6 @@ jobs:
           name: ninja-recorder-macos-latest-${{ github.sha }}
           path: artifacts/macos
 
-      # Attached to the draft only, and expected to be deleted before it is
-      # published — see the `devtools` matrix entry above. `continue-on-error`
-      # so a release can still be cut from a run where the devtools bundle
-      # failed: its absence must never block shipping the real installers.
-      - name: Download Windows devtools bundle
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          name: ninja-recorder-devtools-windows-latest-${{ github.sha }}
-          path: artifacts/windows-devtools
-
       # Notes are derived from the commit range since the previous release,
       # so each draft describes its own changes instead of repeating a
       # hardcoded blurb. Uses git log rather than GitHub's own generator
@@ -444,14 +441,6 @@ jobs:
           been verified against a real Vanguard-protected game yet
           (DEVELOPMENT.md §9, pending Phase 8).
           CAVEATS
-            cat <<'DEVNOTE'
-
-          <!-- REMOVE THIS BLOCK AND THE ninja-recorder-dev ASSET BEFORE PUBLISHING -->
-          > **Draft-only:** the `ninja-recorder-dev` installer above carries the dev
-          > portal (raw SQL execution, arbitrary row writes, database wipe,
-          > state-machine injection). Delete that asset and this block
-          > before making the release public.
-          DEVNOTE
           } > notes.md
           echo "--- generated notes ---"
           cat notes.md
@@ -472,4 +461,3 @@ jobs:
           files: |
             artifacts/windows/**/*.exe
             artifacts/macos/**/*.dmg
-            artifacts/windows-devtools/**/*.exe
