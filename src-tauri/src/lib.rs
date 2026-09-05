@@ -367,7 +367,19 @@ pub fn run() {
 
             let supervisor =
                 state_machine::Supervisor::new(Arc::clone(&recorder), dir.clone(), Arc::clone(&db));
-            supervisor.attach_app(app.handle().clone());
+            // The emit lives here, not in the supervisor: `run()` is dead
+            // code in a `cargo test` build and gets stripped, which keeps
+            // Tauri's Wry window machinery — and with it the Win32 GUI
+            // import stack — out of the test binary. See
+            // `Supervisor::on_library_changed` for what happens when it
+            // isn't kept out.
+            let notify_handle = app.handle().clone();
+            supervisor.set_library_changed_notifier(Box::new(move || {
+                use tauri::Emitter;
+                if let Err(e) = notify_handle.emit(LIBRARY_CHANGED_EVENT, ()) {
+                    eprintln!("[state_machine] failed to emit library-changed: {e}");
+                }
+            }));
             supervisor.start();
 
             app.manage(AppState {

@@ -81,10 +81,25 @@ pub struct Supervisor {
     live_client_task: Mutex<Option<JoinHandle<()>>>,
     session: Mutex<Option<RecordingSession>>,
     last_finalized: Mutex<Option<FinalizedRecording>>,
-    /// Set once at startup via `attach_app`, rather than taken in `new`,
-    /// so the unit tests below can still build a `Supervisor` without a
-    /// Tauri runtime. `None` simply means nothing is emitted.
-    app: Mutex<Option<tauri::AppHandle>>,
+    /// Set once at startup via `set_library_changed_notifier`, rather
+    /// than taken in `new`, so the unit tests below can still build a
+    /// `Supervisor` without a Tauri runtime. `None` simply means nothing
+    /// is emitted.
+    ///
+    /// Deliberately a boxed closure rather than an `AppHandle`. Holding
+    /// the handle here and calling `Emitter::emit` on it made Tauri's Wry
+    /// window machinery *reachable* from this module — and this module has
+    /// unit tests, so the linker could no longer discard it from the test
+    /// harness. That dragged the whole Win32 GUI stack (`user32`, `gdi32`,
+    /// `comctl32`, `ole32`, `shell32`, …) into the test executable's
+    /// import table, and a `cargo test` binary carries no application
+    /// manifest — so Windows resolved `comctl32.dll` to the v5
+    /// side-by-side assembly, which lacks the v6 exports Tauri links
+    /// against. The test binary then died at load with
+    /// STATUS_ENTRYPOINT_NOT_FOUND before running a single test.
+    /// Type-erasing the emit keeps all of that inside `lib.rs`'s `run()`,
+    /// which stays dead code — and so gets stripped — in a test build.
+    on_library_changed: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
 impl Supervisor {
@@ -102,14 +117,16 @@ impl Supervisor {
             live_client_task: Mutex::new(None),
             session: Mutex::new(None),
             last_finalized: Mutex::new(None),
-            app: Mutex::new(None),
+            on_library_changed: Mutex::new(None),
         })
     }
 
-    /// Gives the supervisor a handle to emit on. Called once from
-    /// `lib.rs`'s `setup`, after the app is built.
-    pub fn attach_app(&self, app: tauri::AppHandle) {
-        *self.app.lock().unwrap() = Some(app);
+    /// Gives the supervisor a way to tell the frontend the library
+    /// changed. Called once from `lib.rs`'s `setup`, after the app is
+    /// built. See `on_library_changed` for why this takes a closure and
+    /// not an `AppHandle`.
+    pub fn set_library_changed_notifier(&self, notify: Box<dyn Fn() + Send + Sync>) {
+        *self.on_library_changed.lock().unwrap() = Some(notify);
     }
 
     /// Tells the frontend the VOD library changed on disk. Until this
@@ -117,11 +134,8 @@ impl Supervisor {
     /// recording finalized by the supervisor stayed invisible until the
     /// user happened to press Refresh.
     fn emit_library_changed(&self) {
-        if let Some(app) = self.app.lock().unwrap().as_ref() {
-            use tauri::Emitter;
-            if let Err(e) = app.emit(crate::LIBRARY_CHANGED_EVENT, ()) {
-                eprintln!("[state_machine] failed to emit library-changed: {e}");
-            }
+        if let Some(notify) = self.on_library_changed.lock().unwrap().as_ref() {
+            notify();
         }
     }
 
