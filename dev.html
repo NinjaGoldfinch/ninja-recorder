@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/dev/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ninja-recorder — dev portal</title>
+    <script type="module" src="/src/dev/main.ts" defer></script>
+  </head>
+
+  <body class="dev-body">
+    <div class="dev-root">
+      <header class="dev-topbar">
+        <div class="dev-brand">
+          <span class="dev-brand-mark">🧪</span>
+          <span class="dev-brand-text">dev portal</span>
+        </div>
+        <div id="status-pills" class="dev-pills"></div>
+        <div class="dev-topbar-right">
+          <label class="dev-poll-toggle">
+            <input type="checkbox" id="poll-toggle" checked />
+            Live
+          </label>
+          <code id="db-path" class="dev-dbpath" title="The database every write on this page lands in"></code>
+        </div>
+      </header>
+
+      <nav class="dev-sidebar" id="dev-nav"></nav>
+
+      <main class="dev-main" id="dev-main" tabindex="-1">
+        <div class="dev-empty">Loading…</div>
+      </main>
+    </div>
+  </body>
+</html>

@@ -10,6 +10,21 @@ export default defineConfig(async () => ({
   //
   // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
+
+  // The dev portal (dev.html) is a second entry point, built only when
+  // opted in — a plain `npm run build` must not be able to leak it into
+  // `dist/`, since it pairs with Rust commands that are themselves
+  // compiled out unless the `devtools` Cargo feature is on. The dev
+  // server serves any root-level .html regardless, so `npm run dev`
+  // needs no equivalent branch.
+  build: {
+    rollupOptions: {
+      // @ts-expect-error process is a nodejs global
+      input: process.env.NINJA_DEVTOOLS
+        ? { main: "index.html", dev: "dev.html" }
+        : { main: "index.html" },
+    },
+  },
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
     port: 1420,

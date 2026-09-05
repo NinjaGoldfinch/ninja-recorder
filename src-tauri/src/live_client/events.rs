@@ -15,12 +15,13 @@ use std::collections::HashSet;
 pub struct AllGameData {
     #[serde(rename = "activePlayer")]
     pub active_player: Option<ActivePlayer>,
-    // `allPlayers` (team, champion, etc. for every player) is part of the
-    // real response but unused here — marker extraction only needs to
-    // know our own name, matched directly against event Killer/Victim/
-    // Assister fields (see `classify_event`). Not modeled to avoid an
-    // unused struct; add it back if a future feature needs per-team
-    // classification.
+    /// Every player in the game, both teams. Marker extraction doesn't need
+    /// this (it matches our own name straight against event Killer/Victim/
+    /// Assister fields — see `classify_event`), but the review timeline's
+    /// advantage curve does: it's the only place the API exposes per-player
+    /// items and scores, and the only way to learn which side we're on.
+    #[serde(rename = "allPlayers", default)]
+    pub all_players: Vec<PlayerEntry>,
     pub events: EventsWrapper,
     #[serde(rename = "gameData")]
     pub game_data: GameData,
@@ -32,6 +33,69 @@ pub struct ActivePlayer {
     pub summoner_name: String,
     #[serde(rename = "riotIdGameName", default)]
     pub riot_id_game_name: String,
+    /// *Unspent* gold, not gold earned — the only gold figure the Live
+    /// Client Data API exposes, and only for us. See `team_diff`.
+    #[serde(rename = "currentGold", default)]
+    pub current_gold: f64,
+    #[serde(default)]
+    pub level: i64,
+}
+
+/// One entry from `allPlayers`. Every field is `default` because the
+/// hand-trimmed fixtures omit most of them, and because a live response
+/// that drops `items` for enemies must degrade to a zero contribution
+/// rather than failing the whole poll (and with it, marker extraction).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PlayerEntry {
+    #[serde(rename = "summonerName", default)]
+    pub summoner_name: String,
+    #[serde(rename = "riotIdGameName", default)]
+    pub riot_id_game_name: String,
+    /// "ORDER" (blue side) or "CHAOS" (red side).
+    #[serde(default)]
+    pub team: String,
+    #[serde(default)]
+    pub items: Vec<PlayerItem>,
+    #[serde(default)]
+    pub scores: PlayerScores,
+}
+
+impl PlayerEntry {
+    /// Mirrors `ActivePlayer::candidate_names` — the same name ambiguity
+    /// applies when matching an `allPlayers` entry back to us.
+    fn candidate_names(&self) -> Vec<&str> {
+        [self.summoner_name.as_str(), self.riot_id_game_name.as_str()]
+            .into_iter()
+            .filter(|n| !n.is_empty())
+            .collect()
+    }
+
+    fn item_gold(&self) -> f64 {
+        self.items
+            .iter()
+            .map(|i| (i.price * i.count.max(1)) as f64)
+            .sum()
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PlayerItem {
+    #[serde(default)]
+    pub price: i64,
+    #[serde(default)]
+    pub count: i64,
+}
+
+/// Only the two scores the advantage curve plots. `deaths`/`assists`/
+/// `wardScore` are in the real response too, but modelling fields nothing
+/// reads is what the original `allPlayers` comment was avoiding — add them
+/// alongside a feature that needs them.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PlayerScores {
+    #[serde(default)]
+    pub kills: i64,
+    #[serde(rename = "creepScore", default)]
+    pub creep_score: i64,
 }
 
 impl ActivePlayer {
@@ -90,6 +154,81 @@ pub struct GameEvent {
 pub struct GameData {
     #[serde(rename = "gameTime")]
     pub game_time: f64,
+}
+
+// --- Team advantage -------------------------------------------------------
+
+/// Signed team differentials at one instant, from the active player's
+/// point of view: positive means *our* team is ahead.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TeamDiff {
+    /// "ORDER" or "CHAOS" — which side we were on. Persisted alongside the
+    /// diffs so the sign convention stays auditable after the fact.
+    pub our_team: String,
+    /// **Estimated.** The Live Client Data API exposes no per-player gold
+    /// at all — `activePlayer.currentGold` is our own *unspent* gold and is
+    /// the only gold field in the entire response. This approximates each
+    /// team's earned gold as the summed price of the items its players are
+    /// currently holding, plus our unspent gold on our side only. It drifts
+    /// from true gold via sold items, consumed consumables, component-vs-
+    /// completed-item pricing, and the enemy's unknowable unspent gold, so
+    /// it must never be presented to the user as an exact figure.
+    pub gold_diff_est: f64,
+    /// Exact, from `allPlayers[].scores`.
+    pub kill_diff: i64,
+    /// Exact, from `allPlayers[].scores`.
+    pub cs_diff: i64,
+}
+
+/// Computes signed team differentials for one snapshot.
+///
+/// Returns `None` when we can't tell which side we're on — either
+/// `activePlayer` is absent, or no `allPlayers` entry matches our name.
+/// That's deliberately not a "default to ORDER" fallback: guessing wrong
+/// silently inverts the sign of the whole curve, which would tell a user
+/// they were ahead in every game they lost. Callers persist the `None` and
+/// the UI renders "team side unknown" rather than an untrustworthy line.
+///
+/// This is the same name-matching failure mode that once silently dropped
+/// every kill/death marker (see `matches_our_kills_when_events_use_summoner_name_not_riot_id`),
+/// which is why it reuses `names_match` rather than comparing directly.
+pub fn team_diff(snapshot: &AllGameData) -> Option<TeamDiff> {
+    let active = snapshot.active_player.as_ref()?;
+    let our_names = active.candidate_names();
+
+    let our_team = snapshot
+        .all_players
+        .iter()
+        .find(|p| {
+            p.candidate_names()
+                .iter()
+                .any(|n| our_names.iter().any(|us| names_match(n, us)))
+        })
+        .map(|p| p.team.clone())
+        .filter(|t| !t.is_empty())?;
+
+    let (mut our_gold, mut their_gold) = (active.current_gold, 0.0);
+    let (mut our_kills, mut their_kills) = (0i64, 0i64);
+    let (mut our_cs, mut their_cs) = (0i64, 0i64);
+
+    for player in &snapshot.all_players {
+        let ours = player.team == our_team;
+        let (gold, kills, cs) = if ours {
+            (&mut our_gold, &mut our_kills, &mut our_cs)
+        } else {
+            (&mut their_gold, &mut their_kills, &mut their_cs)
+        };
+        *gold += player.item_gold();
+        *kills += player.scores.kills;
+        *cs += player.scores.creep_score;
+    }
+
+    Some(TeamDiff {
+        our_team,
+        gold_diff_est: our_gold - their_gold,
+        kill_diff: our_kills - their_kills,
+        cs_diff: our_cs - their_cs,
+    })
 }
 
 // --- Markers -------------------------------------------------------------
@@ -299,6 +438,14 @@ impl TimeAlignment {
     pub fn video_time_s(&self, game_time_s: f64) -> f64 {
         (game_time_s + self.offset_s).max(0.0)
     }
+
+    /// The raw offset, for the dev portal's live-session readout. Negative
+    /// means recording started *after* game time 0 (a reconnect); positive
+    /// is the normal loading-screen case.
+    #[cfg(feature = "devtools")]
+    pub fn offset_s(&self) -> f64 {
+        self.offset_s
+    }
 }
 
 #[cfg(test)]
@@ -428,4 +575,117 @@ mod tests {
         let alignment = TimeAlignment::new(5.0, 0.0);
         assert_eq!(alignment.video_time_s(0.0), 0.0);
     }
+
+    // --- team_diff -------------------------------------------------------
+    //
+    // Fixture is 2v2 rather than 5v5 on purpose: `team_diff` sums over
+    // whichever players carry a given `team` string, so a 2v2 exercises the
+    // identical code path as a full lobby while keeping the fixture (shared
+    // with every marker test above) readable.
+    //
+    // Expected fixture values, ORDER = us:
+    //   gold  ORDER items 6400 + 5300 = 11700, + our 450 unspent = 12150
+    //         CHAOS items 4100 + 3200 =  7300           diff = +4850
+    //   kills ORDER 3 + 2 = 5, CHAOS 2 + 1 = 3          diff =    +2
+    //   cs    ORDER 150 + 120 = 270, CHAOS 130 + 95 = 225  diff =   +45
+
+    #[test]
+    fn team_diff_is_positive_when_our_team_is_ahead() {
+        let diff = team_diff(&fixture()).expect("active player is in allPlayers");
+        assert_eq!(diff.our_team, "ORDER");
+        assert_eq!(diff.gold_diff_est, 4850.0);
+        assert_eq!(diff.kill_diff, 2);
+        assert_eq!(diff.cs_diff, 45);
+    }
+
+    /// The sign convention is the single most dangerous thing to get wrong
+    /// here — an inverted curve would silently tell a user they were ahead
+    /// in every game they lost. Re-pointing the active player at the losing
+    /// side must flip every differential, not just relabel the team.
+    #[test]
+    fn team_diff_is_negative_when_we_are_on_the_losing_side() {
+        let mut snapshot = fixture();
+        // Become EnemyA (CHAOS) without touching anything else.
+        snapshot.active_player = Some(ActivePlayer {
+            summoner_name: String::new(),
+            riot_id_game_name: "EnemyA".to_string(),
+            current_gold: 450.0,
+            level: 11,
+        });
+
+        let diff = team_diff(&snapshot).expect("EnemyA is in allPlayers");
+        assert_eq!(diff.our_team, "CHAOS");
+        // Same 450 unspent, now on the other side: 7750 - 11700.
+        assert_eq!(diff.gold_diff_est, -3950.0);
+        assert_eq!(diff.kill_diff, -2);
+        assert_eq!(diff.cs_diff, -45);
+    }
+
+    #[test]
+    fn team_diff_is_none_when_we_are_not_in_all_players() {
+        let mut snapshot = fixture();
+        snapshot.active_player = Some(ActivePlayer {
+            riot_id_game_name: "SomeoneElse".to_string(),
+            ..Default::default()
+        });
+        assert!(
+            team_diff(&snapshot).is_none(),
+            "must refuse to guess a side rather than risk inverting the curve"
+        );
+    }
+
+    #[test]
+    fn team_diff_is_none_without_an_active_player() {
+        let mut snapshot = fixture();
+        snapshot.active_player = None;
+        assert!(team_diff(&snapshot).is_none());
+    }
+
+    /// A live response that omits `items` for enemies (unverified against a
+    /// real game — see the plan's capture step) must still yield exact kill
+    /// and CS diffs, with the gold estimate degrading rather than the whole
+    /// snapshot failing.
+    #[test]
+    fn team_diff_survives_players_with_no_items() {
+        let mut snapshot = fixture();
+        for player in &mut snapshot.all_players {
+            if player.team == "CHAOS" {
+                player.items.clear();
+            }
+        }
+        let diff = team_diff(&snapshot).unwrap();
+        assert_eq!(diff.gold_diff_est, 12150.0, "our side only");
+        assert_eq!(diff.kill_diff, 2, "scores are unaffected by missing items");
+        assert_eq!(diff.cs_diff, 45);
+    }
+
+    /// `count` matters: Blitz holds 2 Control Wards at 350 each. A naive
+    /// sum of `price` alone would under-count stacked consumables.
+    #[test]
+    fn item_gold_multiplies_by_stack_count() {
+        let blitz = fixture()
+            .all_players
+            .into_iter()
+            .find(|p| p.riot_id_game_name == "Blitz")
+            .unwrap();
+        assert_eq!(blitz.item_gold(), 5300.0); // 3300 + 1300 + 350*2
+    }
+
+    #[test]
+    fn active_player_deserializes_gold_and_level() {
+        let active = fixture().active_player.unwrap();
+        assert_eq!(active.current_gold, 450.0);
+        assert_eq!(active.level, 11);
+    }
+
+    /// The trimmed `summoner-name-mismatch.json` has no `allPlayers` at all.
+    /// Deserialization must not fail (marker extraction still depends on it)
+    /// and `team_diff` must simply report no side.
+    #[test]
+    fn snapshot_without_all_players_still_deserializes() {
+        let snapshot = summoner_name_mismatch_fixture();
+        assert!(snapshot.all_players.is_empty());
+        assert!(team_diff(&snapshot).is_none());
+    }
+
 }

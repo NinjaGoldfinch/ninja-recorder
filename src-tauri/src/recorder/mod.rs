@@ -47,6 +47,14 @@ pub trait Recorder: Send {
     /// Finalizes the recording and returns the path to the resulting file.
     fn stop(&mut self) -> Result<PathBuf, RecorderError>;
     fn is_recording(&self) -> bool;
+    /// Which backend is actually live, for diagnostics. Which one you get
+    /// is decided at runtime (`lib.rs`'s `setup`) by target OS *and* by
+    /// whether libobs managed to initialize, so it can't be inferred from
+    /// `cfg!` at the call site — the dev portal and any future
+    /// user-facing "recording unavailable" message both need to ask the
+    /// object itself. `FailedRecorder` folds its init error in here,
+    /// which is why this returns an owned `String`.
+    fn backend_name(&self) -> String;
 }
 
 /// Stands in for the real backend when it fails to initialize (Windows
@@ -69,5 +77,9 @@ impl Recorder for FailedRecorder {
 
     fn is_recording(&self) -> bool {
         false
+    }
+
+    fn backend_name(&self) -> String {
+        format!("unavailable ({})", self.0)
     }
 }

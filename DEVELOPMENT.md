@@ -167,7 +167,7 @@ Implemented in `src-tauri/src/db/` (`Db` + `reconcile`), migrations via `rusqlit
 
 Implemented in `src/review.ts` + `index.html`'s `#review-view`. The video loads via Tauri's asset protocol (`convertFileSrc`, scoped in `tauri.conf.json` to `$APPDATA/recordings/*` — needed the `protocol-asset` Cargo feature, not just config). Frame-step is a ±1/30s time nudge, not true frame-accurate seeking — no per-recording frame rate is probed anywhere yet, so this is an approximation good enough for review, not for precision editing. Closely-spaced markers (common near a teamfight) alternate a vertical lane on the timeline so their glyphs don't visually collide. The library list, filters, and sort are all client-side over the already-fetched row set — fine at solo-user library sizes, would need real pagination/querying if that stops being true.
 
-Verified: layout/CSS visually in a browser (with injected mock data, since a plain browser tab has no Tauri IPC bridge to exercise real `invoke` calls) and a full `cargo tauri dev` launch (asset-protocol config + new `get_recording_markers` command, no capability/schema errors, stable). **Not verified**: actual video playback (no real MP4 fixture available in this environment — drop one in as `fixtures/sample.mp4` to test) and the hotkey→seek interaction against real marker data (needs a loaded recording, which needs either a live app session or a real video file to click through manually).
+Verified: layout/CSS visually in a browser (with injected mock data, since a plain browser tab has no Tauri IPC bridge to exercise real `invoke` calls) and a full `cargo tauri dev` launch (asset-protocol config + new `get_recording_markers` command, no capability/schema errors, stable). **Not verified**: the hotkey→seek interaction against real marker data (needs a loaded recording, which needs a live app session to click through manually). Video playback itself is now testable — `fixtures/sample.mp4` is checked in (§10), and the dev portal's Review-ready seed preset builds a recording around it.
 
 ---
 
@@ -212,13 +212,34 @@ Pinning is wired end-to-end now too: the library list's 📌 was display-only th
 | Capture backend | Windows box, `git pull && cargo run` (Rust + MSVC Build Tools installed) | seconds |
 | Full integration + Vanguard verification | Windows, CI-built installer | occasional |
 
+- **Run the app with `npm run tauri:dev`**, not `cargo tauri dev` — it passes `--features devtools`, which is what compiles in the dev portal (§10). Without it the portal's window and every `dev_*` command are absent, and the main window hides its own "Dev portal" button accordingly.
 - **Never cross-compile the Windows build from macOS.** libobs linking + DLL bundling + installer generation via `cargo-xwin` is a fight with no payoff. GitHub Actions `windows-latest` builds the installer (NSIS); download the artifact.
 - Vanguard verification (capture works during a real Vanguard-protected game, no flags) is a one-time check per significant capture change, not an iterative loop — capture iterates against any window (browser, video loop), no League needed.
-- **CI** ([`.github/workflows/`](../.github/workflows/)): `ci.yml` runs tests + clippy on every push to `main` and every PR (Windows + macOS, matrix), then builds installers natively on each platform and uploads them as workflow artifacts (7-day retention) — a PR's own build is downloadable from its Actions run. `release.yml` triggers on `v*.*.*` tags and publishes a draft GitHub Release with both installers via [`tauri-action`](https://github.com/tauri-apps/tauri-action). Neither build is code-signed yet (no cert configured) — Windows SmartScreen and macOS Gatekeeper both warn on first run. macOS builds only exercise the stub recorder; they're a dev/testing convenience, not a shipping target (§1.1).
+- **CI** ([`.github/workflows/`](../.github/workflows/)): `ci.yml` runs tests + clippy on every push to `main` and every PR (Windows + macOS, matrix) — twice for the Rust side, once with `--features devtools` and once without, since an off-by-default feature is otherwise never compiled by CI and a broken `#[cfg]` would stay green until someone opened the portal — then builds installers natively on each platform and uploads them as workflow artifacts (7-day retention) — a PR's own build is downloadable from its Actions run. `release.yml` triggers on `v*.*.*` tags and publishes a draft GitHub Release with both installers via [`tauri-action`](https://github.com/tauri-apps/tauri-action). Neither build is code-signed yet (no cert configured) — Windows SmartScreen and macOS Gatekeeper both warn on first run. macOS builds only exercise the stub recorder; they're a dev/testing convenience, not a shipping target (§1.1).
 
 ---
 
-## 10. Risks
+## 10. Dev portal
+
+A second window (`dev.html`) that exercises the whole backend: every command, every table, the retention decision, and the state machine — none of which the app's own UI can reach. It replaces the three-button `#testing-view` that used to live in `index.html`.
+
+**It is compiled out of shipped builds.** The `devtools` Cargo feature is off by default, and everything in `src-tauri/src/dev/` plus the `dev.html` Vite entry is behind it. `npm run tauri:dev` turns it on; `npm run build` cannot even emit `dev.html` (`vite.config.ts` gates the second rollup input on `NINJA_DEVTOOLS`). Availability is detected, not configured: the main window calls `dev_open_portal` and hides its button when the command isn't registered, so there is no second flag to keep in sync.
+
+Why it exists, concretely — each of these was untestable before:
+
+- **No way to insert data.** There was no seed script anywhere, so the library, its filters and sort, retention, and the entire review player could only be exercised by finishing a real game on Windows. The Seed panel writes real files, rows, markers with the payload shapes `classify_event` produces, and a 1 Hz advantage curve. Retention fixtures use sparse files, so a 3 GiB recording costs a few hundred bytes of disk.
+- **The supervisor was only drivable by real League polling.** §3.4 notes its async glue has never touched a real LCU. The Simulate panel dispatches `StateEvent`s into the live supervisor (really starting and stopping the recorder), injects Live Client Data payloads through the real `MarkerTracker`, and replays a scripted game at a speed multiplier until it finalizes into a real row. This is the fixture replay mode §3.3 asked for.
+- **Retention deleted files with no preview.** `set_retention_policy` saves *and* enforces. `select_for_deletion` is pure and takes an injected clock, so the Retention panel dry-runs it — including at a fabricated "now", to test an age rule without waiting days.
+- **The in-flight recording session was invisible.** `game_state_status` only carries the *last finalized* recording; markers and samples accumulating during a recording could not be observed at all. `dev_session_snapshot` exposes them.
+- **`fetch_match_summary` is implemented, unit-tested, and called from nowhere** — which is why every `RecordingRow`'s `champion`/`win`/`kda_*` is NULL in practice. The portal at least makes it runnable against a real client; wiring it into finalize is still open.
+
+Two changes leaked usefully out of the portal into the app proper. `Supervisor` now emits a **`library-changed`** event after a finalize (and `set_retention_policy` after a deletion), which `src/main.ts` listens for — the first backend-to-frontend push in the codebase, and it fixes the standing bug where a recording that just finished stayed invisible until the user pressed Refresh. And `fixtures::enabled()` is now an `AtomicBool` seeded from `NINJA_RECORDER_RECORD_FIXTURES` rather than a per-call env read, so capture can be toggled at runtime instead of only at launch.
+
+**Known limits.** The TS command registry (`src/dev/registry.ts`) is hand-maintained, because Tauri has no runtime reflection over `generate_handler!` and this project has no type codegen; `dev_registered_commands` returns the Rust side's own list and the Commands panel shows a banner when the two disagree, which catches drift without preventing it. `generate_handler!` cannot host a `#[cfg]`, so `lib.rs` spells out the production command list twice — that duplication is exactly what the drift banner watches. Seeded placeholder files are sparse and will not decode; the Review-ready preset copies `fixtures/sample.mp4` instead, which is a synthetic 6-second clip checked in for exactly this (see `fixtures/README.md`). It has no audio track, so the player's mute and volume controls still can't be exercised against it.
+
+---
+
+## 11. Risks
 
 | Risk | Mitigation |
 |---|---|

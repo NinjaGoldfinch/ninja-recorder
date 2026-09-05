@@ -14,6 +14,7 @@ use super::machine::{Action, GameState, StateEvent, StateMachine};
 use crate::db::{self, Db};
 use crate::lcu;
 use crate::live_client::{self, AllGameData, Marker, MarkerTracker, TimeAlignment};
+use crate::live_client::team_diff;
 use crate::recorder::{RecordConfig, Recorder};
 use serde::Serialize;
 use std::path::PathBuf;
@@ -26,6 +27,20 @@ pub struct SessionMarker {
     #[serde(flatten)]
     pub marker: Marker,
     pub video_time_s: f64,
+}
+
+/// One 1 Hz sample of the team-advantage series, time-aligned to the video
+/// the same way markers are. Kept in memory for the duration of the
+/// recording and flushed to the DB in one transaction at finalize.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionSample {
+    pub game_time_s: f64,
+    pub video_time_s: f64,
+    /// `None` when the active player couldn't be matched in `allPlayers` —
+    /// see `live_client::events::team_diff` for why that isn't guessed.
+    pub diff: Option<live_client::TeamDiff>,
+    pub our_gold: f64,
+    pub our_level: i64,
 }
 
 /// What the supervisor learned about the most recently finished recording,
@@ -48,6 +63,7 @@ pub struct SupervisorStatus {
 struct RecordingSession {
     tracker: MarkerTracker,
     markers: Vec<SessionMarker>,
+    samples: Vec<SessionSample>,
     alignment: Option<TimeAlignment>,
     record_started_at: Instant,
     /// Wall-clock capture alongside `record_started_at` — `Instant` is
@@ -65,6 +81,25 @@ pub struct Supervisor {
     live_client_task: Mutex<Option<JoinHandle<()>>>,
     session: Mutex<Option<RecordingSession>>,
     last_finalized: Mutex<Option<FinalizedRecording>>,
+    /// Set once at startup via `set_library_changed_notifier`, rather
+    /// than taken in `new`, so the unit tests below can still build a
+    /// `Supervisor` without a Tauri runtime. `None` simply means nothing
+    /// is emitted.
+    ///
+    /// Deliberately a boxed closure rather than an `AppHandle`. Holding
+    /// the handle here and calling `Emitter::emit` on it made Tauri's Wry
+    /// window machinery *reachable* from this module — and this module has
+    /// unit tests, so the linker could no longer discard it from the test
+    /// harness. That dragged the whole Win32 GUI stack (`user32`, `gdi32`,
+    /// `comctl32`, `ole32`, `shell32`, …) into the test executable's
+    /// import table, and a `cargo test` binary carries no application
+    /// manifest — so Windows resolved `comctl32.dll` to the v5
+    /// side-by-side assembly, which lacks the v6 exports Tauri links
+    /// against. The test binary then died at load with
+    /// STATUS_ENTRYPOINT_NOT_FOUND before running a single test.
+    /// Type-erasing the emit keeps all of that inside `lib.rs`'s `run()`,
+    /// which stays dead code — and so gets stripped — in a test build.
+    on_library_changed: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
 impl Supervisor {
@@ -82,7 +117,26 @@ impl Supervisor {
             live_client_task: Mutex::new(None),
             session: Mutex::new(None),
             last_finalized: Mutex::new(None),
+            on_library_changed: Mutex::new(None),
         })
+    }
+
+    /// Gives the supervisor a way to tell the frontend the library
+    /// changed. Called once from `lib.rs`'s `setup`, after the app is
+    /// built. See `on_library_changed` for why this takes a closure and
+    /// not an `AppHandle`.
+    pub fn set_library_changed_notifier(&self, notify: Box<dyn Fn() + Send + Sync>) {
+        *self.on_library_changed.lock().unwrap() = Some(notify);
+    }
+
+    /// Tells the frontend the VOD library changed on disk. Until this
+    /// existed the app had no backend-to-frontend push at all, so a
+    /// recording finalized by the supervisor stayed invisible until the
+    /// user happened to press Refresh.
+    fn emit_library_changed(&self) {
+        if let Some(notify) = self.on_library_changed.lock().unwrap().as_ref() {
+            notify();
+        }
     }
 
     pub fn status(&self) -> SupervisorStatus {
@@ -224,6 +278,26 @@ impl Supervisor {
                 video_time_s: alignment.video_time_s(marker.game_time_s),
                 marker,
             }));
+
+        // Advantage-curve sample. Skipped unless game time actually moved:
+        // the poller re-fetches the same payload during loading screens and
+        // pauses, and a flat run of identical timestamps would draw a
+        // vertical artefact through the graph.
+        let game_time_s = snapshot.game_data.game_time;
+        let moved = session
+            .samples
+            .last()
+            .is_none_or(|last| game_time_s > last.game_time_s);
+        if moved {
+            let active = snapshot.active_player.as_ref();
+            session.samples.push(SessionSample {
+                game_time_s,
+                video_time_s: alignment.video_time_s(game_time_s),
+                diff: team_diff(&snapshot),
+                our_gold: active.map(|p| p.current_gold).unwrap_or(0.0),
+                our_level: active.map(|p| p.level).unwrap_or(0),
+            });
+        }
     }
 
     /// Executes `Action::StartRecording`. The state machine has already
@@ -250,6 +324,7 @@ impl Supervisor {
                 *self.session.lock().unwrap() = Some(RecordingSession {
                     tracker: MarkerTracker::new(),
                     markers: Vec::new(),
+                    samples: Vec::new(),
                     alignment: None,
                     record_started_at: Instant::now(),
                     started_at_millis,
@@ -270,6 +345,7 @@ impl Supervisor {
         match self.recorder.lock().unwrap().stop() {
             Ok(path) => {
                 let markers = session.as_ref().map(|s| s.markers.clone()).unwrap_or_default();
+                let samples = session.as_ref().map(|s| s.samples.clone()).unwrap_or_default();
                 let started_at = session
                     .as_ref()
                     .map(|s| s.started_at_millis)
@@ -295,6 +371,23 @@ impl Supervisor {
                             .collect();
                         if let Err(e) = self.db.insert_markers(id, &new_markers) {
                             eprintln!("[state_machine] failed to insert markers for recording {id}: {e}");
+                        }
+
+                        let new_samples: Vec<db::NewSample> = samples
+                            .iter()
+                            .map(|s| db::NewSample {
+                                game_time_s: s.game_time_s,
+                                video_time_s: s.video_time_s,
+                                our_team: s.diff.as_ref().map(|d| d.our_team.clone()),
+                                gold_diff_est: s.diff.as_ref().map(|d| d.gold_diff_est),
+                                kill_diff: s.diff.as_ref().map(|d| d.kill_diff),
+                                cs_diff: s.diff.as_ref().map(|d| d.cs_diff),
+                                our_gold: Some(s.our_gold),
+                                our_level: Some(s.our_level),
+                            })
+                            .collect();
+                        if let Err(e) = self.db.insert_samples(id, &new_samples) {
+                            eprintln!("[state_machine] failed to insert samples for recording {id}: {e}");
                         }
                         Some(id)
                     }
@@ -327,10 +420,78 @@ impl Supervisor {
                     },
                     Err(e) => eprintln!("[retention] failed to load policy: {e}"),
                 }
+
+                // After the row, its markers/samples, and any retention
+                // deletions — one notification for the whole finalize.
+                self.emit_library_changed();
             }
             Err(e) => eprintln!("[state_machine] failed to stop recording: {e}"),
         }
     }
+}
+
+/// Dev-portal entry points into the otherwise-private async glue. These
+/// exist because `machine.rs`'s pure transition function is well covered
+/// by unit tests while *this* file — the part that actually spawns
+/// watchers and drives the recorder — has never run against a real LCU
+/// (DEVELOPMENT.md §3.4). Feeding it synthetic events from the dev portal
+/// is the first exercise it gets.
+#[cfg(feature = "devtools")]
+impl Supervisor {
+    /// Feeds one event through the real `dispatch`, executing whatever
+    /// actions it returns for real: watchers are spawned, the recorder is
+    /// started and stopped, DB rows are written. That is the point — this
+    /// is not a dry run.
+    pub fn dev_dispatch(self: &Arc<Self>, event: StateEvent) {
+        self.dispatch(event);
+    }
+
+    /// Feeds one Live Client Data payload through the real marker/sample
+    /// pipeline, exactly as the poller would.
+    pub fn dev_on_snapshot(self: &Arc<Self>, snapshot: AllGameData) {
+        self.on_snapshot(snapshot);
+    }
+
+    /// A read-only view of the in-flight recording session. Nothing else
+    /// exposes this — `SupervisorStatus` only carries the *last finalized*
+    /// recording, so markers and samples accumulating during a recording
+    /// are otherwise invisible until it ends.
+    pub fn dev_session_view(&self) -> Option<DevSessionView> {
+        let guard = self.session.lock().unwrap();
+        let session = guard.as_ref()?;
+        Some(DevSessionView {
+            marker_count: session.markers.len(),
+            sample_count: session.samples.len(),
+            alignment_offset_s: session.alignment.map(|a| a.offset_s()),
+            elapsed_s: session.record_started_at.elapsed().as_secs_f64(),
+            started_at_millis: session.started_at_millis,
+            recent_markers: session.markers.iter().rev().take(20).cloned().collect(),
+            last_sample: session.samples.last().cloned(),
+        })
+    }
+
+    /// Emits `library-changed` on behalf of the dev commands, which mutate
+    /// the DB directly rather than going through a finalize.
+    pub fn dev_emit_library_changed(&self) {
+        self.emit_library_changed();
+    }
+}
+
+/// See `Supervisor::dev_session_view`. `alignment_offset_s` is `None`
+/// until the first snapshot arrives — recording starts before Live Client
+/// Data is reachable, so there is always a window where the session
+/// exists but has no game-time-to-video-time mapping yet.
+#[cfg(feature = "devtools")]
+#[derive(Debug, Clone, Serialize)]
+pub struct DevSessionView {
+    pub marker_count: usize,
+    pub sample_count: usize,
+    pub alignment_offset_s: Option<f64>,
+    pub elapsed_s: f64,
+    pub started_at_millis: i64,
+    /// Newest first, capped — this is polled at 1 Hz by the portal.
+    pub recent_markers: Vec<SessionMarker>,
+    pub last_sample: Option<SessionSample>,
 }
 
 fn timestamp_millis() -> i64 {
@@ -354,23 +515,23 @@ mod tests {
     use crate::db::Db;
     use crate::live_client::MarkerKind;
     use crate::recorder::stub::StubRecorder;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn test_supervisor() -> (Arc<Supervisor>, PathBuf) {
-        // `line!()` here would be constant across every call site (it's
-        // evaluated where the macro appears, not where the function is
-        // called), so every test sharing this helper would get the exact
-        // same temp dir — since the test harness runs tests in parallel,
-        // one test's `remove_dir_all` teardown could then delete the
-        // directory out from under another test still recording. A
-        // per-call counter keeps each test's directory unique.
-        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        // `line!()` used to stand in for a per-test discriminator here, but
+        // it expands at this call site, not the caller's — so it's a single
+        // constant and every test shared one directory. With tests running
+        // in parallel, whichever finished first would `remove_dir_all` the
+        // directory another was still recording into, failing that test's
+        // `Recorder::stop` about 1 run in 5. A real counter keeps them apart.
+        static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
+
         let recorder: Arc<Mutex<Box<dyn Recorder>>> =
             Arc::new(Mutex::new(Box::new(StubRecorder::new())));
-        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
             "ninja-recorder-supervisor-test-{}-{}",
             std::process::id(),
-            n
+            NEXT_DIR.fetch_add(1, Ordering::Relaxed)
         ));
         let db = Arc::new(Db::open_in_memory().unwrap());
         (Supervisor::new(recorder, dir.clone(), db), dir)
@@ -398,6 +559,24 @@ mod tests {
             });
         }
 
+        // Likewise a sample — normally pushed by `on_snapshot`.
+        {
+            let mut guard = sup.session.lock().unwrap();
+            let session = guard.as_mut().unwrap();
+            session.samples.push(SessionSample {
+                game_time_s: 12.0,
+                video_time_s: 14.5,
+                diff: Some(live_client::TeamDiff {
+                    our_team: "CHAOS".into(),
+                    gold_diff_est: -1250.0,
+                    kill_diff: -2,
+                    cs_diff: 15,
+                }),
+                our_gold: 450.0,
+                our_level: 11,
+            });
+        }
+
         sup.stop_recording();
 
         let finalized = sup
@@ -406,6 +585,14 @@ mod tests {
             .expect("stop_recording should set last_finalized");
         assert!(finalized.recording_id.is_some(), "DB write should have succeeded");
         assert_eq!(finalized.markers.len(), 1);
+
+        // Samples must land alongside the markers, signs intact — a
+        // recording that finalizes without them renders a blank graph.
+        let samples = sup.db.get_samples(finalized.recording_id.unwrap()).unwrap();
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].our_team, Some("CHAOS".to_string()));
+        assert_eq!(samples[0].gold_diff_est, Some(-1250.0));
+        assert_eq!(samples[0].kill_diff, Some(-2));
 
         let rows = sup.db.list_recordings().unwrap();
         assert_eq!(rows.len(), 1);

@@ -19,10 +19,29 @@ body {
   justify-content: center;
 }
 
+/* The `hidden` attribute means "not rendered", but the UA rule that
+ * implements it (`[hidden] { display: none }`) is a bare attribute selector,
+ * so any class rule setting `display` silently beats it. This app toggles
+ * `hidden` for every view switch and overlay, and two of those elements
+ * (`.video-error`, `.timeline-tooltip`) set `display: flex` — leaving an
+ * opaque error overlay sitting over every playable video, and the marker
+ * tooltip permanently visible. Enforcing it once here is more robust than
+ * remembering a `[hidden]` companion rule for each new component. */
+[hidden] {
+  display: none !important;
+}
+
 .container {
   width: 100%;
   max-width: 960px;
   padding: 2rem 1.5rem;
+}
+
+.app-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
 }
 
 .app-header h1 {
@@ -199,16 +218,25 @@ body {
 }
 
 .dev-panel {
-  margin-top: 3rem;
+  margin-top: 1.5rem;
   padding-top: 1.5rem;
   border-top: 1px solid #e5e5e5;
 }
 
-.dev-panel h2 {
+.dev-panel h3 {
   font-size: 0.9rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: #888;
+}
+
+/* Deliberately quiet: the dev portal is a developer escape hatch, and in
+ * a shipped build the button is hidden outright (see `probeDevPortal`). */
+.dev-portal-link {
+  flex-shrink: 0;
+  background: none;
+  color: #888;
+  font-size: 0.85rem;
 }
 
 .row {
@@ -328,29 +356,254 @@ button:disabled {
   background-color: #fff;
 }
 
-.marker-timeline {
+/* --- VOD timeline ----------------------------------------------------
+ *
+ * Unlike the rest of this file (hard-coded hex, restated wholesale in the
+ * dark-mode block at the bottom), this component themes through custom
+ * properties. It has enough selectors that duplicating all of them below
+ * would be the larger evil, and the per-marker `--marker-color` pattern
+ * already established the idiom.
+ *
+ * `--tl-ahead` / `--tl-behind` are deliberately blue/amber rather than the
+ * obvious green/red: a red-green split is the single worst pairing for the
+ * ~8% of players with a red-green colour vision deficiency, and it also
+ * reads as damage-vs-healing in a game context. The zero baseline and the
+ * signed number in the summary carry the same meaning without colour.
+ */
+
+.vod-timeline {
+  --tl-bg: #f1f1f3;
+  --tl-grid: #c9c9cf;
+  --tl-text: #666;
+  --tl-line: #5b4fc4;
+  --tl-ahead: rgba(57, 108, 216, 0.35);
+  --tl-behind: rgba(224, 137, 26, 0.35);
+  --tl-playhead: #396cd8;
+  --tl-glyph-bg: #fff;
+
   position: relative;
-  height: 3.5rem;
   margin: 0.5rem 0 1rem;
-  background-color: #e9e9e9;
+}
+
+.timeline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--tl-text);
+}
+
+.timeline-metric-summary {
+  min-height: 1.2em;
+}
+
+.timeline-metric-select {
+  padding: 0.2em 0.4em;
   border-radius: 6px;
+  border: 1px solid #ddd;
+  background-color: #fff;
+  font-size: 0.85rem;
+}
+
+.timeline-body {
+  position: relative;
+  height: 5.5rem;
+  border-radius: 6px;
+  background-color: var(--tl-bg);
+  cursor: pointer;
+  overflow: hidden;
+  touch-action: none;
+}
+
+/* Graph occupies everything above the ruler strip. `preserveAspectRatio:
+ * none` on the element means the viewBox stretches to whatever this ends up
+ * being, so no JS is involved in sizing it. */
+.timeline-graph {
+  position: absolute;
+  inset: 0 0 1.5rem 0;
+  width: 100%;
+  height: calc(100% - 1.5rem);
+  display: block;
+}
+
+.tl-area {
+  stroke: none;
+}
+
+.tl-area-ahead {
+  fill: var(--tl-ahead);
+}
+
+.tl-area-behind {
+  fill: var(--tl-behind);
+}
+
+.tl-baseline {
+  stroke: var(--tl-grid);
+  stroke-width: 1;
+}
+
+.tl-line {
+  fill: none;
+  stroke: var(--tl-line);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+
+.timeline-glyphs {
+  position: absolute;
+  inset: 0 0 1.5rem 0;
+  pointer-events: none;
+}
+
+.timeline-glyphs .marker-glyph {
+  pointer-events: auto;
 }
 
 .marker-glyph {
   position: absolute;
+  top: 50%;
   transform: translate(-50%, -50%);
-  width: 1.4rem;
-  height: 1.4rem;
+  width: 1.5rem;
+  height: 1.5rem;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
   border: 2px solid var(--marker-color, #999);
-  background-color: #fff;
+  background-color: var(--tl-glyph-bg);
   font-size: 0.85rem;
   line-height: 1;
   padding: 0;
   cursor: pointer;
+}
+
+.marker-glyph:hover {
+  transform: translate(-50%, -50%) scale(1.15);
+  z-index: 3;
+}
+
+.glyph-badge {
+  position: absolute;
+  top: -0.35rem;
+  right: -0.35rem;
+  min-width: 0.95rem;
+  height: 0.95rem;
+  padding: 0 0.15rem;
+  border-radius: 0.5rem;
+  background-color: var(--tl-playhead);
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: 600;
+  line-height: 0.95rem;
+  text-align: center;
+}
+
+/* Minor ticks are a repeating gradient whose period is a percentage set by
+ * renderRuler, so they rescale with the container without any JS. */
+.timeline-ruler {
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 1.5rem;
+  font-size: 0.65rem;
+  color: var(--tl-text);
+  background-image: repeating-linear-gradient(
+    to right,
+    var(--tl-grid) 0,
+    var(--tl-grid) 1px,
+    transparent 1px,
+    transparent var(--minor-gap, 10%)
+  );
+  background-size: 100% 0.35rem;
+  background-repeat: no-repeat;
+  background-position: left top;
+  border-top: 1px solid var(--tl-grid);
+}
+
+.ruler-label {
+  position: absolute;
+  top: 0.45rem;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+/* The end labels would otherwise hang half their width past the track and
+ * get cut off by its `overflow: hidden` — pin them inside instead of
+ * centring them on their tick. */
+.ruler-label:first-child {
+  transform: none;
+}
+
+.ruler-label:last-child {
+  transform: translateX(-100%);
+}
+
+.timeline-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background-color: var(--tl-playhead);
+  pointer-events: none;
+  z-index: 4;
+}
+
+.timeline-playhead::after {
+  content: "";
+  position: absolute;
+  bottom: -0.25rem;
+  left: 50%;
+  width: 0.65rem;
+  height: 0.65rem;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background-color: var(--tl-playhead);
+}
+
+.timeline-tooltip {
+  position: absolute;
+  bottom: calc(100% - 1.2rem);
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  max-width: 22rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  background-color: rgba(20, 20, 22, 0.94);
+  color: #f2f2f2;
+  font-size: 0.78rem;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.timeline-tooltip .tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.timeline-tooltip .hint {
+  margin-left: auto;
+  color: #aaa;
+}
+
+.time-display {
+  font-variant-numeric: tabular-nums;
+  color: #555;
+}
+
+.icon-btn {
+  padding: 0.3em 0.5em;
+  line-height: 1;
+}
+
+.volume-slider {
+  width: 6rem;
 }
 
 .marker-list {
@@ -476,12 +729,25 @@ kbd {
     border-color: #444;
   }
 
-  .marker-timeline {
-    background-color: #2a2a2a;
+  .vod-timeline {
+    --tl-bg: #232326;
+    --tl-grid: #45454c;
+    --tl-text: #9a9aa2;
+    --tl-line: #a78bfa;
+    --tl-ahead: rgba(96, 148, 255, 0.32);
+    --tl-behind: rgba(240, 160, 60, 0.32);
+    --tl-playhead: #a78bfa;
+    --tl-glyph-bg: #1a1a1a;
   }
 
-  .marker-glyph {
-    background-color: #1a1a1a;
+  .timeline-metric-select {
+    background-color: #2f2f2f;
+    border-color: #444;
+    color: #f6f6f6;
+  }
+
+  .time-display {
+    color: #bbb;
   }
 
   .marker-list {

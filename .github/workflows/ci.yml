@@ -52,9 +52,21 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
+      # The dev portal (`src-tauri/src/dev/`, DEVELOPMENT.md §10) is behind
+      # an off-by-default feature, so nothing above compiles it. Without
+      # this step a `#[cfg(feature = "devtools")]` mistake stays green
+      # until someone runs the portal locally.
+      - name: Run Rust tests (devtools)
+        working-directory: src-tauri
+        run: cargo test --features devtools
+
       - name: Clippy
         working-directory: src-tauri
         run: cargo clippy --no-deps -- -D warnings
+
+      - name: Clippy (devtools)
+        working-directory: src-tauri
+        run: cargo clippy --features devtools --no-deps -- -D warnings
 
   build:
     name: Build (${{ matrix.platform }})

@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "devtools",
+  "description": "Capability for the dev portal window. The window itself is only ever created by the `dev_open_portal` command, which is compiled out unless the `devtools` Cargo feature is on — so in a shipped build nothing can hold this capability.",
+  "windows": ["devtools"],
+  "permissions": [
+    "core:default",
+    "opener:default"
+  ]
+}

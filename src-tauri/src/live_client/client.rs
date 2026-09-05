@@ -50,6 +50,25 @@ impl LiveClientDataClient {
 
         Ok(serde_json::from_str(&text)?)
     }
+
+    /// The same request, returned unparsed. The dev portal wants the raw
+    /// payload — to save as a fixture, and to see fields `AllGameData`
+    /// deliberately drops — which a typed fetch can't give it.
+    #[cfg(feature = "devtools")]
+    pub async fn fetch_all_game_data_raw(&self) -> Result<serde_json::Value, LiveClientError> {
+        let text = self
+            .client
+            .get(format!("{BASE_URL}{ALL_GAME_DATA_PATH}"))
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+
+        fixtures::record("live-client", ALL_GAME_DATA_PATH, &text);
+
+        Ok(serde_json::from_str(&text)?)
+    }
 }
 
 impl Default for LiveClientDataClient {

@@ -14,7 +14,13 @@
       "championName": "Ahri",
       "team": "ORDER",
       "isBot": false,
-      "isDead": false
+      "isDead": false,
+      "items": [
+        { "itemID": 3089, "displayName": "Rabadon's Deathcap", "price": 3200, "count": 1 },
+        { "itemID": 3157, "displayName": "Zhonya's Hourglass", "price": 2800, "count": 1 },
+        { "itemID": 2003, "displayName": "Health Potion", "price": 400, "count": 1 }
+      ],
+      "scores": { "kills": 3, "deaths": 1, "assists": 2, "creepScore": 150, "wardScore": 12.5 }
     },
     {
       "summonerName": "",
@@ -23,7 +29,13 @@
       "championName": "Garen",
       "team": "ORDER",
       "isBot": false,
-      "isDead": false
+      "isDead": false,
+      "items": [
+        { "itemID": 3078, "displayName": "Trinity Force", "price": 3300, "count": 1 },
+        { "itemID": 3047, "displayName": "Plated Steelcaps", "price": 1300, "count": 1 },
+        { "itemID": 2055, "displayName": "Control Ward", "price": 350, "count": 2 }
+      ],
+      "scores": { "kills": 2, "deaths": 1, "assists": 3, "creepScore": 120, "wardScore": 20.0 }
     },
     {
       "summonerName": "",
@@ -32,7 +44,12 @@
       "championName": "Zed",
       "team": "CHAOS",
       "isBot": false,
-      "isDead": false
+      "isDead": false,
+      "items": [
+        { "itemID": 6693, "displayName": "Prowler's Claw", "price": 3400, "count": 1 },
+        { "itemID": 3134, "displayName": "Serrated Dirk", "price": 700, "count": 1 }
+      ],
+      "scores": { "kills": 2, "deaths": 2, "assists": 0, "creepScore": 130, "wardScore": 8.0 }
     },
     {
       "summonerName": "",
@@ -41,7 +58,12 @@
       "championName": "Lux",
       "team": "CHAOS",
       "isBot": false,
-      "isDead": false
+      "isDead": false,
+      "items": [
+        { "itemID": 6653, "displayName": "Liandry's Anguish", "price": 2400, "count": 1 },
+        { "itemID": 1058, "displayName": "Needlessly Large Rod", "price": 800, "count": 1 }
+      ],
+      "scores": { "kills": 1, "deaths": 3, "assists": 1, "creepScore": 95, "wardScore": 15.0 }
     }
   ],
   "events": {

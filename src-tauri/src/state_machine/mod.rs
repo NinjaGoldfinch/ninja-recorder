@@ -13,3 +13,5 @@ pub use supervisor::{Supervisor, SupervisorStatus};
 pub use machine::{Action, GameState, StateEvent, StateMachine};
 #[allow(unused_imports)]
 pub use supervisor::{FinalizedRecording, SessionMarker};
+#[cfg(feature = "devtools")]
+pub use supervisor::DevSessionView;

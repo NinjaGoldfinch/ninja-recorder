@@ -21,10 +21,25 @@ pub enum DbError {
     Migration(#[from] rusqlite_migration::Error),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    /// The file on disk is at a higher schema version than this build
+    /// knows about — it was written by a newer build (in practice: another
+    /// branch, or a downgrade). Migrations only run forward, so there is
+    /// nothing this build can do with it. Detected explicitly rather than
+    /// left to `rusqlite_migration`, whose `DatabaseTooFarAhead` surfaces
+    /// as an opaque nested enum with no room to say which file or what to
+    /// do about it.
+    #[error(
+        "database schema is v{found}, but this build only knows v{expected} —          it was created by a newer build of the app"
+    )]
+    SchemaTooNew { found: i64, expected: i64 },
 }
 
-static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
-    Migrations::new(vec![M::up(
+/// The migration list, paired with its own length. Bundled rather than
+/// kept as a separate constant so the "how many migrations does this build
+/// know about" number can't drift from the list it describes — that number
+/// is what `init` compares `PRAGMA user_version` against.
+static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
+    let migrations = vec![M::up(
         "
         CREATE TABLE recordings (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,7 +85,41 @@ static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
 
         INSERT INTO settings (id) VALUES (1);
         ",
-    )])
+    ), M::up(
+        "
+        -- Per-poll time series behind the review timeline's advantage curve
+        -- (1 Hz, so ~2100 rows for a 35-minute game — trivial for SQLite;
+        -- downsampling happens at render time, not here).
+        --
+        -- The diffs are stored pre-signed from the recording player's point
+        -- of view (positive = their team ahead) with `our_team` alongside,
+        -- so the sign convention stays auditable rather than being an
+        -- unwritten frontend assumption. `our_team` is NULL when the active
+        -- player couldn't be matched in `allPlayers`; the UI renders that
+        -- as a team-side-unknown state instead of a possibly-inverted line.
+        --
+        -- `gold_diff_est` is an ESTIMATE. The Live Client Data API exposes
+        -- no per-player gold, so it's derived from summed item prices plus
+        -- our own unspent gold (see `live_client::events::team_diff`).
+        -- `kill_diff` and `cs_diff` are exact.
+        CREATE TABLE samples (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            recording_id   INTEGER NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+            game_time_s    REAL NOT NULL,
+            video_time_s   REAL NOT NULL,
+            our_team       TEXT,    -- ORDER|CHAOS, NULL if we couldn't be matched
+            gold_diff_est  REAL,    -- signed, + = our team ahead. Estimated.
+            kill_diff      INTEGER, -- signed, exact
+            cs_diff        INTEGER, -- signed, exact
+            our_gold       REAL,    -- activePlayer.currentGold, unspent
+            our_level      INTEGER
+        );
+
+        CREATE INDEX idx_samples_recording_id ON samples(recording_id);
+        ",
+    )];
+    let count = migrations.len() as i64;
+    (Migrations::new(migrations), count)
 });
 
 #[derive(Debug, Clone, Default)]
@@ -97,6 +146,21 @@ pub struct NewMarker {
     pub video_time_s: f64,
     pub kind: String,
     pub payload_json: String,
+}
+
+/// One 1 Hz sample of the team-advantage series. Every metric is optional
+/// because a poll can arrive before we've worked out which side we're on
+/// (or at all, if the active player never matches an `allPlayers` entry).
+#[derive(Debug, Clone, Default)]
+pub struct NewSample {
+    pub game_time_s: f64,
+    pub video_time_s: f64,
+    pub our_team: Option<String>,
+    pub gold_diff_est: Option<f64>,
+    pub kill_diff: Option<i64>,
+    pub cs_diff: Option<i64>,
+    pub our_gold: Option<f64>,
+    pub our_level: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -136,6 +200,20 @@ pub struct MarkerRow {
     pub payload_json: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SampleRow {
+    pub id: i64,
+    pub recording_id: i64,
+    pub game_time_s: f64,
+    pub video_time_s: f64,
+    pub our_team: Option<String>,
+    pub gold_diff_est: Option<f64>,
+    pub kill_diff: Option<i64>,
+    pub cs_diff: Option<i64>,
+    pub our_gold: Option<f64>,
+    pub our_level: Option<i64>,
+}
+
 pub struct Db {
     conn: Mutex<Connection>,
 }
@@ -161,9 +239,35 @@ impl Db {
         })
     }
 
+    /// Raw connection access for the dev portal's SQL console and table
+    /// browser (`dev::sql`). Deliberately feature-gated rather than
+    /// `pub(crate)` outright: everything reachable through this bypasses
+    /// the typed `NewRecording`/`NewMarker` API, the migrations, and the
+    /// `path` upsert rule above, so it must not exist at all in a shipped
+    /// build. Panics on a poisoned lock, matching every other method here.
+    #[cfg(feature = "devtools")]
+    pub(crate) fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.conn.lock().unwrap()
+    }
+
     fn init(conn: &mut Connection) -> Result<(), DbError> {
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        MIGRATIONS.to_latest(conn)?;
+
+        // `rusqlite_migration` would catch this too, but only as
+        // `MigrationDefinition(DatabaseTooFarAhead)` — which reaches the
+        // user as a Rust panic and a backtrace, from inside Tauri's setup
+        // hook. Checking first lets the failure carry both version numbers
+        // and lets `lib.rs` say what to do about it.
+        let (migrations, expected) = &*MIGRATIONS;
+        let found: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if found > *expected {
+            return Err(DbError::SchemaTooNew {
+                found,
+                expected: *expected,
+            });
+        }
+
+        migrations.to_latest(conn)?;
         Ok(())
     }
 
@@ -240,6 +344,63 @@ impl Db {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    /// Inserts all `samples` for `recording_id` in one transaction —
+    /// same shape as `insert_markers`, but this runs with ~2100 rows on a
+    /// normal game, so the single-transaction batching matters more here.
+    pub fn insert_samples(&self, recording_id: i64, samples: &[NewSample]) -> Result<(), DbError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO samples
+                    (recording_id, game_time_s, video_time_s, our_team,
+                     gold_diff_est, kill_diff, cs_diff, our_gold, our_level)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            )?;
+            for s in samples {
+                stmt.execute(params![
+                    recording_id,
+                    s.game_time_s,
+                    s.video_time_s,
+                    s.our_team,
+                    s.gold_diff_est,
+                    s.kill_diff,
+                    s.cs_diff,
+                    s.our_gold,
+                    s.our_level,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Advantage-curve samples for one recording, ordered by position in
+    /// the video — what the review timeline's graph plots.
+    pub fn get_samples(&self, recording_id: i64) -> Result<Vec<SampleRow>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, recording_id, game_time_s, video_time_s, our_team,
+                    gold_diff_est, kill_diff, cs_diff, our_gold, our_level
+             FROM samples WHERE recording_id = ?1 ORDER BY video_time_s ASC",
+        )?;
+        let rows = stmt.query_map([recording_id], |row| {
+            Ok(SampleRow {
+                id: row.get(0)?,
+                recording_id: row.get(1)?,
+                game_time_s: row.get(2)?,
+                video_time_s: row.get(3)?,
+                our_team: row.get(4)?,
+                gold_diff_est: row.get(5)?,
+                kill_diff: row.get(6)?,
+                cs_diff: row.get(7)?,
+                our_gold: row.get(8)?,
+                our_level: row.get(9)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
     }
 
     pub fn list_recordings(&self) -> Result<Vec<RecordingRow>, DbError> {
@@ -355,6 +516,48 @@ impl Db {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A database written by a *newer* build must be refused with a
+    /// diagnosable error rather than the library's opaque
+    /// `DatabaseTooFarAhead`. This is reachable just by switching to an
+    /// older branch, and before it was handled it aborted the whole app
+    /// from inside Tauri's setup hook.
+    #[test]
+    fn refuses_a_schema_from_a_newer_build() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        Db::init(&mut conn).unwrap();
+
+        let (_, expected) = &*MIGRATIONS;
+        let ahead = *expected + 1;
+        conn.pragma_update(None, "user_version", ahead).unwrap();
+
+        match Db::init(&mut conn) {
+            Err(DbError::SchemaTooNew { found, expected: known }) => {
+                assert_eq!(found, ahead);
+                assert_eq!(known, *expected);
+            }
+            other => panic!("expected SchemaTooNew, got {other:?}"),
+        }
+    }
+
+    /// The check is one-sided: an older file is exactly what migrations
+    /// are for, and must still be brought forward.
+    #[test]
+    fn still_migrates_a_database_from_an_older_build() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        Db::init(&mut conn).unwrap();
+
+        let (_, expected) = &*MIGRATIONS;
+        assert_eq!(
+            conn.query_row::<i64, _, _>("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap(),
+            *expected,
+            "a fresh database should land on the newest schema"
+        );
+
+        // Re-running against an already-current file is also a no-op.
+        Db::init(&mut conn).unwrap();
+    }
 
     fn marker(kind: &str, game_time_s: f64) -> NewMarker {
         NewMarker {
@@ -593,4 +796,101 @@ mod tests {
         db.set_retention_policy(&updated).unwrap();
         assert_eq!(db.get_retention_policy().unwrap(), updated);
     }
+
+    fn sample(video_time_s: f64, gold: f64, kills: i64) -> NewSample {
+        NewSample {
+            game_time_s: video_time_s - 5.0,
+            video_time_s,
+            our_team: Some("ORDER".into()),
+            gold_diff_est: Some(gold),
+            kill_diff: Some(kills),
+            cs_diff: Some(0),
+            our_gold: Some(450.0),
+            our_level: Some(11),
+        }
+    }
+
+    fn recording_with_samples(db: &Db, samples: &[NewSample]) -> i64 {
+        let id = db
+            .insert_recording(&NewRecording {
+                path: "/game.mp4".into(),
+                started_at: 1,
+                ..Default::default()
+            })
+            .unwrap();
+        db.insert_samples(id, samples).unwrap();
+        id
+    }
+
+    #[test]
+    fn get_samples_returns_them_ordered_by_video_time() {
+        let db = Db::open_in_memory().unwrap();
+        // Inserted out of order — get_samples must sort them, since the
+        // graph renderer walks the series assuming monotonic time.
+        let id = recording_with_samples(
+            &db,
+            &[sample(30.0, 900.0, 2), sample(10.0, 100.0, 0), sample(20.0, -400.0, -1)],
+        );
+
+        let rows = db.get_samples(id).unwrap();
+        let times: Vec<f64> = rows.iter().map(|r| r.video_time_s).collect();
+        assert_eq!(times, vec![10.0, 20.0, 30.0]);
+    }
+
+    /// Negative diffs are the whole point of the metric — a column typed or
+    /// bound wrongly would clamp "behind" to zero and the curve would only
+    /// ever show good news.
+    #[test]
+    fn sample_diffs_round_trip_with_their_sign_intact() {
+        let db = Db::open_in_memory().unwrap();
+        let id = recording_with_samples(&db, &[sample(10.0, -2750.5, -3)]);
+
+        let row = &db.get_samples(id).unwrap()[0];
+        assert_eq!(row.gold_diff_est, Some(-2750.5));
+        assert_eq!(row.kill_diff, Some(-3));
+        assert_eq!(row.our_team, Some("ORDER".to_string()));
+        assert_eq!(row.our_gold, Some(450.0));
+    }
+
+    /// A poll where the active player couldn't be matched in `allPlayers`
+    /// still gets a row, with the metrics NULL rather than a guessed side.
+    #[test]
+    fn sample_with_unknown_team_stores_nulls() {
+        let db = Db::open_in_memory().unwrap();
+        let id = recording_with_samples(
+            &db,
+            &[NewSample {
+                game_time_s: 5.0,
+                video_time_s: 10.0,
+                ..Default::default()
+            }],
+        );
+
+        let row = &db.get_samples(id).unwrap()[0];
+        assert_eq!(row.our_team, None);
+        assert_eq!(row.gold_diff_est, None);
+        assert_eq!(row.kill_diff, None);
+    }
+
+    #[test]
+    fn get_samples_for_recording_with_none_is_empty() {
+        let db = Db::open_in_memory().unwrap();
+        let id = recording_with_samples(&db, &[]);
+        assert!(db.get_samples(id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn deleting_recording_cascades_to_its_samples() {
+        let db = Db::open_in_memory().unwrap();
+        let id = recording_with_samples(&db, &[sample(10.0, 100.0, 1)]);
+
+        db.delete_recording(id).unwrap();
+
+        let conn = db.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM samples", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
 }
