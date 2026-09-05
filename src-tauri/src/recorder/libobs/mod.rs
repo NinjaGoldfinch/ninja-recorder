@@ -21,7 +21,7 @@ mod window;
 use super::audio::{AudioLayout, AudioSourceKind};
 use super::{RecordConfig, Recorder, RecorderError, RecordingOutput};
 use libobs_recorder::settings::{
-    AudioSource as ObsAudioSource, AudioTrack as ObsAudioTrack, Encoder, Framerate, RateControl,
+    AudioTrackSource as ObsAudioSource, AudioTrack as ObsAudioTrack, Encoder, Framerate, RateControl,
     RecorderSettings, Resolution, Window,
 };
 use libobs_recorder::Recorder as LibObs;
@@ -259,10 +259,9 @@ fn remux_faststart(
     // is ambiguous which track a player picks. Track 0 is the combined mix
     // and must be the one that plays by default.
     for track in 0..audio_track_count.max(1) {
-        command.args([
-            &format!("-disposition:a:{track}"),
-            if track == 0 { "default" } else { "0" },
-        ]);
+        command
+            .arg(format!("-disposition:a:{track}"))
+            .arg(if track == 0 { "default" } else { "0" });
     }
 
     let output = command

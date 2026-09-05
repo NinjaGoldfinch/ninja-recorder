@@ -26,20 +26,23 @@ pub fn list_audio_inputs() -> Result<Vec<AudioInputDevice>, String> {
 #[cfg(target_os = "windows")]
 mod imp {
     use super::AudioInputDevice;
-    use windows::core::PCWSTR;
+    use windows::core::{PCWSTR, PWSTR};
     use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
     use windows::Win32::Media::Audio::{
         eCapture, eCommunications, IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE_ACTIVE,
     };
+    use windows::Win32::System::Com::StructuredStorage::{
+        PropVariantClear, PropVariantToStringAlloc, PROPVARIANT,
+    };
     use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
-        STGM_READ,
+        CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
+        COINIT_MULTITHREADED, STGM_READ,
     };
 
     pub fn list_audio_inputs() -> Result<Vec<AudioInputDevice>, String> {
-        // Tauri's main thread is STA — WebView2 requires it — so
-        // initializing MTA there returns RPC_E_CHANGED_MODE. Own a thread
-        // for the duration instead of trying to share the app's apartment.
+        // Tauri's main thread is STA — WebView2 requires it — so initializing
+        // MTA there returns RPC_E_CHANGED_MODE. Own a thread for the duration
+        // instead of trying to share the app's apartment.
         std::thread::scope(|scope| {
             scope
                 .spawn(|| unsafe { enumerate() })
@@ -49,9 +52,9 @@ mod imp {
     }
 
     unsafe fn enumerate() -> Result<Vec<AudioInputDevice>, String> {
-        // Deliberately not `?`-ed: S_FALSE means "already initialized on
-        // this thread", which is a success. Only a real failure should stop
-        // us, and `CoUninitialize` must still be paired with any success.
+        // Not `?`-ed: S_FALSE means "already initialized on this thread",
+        // which is a success. Only a real failure should stop us, and
+        // `CoUninitialize` must still pair with any success.
         let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
         if hr.is_err() {
             return Err(format!("CoInitializeEx failed: {hr:?}"));
@@ -67,14 +70,14 @@ mod imp {
                 .map_err(|e| format!("could not create the device enumerator: {e}"))?;
 
         // OBS resolves a `device_id` of "default" for *input* via
-        // eCommunications, not eConsole. Matching that here is what makes
-        // the picker's "Windows default" entry mean the same thing the
-        // recorder will actually use.
+        // eCommunications, not eConsole. Matching that here is what makes the
+        // picker's "Windows default" entry mean the same device the recorder
+        // will actually open.
         let default_id = enumerator
             .GetDefaultAudioEndpoint(eCapture, eCommunications)
             .ok()
             .and_then(|device| device.GetId().ok())
-            .and_then(|id| pwstr_to_string(id.as_ptr()));
+            .and_then(|id| take_pwstr(id));
 
         let collection = enumerator
             .EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)
@@ -89,14 +92,14 @@ mod imp {
             let Ok(device) = collection.Item(i) else {
                 continue;
             };
-            let Some(id) = device.GetId().ok().and_then(|id| pwstr_to_string(id.as_ptr())) else {
+            let Some(id) = device.GetId().ok().and_then(|id| take_pwstr(id)) else {
                 continue;
             };
             let name = device
                 .OpenPropertyStore(STGM_READ)
                 .ok()
                 .and_then(|store| store.GetValue(&PKEY_Device_FriendlyName).ok())
-                .map(|value| value.to_string())
+                .and_then(|value| propvariant_string(value))
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "Unknown input".to_string());
 
@@ -108,11 +111,33 @@ mod imp {
         Ok(devices)
     }
 
-    unsafe fn pwstr_to_string(ptr: *const u16) -> Option<String> {
+    /// Copies a COM-allocated wide string out, then frees the original.
+    ///
+    /// `IMMDevice::GetId` and `PropVariantToStringAlloc` both allocate with
+    /// `CoTaskMemAlloc` and hand over ownership, so skipping the free leaks
+    /// once per device per refresh.
+    unsafe fn take_pwstr(ptr: PWSTR) -> Option<String> {
         if ptr.is_null() {
             return None;
         }
-        PCWSTR(ptr).to_string().ok()
+        let out = PCWSTR(ptr.0).to_string().ok();
+        CoTaskMemFree(Some(ptr.0 as *const core::ffi::c_void));
+        out
+    }
+
+    /// Reads a string out of a `PROPVARIANT` and releases it.
+    ///
+    /// The windows-rs `PROPVARIANT` is the raw FFI struct with no `Drop`, so
+    /// it needs an explicit `PropVariantClear`. Going through
+    /// `PropVariantToStringAlloc` rather than reading the union directly
+    /// means a device whose name isn't stored as `VT_LPWSTR` still converts
+    /// instead of coming back empty.
+    unsafe fn propvariant_string(mut value: PROPVARIANT) -> Option<String> {
+        let out = PropVariantToStringAlloc(&value)
+            .ok()
+            .and_then(|p| take_pwstr(p));
+        let _ = PropVariantClear(&mut value);
+        out
     }
 }
 
