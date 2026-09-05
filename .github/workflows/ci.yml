@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # So the full matrix — including the push-only devtools bundles below —
+  # can be exercised from a branch before it is merged. Without this the
+  # devtools entries have no trigger except a push to main itself.
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -16,8 +20,8 @@ jobs:
   # nothing for most of CI's minute spend. The `build` job below still
   # runs the full matrix natively, so macOS-specific compile breakage
   # (cfg'd code, the Phase 1 stub recorder) is still caught before a
-  # release — one job later than it used to be. Kept as a single-entry
-  # matrix so re-adding macos-latest here is a one-word change.
+  # release. Kept as a single-entry matrix so re-adding macos-latest here
+  # is a one-word change.
   test:
     name: Test (${{ matrix.platform }})
     strategy:
@@ -68,17 +72,29 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy --features devtools --no-deps -- -D warnings
 
+  # Deliberately NOT `needs: test` — the two jobs are independent work and
+  # gating cost the whole test job (~4min) of pure latency on every run
+  # before the slow Windows bundle even started. Nothing unreviewed can
+  # escape as a result: release.yml only accepts an artifact from a ci.yml
+  # run whose *overall* conclusion is success, and a failed `test` job
+  # fails the run. The one thing given up is minutes, not safety — a PR
+  # that breaks clippy now still pays for a build it can't use.
+  #
+  # The matrix is built by expression so the devtools bundles (a second
+  # full Tauri build each, DEVELOPMENT.md §10) get their own runners
+  # rather than running serially after the production bundle in the same
+  # job — that second build used to sit squarely on the critical path.
+  # They're skipped on pull_request because release.yml is the only
+  # consumer; PRs get the two production bundles and nothing else.
   build:
-    name: Build (${{ matrix.platform }})
-    needs: test
+    name: Build (${{ matrix.platform }}${{ matrix.devtools && ', devtools' || '' }})
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: windows-latest
-            bundles: nsis
-          - platform: macos-latest
-            bundles: dmg
+        include: >-
+          ${{ fromJSON(github.event_name != 'pull_request'
+          && '[{"platform":"windows-latest","bundles":"nsis"},{"platform":"macos-latest","bundles":"dmg"},{"platform":"windows-latest","bundles":"nsis","devtools":true},{"platform":"macos-latest","bundles":"dmg","devtools":true}]'
+          || '[{"platform":"windows-latest","bundles":"nsis"},{"platform":"macos-latest","bundles":"dmg"}]') }}
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -100,6 +116,39 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # The staged backend is keyed on the exact libobs-recorder revision
+      # Cargo.lock links against, which does double duty: it is a stable
+      # cache key, and it stops the out-of-process worker staged below
+      # from drifting away from the in-process crate the app is compiled
+      # against — the old `git clone --depth 1` followed whatever HEAD
+      # happened to be, while Cargo used the locked rev.
+      - name: Resolve libobs backend revision
+        if: matrix.platform == 'windows-latest'
+        id: libobs-rev
+        shell: bash
+        run: |
+          rev=$(grep -A3 '^name = "libobs-recorder"$' src-tauri/Cargo.lock |
+            sed -nE 's/^source = ".*#([0-9a-f]{40})"$/\1/p')
+          if [ -z "$rev" ]; then
+            echo "::error::Could not read the libobs-recorder revision out of src-tauri/Cargo.lock" >&2
+            exit 1
+          fi
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+
+      # Both staging steps below write into src-tauri/target/libobs and
+      # neither output depends on this repo's own sources, so the whole
+      # directory caches as a unit. ffmpeg has no version to key on (see
+      # the download step), so bump FFMPEG_EPOCH in the key to pull a
+      # fresher build; GitHub also evicts caches untouched for 7 days,
+      # which refreshes it on its own.
+      - name: Cache libobs backend + ffmpeg
+        if: matrix.platform == 'windows-latest'
+        id: libobs-cache
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/target/libobs
+          key: libobs-${{ runner.os }}-${{ steps.libobs-rev.outputs.rev }}-ffmpeg-epoch1
+
       # Builds the out-of-process libobs worker from our capture-backend
       # fork (github.com/NinjaGoldfinch/libobs-recorder — see
       # DEVELOPMENT.md §2.1) and stages it + its bundled libobs DLLs at
@@ -112,10 +161,15 @@ jobs:
       # just for a Windows-only optional binary. Unverified — see
       # DEVELOPMENT.md §2.2's Phase 6 status note.
       - name: Stage libobs capture backend
-        if: matrix.platform == 'windows-latest'
+        if: matrix.platform == 'windows-latest' && steps.libobs-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          git clone --depth 1 https://github.com/NinjaGoldfinch/libobs-recorder.git ../libobs-recorder-build
+          $rev = "${{ steps.libobs-rev.outputs.rev }}"
+          New-Item -ItemType Directory -Force -Path ../libobs-recorder-build | Out-Null
+          git init ../libobs-recorder-build
+          git -C ../libobs-recorder-build remote add origin https://github.com/NinjaGoldfinch/libobs-recorder.git
+          git -C ../libobs-recorder-build fetch --depth 1 origin $rev
+          git -C ../libobs-recorder-build checkout FETCH_HEAD
           cargo build --release --manifest-path ../libobs-recorder-build/Cargo.toml --bin extprocess_recorder
           $dllDir = Get-ChildItem ../libobs-recorder-build/build-helper -Directory -Filter "libobs_*" |
             Sort-Object Name -Descending | Select-Object -First 1
@@ -132,14 +186,15 @@ jobs:
       # download here degrades to unseekable-but-playable recordings
       # rather than breaking the build. BtbN's "latest" release is a
       # continuously-updated static build, not a pinned version — same
-      # looseness as this job's own unpinned `git clone` above.
+      # looseness as the fork clone above had before it was pinned.
       - name: Stage ffmpeg for faststart remux
-        if: matrix.platform == 'windows-latest'
+        if: matrix.platform == 'windows-latest' && steps.libobs-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile ffmpeg.zip
           Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-extracted
           $bin = Get-ChildItem ffmpeg-extracted -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+          New-Item -ItemType Directory -Force -Path src-tauri/target/libobs | Out-Null
           Copy-Item $bin.FullName src-tauri/target/libobs/ffmpeg.exe -Force
 
       # Native build on each platform's own runner — never cross-compiled.
@@ -147,40 +202,26 @@ jobs:
       # installer choice); dmg on macOS is the standard Tauri bundle format
       # there. macOS builds only exercise the stub recorder (Phase 1) —
       # real capture is Windows-only (Phase 6).
-      - name: Build app
-        run: npm run tauri build -- --bundles ${{ matrix.bundles }}
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ninja-recorder-${{ matrix.platform }}-${{ github.sha }}
-          path: src-tauri/target/release/bundle
-          retention-days: 7
-          if-no-files-found: error
-
-      # A second installer with the dev portal compiled in (DEVELOPMENT.md
-      # §10). Only ever attached to the *draft* release and removed before
-      # it goes public — it exposes raw SQL execution, arbitrary row
-      # writes, a DB wipe and state-machine injection, none of which
-      # belongs in a build handed to users.
       #
-      # Push-only: this is a second full Tauri bundle, so running it on
-      # every PR would roughly double the build job. release.yml reuses
-      # the artifacts from the main-branch run, which is the only place
-      # they're actually needed. Drop the `if:` to have PRs cover it too.
+      # The devtools variant additionally layers tauri.devtools.conf.json
+      # over the config to turn NSIS compression off. Compressing the
+      # ~200MB payload (ffmpeg + the libobs DLLs) with solid LZMA is
+      # ~2min of makensis, and it buys nothing here: this installer is
+      # attached to the draft release and deleted before it is published,
+      # so nobody ever downloads it. The production bundle keeps LZMA and
+      # its ~62MB installer.
       #
       # NINJA_DEVTOOLS reaches vite through tauri's beforeBuildCommand, so
       # dev.html is emitted; --features devtools compiles the Rust side.
-      - name: Build app (devtools)
-        if: github.event_name == 'push'
+      - name: Build app
         env:
-          NINJA_DEVTOOLS: "1"
-        run: npm run tauri build -- --bundles ${{ matrix.bundles }} --features devtools
+          NINJA_DEVTOOLS: ${{ matrix.devtools && '1' || '' }}
+        run: npm run tauri build -- --bundles ${{ matrix.bundles }} ${{ matrix.devtools && '--features devtools --config src-tauri/tauri.devtools.conf.json' || '' }}
 
       # The devtools bundle lands on the same filename as the production
       # one, which would collide when both are attached to a release.
       - name: Label devtools bundles
-        if: github.event_name == 'push'
+        if: ${{ matrix.devtools }}
         shell: bash
         run: |
           cd src-tauri/target/release/bundle
@@ -191,11 +232,10 @@ jobs:
               echo "labelled: ${base%.*}-devtools.${base##*.}"
             done
 
-      - name: Upload devtools build artifact
-        if: github.event_name == 'push'
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ninja-recorder-devtools-${{ matrix.platform }}-${{ github.sha }}
+          name: ninja-recorder${{ matrix.devtools && '-devtools' || '' }}-${{ matrix.platform }}-${{ github.sha }}
           path: src-tauri/target/release/bundle
           retention-days: 7
           if-no-files-found: error
