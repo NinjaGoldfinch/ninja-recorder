@@ -310,12 +310,30 @@ jobs:
       # real capture is Windows-only (Phase 6).
       #
       # The devtools variant additionally layers tauri.devtools.conf.json
-      # over the config to turn NSIS compression off. Compressing the
-      # ~200MB payload (ffmpeg + the libobs DLLs) with solid LZMA is
-      # ~2min of makensis, and it buys nothing here: this installer is
-      # attached to the draft release and deleted before it is published,
-      # so nobody ever downloads it. The production bundle keeps LZMA and
-      # its ~62MB installer.
+      # over the config, which does two things.
+      #
+      # It renames the product (and the binary) to `ninja-recorder-dev`,
+      # which is what makes this a separate application to Windows rather
+      # than a rival copy of the real one. NSIS keys everything off
+      # productName: the uninstall entry
+      # (HKCU\...\Uninstall\<productName>), the default install directory
+      # (%LOCALAPPDATA%\<productName>) and the shortcut. While the two
+      # shared it, running this installer made NSIS treat the real install
+      # as an older version of *itself* and uninstall it first — and that
+      # step aborts the whole install with "Unable to uninstall!" if the
+      # old uninstaller returns non-zero or leaves the binary behind, which
+      # a still-running app is enough to cause. mainBinaryName splits the
+      # process name too, so neither installer's "close the running app"
+      # check can reach across at the other. The two now install side by
+      # side. The identifier is deliberately *not* overridden, so the
+      # portal still opens the library the real app writes to.
+      #
+      # It also turns NSIS compression off. Compressing the ~200MB payload
+      # (ffmpeg + the libobs DLLs) with solid LZMA is ~2min of makensis,
+      # and it buys nothing here: this installer is attached to the draft
+      # release and deleted before it is published, so nobody ever
+      # downloads it. The production bundle keeps LZMA and its ~62MB
+      # installer.
       #
       # NINJA_DEVTOOLS reaches vite through tauri's beforeBuildCommand, so
       # dev.html is emitted; --features devtools compiles the Rust side.
@@ -323,20 +341,6 @@ jobs:
         env:
           NINJA_DEVTOOLS: ${{ matrix.devtools && '1' || '' }}
         run: npm run tauri build -- --bundles ${{ matrix.bundles }} ${{ matrix.devtools && '--features devtools --config src-tauri/tauri.devtools.conf.json' || '' }}
-
-      # The devtools bundle lands on the same filename as the production
-      # one, which would collide when both are attached to a release.
-      - name: Label devtools bundles
-        if: ${{ matrix.devtools }}
-        shell: bash
-        run: |
-          cd src-tauri/target/release/bundle
-          find . -type f \( -name '*.exe' -o -name '*.dmg' \) -print0 |
-            while IFS= read -r -d '' f; do
-              dir=$(dirname "$f"); base=$(basename "$f")
-              mv "$f" "$dir/${base%.*}-devtools.${base##*.}"
-              echo "labelled: ${base%.*}-devtools.${base##*.}"
-            done
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -442,8 +446,8 @@ jobs:
           CAVEATS
             cat <<'DEVNOTE'
 
-          <!-- REMOVE THIS BLOCK AND THE *-devtools ASSET BEFORE PUBLISHING -->
-          > **Draft-only:** the `*-devtools` installer above carries the dev
+          <!-- REMOVE THIS BLOCK AND THE ninja-recorder-dev ASSET BEFORE PUBLISHING -->
+          > **Draft-only:** the `ninja-recorder-dev` installer above carries the dev
           > portal (raw SQL execution, arbitrary row writes, database wipe,
           > state-machine injection). Delete that asset and this block
           > before making the release public.
@@ -468,4 +472,4 @@ jobs:
           files: |
             artifacts/windows/**/*.exe
             artifacts/macos/**/*.dmg
-            artifacts/windows-devtools/**/*-devtools.exe
+            artifacts/windows-devtools/**/*.exe
