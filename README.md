@@ -2,12 +2,13 @@
 
 A lightweight League of Legends VOD recorder for Windows. Automatically records your games, tags the VOD timeline with in-game events (kills, deaths, objectives), and provides a review player built for improvement — with YouTube upload and native replay (`.rofl`) support planned.
 
-> **Status:** Working on Windows, unreleased. Recording, event markers, the VOD
-> library and the review player are all built and running (phases 1–7 and 9);
-> installers are published as draft releases. The libobs capture backend has not
-> yet been verified against a real Vanguard-protected game — that's phase 8, and
-> it's the gate on calling this ready. YouTube upload and `.rofl` support are not
-> started.
+> **Status:** Usable on Windows, pre-1.0. Recording, event markers, the VOD
+> library and the review player are all built and running (phases 1–7 and 9),
+> and installers ship from the [Releases](../../releases) page. Two caveats
+> worth knowing before you install: builds are unsigned, so SmartScreen warns
+> on first run, and the libobs capture backend has not yet been verified
+> against a real Vanguard-protected game — that's phase 8, and it's the gate on
+> calling this ready. YouTube upload and `.rofl` support are not started.
 
 ## Why
 
