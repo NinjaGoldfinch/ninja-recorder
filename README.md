@@ -2,7 +2,13 @@
 
 A lightweight League of Legends VOD recorder for Windows. Automatically records your games, tags the VOD timeline with in-game events (kills, deaths, objectives), and provides a review player built for improvement — with YouTube upload and native replay (`.rofl`) support planned.
 
-> **Status:** Planning / early scaffolding. Nothing runs yet.
+> **Status:** Usable on Windows, pre-1.0. Recording, event markers, the VOD
+> library and the review player are all built and running (phases 1–7 and 9),
+> and installers ship from the [Releases](../../releases) page. Two caveats
+> worth knowing before you install: builds are unsigned, so SmartScreen warns
+> on first run, and the libobs capture backend has not yet been verified
+> against a real Vanguard-protected game — that's phase 8, and it's the gate on
+> calling this ready. YouTube upload and `.rofl` support are not started.
 
 ## Why
 
@@ -11,7 +17,7 @@ A lightweight League of Legends VOD recorder for Windows. Automatically records 
 - **Lightweight** — Tauri shell (~10 MB, uses OS WebView2) + embedded libobs. No Electron, no bundled Chromium.
 - **Vanguard-safe by design** — capture uses Windows Graphics Capture (WGC) only. No process injection, no hooks, no memory reading. Ever.
 
-## Architecture (planned)
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -44,19 +50,23 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for the full design doc: constraints, API d
 
 Tracked as GitHub issues — each phase is an issue.
 
-| Phase | What | Platform |
-|---|---|---|
-| 1 | Scaffold Tauri v2 project, `Recorder` trait + stub backend | macOS/any |
-| 2 | LCU client: lockfile discovery, gameflow polling, match metadata | macOS/any |
-| 3 | Live Client Data poller + event → marker pipeline (with fixture recording) | macOS/any |
-| 4 | SQLite VOD library + data model | macOS/any |
-| 5 | Review UI: player, marker timeline, VOD browser | macOS/any |
-| 6 | libobs capture backend (WGC + hardware encode) | **Windows** |
-| 7 | GitHub Actions: test + build installers (Windows + macOS) on every push/PR, tag-triggered release | CI |
-| 8 | Integration test on real hardware + Vanguard verification | **Windows** |
-| 9 | Disk retention policy (max size / max age / pinned VODs) | any |
-| 10 | YouTube upload (OAuth desktop flow, resumable upload) | any |
-| 11 | ROFL replay download alongside video | any |
+| Phase | What | Platform | Status |
+|---|---|---|---|
+| 1 | Scaffold Tauri v2 project, `Recorder` trait + stub backend | macOS/any | done |
+| 2 | LCU client: lockfile discovery, gameflow polling, match metadata | macOS/any | done |
+| 3 | Live Client Data poller + event → marker pipeline (with fixture recording) | macOS/any | done |
+| 4 | SQLite VOD library + data model | macOS/any | done |
+| 5 | Review UI: player, marker timeline, VOD browser | macOS/any | done |
+| 6 | libobs capture backend (WGC + hardware encode) | **Windows** | built, unverified |
+| 7 | GitHub Actions: test + build installers on every push/PR, draft release per commit on `main` | CI | done |
+| 8 | Integration test on real hardware + Vanguard verification | **Windows** | **next** |
+| 9 | Disk retention policy (max size / max age / pinned VODs) | any | done |
+| 10 | YouTube upload (OAuth desktop flow, resumable upload) | any | not started |
+| 11 | ROFL replay download alongside video | any | not started |
+
+"Built, unverified" for phase 6 is load-bearing: the capture path compiles, bundles
+and records, but has never run against a real Vanguard-protected game. See
+[docs/phase-8-runbook.md](docs/phase-8-runbook.md) for what that check involves.
 
 ## Development
 
@@ -65,12 +75,18 @@ Primary development happens on macOS against the stub recorder (League runs nati
 ```bash
 # prerequisites: Rust stable, Node.js
 npm install
-npm run tauri dev
+npm run tauri:dev
 ```
+
+`tauri:dev`, not `tauri dev` — it passes `--features devtools`, which compiles in
+the dev portal: a second window that seeds the library, drives the state machine
+without League running, dry-runs the retention policy and runs raw SQL. Most of
+the backend can only be exercised through it. See
+[DEVELOPMENT.md §10](DEVELOPMENT.md#10-dev-portal).
 
 The Rust project lives at `src-tauri/Cargo.toml`, not the repo root — bare
 `cargo` commands (`cargo check`, `cargo test`) must be run from `src-tauri/`,
-e.g. `cd src-tauri && cargo test`. `npm run tauri dev` handles this for you
+e.g. `cd src-tauri && cargo test`. `npm run tauri:dev` handles this for you
 from the repo root.
 
 ## Non-negotiable constraints

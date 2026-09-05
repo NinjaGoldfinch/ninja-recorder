@@ -16,8 +16,8 @@ of the run, not just the plan.
 ## 1. Install from CI artifact, no dev tooling involved
 
 - [ ] Download the `ninja-recorder-windows-latest-<sha>` artifact from the latest `main` CI run
-      (or build a `v*.*.*` tag and grab the draft Release installer instead, if this pass is also
-      meant to validate `release.yml`)
+      (or take the installer off that run's draft Release instead, if this pass is also meant to
+      validate what a release actually ships — every commit on `main` leaves one)
 - [ ] Run the NSIS installer on a clean-ish user account (not the same profile used for `cargo run`
       testing, if avoidable — the goal is to catch anything the dev loop's leftover state hides)
 - [ ] Launch the installed app directly (Start Menu / desktop shortcut) — not from a terminal
