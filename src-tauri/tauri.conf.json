@@ -24,7 +24,10 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPDATA/recordings/*"]
+        "scope": [
+          "$APPDATA/recordings/*",
+          "$APPDATA/recordings/audio-tracks/*"
+        ]
       }
     }
   },

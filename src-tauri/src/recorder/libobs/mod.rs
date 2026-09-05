@@ -18,9 +18,11 @@
 
 mod window;
 
-use super::{RecordConfig, Recorder, RecorderError};
+use super::audio::{AudioLayout, AudioSourceKind};
+use super::{RecordConfig, Recorder, RecorderError, RecordingOutput};
 use libobs_recorder::settings::{
-    AudioSource, Encoder, Framerate, RateControl, RecorderSettings, Resolution, Window,
+    AudioSource as ObsAudioSource, AudioTrack as ObsAudioTrack, Encoder, Framerate, RateControl,
+    RecorderSettings, Resolution, Window,
 };
 use libobs_recorder::Recorder as LibObs;
 use std::path::{Path, PathBuf};
@@ -49,6 +51,10 @@ fn is_acceptable_encoder(encoder: &Encoder) -> bool {
 pub struct LibObsRecorder {
     inner: LibObs,
     active_path: Option<PathBuf>,
+    /// The layout `start` actually configured, held so `stop` can report it
+    /// without re-deriving it from a preference that may have changed
+    /// mid-game.
+    active_audio: Option<AudioLayout>,
     /// Resolved by the caller the same way as `extprocess_recorder_path`
     /// (Tauri's path resolver, bundled as a resource) — `None` if it
     /// isn't present, in which case `stop` just skips the faststart
@@ -72,6 +78,7 @@ impl LibObsRecorder {
         Ok(Self {
             inner,
             active_path: None,
+            active_audio: None,
             ffmpeg_path,
         })
     }
@@ -109,7 +116,17 @@ impl Recorder for LibObsRecorder {
         );
         settings.set_framerate(Framerate::new(60, 1));
         settings.set_rate_control(RateControl::CBR(8000)); // ~8 Mbps, DEVELOPMENT.md §2.4
-        settings.set_audio_source(AudioSource::SYSTEM);
+
+        // One mp4 audio track per entry, in order: track 0 is the combined
+        // mix, the rest are isolated stems (DEVELOPMENT.md §2.5). The fork
+        // turns each track's source list into a libobs mixer bitmask —
+        // a source can feed several mixes at once, which is what makes the
+        // stems nearly free.
+        let audio = config.audio.layout();
+        if let Err(e) = audio.validate() {
+            return Err(RecorderError::Backend(format!("invalid audio layout: {e}")));
+        }
+        settings.set_audio_tracks(to_obs_tracks(&audio));
 
         let encoder = self
             .inner
@@ -134,11 +151,18 @@ impl Recorder for LibObsRecorder {
             .map_err(|e| RecorderError::Backend(e.to_string()))?;
 
         self.active_path = Some(output_path);
+        self.active_audio = Some(audio);
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<PathBuf, RecorderError> {
+    fn stop(&mut self) -> Result<RecordingOutput, RecorderError> {
         let path = self.active_path.take().ok_or(RecorderError::NotRecording)?;
+        let audio = self.active_audio.take().unwrap_or_else(|| {
+            // Can't happen — the two are set together in `start` — but
+            // guessing a layout is worse than reporting an empty one, which
+            // the library records as "unknown".
+            AudioLayout { sources: Vec::new(), tracks: Vec::new() }
+        });
         self.inner
             .stop_recording()
             .map_err(|e| RecorderError::Backend(e.to_string()))?;
@@ -152,14 +176,14 @@ impl Recorder for LibObsRecorder {
         // worth fixing up now, on a clean stop; a stream-copy remux is
         // fast and lossless, just rewriting the container's index.
         if let Some(ffmpeg_path) = &self.ffmpeg_path {
-            if let Err(e) = remux_faststart(ffmpeg_path, &path) {
+            if let Err(e) = remux_faststart(ffmpeg_path, &path, audio.tracks.len()) {
                 eprintln!(
                     "[recorder] faststart remux failed, keeping original (unseekable) file: {e}"
                 );
             }
         }
 
-        Ok(path)
+        Ok(RecordingOutput { path, audio })
     }
 
     fn is_recording(&self) -> bool {
@@ -171,19 +195,77 @@ impl Recorder for LibObsRecorder {
     }
 }
 
+/// Translates our backend-agnostic layout into the fork's own track type.
+///
+/// The only place libobs vocabulary meets ours, which is the point of the
+/// `Recorder` trait boundary (DEVELOPMENT.md §2.2): `AudioLayout` crosses
+/// the Tauri IPC and lands in SQLite, so it must not grow a libobs type.
+///
+/// Source order is preserved because `AudioTrackSpec::sources` indexes into
+/// it — reordering here would silently reassign every stem.
+fn to_obs_tracks(layout: &AudioLayout) -> Vec<ObsAudioTrack> {
+    let sources: Vec<ObsAudioSource> = layout
+        .sources
+        .iter()
+        .map(|source| match source {
+            AudioSourceKind::Game => ObsAudioSource::Application { exe: None },
+            AudioSourceKind::Application { exe } => ObsAudioSource::Application {
+                exe: Some(exe.clone()),
+            },
+            AudioSourceKind::Desktop => ObsAudioSource::Output { device_id: None },
+            AudioSourceKind::Microphone { device_id } => ObsAudioSource::Input {
+                device_id: device_id.clone(),
+            },
+        })
+        .collect();
+
+    layout
+        .tracks
+        .iter()
+        .map(|track| ObsAudioTrack {
+            name: track.label.clone(),
+            sources: track.sources.iter().filter_map(|&i| sources.get(i).cloned()).collect(),
+        })
+        .collect()
+}
+
 /// Stream-copies `video_path` through ffmpeg with `-movflags +faststart`
 /// so the `moov` (seek index) ends up at the front of the file instead of
 /// wherever the fragmented writer left it, then atomically replaces the
 /// original. `-c copy` means no re-encode — this only rewrites container
 /// metadata, so it's a fraction of a second even for a long recording.
-fn remux_faststart(ffmpeg_path: &Path, video_path: &Path) -> Result<(), String> {
+fn remux_faststart(
+    ffmpeg_path: &Path,
+    video_path: &Path,
+    audio_track_count: usize,
+) -> Result<(), String> {
     let tmp_path = video_path.with_extension("faststart.tmp.mp4");
 
-    let output = Command::new(ffmpeg_path)
+    let mut command = Command::new(ffmpeg_path);
+    command
         .arg("-y") // overwrite tmp_path without prompting if it's left over from a previous crash
         .arg("-i")
         .arg(video_path)
-        .args(["-c", "copy", "-movflags", "+faststart"])
+        // Without these, ffmpeg's *default* stream selection applies: one
+        // video and one audio stream, the "best" of each. On a multi-track
+        // recording that silently drops every stem, and the rename below
+        // makes it permanent. `0:a?` rather than `0` also skips any
+        // data/unknown stream without needing `-ignore_unknown`, and the
+        // `?` keeps an audio-less file from failing outright.
+        .args(["-map", "0:v?", "-map", "0:a?"])
+        .args(["-c", "copy", "-movflags", "+faststart"]);
+
+    // obs-ffmpeg-mux never sets AV_DISPOSITION_DEFAULT, so without this it
+    // is ambiguous which track a player picks. Track 0 is the combined mix
+    // and must be the one that plays by default.
+    for track in 0..audio_track_count.max(1) {
+        command.args([
+            &format!("-disposition:a:{track}"),
+            if track == 0 { "default" } else { "0" },
+        ]);
+    }
+
+    let output = command
         .arg(&tmp_path)
         .output()
         .map_err(|e| format!("failed to launch ffmpeg at {}: {e}", ffmpeg_path.display()))?;

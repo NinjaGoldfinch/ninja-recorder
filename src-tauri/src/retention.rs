@@ -95,6 +95,14 @@ pub fn delete_recording_and_file(db: &Db, row: &RecordingRow) -> Result<(), Dele
             })
         }
     }
+    // Any audio stems extracted from this recording for the review player
+    // (`audio_tracks`) are invisible to everything else — reconcile doesn't
+    // scan the cache directory and they aren't in `size_bytes` — so nothing
+    // else would ever reclaim them. The recordings folder is the mp4's own
+    // parent, so it doesn't need threading through every caller.
+    if let Some(dir) = std::path::Path::new(&row.path).parent() {
+        crate::audio_tracks::remove_for(dir, std::path::Path::new(&row.path));
+    }
     db.delete_recording(row.id).map_err(DeleteError::from)
 }
 
@@ -215,6 +223,7 @@ mod tests {
             patch: None,
             pinned,
             size_bytes,
+            audio_tracks_json: None,
         }
     }
 

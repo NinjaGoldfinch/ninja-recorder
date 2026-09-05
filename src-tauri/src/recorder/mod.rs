@@ -3,6 +3,8 @@
 //! lives behind this trait. Nothing above this module may depend on libobs
 //! types directly; see DEVELOPMENT.md §2.2.
 
+pub mod audio;
+pub mod devices;
 #[cfg(target_os = "windows")]
 pub mod libobs;
 // Also compiled on Windows under `cfg(test)`: `state_machine::supervisor`'s
@@ -11,15 +13,36 @@ pub mod libobs;
 #[cfg(any(test, not(target_os = "windows")))]
 pub mod stub;
 
+use audio::{AudioLayout, AudioPreset};
 use std::path::PathBuf;
 
-/// Parameters for a single recording. Intentionally minimal: resolution,
-/// encoder and audio-source choices are the backend's, not the caller's.
-#[derive(Debug, Clone)]
+/// Parameters for a single recording. Still minimal: resolution and encoder
+/// are the backend's business, not the caller's. Audio is the exception —
+/// what gets captured is a user-facing product decision (whose microphone,
+/// on which track), so it's chosen above the trait and passed down. See
+/// DEVELOPMENT.md §2.5.
+#[derive(Debug, Clone, Default)]
 pub struct RecordConfig {
     pub output_dir: PathBuf,
     /// Filename without extension; the backend chooses the container.
     pub file_stem: String,
+    /// Only the libobs backend acts on this — `StubRecorder` captures
+    /// nothing — so it's legitimately unread on every other platform, same
+    /// as `RecorderError::Backend` below.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub audio: AudioPreset,
+}
+
+/// What `Recorder::stop` produced.
+///
+/// The track layout is reported by the backend rather than assumed from the
+/// `RecordConfig` that started the recording: a microphone can be unplugged
+/// between the settings screen and the end of the game, and the row we write
+/// has to describe the file that actually exists.
+#[derive(Debug, Clone)]
+pub struct RecordingOutput {
+    pub path: PathBuf,
+    pub audio: AudioLayout,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -44,8 +67,9 @@ pub enum RecorderError {
 
 pub trait Recorder: Send {
     fn start(&mut self, config: RecordConfig) -> Result<(), RecorderError>;
-    /// Finalizes the recording and returns the path to the resulting file.
-    fn stop(&mut self) -> Result<PathBuf, RecorderError>;
+    /// Finalizes the recording and reports the file it produced, along
+    /// with the audio track layout that actually made it into that file.
+    fn stop(&mut self) -> Result<RecordingOutput, RecorderError>;
     fn is_recording(&self) -> bool;
     /// Which backend is actually live, for diagnostics. Which one you get
     /// is decided at runtime (`lib.rs`'s `setup`) by target OS *and* by
@@ -71,7 +95,7 @@ impl Recorder for FailedRecorder {
         Err(RecorderError::Backend(self.0.clone()))
     }
 
-    fn stop(&mut self) -> Result<PathBuf, RecorderError> {
+    fn stop(&mut self) -> Result<RecordingOutput, RecorderError> {
         Err(RecorderError::NotRecording)
     }
 

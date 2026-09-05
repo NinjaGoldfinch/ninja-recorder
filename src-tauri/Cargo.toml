@@ -60,8 +60,25 @@ fs2 = "0.4"
 # §1.1/§2.2 for why upstream can't be used as-is. GPL-2.0, same as libobs
 # itself; this project is GPL-2.0 accordingly (README).
 [target.'cfg(target_os = "windows")'.dependencies]
-libobs-recorder = { git = "https://github.com/NinjaGoldfinch/libobs-recorder.git" }
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+# Pinned to the `multi-track-audio` branch rather than the fork's default:
+# the multi-track patch (DEVELOPMENT.md §2.5) changes encoder and source
+# lifetimes inside libobs and has not been run on real Windows hardware yet,
+# so `master` stays the known-working backend until it has.
+libobs-recorder = { git = "https://github.com/NinjaGoldfinch/libobs-recorder.git", branch = "multi-track-audio" }
+# Win32_Media_Audio + the COM/property-store features are the microphone
+# picker (recorder/devices.rs): IMMDeviceEnumerator to list input endpoints,
+# IPropertyStore + PKEY_Device_FriendlyName for their display names. Done
+# here rather than through libobs so the picker still works when the capture
+# backend failed to initialize.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_Devices_FunctionDiscovery",
+] }
 
 # Full DWARF for our own crate is what fills `target/` — 30k codegen-unit
 # objects at ~500 KB of debug info each, ~8 GB before this. Line tables keep

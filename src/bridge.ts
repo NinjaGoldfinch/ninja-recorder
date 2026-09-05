@@ -1,5 +1,8 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type {
+  AudioInputDevice,
+  AudioLayout,
+  AudioPreset,
   LcuStatus,
   MarkerRow,
   RecordingRow,
@@ -62,15 +65,35 @@ function row(
     patch: "15.17",
     pinned: false,
     size_bytes: 1_900_000_000,
+    audio_tracks_json: JSON.stringify(LAYOUTS.game_mic),
     ...overrides,
   };
 }
+
+// The three shapes the review player has to render: a single track (no stem
+// picker at all), a multi-track recording, and an unknown layout.
+const LAYOUTS = {
+  game: {
+    sources: [{ kind: "game" }],
+    tracks: [{ label: "Game", sources: [0] }],
+  },
+  game_mic: {
+    sources: [{ kind: "game" }, { kind: "microphone" }],
+    tracks: [
+      { label: "Everything", sources: [0, 1] },
+      { label: "Game", sources: [0] },
+      { label: "Mic", sources: [1] },
+    ],
+  },
+} satisfies Record<string, AudioLayout>;
 
 // Deliberately awkward: nulls everywhere a rescan-imported file has them,
 // a champion name long enough to wrap a card, and a filename that would
 // break out of an attribute if it were interpolated unescaped.
 const FIXTURE_ROWS: RecordingRow[] = [
   row(1, "Ahri", true, { pinned: true }),
+  // Single track: the player must hide the stem picker entirely.
+  row(13, "Jinx", true, { audio_tracks_json: JSON.stringify(LAYOUTS.game) }),
   row(2, "Lee Sin", false, { kda_k: 2, kda_d: 9, kda_a: 4 }),
   row(3, "Aurelion Sol", true, { duration_s: 3120 }),
   row(4, "Kai'Sa", false),
@@ -90,6 +113,8 @@ const FIXTURE_ROWS: RecordingRow[] = [
     kda_a: null,
     path: '/fixtures/clip " onerror="alert(1).mp4',
     size_bytes: 240_000_000,
+    // A rescan knows nothing about a file's audio.
+    audio_tracks_json: null,
   }),
   row(10, "Kled", true, { pinned: true, size_bytes: 3_400_000_000 }),
   row(11, "Zed", false),
@@ -134,6 +159,13 @@ const MOCKS: Record<string, unknown> = {
   preview_retention_policy: { deleted: [], freed_bytes: 0 },
   set_retention_policy: { deleted: [], freed_bytes: 0 },
   get_ui_prefs: {},
+  get_audio_preset: { preset: "game" } satisfies AudioPreset,
+  set_audio_preset: null,
+  list_audio_inputs: [
+    { id: "mic-usb", name: "Blue Yeti", is_default: true },
+    { id: "mic-webcam", name: "HD Webcam Microphone", is_default: false },
+    { id: "mic-line", name: "Line In (Realtek(R) Audio)", is_default: false },
+  ] satisfies AudioInputDevice[],
   get_recordings_dir: "/fixtures/recordings",
   rescan_recordings: { orphans_removed: 0, imported: 0 },
   lcu_status: {
