@@ -18,6 +18,10 @@ license = "GPL-2.0-only"
 name = "ninja_recorder_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# CI probe: this comment exists only to change the Cargo.toml hash, and
+# with it the Swatinem/rust-cache key, without altering a single line of
+# code or dependency. If the Windows test job fails on this commit, the
+# failure belongs to a partial cache restore, not to any source change.
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
