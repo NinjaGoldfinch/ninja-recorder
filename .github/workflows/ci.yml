@@ -6,8 +6,15 @@ on:
   pull_request:
   # So the full matrix — including the devtools bundle below, which pull
   # requests skip — can be exercised from a branch before it is merged.
-  # A manual run never mints a version or drafts a release; it only builds.
+  # A manual run only builds unless `draft_release` is set, which is both
+  # how the draft path gets tested off main and the escape hatch for
+  # re-cutting a draft from a commit whose own run was lost.
   workflow_dispatch:
+    inputs:
+      draft_release:
+        description: "Mint a version and leave a draft release"
+        type: boolean
+        default: false
 
 # Superseded pull-request runs are cancelled, which is most of the minute
 # saving. Pushes to main are deliberately NOT grouped together: each one
@@ -48,6 +55,7 @@ jobs:
         id: pick
         env:
           EVENT: ${{ github.event_name }}
+          FORCE: ${{ inputs.draft_release }}
         run: |
           set -euo pipefail
           base=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
@@ -62,10 +70,13 @@ jobs:
           minor=$(printf '%s' "$base_version" | cut -d. -f2)
           version="${major}.$((minor + n)).0"
 
-          # Only a push to main mints a version. Pull requests and manual
-          # runs build at whatever the tree already says, so their
-          # installers stay honest about what they are.
-          if [ "$EVENT" = "push" ] && [ "$n" -gt 0 ]; then
+          # Only a push to main — or an explicitly opted-in manual run —
+          # mints a version. Pull requests build at whatever the tree
+          # already says, so their installers stay honest about what they
+          # are. The commit-count guard matters in its own right: at zero
+          # commits past the base tag the arithmetic lands back on the base
+          # version, which would overwrite a release that already exists.
+          if [ "$n" -gt 0 ] && { [ "$EVENT" = "push" ] || [ "$FORCE" = "true" ]; }; then
             release=true
           else
             release=false
