@@ -63,3 +63,9 @@ fs2 = "0.4"
 libobs-recorder = { git = "https://github.com/NinjaGoldfinch/libobs-recorder.git" }
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 
+# Full DWARF for our own crate is what fills `target/` — 30k codegen-unit
+# objects at ~500 KB of debug info each, ~8 GB before this. Line tables keep
+# file/line in backtraces and panics; the cost is no variable inspection in
+# lldb, which we don't use on the Rust side.
+[profile.dev]
+debug = "line-tables-only"
