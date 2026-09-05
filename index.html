@@ -234,6 +234,10 @@
               <option value="2">2×</option>
             </select>
           </label>
+          <label id="audio-track-field" hidden>
+            Audio
+            <select id="audio-track-select" aria-label="Audio track"></select>
+          </label>
           <button id="mute-btn" type="button" class="icon-btn" title="Mute">
             🔊
           </button>
@@ -313,6 +317,54 @@
               <option value="longest">Longest first</option>
               <option value="champion">Champion (A&#8211;Z)</option>
             </select>
+          </div>
+        </section>
+
+        <section class="settings-group">
+          <h3>Audio</h3>
+          <div class="setting-row">
+            <div class="setting-copy">
+              <span class="setting-label">What to capture</span>
+              <p class="setting-hint">
+                Your microphone is only ever recorded on a preset that names
+                it.
+              </p>
+            </div>
+            <div
+              class="segmented"
+              id="audio-preset-toggle"
+              role="radiogroup"
+              aria-label="Audio capture"
+            >
+              <button type="button" role="radio" data-audio-preset="game"
+                      aria-checked="true">Game</button>
+              <button type="button" role="radio" data-audio-preset="game_mic"
+                      aria-checked="false">Game + mic</button>
+              <button type="button" role="radio" data-audio-preset="game_mic_discord"
+                      aria-checked="false">Game + mic + Discord</button>
+              <button type="button" role="radio" data-audio-preset="desktop"
+                      aria-checked="false">Desktop</button>
+            </div>
+          </div>
+          <div class="setting-row">
+            <div class="setting-copy">
+              <span class="setting-label">Microphone</span>
+              <p class="setting-hint">
+                &#8220;Windows default&#8221; follows your default
+                communications device, which is what the recorder asks for.
+              </p>
+            </div>
+            <select id="audio-mic-select" aria-label="Microphone" disabled>
+              <option value="">Windows default</option>
+            </select>
+          </div>
+          <div class="setting-block">
+            <span class="setting-label">Tracks</span>
+            <p class="setting-hint">
+              Each recording gets one combined track plus an isolated track
+              per source, so you can mute or extract any of them later.
+            </p>
+            <p id="audio-track-preview" class="callout"></p>
           </div>
         </section>
 

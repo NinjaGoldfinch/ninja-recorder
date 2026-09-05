@@ -331,7 +331,7 @@ dependencies = [
 [[package]]
 name = "build-helper"
 version = "0.1.0"
-source = "git+https://github.com/NinjaGoldfinch/libobs-recorder.git#ee0bb36f4a555bf117417d5b4ad17163949066c5"
+source = "git+https://github.com/NinjaGoldfinch/libobs-recorder.git?branch=multi-track-audio#7c651640e877518735f0af951ad8a4d04259caa8"
 dependencies = [
  "fs_extra",
 ]
@@ -1840,7 +1840,7 @@ dependencies = [
 [[package]]
 name = "intprocess-recorder"
 version = "0.1.0"
-source = "git+https://github.com/NinjaGoldfinch/libobs-recorder.git#ee0bb36f4a555bf117417d5b4ad17163949066c5"
+source = "git+https://github.com/NinjaGoldfinch/libobs-recorder.git?branch=multi-track-audio#7c651640e877518735f0af951ad8a4d04259caa8"
 dependencies = [
  "libobs-sys",
  "serde",
@@ -1849,7 +1849,7 @@ dependencies = [
 [[package]]
 name = "ipc-link"
 version = "0.1.0"
-source = "git+https://github.com/NinjaGoldfinch/libobs-recorder.git#ee0bb36f4a555bf117417d5b4ad17163949066c5"
+source = "git+https://github.com/NinjaGoldfinch/libobs-recorder.git?branch=multi-track-audio#7c651640e877518735f0af951ad8a4d04259caa8"
 dependencies = [
  "intprocess-recorder",
  "log",
@@ -2105,7 +2105,7 @@ dependencies = [
 [[package]]
 name = "libobs-recorder"
 version = "2.0.0"
-source = "git+https://github.com/NinjaGoldfinch/libobs-recorder.git#ee0bb36f4a555bf117417d5b4ad17163949066c5"
+source = "git+https://github.com/NinjaGoldfinch/libobs-recorder.git?branch=multi-track-audio#7c651640e877518735f0af951ad8a4d04259caa8"
 dependencies = [
  "intprocess-recorder",
  "ipc-link",
@@ -2114,7 +2114,7 @@ dependencies = [
 [[package]]
 name = "libobs-sys"
 version = "0.1.0"
-source = "git+https://github.com/NinjaGoldfinch/libobs-recorder.git#ee0bb36f4a555bf117417d5b4ad17163949066c5"
+source = "git+https://github.com/NinjaGoldfinch/libobs-recorder.git?branch=multi-track-audio#7c651640e877518735f0af951ad8a4d04259caa8"
 dependencies = [
  "build-helper",
 ]

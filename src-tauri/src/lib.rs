@@ -1,3 +1,4 @@
+mod audio_tracks;
 mod db;
 #[cfg(feature = "devtools")]
 mod dev;
@@ -8,10 +9,12 @@ mod recorder;
 mod retention;
 mod state_machine;
 
+use recorder::audio::{AudioInputDevice, AudioPreset};
 #[cfg(not(target_os = "windows"))]
 use recorder::stub::StubRecorder;
 use recorder::{RecordConfig, Recorder};
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
@@ -35,6 +38,37 @@ fn recordings_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> 
         .map_err(|e| e.to_string())
 }
 
+/// The bundled ffmpeg, if it was staged into this build.
+///
+/// Optional by design and in two places at once: `LibObsRecorder::stop` uses
+/// it to remux each recording to a seekable file, and `extract_audio_track`
+/// uses it to pull out an audio stem. Neither is allowed to be a hard
+/// dependency — a failed download in CI degrades those features rather than
+/// breaking recording — so both resolve it the same way and handle `None`.
+fn ffmpeg_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        app.path()
+            .resolve("libobs/ffmpeg.exe", tauri::path::BaseDirectory::Resource)
+            .ok()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // Nothing is bundled off Windows, but a locally installed ffmpeg
+        // makes stem extraction testable in the macOS dev loop.
+        let _ = app;
+        which_ffmpeg()
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn which_ffmpeg() -> Option<std::path::PathBuf> {
+    ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .find(|p| p.exists())
+}
+
 #[tauri::command]
 fn start_recording(state: tauri::State<AppState>, app: tauri::AppHandle) -> Result<(), String> {
     let dir = recordings_dir(&app)?;
@@ -44,6 +78,7 @@ fn start_recording(state: tauri::State<AppState>, app: tauri::AppHandle) -> Resu
     let config = RecordConfig {
         output_dir: dir,
         file_stem: format!("recording-{}", chrono_stamp()),
+        audio: state.db.get_audio_preset().map_err(|e| e.to_string())?,
     };
     state
         .recorder
@@ -55,13 +90,13 @@ fn start_recording(state: tauri::State<AppState>, app: tauri::AppHandle) -> Resu
 
 #[tauri::command]
 fn stop_recording(state: tauri::State<AppState>) -> Result<String, String> {
-    let path = state
+    let output = state
         .recorder
         .lock()
         .map_err(|e| e.to_string())?
         .stop()
         .map_err(|e| e.to_string())?;
-    Ok(path.display().to_string())
+    Ok(output.path.display().to_string())
 }
 
 #[tauri::command]
@@ -222,6 +257,72 @@ fn set_ui_pref(state: tauri::State<AppState>, key: String, value: String) -> Res
     state.db.set_ui_pref(&key, &value).map_err(|e| e.to_string())
 }
 
+/// The audio capture preset, read and written through `serde` rather than as
+/// a raw `settings_kv` string like `theme` is.
+///
+/// The distinction matters: a bad theme value looks wrong, but a bad audio
+/// preset changes what gets recorded — including whether the microphone is
+/// live. Validating on this side keeps that decision next to the recorder
+/// that acts on it instead of trusting the frontend.
+#[tauri::command]
+fn get_audio_preset(state: tauri::State<AppState>) -> Result<AudioPreset, String> {
+    state.db.get_audio_preset().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_audio_preset(state: tauri::State<AppState>, preset: AudioPreset) -> Result<(), String> {
+    // Rejected here rather than at record time: the user is looking at the
+    // settings screen right now and can act on the message. Only a `Custom`
+    // layout can actually fail this.
+    preset.layout().validate()?;
+    state
+        .db
+        .set_audio_preset(&preset)
+        .map_err(|e| e.to_string())
+}
+
+/// Audio inputs for the microphone picker, default first. Empty off Windows,
+/// where nothing can be captured anyway.
+#[tauri::command]
+async fn list_audio_inputs() -> Result<Vec<AudioInputDevice>, String> {
+    tauri::async_runtime::spawn_blocking(recorder::devices::list_audio_inputs)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Extracts one audio track out of a recording into a standalone file the
+/// review player can play alongside the (muted) video.
+///
+/// This exists because WebView2 gives us no way to select among the audio
+/// tracks of a single `<video>`: `HTMLMediaElement.audioTracks` sits behind
+/// an experimental Blink flag on a runtime whose version we don't control.
+/// Track 0 is the combined mix and needs none of this — only stem selection
+/// comes through here, so the cost is paid by the rare case.
+///
+/// Cheap despite appearances: `-c copy` on one audio stream rewrites tens of
+/// megabytes, not the multi-gigabyte video. Cached, so switching back to a
+/// stem already extracted is free. See DEVELOPMENT.md §2.5.
+#[tauri::command]
+async fn extract_audio_track(
+    app: tauri::AppHandle,
+    recording_path: String,
+    track_index: usize,
+) -> Result<String, String> {
+    if track_index == 0 {
+        return Err("track 0 is the combined mix and plays from the video itself".into());
+    }
+    let dir = recordings_dir(&app)?;
+    let ffmpeg = ffmpeg_path(&app)
+        .ok_or("ffmpeg was not bundled with this build, so audio stems can't be extracted")?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        audio_tracks::extract(&ffmpeg, &dir, Path::new(&recording_path), track_index)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map(|path| path.display().to_string())
+}
+
 #[derive(serde::Serialize)]
 struct LcuStatus {
     connected: bool,
@@ -312,14 +413,7 @@ pub fn run() {
                 #[cfg(target_os = "windows")]
                 {
                     use tauri::path::BaseDirectory;
-                    // Optional: only used to remux each recording to a
-                    // seekable faststart MP4 on stop (see LibObsRecorder's
-                    // `stop`) — `None` if unstaged rather than failing
-                    // init, since recording itself doesn't depend on it.
-                    let ffmpeg_path = app
-                        .path()
-                        .resolve("libobs/ffmpeg.exe", BaseDirectory::Resource)
-                        .ok();
+                    let ffmpeg = ffmpeg_path(app.handle());
                     // Init failure here (missing/unstaged libobs files, no
                     // usable GPU, etc.) must not take the whole app down —
                     // only recording depends on this. Fall back to a
@@ -330,7 +424,7 @@ pub fn run() {
                         .resolve("libobs/extprocess_recorder.exe", BaseDirectory::Resource)
                         .map_err(|e| e.to_string())
                         .and_then(|path| {
-                            recorder::libobs::LibObsRecorder::new(path, ffmpeg_path)
+                            recorder::libobs::LibObsRecorder::new(path, ffmpeg)
                                 .map_err(|e| e.to_string())
                         });
                     match init {
@@ -473,6 +567,10 @@ pub fn run() {
         open_recordings_folder,
         get_ui_prefs,
         set_ui_pref,
+        get_audio_preset,
+        set_audio_preset,
+        list_audio_inputs,
+        extract_audio_track,
         lcu_status,
         game_state_status
     ]);
@@ -496,6 +594,10 @@ pub fn run() {
         open_recordings_folder,
         get_ui_prefs,
         set_ui_pref,
+        get_audio_preset,
+        set_audio_preset,
+        list_audio_inputs,
+        extract_audio_track,
         lcu_status,
         game_state_status,
         dev::dev_open_portal,

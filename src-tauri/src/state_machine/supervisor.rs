@@ -327,9 +327,16 @@ impl Supervisor {
         }
 
         let started_at_millis = timestamp_millis();
+        // Read the preset per recording rather than caching it at startup:
+        // the user can change what gets captured between games, and the
+        // next game should honour that without a restart.
         let config = RecordConfig {
             output_dir: self.recordings_dir.clone(),
             file_stem: format!("recording-{started_at_millis}"),
+            audio: self.db.get_audio_preset().unwrap_or_else(|e| {
+                eprintln!("[state_machine] could not read the audio preset ({e}), using the default");
+                Default::default()
+            }),
         };
         match self.recorder.lock().unwrap().start(config) {
             Ok(()) => {
@@ -355,7 +362,8 @@ impl Supervisor {
     fn stop_recording(&self) {
         let session = self.session.lock().unwrap().take();
         match self.recorder.lock().unwrap().stop() {
-            Ok(path) => {
+            Ok(output) => {
+                let path = output.path;
                 let markers = session.as_ref().map(|s| s.markers.clone()).unwrap_or_default();
                 let samples = session.as_ref().map(|s| s.samples.clone()).unwrap_or_default();
                 let started_at = session
@@ -365,10 +373,21 @@ impl Supervisor {
                 let path_str = path.display().to_string();
                 let size_bytes = std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0);
 
+                // Serialized from what the backend reports it wrote, not
+                // from the preset we asked for — see `RecordingOutput`.
+                let audio_tracks_json = match serde_json::to_string(&output.audio) {
+                    Ok(json) => Some(json),
+                    Err(e) => {
+                        eprintln!("[state_machine] could not encode the audio track layout: {e}");
+                        None
+                    }
+                };
+
                 let recording_id = match self.db.insert_recording(&db::NewRecording {
                     path: path_str.clone(),
                     started_at,
                     size_bytes,
+                    audio_tracks_json,
                     ..Default::default()
                 }) {
                     Ok(id) => {

@@ -175,6 +175,49 @@ export const COMMANDS: CommandSpec[] = [
     ],
   },
 
+  // --- Audio -------------------------------------------------------
+  {
+    name: "get_audio_preset",
+    group: "Audio",
+    dev: false,
+    description:
+      "The audio capture preset. Unlike the settings_kv prefs, this is parsed and validated backend-side \u2014 it decides what gets recorded.",
+  },
+  {
+    name: "set_audio_preset",
+    group: "Audio",
+    dev: false,
+    danger: true,
+    description:
+      "Chooses what gets captured and how it is split across mp4 audio tracks. Track 0 is always the combined mix.",
+    args: [
+      {
+        name: "preset",
+        kind: "json",
+        help: 'e.g. {"preset":"game_mic_discord"} or {"preset":"game"}',
+        default: { preset: "game" },
+      },
+    ],
+  },
+  {
+    name: "list_audio_inputs",
+    group: "Audio",
+    dev: false,
+    description:
+      "Audio input devices for the microphone picker, default first. Empty off Windows.",
+  },
+  {
+    name: "extract_audio_track",
+    group: "Audio",
+    dev: false,
+    description:
+      "Extracts one audio stem to a cached sidecar so the review player can play it. Rejects track 0, which plays from the video itself.",
+    args: [
+      { name: "recordingPath", kind: "string" },
+      { name: "trackIndex", kind: "number", default: 1 },
+    ],
+  },
+
   // --- League ------------------------------------------------------
   {
     name: "lcu_status",

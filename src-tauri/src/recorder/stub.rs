@@ -3,7 +3,8 @@
 //! the app (state machine, VOD library, review UI) is fully developable
 //! without libobs or Windows. See DEVELOPMENT.md §2.2 and §9.
 
-use super::{RecordConfig, Recorder, RecorderError};
+use super::audio::AudioPreset;
+use super::{RecordConfig, Recorder, RecorderError, RecordingOutput};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -36,7 +37,7 @@ impl Recorder for StubRecorder {
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<PathBuf, RecorderError> {
+    fn stop(&mut self) -> Result<RecordingOutput, RecorderError> {
         let config = self.active.take().ok_or(RecorderError::NotRecording)?;
         thread::sleep(Duration::from_millis(150)); // simulated finalize/mux
 
@@ -52,7 +53,15 @@ impl Recorder for StubRecorder {
                 fs::write(&dest, b"NINJA_RECORDER_STUB_PLACEHOLDER")?;
             }
         }
-        Ok(dest)
+
+        // The fixture has no audio at all (see docs/dev-portal.md's known
+        // limits), so reporting the preset's real layout would be a lie the
+        // review player then renders a stem picker for. One nominal track is
+        // the honest answer and keeps the persisted shape exercised.
+        Ok(RecordingOutput {
+            path: dest,
+            audio: AudioPreset::Game.layout(),
+        })
     }
 
     fn is_recording(&self) -> bool {
@@ -84,13 +93,15 @@ mod tests {
         rec.start(RecordConfig {
             output_dir: dir.clone(),
             file_stem: "test".into(),
+            ..Default::default()
         })
         .unwrap();
         assert!(rec.is_recording());
 
-        let path = rec.stop().unwrap();
+        let output = rec.stop().unwrap();
         assert!(!rec.is_recording());
-        assert!(path.exists());
+        assert!(output.path.exists());
+        assert_eq!(output.audio.tracks.len(), 1);
 
         fs::remove_dir_all(&dir).ok();
     }
@@ -108,12 +119,14 @@ mod tests {
         rec.start(RecordConfig {
             output_dir: dir.clone(),
             file_stem: "test".into(),
+            ..Default::default()
         })
         .unwrap();
 
         let second = rec.start(RecordConfig {
             output_dir: dir.clone(),
             file_stem: "test2".into(),
+            ..Default::default()
         });
         assert!(matches!(second, Err(RecorderError::AlreadyRecording)));
 

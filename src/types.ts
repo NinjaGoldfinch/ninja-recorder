@@ -19,6 +19,50 @@ export interface RecordingRow {
   patch: string | null;
   pinned: boolean;
   size_bytes: number;
+  /// JSON-encoded `AudioLayout`, or null when the layout is unknown —
+  /// every recording made before multi-track audio, and anything a rescan
+  /// imported from a file we didn't record.
+  audio_tracks_json: string | null;
+}
+
+/** One capturable audio source. Mirrors Rust's `AudioSourceKind`. */
+export type AudioSourceKind =
+  | { kind: "game" }
+  | { kind: "desktop" }
+  | { kind: "microphone"; device_id?: string }
+  | { kind: "application"; exe: string };
+
+/** One audio track in the mp4. Track 0 is always the combined mix. */
+export interface AudioTrackSpec {
+  label: string;
+  /** Indices into the layout's `sources`. */
+  sources: number[];
+}
+
+export interface AudioLayout {
+  sources: AudioSourceKind[];
+  tracks: AudioTrackSpec[];
+}
+
+/**
+ * What the user picked in Settings. Mirrors Rust's `AudioPreset`, which is
+ * serde-tagged on `preset` — the backend validates it, so this type only has
+ * to describe the shape, not enforce it.
+ */
+export type AudioPreset =
+  | { preset: "game" }
+  | { preset: "game_mic"; mic_device_id?: string }
+  | { preset: "game_mic_discord"; mic_device_id?: string }
+  | { preset: "desktop" }
+  | { preset: "custom"; sources: AudioSourceKind[]; tracks: AudioTrackSpec[] };
+
+/** A preset the settings screen can offer as a single button. */
+export type AudioPresetKey = "game" | "game_mic" | "game_mic_discord" | "desktop";
+
+export interface AudioInputDevice {
+  id: string;
+  name: string;
+  is_default: boolean;
 }
 
 export interface MarkerRow {

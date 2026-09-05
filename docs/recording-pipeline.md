@@ -171,7 +171,7 @@ continues, because losing the footage is worse than losing its metadata.
 flowchart TB
     A["Recorder::stop()"] --> B{"ok?"}
     B -->|"no"| Z["log; keep last_finalized empty"]
-    B -->|"yes"| C["stat file for size_bytes"]
+    B -->|"yes"| C["stat file for size_bytes<br/><small>+ serialize the reported audio layout</small>"]
     C --> D["db.insert_recording"]
     D -->|"err"| E["log; recording_id = None<br/><small>UI shows DB WRITE FAILED</small>"]
     D -->|"ok"| F["insert_markers"]

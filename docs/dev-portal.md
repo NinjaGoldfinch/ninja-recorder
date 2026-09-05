@@ -117,6 +117,10 @@ app writes to.
   Review-ready preset copies `fixtures/sample.mp4` instead — a synthetic
   6-second clip checked in for this purpose (see `fixtures/README.md`). It has
   no audio track, so the player's mute and volume controls still cannot be
-  exercised against it.
+  exercised against it — and neither can stem playback. The Seed panel does
+  write varied `audio_tracks_json` layouts across the seeded rows, so the stem
+  *picker* renders (including the single-track case, where it must not appear
+  at all); selecting a stem then fails at extraction, since there is no audio
+  to extract.
 - **Retention fixtures use sparse files**, so a 3 GiB recording costs a few
   hundred bytes of real disk.

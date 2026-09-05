@@ -9,6 +9,7 @@ pub mod reconcile;
 
 use rusqlite::{params, Connection, OptionalExtension};
 use rusqlite_migration::{Migrations, M};
+use crate::recorder::audio::AudioPreset;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -33,12 +34,23 @@ pub enum DbError {
         "database schema is v{found}, but this build only knows v{expected} —          it was created by a newer build of the app"
     )]
     SchemaTooNew { found: i64, expected: i64 },
+    /// A value we were asked to persist couldn't be turned into JSON. Only
+    /// reachable for the audio preset, and only if `serde_json` fails on a
+    /// type that derives `Serialize` — i.e. effectively never, but it isn't
+    /// worth an `unwrap` on the write path for a user preference.
+    #[error("could not encode a setting: {0}")]
+    Encode(String),
 }
 
 /// The migration list, paired with its own length. Bundled rather than
 /// kept as a separate constant so the "how many migrations does this build
 /// know about" number can't drift from the list it describes — that number
 /// is what `init` compares `PRAGMA user_version` against.
+/// `settings_kv` key holding the JSON `AudioPreset`. Lives in the same
+/// unseeded store as `theme` — a missing key means "use the default", which
+/// is what keeps adding a preference a zero-migration change.
+const AUDIO_PRESET_KEY: &str = "audio_preset";
+
 static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
     let migrations = vec![M::up(
         "
@@ -130,6 +142,23 @@ static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
             value TEXT NOT NULL
         );
         ",
+    ), M::up(
+        "
+        -- Which audio source landed on which mp4 audio track, as the JSON
+        -- form of `recorder::audio::AudioLayout`: track 0 is the combined
+        -- mix, tracks after it are isolated stems (DEVELOPMENT.md §2.5).
+        --
+        -- Nullable, and that is the interesting case: every row that
+        -- predates this column, plus anything `reconcile` imports from a
+        -- file it did not record, genuinely has an unknown layout. NULL
+        -- means 'unknown', which the review player renders as no stem
+        -- picker rather than as a guess.
+        --
+        -- Stored as JSON rather than a child table because it is read-only,
+        -- always read whole, never queried by predicate, and at most six
+        -- rows long.
+        ALTER TABLE recordings ADD COLUMN audio_tracks_json TEXT;
+        ",
     )];
     let count = migrations.len() as i64;
     (Migrations::new(migrations), count)
@@ -151,6 +180,10 @@ pub struct NewRecording {
     pub patch: Option<String>,
     pub pinned: bool,
     pub size_bytes: i64,
+    /// JSON `recorder::audio::AudioLayout`. `None` = unknown, and stays
+    /// unknown: the upsert COALESCEs rather than overwrites, so `reconcile`
+    /// passing `None` here can't erase a layout the recorder already wrote.
+    pub audio_tracks_json: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -193,6 +226,9 @@ pub struct RecordingRow {
     pub patch: Option<String>,
     pub pinned: bool,
     pub size_bytes: i64,
+    /// JSON `recorder::audio::AudioLayout`. `None` = unknown, which is the
+    /// right answer for a file we did not record.
+    pub audio_tracks_json: Option<String>,
 }
 
 /// Disk retention policy (DEVELOPMENT.md §6): `None` means that
@@ -247,6 +283,7 @@ fn row_to_recording(row: &rusqlite::Row) -> rusqlite::Result<RecordingRow> {
         patch: row.get(12)?,
         pinned: row.get(13)?,
         size_bytes: row.get(14)?,
+        audio_tracks_json: row.get(15)?,
     })
 }
 
@@ -321,8 +358,9 @@ impl Db {
         conn.query_row(
             "INSERT INTO recordings
                 (path, started_at, duration_s, game_id, queue, champion, role,
-                 win, kda_k, kda_d, kda_a, patch, pinned, size_bytes)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                 win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
+                 audio_tracks_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
              ON CONFLICT(path) DO UPDATE SET
                 started_at = excluded.started_at,
                 duration_s = excluded.duration_s,
@@ -336,7 +374,13 @@ impl Db {
                 kda_a      = excluded.kda_a,
                 patch      = excluded.patch,
                 pinned     = excluded.pinned,
-                size_bytes = excluded.size_bytes
+                size_bytes = excluded.size_bytes,
+                -- COALESCE, not a plain overwrite: `reconcile` upserts on
+                -- `path` with an all-default row, so a rescan landing after
+                -- a finalize would otherwise erase the track layout the
+                -- recorder just established. A NULL never wins here.
+                audio_tracks_json =
+                    COALESCE(excluded.audio_tracks_json, recordings.audio_tracks_json)
              RETURNING id",
             params![
                 new.path,
@@ -353,6 +397,7 @@ impl Db {
                 new.patch,
                 new.pinned,
                 new.size_bytes,
+                new.audio_tracks_json,
             ],
             |row| row.get(0),
         )
@@ -443,7 +488,8 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, path, started_at, duration_s, game_id, queue, champion, role,
-                    win, kda_k, kda_d, kda_a, patch, pinned, size_bytes
+                    win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
+                    audio_tracks_json
              FROM recordings ORDER BY started_at DESC",
         )?;
         let rows = stmt.query_map([], row_to_recording)?;
@@ -537,7 +583,8 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
             "SELECT id, path, started_at, duration_s, game_id, queue, champion, role,
-                    win, kda_k, kda_d, kda_a, patch, pinned, size_bytes
+                    win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
+                    audio_tracks_json
              FROM recordings WHERE id = ?1",
             [id],
             row_to_recording,
@@ -565,6 +612,40 @@ impl Db {
             params![key, value],
         )?;
         Ok(())
+    }
+
+    /// The audio capture preset, read through `serde` rather than as a raw
+    /// `settings_kv` string.
+    ///
+    /// Unlike `theme`, a value we can't parse here doesn't just look wrong —
+    /// it decides what gets recorded, including whether a microphone is
+    /// live. So the fallback is explicit and loud rather than silent: an
+    /// unreadable row records game audio only, which is the safe answer, and
+    /// says so on stderr.
+    pub fn get_audio_preset(&self) -> Result<AudioPreset, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings_kv WHERE key = ?1",
+                [AUDIO_PRESET_KEY],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        Ok(match raw {
+            None => AudioPreset::default(),
+            Some(json) => serde_json::from_str(&json).unwrap_or_else(|e| {
+                eprintln!(
+                    "[db] unreadable {AUDIO_PRESET_KEY} preference ({e}), recording game audio only: {json}"
+                );
+                AudioPreset::default()
+            }),
+        })
+    }
+
+    pub fn set_audio_preset(&self, preset: &AudioPreset) -> Result<(), DbError> {
+        let json = serde_json::to_string(preset).map_err(|e| DbError::Encode(e.to_string()))?;
+        self.set_ui_pref(AUDIO_PRESET_KEY, &json)
     }
 }
 
@@ -850,6 +931,102 @@ mod tests {
         let prefs = db.get_ui_prefs().unwrap();
         assert_eq!(prefs.get("theme").map(String::as_str), Some("dark"));
         assert_eq!(prefs.get("defaultSort").map(String::as_str), Some("champion"));
+    }
+
+    #[test]
+    fn audio_preset_defaults_to_game_when_unset() {
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(db.get_audio_preset().unwrap(), AudioPreset::Game);
+    }
+
+    #[test]
+    fn audio_preset_round_trips_through_settings_kv() {
+        let db = Db::open_in_memory().unwrap();
+        let preset = AudioPreset::GameMicDiscord {
+            mic_device_id: Some("{0.0.1.00000000}.{abc}".into()),
+        };
+        db.set_audio_preset(&preset).unwrap();
+        assert_eq!(db.get_audio_preset().unwrap(), preset);
+    }
+
+    /// A hand-edited or corrupt row must not decide to record a microphone,
+    /// and must not take the app down either — it falls back to the default.
+    #[test]
+    fn an_unparseable_audio_preset_falls_back_to_the_default() {
+        let db = Db::open_in_memory().unwrap();
+        db.set_ui_pref(AUDIO_PRESET_KEY, "{not json").unwrap();
+        assert_eq!(db.get_audio_preset().unwrap(), AudioPreset::Game);
+    }
+
+    #[test]
+    fn audio_tracks_json_round_trips_through_insert_and_list() {
+        let db = Db::open_in_memory().unwrap();
+        let layout = AudioPreset::GameMic { mic_device_id: None }.layout();
+        let json = serde_json::to_string(&layout).unwrap();
+
+        db.insert_recording(&NewRecording {
+            path: "/game.mp4".into(),
+            started_at: 1,
+            audio_tracks_json: Some(json.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let rows = db.list_recordings().unwrap();
+        assert_eq!(rows[0].audio_tracks_json.as_deref(), Some(json.as_str()));
+
+        let parsed: crate::recorder::audio::AudioLayout =
+            serde_json::from_str(rows[0].audio_tracks_json.as_ref().unwrap()).unwrap();
+        assert_eq!(parsed, layout);
+    }
+
+    /// `reconcile` upserts on `path` with an all-default row. If the upsert
+    /// overwrote instead of COALESCEing, a rescan landing after a finalize
+    /// would erase the track layout and the review player would lose its
+    /// stem picker for that VOD.
+    #[test]
+    fn a_rescan_upsert_cannot_erase_a_known_audio_layout() {
+        let db = Db::open_in_memory().unwrap();
+        let json = serde_json::to_string(&AudioPreset::GameMic { mic_device_id: None }.layout())
+            .unwrap();
+
+        let id = db
+            .insert_recording(&NewRecording {
+                path: "/game.mp4".into(),
+                started_at: 1,
+                audio_tracks_json: Some(json.clone()),
+                ..Default::default()
+            })
+            .unwrap();
+
+        // Exactly what reconcile writes for a file it re-imports.
+        let same_id = db
+            .insert_recording(&NewRecording {
+                path: "/game.mp4".into(),
+                started_at: 2,
+                ..Default::default()
+            })
+            .unwrap();
+
+        assert_eq!(same_id, id);
+        let row = db.get_recording(id).unwrap().unwrap();
+        assert_eq!(row.started_at, 2, "the rest of the row should still update");
+        assert_eq!(row.audio_tracks_json.as_deref(), Some(json.as_str()));
+    }
+
+    /// A row that predates migration 5, or any file `reconcile` imported,
+    /// genuinely has an unknown layout — NULL, not a guess.
+    #[test]
+    fn a_recording_with_no_known_audio_layout_reads_back_as_none() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db
+            .insert_recording(&NewRecording {
+                path: "/imported.mp4".into(),
+                started_at: 1,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(db.get_recording(id).unwrap().unwrap().audio_tracks_json.is_none());
     }
 
     #[test]
