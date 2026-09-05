@@ -18,6 +18,13 @@ license = "GPL-2.0-only"
 name = "ninja_recorder_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# CI probe: an unused, off-by-default feature and nothing else. No code, no
+# dependency, no lockfile change. Declaring it alters `cargo metadata`,
+# which is what Swatinem/rust-cache actually hashes — so this changes the
+# cache key while leaving every source file identical to main.
+[features]
+devtools = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
