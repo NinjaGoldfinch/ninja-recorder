@@ -1,101 +1,189 @@
 # ninja-recorder
 
-A lightweight League of Legends VOD recorder for Windows. Automatically records your games, tags the VOD timeline with in-game events (kills, deaths, objectives), and provides a review player built for improvement — with YouTube upload and native replay (`.rofl`) support planned.
+A lightweight League of Legends VOD recorder for Windows. It records your
+games automatically, tags the timeline with in-game events — kills, deaths,
+dragons, barons, turrets — and gives you a review player built for improving,
+not for editing.
 
-> **Status:** Usable on Windows, pre-1.0. Recording, event markers, the VOD
-> library and the review player are all built and running (phases 1–7 and 9),
-> and installers ship from the [Releases](../../releases) page. Two caveats
-> worth knowing before you install: builds are unsigned, so SmartScreen warns
-> on first run, and the libobs capture backend has not yet been verified
-> against a real Vanguard-protected game — that's phase 8, and it's the gate on
-> calling this ready. YouTube upload and `.rofl` support are not started.
+No OBS to install. No scenes to configure. No injection into the game, ever.
+
+> **Status: pre-1.0, usable on Windows.** Recording, event markers, the VOD
+> library, the review player and disk retention are all built and running, and
+> installers ship from the [Releases](../../releases) page. Two caveats before
+> you install: builds are **unsigned**, so SmartScreen warns on first run, and
+> the libobs capture backend **has not yet been verified against a real
+> Vanguard-protected game** — see
+> [docs/windows-verification.md](docs/windows-verification.md) for exactly
+> what that check involves.
+
+---
+
+## What it does
+
+```mermaid
+flowchart LR
+    A["You launch<br/>League"] --> B["App detects the client<br/><small>lockfile</small>"]
+    B --> C["Game starts<br/><small>gameflow phase</small>"]
+    C --> D["Recording starts<br/><small>WGC capture,<br/>hardware encode</small>"]
+    D --> E["Events become markers<br/><small>Live Client Data @ 1 Hz</small>"]
+    E --> F["Game ends"]
+    F --> G["Tagged VOD in<br/>your library"]
+    G --> H["Review player:<br/>jump to any death"]
+    style A fill:#e8f5e9,stroke:#2e7d32
+    style H fill:#ede7f6,stroke:#5e35b1
+```
+
+You do not press a button anywhere in that chain.
 
 ## Why
 
-- **Zero-config recording** — detects when a game starts via the League Client API and records automatically. No OBS setup, no scene configuration.
-- **Event-tagged VODs** — every kill, death, dragon, baron, and turret becomes a marker on the timeline. Jump straight to your deaths. Clip the teamfight.
-- **Lightweight** — Tauri shell (~10 MB, uses OS WebView2) + embedded libobs. No Electron, no bundled Chromium.
-- **Vanguard-safe by design** — capture uses Windows Graphics Capture (WGC) only. No process injection, no hooks, no memory reading. Ever.
+- **Zero-config recording.** The League Client API tells the app when a game
+  starts. That's the whole trigger.
+- **Event-tagged VODs.** Every kill, death, dragon, baron, herald and turret
+  becomes a marker on the timeline. Jump straight to your deaths. Clip the
+  teamfight. A per-second advantage curve sits under the markers.
+- **Lightweight.** A Tauri shell (~10 MB, uses the OS webview) plus embedded
+  libobs. No Electron, no bundled Chromium. Idle RAM and install size are
+  tracked targets, not vibes.
+- **Vanguard-safe by design.** Capture is Windows Graphics Capture only. No
+  process injection, no API hooks, no memory reading. This is not a setting.
+- **It won't eat your SSD.** 1080p60 at 8 Mbps is ~3.5 GB/hour. Retention
+  ships on by default (50 GiB / 30 days), with pinning for the games you want
+  to keep and a preview of what a tightened policy would delete before you
+  save it.
 
-## Architecture
+## Install
 
+Grab the installer for your platform from
+[Releases](../../releases).
+
+- **Windows** — NSIS installer. This is the real target: it includes the
+  libobs capture backend.
+- **macOS** — `.dmg`. A development convenience only; it ships the *stub*
+  recorder and cannot capture a game. Real capture is Windows-only by
+  constraint, not by omission.
+
+Both are unsigned, so Windows SmartScreen and macOS Gatekeeper will warn on
+first run.
+
+## Architecture in one picture
+
+```mermaid
+flowchart TB
+    subgraph L["League of Legends"]
+        LCU["LCU API<br/><small>lockfile auth</small>"]
+        LIVE["Live Client Data API<br/><small>port 2999</small>"]
+    end
+    subgraph App["ninja-recorder — one Tauri v2 process"]
+        subgraph Core["Rust core"]
+            SM["Game state machine<br/><small>pure transitions + async supervisor</small>"]
+            EV["Event → marker pipeline"]
+            REC["Recorder trait<br/><small>libobs (Windows) · stub (dev)</small>"]
+            DB["SQLite library<br/><small>+ retention policy</small>"]
+        end
+        UI["Webview frontend<br/><small>library · review player · settings</small>"]
+    end
+    MP4["MP4 files on disk"]
+
+    LCU -->|"phase changes"| SM
+    LIVE -->|"1 Hz snapshots"| EV
+    SM --> REC
+    EV --> DB
+    REC --> MP4
+    SM --> DB
+    DB <--> UI
+    MP4 -->|"asset protocol"| UI
 ```
-┌─────────────────────────────────────────────────┐
-│ Tauri v2 app                                    │
-│                                                 │
-│  ┌───────────────┐   ┌──────────────────────┐   │
-│  │ Rust core     │   │ WebView2 frontend    │   │
-│  │               │   │                      │   │
-│  │ LCU client ───┼──▶│ VOD library UI       │   │
-│  │ Live Client   │   │ Review player        │   │
-│  │   Data poller │   │  (<video> + marker   │   │
-│  │ Game state    │   │   timeline)          │   │
-│  │   machine     │   │                      │   │
-│  │ Recorder trait│   └──────────────────────┘   │
-│  │  ├ libobs (Win)                              │
-│  │  └ stub (dev/macOS)                          │
-│  │ SQLite (VOD metadata + markers)              │
-│  └───────────────┘                              │
-└─────────────────────────────────────────────────┘
-```
 
-- **Capture:** [libobs](https://github.com/obsproject/obs-studio) embedded as a library (not OBS-the-app, no user install), driven programmatically. WGC window capture + hardware encode (NVENC/AMF/QSV).
-- **Game detection:** LCU API (`/lol-gameflow/v1/gameflow-phase`) triggers record start/stop.
-- **Events:** Live Client Data API (`https://127.0.0.1:2999`) polled ~1 Hz during games; events become timeline markers.
-- **Storage:** MP4 files on disk + SQLite rows (match metadata, markers, file paths).
+- **Capture:** [libobs](https://github.com/obsproject/obs-studio) embedded as
+  a library — not OBS-the-app, nothing for the user to install — driven
+  programmatically. WGC window capture plus hardware encode (NVENC/AMF/QSV).
+- **Game detection:** the LCU's gameflow phase, over its WebSocket where
+  available, polling as a fallback.
+- **Events:** the Live Client Data API at `https://127.0.0.1:2999`, polled at
+  1 Hz during games.
+- **Storage:** MP4s on disk are the source of truth; SQLite holds match
+  metadata, markers and the advantage samples.
 
-See [DEVELOPMENT.md](DEVELOPMENT.md) for the full design doc: constraints, API details, capture design, risks, and the reasoning behind each decision.
+Full detail, with the runtime sequence and every diagram:
+**[docs/](docs/)**.
 
-## Roadmap
+## Documentation
 
-Tracked as GitHub issues — each phase is an issue.
-
-| Phase | What | Platform | Status |
-|---|---|---|---|
-| 1 | Scaffold Tauri v2 project, `Recorder` trait + stub backend | macOS/any | done |
-| 2 | LCU client: lockfile discovery, gameflow polling, match metadata | macOS/any | done |
-| 3 | Live Client Data poller + event → marker pipeline (with fixture recording) | macOS/any | done |
-| 4 | SQLite VOD library + data model | macOS/any | done |
-| 5 | Review UI: player, marker timeline, VOD browser | macOS/any | done |
-| 6 | libobs capture backend (WGC + hardware encode) | **Windows** | built, unverified |
-| 7 | GitHub Actions: test + build installers on every push/PR, draft release per commit on `main` | CI | done |
-| 8 | Integration test on real hardware + Vanguard verification | **Windows** | **next** |
-| 9 | Disk retention policy (max size / max age / pinned VODs) | any | done |
-| 10 | YouTube upload (OAuth desktop flow, resumable upload) | any | not started |
-| 11 | ROFL replay download alongside video | any | not started |
-
-"Built, unverified" for phase 6 is load-bearing: the capture path compiles, bundles
-and records, but has never run against a real Vanguard-protected game. See
-[docs/phase-8-runbook.md](docs/phase-8-runbook.md) for what that check involves.
+| Document | What it covers |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | Components, module map, the `Recorder` trait boundary |
+| [docs/recording-pipeline.md](docs/recording-pipeline.md) | The core workflow end to end: state machine, events → markers, finalize |
+| [docs/data-model.md](docs/data-model.md) | Schema, migrations, reconciliation, retention |
+| [docs/frontend.md](docs/frontend.md) | Module ownership, views, IPC surface, theming |
+| [docs/dev-portal.md](docs/dev-portal.md) | Driving the backend without League running |
+| [docs/ci-and-releases.md](docs/ci-and-releases.md) | CI job graph, versioning, releases |
+| [docs/windows-verification.md](docs/windows-verification.md) | The hardware checklist that closes the unverified-capture gap |
+| [docs/product-design.md](docs/product-design.md) | The product, the decisions behind it, and how it was actually built |
+| [DEVELOPMENT.md](DEVELOPMENT.md) | The *why*: constraints, decisions, alternatives rejected, risks |
 
 ## Development
 
-Primary development happens on macOS against the stub recorder (League runs natively on macOS and both local APIs behave identically — Practice Tool generates real events). The capture backend is developed on Windows via `cargo run`; installers are produced by CI, not built locally.
-
 ```bash
-# prerequisites: Rust stable, Node.js
 npm install
 npm run tauri:dev
 ```
 
-`tauri:dev`, not `tauri dev` — it passes `--features devtools`, which compiles in
-the dev portal: a second window that seeds the library, drives the state machine
-without League running, dry-runs the retention policy and runs raw SQL. Most of
-the backend can only be exercised through it. See
-[DEVELOPMENT.md §10](DEVELOPMENT.md#10-dev-portal).
+Prerequisites: Rust stable and Node.js.
 
-The Rust project lives at `src-tauri/Cargo.toml`, not the repo root — bare
-`cargo` commands (`cargo check`, `cargo test`) must be run from `src-tauri/`,
-e.g. `cd src-tauri && cargo test`. `npm run tauri:dev` handles this for you
-from the repo root.
+**`tauri:dev`, not `tauri dev`** — the colon matters. It passes
+`--features devtools`, which compiles in the dev portal: a second window that
+seeds the library, drives the state machine without League running, dry-runs
+the retention policy and runs raw SQL. Most of the backend can only be
+exercised through it. See [docs/dev-portal.md](docs/dev-portal.md).
+
+**The Rust project lives at `src-tauri/`, not the repo root.** Bare `cargo`
+commands must be run from there:
+
+```bash
+cd src-tauri && cargo test
+cd src-tauri && cargo clippy --all-targets -- -D warnings
+```
+
+`npm run tauri:dev` handles that for you from the repo root.
+
+### Where work happens
+
+| Layer | Where | Loop |
+|---|---|---|
+| LCU, Live Client Data, state machine | macOS, native — League runs on macOS and both local APIs behave identically | seconds |
+| VOD library, review UI | macOS, stub recorder + fixture MP4s | seconds |
+| Capture backend | Windows box, `cargo run` | seconds |
+| Full integration + Vanguard check | Windows, CI-built installer | occasional |
+
+Installers are produced by CI, never built locally and never cross-compiled —
+libobs linking, DLL bundling and installer generation from macOS is a fight
+with no payoff.
 
 ## Non-negotiable constraints
 
-1. **No injection.** OBS "Game Capture" style hooking is permanently off the table — Riot Vanguard is a kernel anti-cheat and DLL injection is exactly what it exists to stop. WGC/display capture only.
-2. **Official APIs only.** LCU + Live Client Data. No memory reading, no packet sniffing.
-3. **Lightweight is a feature.** Idle RAM and install size are tracked, not vibes.
+1. **No injection.** OBS "Game Capture"–style hooking is permanently off the
+   table. Riot Vanguard is a kernel anti-cheat and DLL injection is exactly
+   what it exists to stop. WGC and display capture only.
+2. **Official APIs only.** LCU and Live Client Data. No memory reading, no
+   packet sniffing.
+3. **Lightweight is a feature.** Idle RAM and install size are measured
+   against targets, not asserted.
+
+Anything that would violate these is not a trade-off to weigh — it is out of
+scope. The reasoning is in
+[DEVELOPMENT.md §1](DEVELOPMENT.md#1-hard-constraints).
+
+## Not built
+
+- **YouTube upload.** Design notes exist ([DEVELOPMENT.md §7](DEVELOPMENT.md#7-youtube-upload-designed-not-built)),
+  including the quota reality that makes auto-upload a non-starter.
+- **`.rofl` replay download.** Also designed, not implemented
+  ([DEVELOPMENT.md §8](DEVELOPMENT.md#8-rofl-replays-designed-not-built)).
 
 ## License
 
-GPL-2.0-only. The capture backend (Phase 6) embeds [libobs](https://github.com/obsproject/obs-studio) (GPLv2),
-which obligates the whole distributed binary — this isn't a preference, it's inherited from that dependency.
+GPL-2.0-only. The capture backend embeds
+[libobs](https://github.com/obsproject/obs-studio) (GPLv2), which obligates
+the whole distributed binary. That is inherited from the dependency, not a
+preference.

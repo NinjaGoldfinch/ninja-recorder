@@ -35,9 +35,9 @@ const MARKER_PRIORITY = [
   "assist",
 ];
 
-// Real per-recording frame rate isn't probed anywhere yet (that's an
-// encoder-config concern for Phase 6) — 1/30s is a reasonable
-// approximation for review purposes, not frame-exact.
+// Real per-recording frame rate isn't probed anywhere yet (it's a
+// capture-backend concern) — 1/30s is a reasonable approximation for
+// review purposes, not frame-exact.
 const FRAME_SECONDS = 1 / 30;
 
 let backBtn: HTMLButtonElement | null;

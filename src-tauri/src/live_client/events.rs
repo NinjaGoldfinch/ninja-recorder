@@ -271,7 +271,7 @@ pub struct Marker {
     pub game_time_s: f64,
     /// Structured detail specific to the marker kind (killer/victim/dragon
     /// type/etc.) — matches the `payload_json` column planned in
-    /// DEVELOPMENT.md §4 so this serializes straight into the DB in Phase 4.
+    /// DEVELOPMENT.md §4, so this serializes straight into the DB.
     pub payload: serde_json::Value,
 }
 

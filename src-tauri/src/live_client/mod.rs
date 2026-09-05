@@ -8,8 +8,8 @@ pub mod poller;
 pub use client::LiveClientDataClient;
 pub use events::{team_diff, AllGameData, Marker, MarkerTracker, TeamDiff, TimeAlignment};
 
-// Re-exported for future consumers (Phase 4 VOD library, Phase 5 review
-// UI) — not used internally yet.
+// Re-exported for consumers outside this module (the supervisor, the dev
+// portal) — not used internally.
 #[allow(unused_imports)]
 pub use client::LiveClientError;
 #[allow(unused_imports)]

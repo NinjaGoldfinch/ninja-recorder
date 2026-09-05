@@ -73,7 +73,7 @@ static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
         ",
     ), M::up(
         "
-        -- Single-row settings table (Phase 9 / DEVELOPMENT.md §6). Defaults
+        -- Single-row settings table (DEVELOPMENT.md §6). Defaults
         -- to 50 GiB / 30 days rather than unlimited: disk retention is a
         -- launch feature specifically because unbounded capture fills an
         -- SSD in weeks, so it should protect the user out of the box, not
@@ -195,7 +195,7 @@ pub struct RecordingRow {
     pub size_bytes: i64,
 }
 
-/// Disk retention policy (Phase 9 / DEVELOPMENT.md §6): `None` means that
+/// Disk retention policy (DEVELOPMENT.md §6): `None` means that
 /// dimension is unbounded. Mirrors the single-row `settings` table.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct RetentionPolicy {
@@ -460,7 +460,7 @@ impl Db {
     }
 
     /// Markers for one recording, ordered by position in the video —
-    /// what the review timeline (Phase 5) renders.
+    /// what the review timeline renders.
     pub fn get_markers(&self, recording_id: i64) -> Result<Vec<MarkerRow>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -640,7 +640,7 @@ mod tests {
         assert_eq!(rows[0].id, id);
         assert_eq!(rows[0].path, "/recordings/one.mp4");
         assert_eq!(rows[0].size_bytes, 12345);
-        assert_eq!(rows[0].pinned, false);
+        assert!(!rows[0].pinned);
         assert_eq!(rows[0].champion, None);
     }
 
@@ -834,7 +834,7 @@ mod tests {
     #[test]
     fn missing_ui_pref_is_absent_not_an_error() {
         let db = Db::open_in_memory().unwrap();
-        assert!(db.get_ui_prefs().unwrap().get("never-set").is_none());
+        assert!(!db.get_ui_prefs().unwrap().contains_key("never-set"));
     }
 
     #[test]

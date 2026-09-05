@@ -86,7 +86,7 @@ fn rescan_recordings(state: tauri::State<AppState>) -> Result<db::reconcile::Rec
     db::reconcile::reconcile(&state.db, &state.recordings_dir).map_err(|e| e.to_string())
 }
 
-/// Markers for the review timeline (Phase 5).
+/// Markers for the review timeline.
 #[tauri::command]
 fn get_recording_markers(
     state: tauri::State<AppState>,
@@ -119,7 +119,7 @@ struct DiskUsage {
     free_bytes: i64,
 }
 
-/// Usage summary for the library UI (Phase 9 / DEVELOPMENT.md §6) — shown
+/// Usage summary for the library UI (DEVELOPMENT.md §6) — shown
 /// alongside the retention policy so nothing gets deleted as a surprise.
 #[tauri::command]
 fn get_disk_usage(state: tauri::State<AppState>) -> Result<DiskUsage, String> {
@@ -231,8 +231,8 @@ struct LcuStatus {
 }
 
 /// One-shot LCU status check for the dev panel: is the client running, and
-/// if so, what's its current gameflow phase / summoner. Phase 3's state
-/// machine is what keeps this live continuously via `lcu::gameflow::watch`;
+/// if so, what's its current gameflow phase / summoner. The state machine
+/// is what keeps this live continuously via `lcu::gameflow::watch`;
 /// this command is just a smoke test that the client + auth + parsing work.
 #[tauri::command]
 async fn lcu_status() -> LcuStatus {
@@ -284,7 +284,7 @@ async fn lcu_status() -> LcuStatus {
 }
 
 /// Timestamp for default filenames. Only used by the manual dev-panel
-/// start button now — the state machine (Phase 3) has its own copy since
+/// start button now — the state machine has its own copy since
 /// it drives recording independently, from gameflow events rather than a
 /// button click.
 fn chrono_stamp() -> u128 {
@@ -403,7 +403,7 @@ pub fn run() {
                 Err(e) => eprintln!("[db] startup reconcile failed: {e}"),
             }
 
-            // Retention (Phase 9 / DEVELOPMENT.md §6): enforced here and
+            // Retention (DEVELOPMENT.md §6): enforced here and
             // again after every finalize (state_machine::supervisor), so a
             // policy set while the app was closed — or last session's
             // finalize enforcement never running because the app crashed

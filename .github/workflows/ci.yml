@@ -4,28 +4,29 @@ on:
   push:
     branches: [main]
   pull_request:
-  # So the full matrix — including the devtools bundle below, which pull
-  # requests skip — can be exercised from a branch before it is merged.
-  # A manual run only builds unless `draft_release` is set, which is both
-  # how the draft path gets tested off main and the escape hatch for
-  # re-cutting a draft from a commit whose own run was lost.
+  # Pull requests run `test` only (see `build` below), so a manual run is
+  # how the full matrix — including the devtools bundle — gets exercised
+  # from a branch before it is merged. A manual run only builds unless
+  # `publish_release` is set, which is both how the release path gets
+  # tested off main and the escape hatch for re-cutting a release from a
+  # commit whose own run was lost.
   workflow_dispatch:
     inputs:
-      draft_release:
-        description: "Mint a version and leave a draft release"
+      publish_release:
+        description: "Mint a version and publish a release"
         type: boolean
         default: false
 
 # Superseded pull-request runs are cancelled, which is most of the minute
 # saving. Pushes to main are deliberately NOT grouped together: each one
-# owes a draft release, so cancelling an in-flight run because a second
-# commit landed would silently drop that commit's build.
+# owes a release, so cancelling an in-flight run because a second commit
+# landed would silently drop that commit's build.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Every push to main gets its own draft release, so the version has to be
+  # Every push to main gets its own release, so the version has to be
   # settled before anything compiles: it is baked into the binary, the
   # installer filename and the About block, and a version chosen after the
   # build would disagree with all three.
@@ -33,13 +34,15 @@ jobs:
   # It is derived from the commit's distance to the newest real tag rather
   # than "highest version seen, plus one". That makes it a pure function of
   # the commit: two pushes landing at once cannot claim the same version,
-  # and re-running a commit updates its own draft instead of minting a
-  # second one. Draft releases carry no git tag until somebody publishes
-  # them, which is exactly what holds the base still while drafts pile up
-  # — publish one and it becomes the new base, so the count restarts from
-  # a higher minor and the sequence stays monotonic either way.
+  # and re-running a commit updates its own release instead of minting a
+  # second one. Publishing creates the tag, so the next commit measures
+  # from it and the count restarts from a higher minor — the sequence stays
+  # monotonic whether or not any given run reaches the release step.
+  #
+  # Skipped entirely on pull requests, which neither build nor release.
   version:
     name: Version
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.pick.outputs.version }}
@@ -55,7 +58,7 @@ jobs:
         id: pick
         env:
           EVENT: ${{ github.event_name }}
-          FORCE: ${{ inputs.draft_release }}
+          FORCE: ${{ inputs.publish_release }}
         run: |
           set -euo pipefail
           base=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
@@ -71,8 +74,8 @@ jobs:
           version="${major}.$((minor + n)).0"
 
           # Only a push to main — or an explicitly opted-in manual run —
-          # mints a version. Pull requests build at whatever the tree
-          # already says, so their installers stay honest about what they
+          # mints a version; a plain manual run builds at whatever the tree
+          # already says, so its installers stay honest about what they
           # are. The commit-count guard matters in its own right: at zero
           # commits past the base tag the arithmetic lands back on the base
           # version, which would overwrite a release that already exists.
@@ -92,7 +95,7 @@ jobs:
   # clippy — is platform-independent, so running it twice bought almost
   # nothing for most of CI's minute spend. The `build` job below still
   # runs the full matrix natively, so macOS-specific compile breakage
-  # (cfg'd code, the Phase 1 stub recorder) is still caught before a
+  # (cfg'd code, the stub recorder) is still caught before a
   # release. Kept as a single-entry matrix so re-adding macos-latest here
   # is a one-word change.
   test:
@@ -145,41 +148,49 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy --features devtools --no-deps -- -D warnings
 
-  # Deliberately NOT `needs: test` — the two jobs are independent work and
-  # gating cost the whole test job (~4min) of pure latency on every run
-  # before the slow Windows bundle even started. Nothing unreviewed can
-  # escape as a result: release.yml only accepts an artifact from a ci.yml
-  # run whose *overall* conclusion is success, and a failed `test` job
-  # fails the run. The one thing given up is minutes, not safety — a PR
-  # that breaks clippy now still pays for a build it can't use.
+  # Pull requests do not build at all. Three Tauri bundles — two of them
+  # Windows, each ~6min — are the overwhelming majority of this workflow's
+  # minute spend and its artifact storage, and nothing consumes a PR's
+  # bundles: they are not released, and the review that matters happens in
+  # the diff and in `test`. A branch that genuinely needs an installer can
+  # get the full matrix from `gh workflow run ci.yml --ref <branch>`.
   #
-  # The matrix is built by expression so the devtools bundle (a second
-  # full Tauri build, DEVELOPMENT.md §10) gets its own runner rather than
+  # Deliberately NOT `needs: test` — the two jobs are independent work and
+  # gating cost the whole test job (~4min) of pure latency on every push to
+  # main before the slow Windows bundle even started. Nothing unreviewed
+  # escapes as a result, because `release` below needs both.
+  #
+  # The devtools bundle (a second full Tauri build, DEVELOPMENT.md §10)
+  # gets its own matrix entry, and therefore its own runner, rather than
   # running serially after the production bundle in the same job — that
   # second build used to sit squarely on the critical path.
   #
   # It is never attached to a release. The installer it produces carries
   # raw SQL execution, arbitrary row writes, a database wipe and
-  # state-machine injection, and a draft asset that must be deleted before
+  # state-machine injection, and an asset that must be deleted before
   # publishing is one forgotten click away from shipping all of that. It
   # is reachable only as a workflow artifact — from a push to main or a
   # `workflow_dispatch` run — which expires on its own and can never be
-  # published by accident. Pull requests skip it: it is a second full
-  # Windows bundle, and anyone who wants one can dispatch a run.
+  # published by accident.
   #
   # Windows-only: the dev portal exists to exercise the backend without
-  # League running, and the macOS build is the Phase 1 stub recorder, so a
+  # League running, and the macOS build is the stub recorder, so a
   # macOS devtools installer cost a 10x-billed runner to exercise a stub.
   # Re-adding it is one more entry in the matrix below.
   build:
     name: Build (${{ matrix.platform }}${{ matrix.devtools && ', devtools' || '' }})
+    if: github.event_name != 'pull_request'
     strategy:
       fail-fast: false
       matrix:
-        include: >-
-          ${{ fromJSON(github.event_name != 'pull_request'
-          && '[{"platform":"windows-latest","bundles":"nsis"},{"platform":"macos-latest","bundles":"dmg"},{"platform":"windows-latest","bundles":"nsis","devtools":true}]'
-          || '[{"platform":"windows-latest","bundles":"nsis"},{"platform":"macos-latest","bundles":"dmg"}]') }}
+        include:
+          - platform: windows-latest
+            bundles: nsis
+          - platform: macos-latest
+            bundles: dmg
+          - platform: windows-latest
+            bundles: nsis
+            devtools: true
     needs: version
     runs-on: ${{ matrix.platform }}
     steps:
@@ -273,7 +284,7 @@ jobs:
       # Rust + the unstable `bindeps` flag, which would force the whole
       # project (including every macOS dev's `cargo check`) onto nightly
       # just for a Windows-only optional binary. Unverified — see
-      # DEVELOPMENT.md §2.2's Phase 6 status note.
+      # DEVELOPMENT.md §2.2's status note.
       - name: Stage libobs capture backend
         if: matrix.platform == 'windows-latest' && steps.libobs-cache.outputs.cache-hit != 'true'
         shell: pwsh
@@ -295,7 +306,7 @@ jobs:
       # `LibObsRecorder::stop` (src-tauri/src/recorder/libobs/mod.rs) can
       # remux each recording to a seekable faststart MP4 after capture —
       # the crash-safe fragmented format `start()` records with has no
-      # seek index (DEVELOPMENT.md, Phase 6 follow-up). Optional at
+      # seek index (DEVELOPMENT.md §2.2). Optional at
       # runtime (lib.rs resolves it with `.ok()`), so a failed/missing
       # download here degrades to unseekable-but-playable recordings
       # rather than breaking the build. BtbN's "latest" release is a
@@ -314,8 +325,8 @@ jobs:
       # Native build on each platform's own runner — never cross-compiled.
       # DEVELOPMENT.md §9: NSIS on Windows (not MSI, matches the documented
       # installer choice); dmg on macOS is the standard Tauri bundle format
-      # there. macOS builds only exercise the stub recorder (Phase 1) —
-      # real capture is Windows-only (Phase 6).
+      # there. macOS builds only exercise the stub recorder — real capture
+      # is Windows-only (DEVELOPMENT.md §1.1).
       #
       # The devtools variant additionally layers tauri.devtools.conf.json
       # over the config, which does two things.
@@ -338,10 +349,9 @@ jobs:
       #
       # It also turns NSIS compression off. Compressing the ~200MB payload
       # (ffmpeg + the libobs DLLs) with solid LZMA is ~2min of makensis,
-      # and it buys nothing here: this installer is attached to the draft
-      # release and deleted before it is published, so nobody ever
-      # downloads it. The production bundle keeps LZMA and its ~62MB
-      # installer.
+      # and it buys nothing here: this installer never reaches a release,
+      # only a workflow artifact somebody deliberately downloads. The
+      # production bundle keeps LZMA and its ~62MB installer.
       #
       # NINJA_DEVTOOLS reaches vite through tauri's beforeBuildCommand, so
       # dev.html is emitted; --features devtools compiles the Rust side.
@@ -358,18 +368,21 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  # Publishes a draft for every commit that lands on main, from the bundles
-  # the matrix above just produced. Nothing is rebuilt and no tag is pushed:
-  # a draft release holds its tag name without creating the ref, so the tag
-  # only comes into existence if somebody publishes the draft — which is
-  # also what keeps `version` above counting from a stable base.
+  # Publishes a release for every commit that lands on main, from the
+  # bundles the matrix above just produced. Nothing is rebuilt.
+  #
+  # `needs: [version, test, build]` is the gate that makes this safe to
+  # publish unattended rather than leave as a draft: it cannot start until
+  # tsc, cargo test and clippy have all gone green on the same commit, so
+  # "published" already means "tested". Publishing creates the tag, which
+  # becomes the base `version` counts from next time.
   #
   # This replaces the old release.yml, which triggered on a manually pushed
   # tag and then had to go hunting for the ci.yml run that matched the
   # commit. Running in the same workflow makes the artifacts local, so the
   # cross-run download dance and its `actions: read` token are both gone.
-  draft-release:
-    name: Draft release
+  release:
+    name: Release
     if: needs.version.outputs.release == 'true'
     needs: [version, test, build]
     runs-on: ubuntu-latest
@@ -396,18 +409,17 @@ jobs:
           path: artifacts/macos
 
       # Notes are derived from the commit range since the previous release,
-      # so each draft describes its own changes instead of repeating a
+      # so each release describes its own changes instead of repeating a
       # hardcoded blurb. Uses git log rather than GitHub's own generator
       # because that one lists merged PRs only, and this repo mixes PRs
       # with commits pushed straight to main — those would silently go
       # unlisted. Merge commits are dropped as noise, as are the version-bump
       # commits that older ranges still contain; nothing bumps a version in
-      # the repo any more. The previous release is the newest *tag*, so
-      # while a run of drafts goes unpublished each one accumulates the
-      # whole range since the last published release, which is what you
-      # want to read before deciding to publish. The standing install
+      # the repo any more. The previous release is the newest *tag*, which
+      # this job creates on every publish, so each range is exactly one
+      # commit's worth of changes unless a run failed. The standing install
       # caveats are appended below the changelog; keep them in sync with
-      # DEVELOPMENT.md as the Phase 6/8 status changes.
+      # docs/windows-verification.md as the capture-backend status changes.
       - name: Build release notes
         env:
           TAG: v${{ needs.version.outputs.version }}
@@ -435,28 +447,27 @@ jobs:
           warn on first run (no code-signing certificate configured yet). See
           the installer for your platform below.
 
-          macOS builds only exercise the stub recorder from Phase 1 — real
-          game capture is Windows-only (DEVELOPMENT.md §1.1). The Windows
-          build includes the Phase 6 libobs capture backend, but it hasn't
-          been verified against a real Vanguard-protected game yet
-          (DEVELOPMENT.md §9, pending Phase 8).
+          macOS builds only exercise the stub recorder — real game capture is
+          Windows-only (DEVELOPMENT.md §1.1). The Windows build includes the
+          libobs capture backend, but it has not been verified against a real
+          Vanguard-protected game yet (docs/windows-verification.md).
           CAVEATS
           } > notes.md
           echo "--- generated notes ---"
           cat notes.md
 
-      # Draft so a build never goes public before it's reviewed — publish
-      # manually from the Releases page. `target_commitish` pins which
-      # commit the tag lands on at that point, since the tag does not exist
-      # until then.
-      - name: Publish draft release
+      # Published, not drafted: the `needs` above already withhold this
+      # step until the commit's tests pass, so a human clicking Publish
+      # added latency rather than a check. `target_commitish` pins which
+      # commit the tag is created on.
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.version.outputs.version }}
           target_commitish: ${{ github.sha }}
           name: "ninja-recorder v${{ needs.version.outputs.version }}"
           body_path: notes.md
-          draft: true
+          draft: false
           prerelease: false
           files: |
             artifacts/windows/**/*.exe

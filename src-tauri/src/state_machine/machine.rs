@@ -70,10 +70,10 @@ impl StateMachine {
     /// Phase gameflow reports when a game (or Practice Tool match) is
     /// actually running or being reconnected to. Chosen to match
     /// DEVELOPMENT.md's diagram; not verified live yet (no League client
-    /// installed here — see Phase 8). If live testing finds gameflow
-    /// reports a distinct phase while merely spectating, that phase must
-    /// NOT be added here, since DEVELOPMENT.md explicitly calls for
-    /// spectator sessions to not trigger recording.
+    /// installed here — see docs/windows-verification.md). If live testing
+    /// finds gameflow reports a distinct phase while merely spectating,
+    /// that phase must NOT be added here, since DEVELOPMENT.md explicitly
+    /// calls for spectator sessions to not trigger recording.
     fn is_game_running_phase(phase: &GameflowPhase) -> bool {
         matches!(phase, GameflowPhase::InProgress | GameflowPhase::Reconnect)
     }

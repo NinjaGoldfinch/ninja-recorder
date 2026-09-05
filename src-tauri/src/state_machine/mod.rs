@@ -6,9 +6,9 @@ pub mod supervisor;
 
 pub use supervisor::{Supervisor, SupervisorStatus};
 
-// Re-exported for future consumers (Phase 4 VOD library persisting
-// finalized recordings, tests elsewhere) — not used outside this module
-// yet; `machine`'s own tests and `supervisor` reach these via `super::`.
+// Re-exported for consumers outside this module (the dev portal's state
+// injection, tests elsewhere); `machine`'s own tests and `supervisor`
+// reach these via `super::`.
 #[allow(unused_imports)]
 pub use machine::{Action, GameState, StateEvent, StateMachine};
 #[allow(unused_imports)]

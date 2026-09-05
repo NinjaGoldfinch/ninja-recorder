@@ -1,6 +1,6 @@
 //! Async orchestration around the pure `StateMachine`: spawns/aborts the
 //! lockfile, gameflow, and Live Client Data watchers per `Action`, and
-//! drives the `Recorder` (Phase 1) and marker pipeline (`live_client`).
+//! drives the `Recorder` and the marker pipeline (`live_client`).
 //! DEVELOPMENT.md §3.4.
 //!
 //! Unlike `machine.rs`, this glue can't be meaningfully unit-tested
@@ -415,7 +415,7 @@ impl Supervisor {
                     markers,
                 });
 
-                // Retention (Phase 9 / DEVELOPMENT.md §6): enforced right
+                // Retention (DEVELOPMENT.md §6): enforced right
                 // after every finalize, in addition to app-start
                 // (lib.rs's `setup`) — this is what actually keeps disk
                 // usage bounded during a long play session where the app

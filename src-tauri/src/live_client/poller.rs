@@ -12,7 +12,7 @@ const MAX_BACKOFF: Duration = Duration::from_secs(10);
 /// Polls forever, calling `on_snapshot` on every successful fetch and
 /// `on_down` (at most once per transition into the down state) whenever
 /// the endpoint stops responding. Runs until the caller's task is
-/// aborted — the state machine (Phase 3) owns that lifecycle, starting
+/// aborted — the state machine owns that lifecycle, starting
 /// this when gameflow enters `InProgress`/`Reconnect` and stopping it once
 /// recording finalizes.
 pub async fn watch<OnSnapshot, OnDown>(
