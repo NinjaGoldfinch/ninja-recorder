@@ -14,7 +14,8 @@ use serde_json::Value as Json;
 /// the migration bookkeeping table are deliberately absent — they are
 /// reachable from the SQL console for anyone who really wants them, but
 /// they should not show up as ordinary editable data.
-const BROWSABLE_TABLES: &[&str] = &["recordings", "markers", "samples", "settings"];
+const BROWSABLE_TABLES: &[&str] =
+    &["recordings", "markers", "samples", "settings", "settings_kv"];
 
 #[derive(Serialize)]
 pub struct Column {
@@ -225,6 +226,8 @@ pub fn dev_insert_row(
             rusqlite::params_from_iter(binds.iter()),
         )
         .map_err(|e| e.to_string())?;
+        // Meaningless for a TEXT-keyed table like `settings_kv`; the
+        // caller only uses it as a confirmation for autoincrement tables.
         conn.last_insert_rowid()
     };
     dev::notify_library_changed(&app);
@@ -236,7 +239,7 @@ pub fn dev_update_row(
     state: tauri::State<AppState>,
     app: tauri::AppHandle,
     table: String,
-    id: i64,
+    id: Json,
     values: RowValues,
 ) -> Result<usize, String> {
     let table = checked_table(&table)?;
@@ -250,7 +253,7 @@ pub fn dev_update_row(
         assignments.push(format!("\"{}\" = ?", checked_column(&state, table, name)?));
         binds.push(json_to_sql(value)?);
     }
-    binds.push(SqlValue::Integer(id));
+    binds.push(json_to_sql(&id)?);
 
     let changed = {
         let conn = state.db.conn();
@@ -273,7 +276,7 @@ pub fn dev_delete_row(
     state: tauri::State<AppState>,
     app: tauri::AppHandle,
     table: String,
-    id: i64,
+    id: Json,
     // `delete_file` only means anything for `recordings`. Without it the
     // next `reconcile` sees an untracked file and imports the row straight
     // back, which reads as the delete having silently failed.
@@ -281,10 +284,12 @@ pub fn dev_delete_row(
 ) -> Result<usize, String> {
     let table = checked_table(&table)?;
 
+    let key = json_to_sql(&id)?;
+
     if table == "recordings" && delete_file.unwrap_or(false) {
         let conn = state.db.conn();
         let path: Option<String> = conn
-            .query_row("SELECT path FROM recordings WHERE id = ?", [id], |r| r.get(0))
+            .query_row("SELECT path FROM recordings WHERE id = ?", [&key], |r| r.get(0))
             .ok();
         drop(conn);
         if let Some(path) = path {
@@ -296,7 +301,7 @@ pub fn dev_delete_row(
         let conn = state.db.conn();
         conn.execute(
             &format!("DELETE FROM {table} WHERE {} = ?", primary_key(table)),
-            [id],
+            [&key],
         )
         .map_err(|e| e.to_string())?
     };
@@ -406,10 +411,15 @@ fn checked_column(
 }
 
 fn primary_key(table: &str) -> &'static str {
-    // Every table here keys on `id`, `settings` included (it's a
-    // single-row table with `CHECK (id = 1)`).
-    let _ = table;
-    "id"
+    match table {
+        // Migration 4's UI-prefs store is keyed by name, not an
+        // autoincrement id — editing or deleting a row here by `id` would
+        // silently match nothing.
+        "settings_kv" => "key",
+        // Everything else keys on `id`, `settings` included (a single-row
+        // table with `CHECK (id = 1)`).
+        _ => "id",
+    }
 }
 
 fn value_ref_to_json(value: ValueRef<'_>) -> Json {

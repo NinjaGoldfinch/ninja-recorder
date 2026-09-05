@@ -1,45 +1,10 @@
-import { invoke, convertFileSrc } from "@tauri-apps/api/core";
-import { escapeHtml } from "./shared/html";
+import { assetUrl, call } from "./bridge";
+import { escapeHtml } from "./dom";
+import { formatTime } from "./format";
+import { currentView, showView } from "./router";
+import type { MarkerRow, RecordingRow, SampleRow } from "./types";
 
-export interface RecordingRow {
-  id: number;
-  path: string;
-  started_at: number;
-  duration_s: number | null;
-  game_id: number | null;
-  queue: number | null;
-  champion: string | null;
-  role: string | null;
-  win: boolean | null;
-  kda_k: number | null;
-  kda_d: number | null;
-  kda_a: number | null;
-  patch: string | null;
-  pinned: boolean;
-  size_bytes: number;
-}
-
-interface MarkerRow {
-  id: number;
-  recording_id: number;
-  game_time_s: number;
-  video_time_s: number;
-  kind: string;
-  payload_json: string;
-}
-
-interface SampleRow {
-  id: number;
-  recording_id: number;
-  game_time_s: number;
-  video_time_s: number;
-  our_team: string | null;
-  gold_diff_est: number | null;
-  kill_diff: number | null;
-  cs_diff: number | null;
-  our_gold: number | null;
-  our_level: number | null;
-}
+export type { RecordingRow };
 
 const MARKER_STYLE: Record<string, { icon: string; label: string; color: string }> = {
   kill: { icon: "⚔️", label: "Kill", color: "#43a047" },
@@ -75,8 +40,6 @@ const MARKER_PRIORITY = [
 // approximation for review purposes, not frame-exact.
 const FRAME_SECONDS = 1 / 30;
 
-let reviewView: HTMLElement | null;
-let libraryView: HTMLElement | null;
 let backBtn: HTMLButtonElement | null;
 let reviewTitle: HTMLElement | null;
 let video: HTMLVideoElement | null;
@@ -115,8 +78,6 @@ let rafHandle: number | null = null;
 let isScrubbing = false;
 
 export function initReview() {
-  reviewView = document.querySelector("#review-view");
-  libraryView = document.querySelector("#library-view");
   backBtn = document.querySelector("#back-to-library-btn");
   reviewTitle = document.querySelector("#review-title");
   video = document.querySelector("#review-video");
@@ -304,7 +265,7 @@ function stepFrame(direction: 1 | -1) {
 }
 
 function isReviewOpen(): boolean {
-  return !!reviewView && !reviewView.hidden;
+  return currentView() === "review";
 }
 
 function isTypingInField(): boolean {
@@ -756,12 +717,6 @@ function toggleFullscreen() {
   else playerWrap.requestFullscreen().catch(() => {});
 }
 
-function formatTime(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, "0")}`;
-}
-
 function markerLabel(m: MarkerRow): string {
   let payload: Record<string, unknown> = {};
   try {
@@ -814,14 +769,14 @@ function renderMarkerList() {
 }
 
 export async function openReview(row: RecordingRow) {
-  if (!reviewView || !libraryView || !video) return;
+  if (!video) return;
 
   currentRecordingPath = row.path;
   if (reviewTitle) reviewTitle.textContent = row.champion ?? `Recording #${row.id}`;
   if (videoError) videoError.hidden = true;
   if (videoErrorText) videoErrorText.textContent = "";
   if (videoErrorDetail) videoErrorDetail.textContent = "";
-  video.src = convertFileSrc(row.path);
+  video.src = assetUrl(row.path);
   video.playbackRate = rateSelect ? Number(rateSelect.value) : 1;
 
   currentMarkers = [];
@@ -832,13 +787,12 @@ export async function openReview(row: RecordingRow) {
   syncPlayButton();
   syncVolumeControls();
 
-  libraryView.hidden = true;
-  reviewView.hidden = false;
+  showView("review");
 
   try {
     const [markers, samples] = await Promise.all([
-      invoke<MarkerRow[]>("get_recording_markers", { recordingId: row.id }),
-      invoke<SampleRow[]>("get_recording_samples", { recordingId: row.id }),
+      call<MarkerRow[]>("get_recording_markers", { recordingId: row.id }),
+      call<SampleRow[]>("get_recording_samples", { recordingId: row.id }),
     ]);
     currentMarkers = markers;
     currentSamples = samples;
@@ -852,7 +806,7 @@ export async function openReview(row: RecordingRow) {
 }
 
 function closeReview() {
-  if (!reviewView || !libraryView || !video) return;
+  if (!video) return;
   stopPlayheadLoop();
   hideClusterTooltip();
   video.pause();
@@ -861,6 +815,5 @@ function closeReview() {
   currentRecordingPath = null;
   currentSamples = [];
   currentClusters = [];
-  reviewView.hidden = true;
-  libraryView.hidden = false;
+  showView("library");
 }

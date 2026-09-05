@@ -141,6 +141,12 @@ pub fn dev_registered_commands() -> Vec<&'static str> {
         "get_retention_policy",
         "set_retention_policy",
         "set_pinned",
+        "preview_retention_policy",
+        "delete_recording",
+        "get_recordings_dir",
+        "open_recordings_folder",
+        "get_ui_prefs",
+        "set_ui_pref",
         "lcu_status",
         "game_state_status",
     ]
