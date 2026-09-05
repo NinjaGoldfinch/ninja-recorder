@@ -15,11 +15,36 @@
 use super::client::{LcuClientError, LcuHttpClient};
 use serde::{Deserialize, Serialize};
 
+/// The LCU's `/lol-summoner/v1/current-summoner`. `displayName` has been
+/// an empty string ever since Riot IDs replaced summoner names, so the
+/// name now lives in `gameName` + `tagLine`; every field is optional so an
+/// older (or newer) client shape still parses.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CurrentSummoner {
     pub puuid: String,
-    #[serde(rename = "displayName")]
-    pub display_name: String,
+    #[serde(rename = "displayName", default)]
+    pub display_name: Option<String>,
+    #[serde(rename = "gameName", default)]
+    pub game_name: Option<String>,
+    #[serde(rename = "tagLine", default)]
+    pub tag_line: Option<String>,
+}
+
+impl CurrentSummoner {
+    /// The name to show a human: the Riot ID when we have one, otherwise
+    /// the legacy display name, and `None` when the client gave us neither.
+    pub fn display(&self) -> Option<String> {
+        let game_name = non_empty(&self.game_name);
+        match (game_name, non_empty(&self.tag_line)) {
+            (Some(name), Some(tag)) => Some(format!("{}#{}", name, tag)),
+            (Some(name), None) => Some(name.to_string()),
+            (None, _) => non_empty(&self.display_name).map(str::to_string),
+        }
+    }
+}
+
+fn non_empty(field: &Option<String>) -> Option<&str> {
+    field.as_deref().map(str::trim).filter(|s| !s.is_empty())
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -125,7 +150,33 @@ mod tests {
     use super::*;
 
     fn fixture_me() -> CurrentSummoner {
-        serde_json::from_str(r#"{"puuid": "my-puuid", "displayName": "ninja"}"#).unwrap()
+        serde_json::from_str(
+            r#"{"puuid": "my-puuid", "displayName": "", "gameName": "ninja", "tagLine": "NA1"}"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn prefers_the_riot_id_over_the_hollowed_out_display_name() {
+        let me: CurrentSummoner = serde_json::from_str(
+            r#"{"puuid": "p", "displayName": "", "gameName": "ninja", "tagLine": "NA1"}"#,
+        )
+        .unwrap();
+        assert_eq!(me.display().as_deref(), Some("ninja#NA1"));
+    }
+
+    #[test]
+    fn falls_back_to_the_display_name_on_a_pre_riot_id_client() {
+        let me: CurrentSummoner =
+            serde_json::from_str(r#"{"puuid": "p", "displayName": "ninja"}"#).unwrap();
+        assert_eq!(me.display().as_deref(), Some("ninja"));
+    }
+
+    #[test]
+    fn has_no_name_when_the_client_gives_us_nothing_usable() {
+        let me: CurrentSummoner =
+            serde_json::from_str(r#"{"puuid": "p", "displayName": "  "}"#).unwrap();
+        assert_eq!(me.display(), None);
     }
 
     fn fixture_game(json: &str) -> GameDto {

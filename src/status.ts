@@ -136,7 +136,9 @@ function renderLcu(status: LcuStatus) {
     els.aboutLcu.textContent = "Not running (no lockfile found).";
     return;
   }
-  const who = status.summoner ?? "signed in";
+  // The LCU hands back an empty string, not null, when it has no Riot ID
+  // for us yet — so fall back on falsiness rather than nullishness.
+  const who = status.summoner || "signed in";
   setPill(els.lcuPill, els.lcuText, "online", who);
   els.aboutLcu.textContent = `Connected as ${who} — phase ${status.phase ?? "?"}.`;
 }
