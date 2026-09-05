@@ -70,7 +70,8 @@ jobs:
       # below the changelog; keep them in sync with DEVELOPMENT.md as the
       # Phase 6/8 status changes.
       # Attached to the draft only, and expected to be deleted before it is
-      # published — see ci.yml's "Build app (devtools)". `continue-on-error`
+      # published — produced by ci.yml's `devtools: true` matrix entries.
+      # `continue-on-error`
       # so a release can still be cut from a run that predates these
       # artifacts, or from one where the devtools bundle failed: their
       # absence must never block shipping the real installers.
