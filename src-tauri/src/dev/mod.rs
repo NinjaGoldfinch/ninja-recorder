@@ -50,8 +50,22 @@ const PORTAL_LABEL: &str = "devtools";
 /// when the call is rejected — in a build without `devtools` this command
 /// simply isn't registered, so "is the portal available" needs no second
 /// flag to keep in sync.
+///
+/// `async` on purpose, and load-bearing on Windows. Tauri runs a
+/// *synchronous* command on the main thread, which means a sync version of
+/// this ran `build()` re-entrantly from inside WebView2's own IPC callback
+/// — the Win32 window got created, because that part is synchronous, but
+/// the WebView2 controller needs the message loop to pump and never
+/// attached. `build()` still returned `Ok`, so the portal came up as a bare
+/// white window with no webview in it at all: no page, no context menu,
+/// and `open_devtools()` below silently doing nothing. macOS never showed
+/// it because WKWebView is created synchronously.
+///
+/// An async command runs on the async runtime instead, so `build()`
+/// dispatches to the event loop from off the main thread and waits for it
+/// properly.
 #[tauri::command]
-pub fn dev_open_portal(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn dev_open_portal(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
     if let Some(existing) = app.get_webview_window(PORTAL_LABEL) {
