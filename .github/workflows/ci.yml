@@ -48,6 +48,34 @@ jobs:
       - name: Type-check frontend
         run: npx tsc --noEmit
 
+      # TEMPORARY diagnostic — remove before merge. The Windows test binary
+      # dies with STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139) before any test
+      # runs, meaning a DLL is present but missing an expected export. This
+      # names which one instead of guessing across CI runs.
+      - name: Diagnose Windows test binary (temporary)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          cargo test --no-run
+          $exe = Get-ChildItem target\debug\deps\ninja_recorder_lib-*.exe |
+                 Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          Write-Host "=== test exe: $($exe.FullName)"
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          Write-Host "=== imports (dumpbin /dependents)"
+          & $dumpbin.FullName /dependents $exe.FullName
+          Write-Host "=== DLLs beside the exe (deps/)"
+          Get-ChildItem target\debug\deps\*.dll -ErrorAction SilentlyContinue |
+            ForEach-Object { "{0}`t{1}`t{2}" -f $_.Name, $_.Length, $_.VersionInfo.FileVersion }
+          Write-Host "=== DLLs in target\debug"
+          Get-ChildItem target\debug\*.dll -ErrorAction SilentlyContinue |
+            ForEach-Object { "{0}`t{1}`t{2}" -f $_.Name, $_.Length, $_.VersionInfo.FileVersion }
+          Write-Host "=== direct run"
+          & $exe.FullName --list 2>&1 | Select-Object -First 15
+          Write-Host "=== exit code: $LASTEXITCODE"
+
       - name: Run Rust tests
         working-directory: src-tauri
         run: cargo test
