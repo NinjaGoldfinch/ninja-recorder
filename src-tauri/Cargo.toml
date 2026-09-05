@@ -24,7 +24,14 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # wipe, state-machine injection — is compiled into a shipped installer.
 # Enable for local work with `npm run tauri:dev`, which passes
 # `--features devtools`. Release workflows need no change.
-devtools = []
+#
+# Pulls in tauri's own `devtools` feature, which is what puts the web
+# inspector in a *release* build. Debug builds always have it, so
+# `tauri:dev` never noticed it was missing — but the devtools installer is
+# a release build, which left the one bundle that exists for debugging as
+# the one bundle you could not debug: a portal that failed to load had no
+# way to say why.
+devtools = ["tauri/devtools"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

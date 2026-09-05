@@ -278,7 +278,7 @@ async fn lcu_status() -> LcuStatus {
     LcuStatus {
         connected: true,
         phase: phase.ok().map(|p| format!("{:?}", p)),
-        summoner: summoner.ok().map(|s| s.display_name),
+        summoner: summoner.ok().and_then(|s| s.display()),
         error: None,
     }
 }

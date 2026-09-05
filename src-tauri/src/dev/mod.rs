@@ -60,12 +60,22 @@ pub fn dev_open_portal(app: tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    WebviewWindowBuilder::new(&app, PORTAL_LABEL, WebviewUrl::App("dev.html".into()))
-        .title("ninja-recorder — dev portal")
-        .inner_size(1280.0, 860.0)
-        .min_inner_size(900.0, 600.0)
-        .build()
-        .map_err(|e| e.to_string())?;
+    let window =
+        WebviewWindowBuilder::new(&app, PORTAL_LABEL, WebviewUrl::App("dev.html".into()))
+            .title("ninja-recorder — dev portal")
+            .inner_size(1280.0, 860.0)
+            .min_inner_size(900.0, 600.0)
+            .build()
+            .map_err(|e| e.to_string())?;
+
+    // Opened with the window rather than left to a right-click. The case
+    // that most needs a console is the page failing to load at all, and a
+    // blank webview gives you nothing to right-click on — so the portal
+    // that cannot explain itself is precisely the one where the inspector
+    // is unreachable. Relies on tauri's own `devtools` feature, which this
+    // crate's `devtools` feature pulls in (Cargo.toml); a release build
+    // has no inspector at all without it.
+    window.open_devtools();
     Ok(())
 }
 
