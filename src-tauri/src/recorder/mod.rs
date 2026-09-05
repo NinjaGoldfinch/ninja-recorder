@@ -1,5 +1,5 @@
 //! Capture backend abstraction. Every recording implementation — the real
-//! libobs backend (Windows, Phase 6) and the stub used everywhere else —
+//! libobs backend (Windows) and the stub used everywhere else —
 //! lives behind this trait. Nothing above this module may depend on libobs
 //! types directly; see DEVELOPMENT.md §2.2.
 
@@ -13,8 +13,8 @@ pub mod stub;
 
 use std::path::PathBuf;
 
-/// Parameters for a single recording. Intentionally minimal for Phase 1 —
-/// resolution/encoder/audio-source options land alongside the libobs backend.
+/// Parameters for a single recording. Intentionally minimal: resolution,
+/// encoder and audio-source choices are the backend's, not the caller's.
 #[derive(Debug, Clone)]
 pub struct RecordConfig {
     pub output_dir: PathBuf,

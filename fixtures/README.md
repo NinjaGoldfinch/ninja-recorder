@@ -21,6 +21,6 @@ recording backend.
   No audio track — the player's mute and volume controls can't be
   exercised against it. Regenerate at a different size or length by
   editing the constants at the top of the script.
-- LCU / Live Client Data JSON fixtures land here in Phase 2/3 — every
-  response shape the app depends on gets captured here the first time it's
-  seen, per DEVELOPMENT.md §3.3.
+- LCU / Live Client Data JSON fixtures land here — every response shape
+  the app depends on gets captured the first time it's seen, per
+  DEVELOPMENT.md §3.3.

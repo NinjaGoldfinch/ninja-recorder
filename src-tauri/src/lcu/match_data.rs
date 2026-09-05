@@ -1,15 +1,15 @@
 //! Post-game match metadata: champion, KDA, win/loss, queue. DEVELOPMENT.md
 //! §3.1. Champion *name* resolution (id → display name, e.g. via Data
-//! Dragon) is out of scope here — the VOD library UI (Phase 4/5) owns
-//! that; this module only surfaces what the LCU itself returns.
+//! Dragon) is out of scope here — the VOD library UI owns that; this
+//! module only surfaces what the LCU itself returns.
 //!
 //! `fetch_match_summary` still isn't called anywhere — the state machine's
-//! Finalizing step (Phase 3) stops short of fetching it, since reliably
-//! resolving *which* gameId just finished needs LCU endpoint research this
-//! machine can't verify live (no League client installed). Wired in once
-//! that's confirmed and the VOD library (Phase 4) has a row to attach it
-//! to. The extraction logic itself (`extract_summary`) is unit-tested
-//! against fixture JSON below.
+//! Finalizing step stops short of fetching it, since reliably resolving
+//! *which* gameId just finished needs LCU endpoint research this machine
+//! can't verify live (no League client installed), which is why every
+//! recording's `champion`/`win`/`kda_*` is NULL in practice. Wire it in
+//! once that's confirmed. The extraction logic itself (`extract_summary`)
+//! is unit-tested against fixture JSON below.
 #![allow(dead_code)]
 
 use super::client::{LcuClientError, LcuHttpClient};

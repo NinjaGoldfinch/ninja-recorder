@@ -16,8 +16,8 @@ pub use gameflow::GameflowPhase;
 #[allow(unused_imports)]
 pub use client::LcuClientError;
 
-// Re-exported for future consumers (Phase 3 state machine, Phase 4 VOD
-// library) — not all used internally yet.
+// Re-exported for consumers outside this module (the state machine, the
+// dev portal) — not all used internally.
 #[allow(unused_imports)]
 pub use gameflow::{GameflowSource, GameflowUpdate};
 #[allow(unused_imports)]

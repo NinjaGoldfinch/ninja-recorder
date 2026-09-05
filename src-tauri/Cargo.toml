@@ -5,7 +5,7 @@ description = "Lightweight League of Legends VOD recorder"
 authors = ["ninja"]
 edition = "2021"
 # GPL-2.0-only, not our choice of convenience: linking libobs (GPLv2) for
-# the capture backend (Phase 6) obligates the whole distributed binary.
+# the capture backend obligates the whole distributed binary.
 # See DEVELOPMENT.md §2.1.
 license = "GPL-2.0-only"
 
@@ -51,10 +51,10 @@ base64 = "0.22"
 rusqlite = { version = "0.32", features = ["bundled"] }
 rusqlite_migration = "1"
 # Cross-platform free-disk-space query for the record-start preflight check
-# (Phase 9 / DEVELOPMENT.md §6) — std has no such API.
+# (DEVELOPMENT.md §6) — std has no such API.
 fs2 = "0.4"
 
-# Real capture backend (Phase 6). Fork of github.com/FFFFFFFXXXXXXX/libobs-recorder
+# Real capture backend. Fork of github.com/FFFFFFFXXXXXXX/libobs-recorder
 # that swaps the injection-based `game_capture` source for `window_capture`
 # (Windows.Graphics.Capture) — see the fork's readme and DEVELOPMENT.md
 # §1.1/§2.2 for why upstream can't be used as-is. GPL-2.0, same as libobs
