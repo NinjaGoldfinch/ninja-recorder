@@ -49,7 +49,10 @@ impl AudioSourceKind {
     /// Whether this source records the user's voice. Used to keep the
     /// promise that a preset which doesn't name a microphone never captures
     /// one — asserted in the tests below rather than left to review.
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    ///
+    /// Test-only: nothing in the capture path branches on it, because the
+    /// backend hands every source to libobs the same way.
+    #[cfg(test)]
     pub fn is_microphone(&self) -> bool {
         matches!(self, Self::Microphone { .. })
     }
@@ -74,30 +77,6 @@ pub struct AudioLayout {
 }
 
 impl AudioLayout {
-    /// Per-source libobs mixer bitmasks: bit *n* set means "feed track *n*".
-    ///
-    /// This is the one computation the whole multi-track design rests on. A
-    /// libobs source can feed several mixers at once, so putting game audio
-    /// on both the combined track and its own stem costs one extra bit
-    /// rather than a second capture. Sources are *not* free to default here:
-    /// libobs initialises `audio_mixers` to `0xFF` (every mix), so a source
-    /// this returns `0` for must still be explicitly silenced by the backend
-    /// or it leaks into every track.
-    ///
-    /// Consumed by the libobs backend, which only exists on Windows.
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    pub fn mixer_masks(&self) -> Vec<u32> {
-        let mut masks = vec![0u32; self.sources.len()];
-        for (track_idx, track) in self.tracks.iter().enumerate() {
-            for &source_idx in &track.sources {
-                if let Some(mask) = masks.get_mut(source_idx) {
-                    *mask |= 1 << track_idx;
-                }
-            }
-        }
-        masks
-    }
-
     /// Rejects a layout that would produce a file the rest of the app can't
     /// describe. Only `Custom` can fail this — the built-in presets are
     /// covered by the tests below — but `Custom` is deserialized from a
@@ -315,25 +294,18 @@ mod tests {
     }
 
     #[test]
-    fn mixer_masks_put_each_source_on_the_combined_track_and_its_own_stem() {
+    fn game_mic_discord_also_gives_each_source_its_own_stem() {
         let layout = AudioPreset::GameMicDiscord {
             mic_device_id: None,
         }
         .layout();
-        assert_eq!(
-            layout.mixer_masks(),
-            vec![
-                0b0011, // game    -> combined + stem 1
-                0b0101, // mic     -> combined + stem 2
-                0b1001, // discord -> combined + stem 3
-            ]
-        );
-    }
-
-    #[test]
-    fn desktop_mixer_masks_keep_the_game_off_the_combined_track() {
-        let layout = AudioPreset::Desktop.layout();
-        assert_eq!(layout.mixer_masks(), vec![0b01, 0b10]);
+        // Track 0 is the combined mix (asserted above); tracks 1.. are the
+        // stems, one per source and in source order. A source feeding both
+        // is the point of the design — it costs a mixer bit, not a second
+        // capture.
+        assert_eq!(layout.tracks[1].sources, vec![0]); // game
+        assert_eq!(layout.tracks[2].sources, vec![1]); // mic
+        assert_eq!(layout.tracks[3].sources, vec![2]); // discord
     }
 
     #[test]
@@ -354,15 +326,15 @@ mod tests {
 
             // libobs stops at the first unbound output track, so a hole in
             // the track list silently truncates the file to one track.
-            for (i, mask) in layout.mixer_masks().iter().enumerate() {
-                assert_ne!(*mask, 0, "{preset:?}: source {i} feeds no track");
-            }
-            for track_idx in 0..layout.tracks.len() {
+            for i in 0..layout.sources.len() {
                 assert!(
-                    layout
-                        .mixer_masks()
-                        .iter()
-                        .any(|m| m & (1 << track_idx) != 0),
+                    layout.tracks.iter().any(|t| t.sources.contains(&i)),
+                    "{preset:?}: source {i} feeds no track"
+                );
+            }
+            for (track_idx, track) in layout.tracks.iter().enumerate() {
+                assert!(
+                    !track.sources.is_empty(),
                     "{preset:?}: track {track_idx} has no source"
                 );
             }
