@@ -105,7 +105,7 @@ behind a three-method trait and nothing above it knows libobs exists.
 
 ```mermaid
 flowchart TB
-    SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording"}
+    SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release"}
     T -->|"#[cfg(windows)]"| L["LibObsRecorder<br/><small>WGC window capture,<br/>NVENC/AMF/QSV H.264,<br/>one AAC track per audio source,<br/>fragmented MP4 + faststart remux</small>"]
     T -->|"everything else"| S["StubRecorder<br/><small>copies fixtures/sample.mp4</small>"]
     style T fill:#ede7f6,stroke:#5e35b1
@@ -115,6 +115,14 @@ The stub is not a mock — it writes a real, playable file into the real
 recordings directory and takes a real amount of time to do it. That is what
 keeps the library, retention, review player and the whole state machine
 developable on macOS with no Windows box in the loop.
+
+`prepare`/`release` exist because the Windows backend is expensive to hold:
+bringing it up spawns the out-of-process worker *and* initializes libobs, so a
+warm backend is a GPU device and every plugin resident in another process. The
+supervisor warms it when the League client appears and drops it when the client
+goes away, off the resulting state rather than off individual actions
+([DEVELOPMENT.md §2.2](../DEVELOPMENT.md#22-the-recorder-trait)). Both default
+to no-ops, so `StubRecorder` ignores them entirely.
 
 `start` takes the user's audio preset and `stop` reports the track layout it
 actually wrote — reported, not assumed, because a microphone can be unplugged

@@ -102,6 +102,34 @@ First real measurement against the targets in
 | Recording overhead | Hardware encoder only, no x264 | | Confirm encoder choice in app logs during §2/§3 |
 | Idle CPU | ~0% | | Task Manager, app idle with the client closed |
 
+**Measure idle RAM with the client closed *and* open.** The capture backend is
+now warm only while the League client is running
+([DEVELOPMENT.md §2.2](../DEVELOPMENT.md#22-the-recorder-trait)), so those are
+two different numbers and only the first is the §1.2 target. Confirm from Task
+Manager that **no `extprocess_recorder.exe` exists at all** before the client
+starts, that one appears within a few seconds of it starting, and that it goes
+away again when the client closes.
+
+### 5.1 Capture-backend lifecycle
+
+New with `prepare`/`release`; none of it can be exercised off Windows.
+
+- [ ] `extprocess_recorder.exe` is absent at app start, appears with the League
+      client, and disappears when the client closes.
+- [ ] The app log's `[recorder] backend:` line reads `libobs (idle)` at startup,
+      not `libobs (ready)`.
+- [ ] **A game recorded minutes after the client opened still works.** The
+      backend is now brought up well before `start`, so this checks it is still
+      healthy after sitting warm through champ select.
+- [ ] **Several games in one session.** Bring-up/tear-down now repeats across a
+      session (client restart, or closing and reopening the client) — watch for
+      a leak, a stale GPU device, or a second worker process.
+- [ ] Closing the client *mid-recording* does not tear the backend down under a
+      live encoder — the recording should finalize normally.
+- [ ] A machine where libobs fails to initialize surfaces
+      `libobs (unavailable: …)` in the dev portal's health panel rather than
+      failing at startup.
+
 ## 6. Open questions specific to the capture backend
 
 These are the things nobody has been able to answer by reading the code:

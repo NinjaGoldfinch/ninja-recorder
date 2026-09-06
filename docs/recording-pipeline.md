@@ -88,6 +88,19 @@ supervisor is the only thing that executes them, so "what should happen" and
 | `LiveClientUp` / `LiveClientDown` | `live_client::poller::watch` | 1 Hz, exponential backoff to 10 s while down |
 | `FinalizeComplete` | the supervisor itself, after `stop()` and teardown | once per game |
 
+### The capture backend's warm window
+
+Orthogonal to the transitions above, and driven off the resulting state rather
+than off any `Action`: the supervisor calls `Recorder::prepare` on every state
+except `Idle`, and `Recorder::release` on `Idle`. In practice that means the
+Windows backend is warm for exactly as long as the League client is running,
+because holding it from launch to exit is the largest single item on the
+idle-RAM budget ([DEVELOPMENT.md §2.2](../DEVELOPMENT.md#22-the-recorder-trait)).
+
+`prepare` is only a pre-warm — `start` brings the backend up itself if it has to
+— so a client that goes straight into a game is safe, and `release` is a no-op
+while a recording is in flight.
+
 ### Edge cases the pure tests cover
 
 | Case | Behaviour |

@@ -79,6 +79,28 @@ pub trait Recorder: Send {
     /// object itself. `FailedRecorder` folds its init error in here,
     /// which is why this returns an owned `String`.
     fn backend_name(&self) -> String;
+
+    /// Bring the backend up ahead of time, because a recording now looks
+    /// plausible — the supervisor calls this on entering `ClientRunning`.
+    ///
+    /// Purely a pre-warm: `start` brings the backend up itself if this was
+    /// never called or failed, so nothing depends on it having run. That
+    /// matters because the two can race — a client that goes straight into
+    /// a game gets `prepare` and `start` back to back — and correctness
+    /// must not hinge on which wins.
+    ///
+    /// Default no-op: only a backend with expensive resident state needs
+    /// to care.
+    fn prepare(&mut self) -> Result<(), RecorderError> {
+        Ok(())
+    }
+
+    /// Drop whatever `prepare` acquired, because no game is plausible any
+    /// more — the supervisor calls this on returning to `Idle`.
+    ///
+    /// Must be a no-op while a recording is in flight, and infallible: it
+    /// runs on a path where there is nothing useful to do with an error.
+    fn release(&mut self) {}
 }
 
 /// Stands in for the real backend when it fails to initialize (Windows

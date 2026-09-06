@@ -414,26 +414,22 @@ pub fn run() {
                 {
                     use tauri::path::BaseDirectory;
                     let ffmpeg = ffmpeg_path(app.handle());
-                    // Init failure here (missing/unstaged libobs files, no
-                    // usable GPU, etc.) must not take the whole app down —
-                    // only recording depends on this. Fall back to a
-                    // recorder that surfaces the error on `start` instead
-                    // of propagating it out of `setup`.
-                    let init = app
+                    // Only the *path* can fail here now. libobs itself no
+                    // longer starts during setup — it comes up when the
+                    // state machine sees the League client, and reports its
+                    // own failure through `backend_name`/`start`. Either
+                    // way this must not take the whole app down: the
+                    // library, review UI and LCU polling don't need capture.
+                    match app
                         .path()
                         .resolve("libobs/extprocess_recorder.exe", BaseDirectory::Resource)
-                        .map_err(|e| e.to_string())
-                        .and_then(|path| {
-                            recorder::libobs::LibObsRecorder::new(path, ffmpeg)
-                                .map_err(|e| e.to_string())
-                        });
-                    match init {
-                        Ok(recorder) => Box::new(recorder),
+                    {
+                        Ok(path) => Box::new(recorder::libobs::LibObsRecorder::new(path, ffmpeg)),
                         Err(e) => {
                             eprintln!(
-                                "[recorder] libobs backend failed to initialize, recording disabled: {e}"
+                                "[recorder] could not locate the libobs worker, recording disabled: {e}"
                             );
-                            Box::new(recorder::FailedRecorder(e))
+                            Box::new(recorder::FailedRecorder(e.to_string()))
                         }
                     }
                 }
@@ -442,10 +438,12 @@ pub fn run() {
                     Box::new(StubRecorder::new())
                 }
             };
-            // Which backend you get depends on target OS *and* on whether
-            // libobs managed to initialize, and the difference decides
-            // whether recording works at all — worth one line at startup
-            // rather than only being discoverable by trying to record.
+            // Which backend you get depends on the target OS and on
+            // whether the worker binary was found, and the difference
+            // decides whether recording works at all — worth one line at
+            // startup rather than only being discoverable by trying to
+            // record. On Windows this now says "idle" rather than "ready":
+            // libobs comes up with the League client, not with the app.
             println!("[recorder] backend: {}", backend.backend_name());
 
             let recorder: Arc<Mutex<Box<dyn Recorder>>> = Arc::new(Mutex::new(backend));

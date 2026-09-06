@@ -66,12 +66,47 @@ trait Recorder {
     fn start(&mut self, config: RecordConfig) -> Result<()>;
     fn stop(&mut self) -> Result<PathBuf>;   // finalized MP4
     fn is_recording(&self) -> bool;
+    fn prepare(&mut self) -> Result<()>;     // warm up; default no-op
+    fn release(&mut self);                   // go cold; default no-op
 }
 ```
 
 Backends:
 - `LibObsRecorder` — Windows, the real one.
 - `StubRecorder` — dev/macOS: sleeps, copies a fixture MP4 into place. Keeps the entire app layer developable and testable without Windows.
+
+**Decision: the backend is warm only while the League client is.** Bringing
+`LibObs` up spawns the out-of-process worker *and* sends it `Init`, which runs
+`obs_startup` and loads every plugin — so a live backend is a D3D11 device and
+the whole libobs plugin set resident in another process, not a dormant handle.
+It used to be constructed in `lib.rs`'s `setup` and held until exit, which put
+the single largest item on the idle-RAM budget (§1.2) on a machine that might
+never open League.
+
+`prepare`/`release` move that to the state machine's `ClientRunning` window:
+warm when the client appears, cold when it goes away. Two alternatives were
+rejected. Staying warm forever is the old behaviour and the thing being fixed.
+Going lazy on the first `start` instead would put libobs init *inside* the
+record path, where it lands on top of the existing bounded window-size wait and
+risks losing the opening seconds of a game — whereas the client being open is a
+reliable minutes-ahead signal that a game is plausible.
+
+`prepare` is therefore a pre-warm and nothing depends on it: `start` calls the
+same idempotent `ensure_up`, so the two racing (a client that goes straight into
+a game) is harmless. `release` refuses to run while a recording is in flight.
+The supervisor drives both from the resulting *state*, not from `Action`s — a
+client restart emits a gameflow stop and start while staying in `ClientRunning`,
+and acting on those would tear the backend down and rebuild it for nothing.
+
+The cost is that init failure is no longer a startup event, so it can't swap in
+a `FailedRecorder` any more. `LibObsRecorder::new` is now infallible (only the
+worker-binary path lookup can fail that way) and `backend_name` carries the
+diagnostic instead: `libobs (idle)`, `libobs (ready)`, or
+`libobs (unavailable: …)`. There is also a **first-recording-of-a-session risk
+that only real hardware can settle**: whether a backend brought up minutes
+before `start` is still healthy, and whether repeated bring-up/tear-down across
+several games in a session leaks anything on the libobs side
+([docs/windows-verification.md](docs/windows-verification.md)).
 
 Rules:
 - No libobs types leak above the trait.

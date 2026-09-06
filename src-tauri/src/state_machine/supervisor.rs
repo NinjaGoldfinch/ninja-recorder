@@ -187,12 +187,41 @@ impl Supervisor {
     }
 
     fn dispatch_one(self: &Arc<Self>, event: StateEvent) {
-        let actions = {
+        let (actions, state) = {
             let mut machine = self.machine.lock().unwrap();
-            machine.handle(event)
+            (machine.handle(event), machine.state.clone())
         };
         for action in actions {
             self.execute(action);
+        }
+        self.sync_capture_backend(&state);
+    }
+
+    /// Keeps the capture backend's resident cost tied to whether a game is
+    /// plausible: warm from the moment the League client is running, cold
+    /// once it isn't (DEVELOPMENT.md §1.2).
+    ///
+    /// Driven off the resulting *state* rather than off `Action`s, because
+    /// the actions don't say it. A client restart emits a stop and a start
+    /// of the gameflow watch while staying in `ClientRunning`, so acting on
+    /// those would tear libobs down and bring it straight back up for
+    /// nothing. Reading the state makes that a no-op, and makes this
+    /// idempotent — which matters because `dispatch` runs us twice.
+    fn sync_capture_backend(&self, state: &GameState) {
+        // Blocks on the recorder mutex, which `stop_recording` holds for the
+        // whole finalize. So a lockfile-watch dispatch landing mid-finalize
+        // waits a few seconds here. Deliberate: `try_lock` would be
+        // non-blocking but could silently skip the `release` at `Idle`, and
+        // nothing would dispatch again until the client came back, leaving
+        // the backend warm indefinitely — the exact thing this exists to
+        // prevent. Delaying a background poll is the cheaper trade.
+        let mut recorder = self.recorder.lock().unwrap();
+        if matches!(state, GameState::Idle) {
+            recorder.release();
+        } else if let Err(e) = recorder.prepare() {
+            // Not fatal: `start` retries the bring-up itself, and a warning
+            // now is more useful than silence until someone tries to record.
+            eprintln!("[state_machine] capture backend not ready: {e}");
         }
     }
 
@@ -546,7 +575,103 @@ mod tests {
     use crate::db::Db;
     use crate::live_client::MarkerKind;
     use crate::recorder::stub::StubRecorder;
+    use crate::recorder::RecorderError;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Counts `prepare`/`release` so the capture-backend lifecycle can be
+    /// asserted on. The real bring-up only exists on Windows, so this is
+    /// the only place the *policy* — warm with the client, cold at idle —
+    /// is testable at all. Counters are shared with the test rather than
+    /// read back out of the `Box<dyn Recorder>`, which can't be downcast.
+    #[derive(Clone, Default)]
+    struct Counts {
+        prepared: Arc<AtomicUsize>,
+        released: Arc<AtomicUsize>,
+    }
+
+    impl Counts {
+        fn get(&self) -> (usize, usize) {
+            (
+                self.prepared.load(Ordering::Relaxed),
+                self.released.load(Ordering::Relaxed),
+            )
+        }
+    }
+
+    struct CountingRecorder(Counts);
+
+    impl Recorder for CountingRecorder {
+        fn start(&mut self, _config: crate::recorder::RecordConfig) -> Result<(), RecorderError> {
+            Ok(())
+        }
+
+        fn stop(&mut self) -> Result<crate::recorder::RecordingOutput, RecorderError> {
+            Err(RecorderError::NotRecording)
+        }
+
+        fn is_recording(&self) -> bool {
+            false
+        }
+
+        fn backend_name(&self) -> String {
+            "counting".to_string()
+        }
+
+        fn prepare(&mut self) -> Result<(), RecorderError> {
+            self.0.prepared.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+
+        fn release(&mut self) {
+            self.0.released.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn counting_supervisor() -> (Arc<Supervisor>, Counts) {
+        let counts = Counts::default();
+        let recorder: Arc<Mutex<Box<dyn Recorder>>> =
+            Arc::new(Mutex::new(Box::new(CountingRecorder(counts.clone()))));
+        let db = Arc::new(Db::open_in_memory().unwrap());
+        (
+            Supervisor::new(recorder, std::env::temp_dir(), db),
+            counts,
+        )
+    }
+
+    #[test]
+    fn capture_backend_is_released_at_idle() {
+        let (sup, counts) = counting_supervisor();
+        sup.sync_capture_backend(&GameState::Idle);
+        assert_eq!(counts.get(), (0, 1), "idle should release, never prepare");
+    }
+
+    #[test]
+    fn capture_backend_is_prepared_once_the_client_is_running() {
+        let (sup, counts) = counting_supervisor();
+        for state in [
+            GameState::ClientRunning,
+            GameState::WaitingForGame,
+            GameState::Recording,
+            GameState::Finalizing,
+        ] {
+            let before = counts.get();
+            sup.sync_capture_backend(&state);
+            let after = counts.get();
+            assert_eq!(after.0, before.0 + 1, "{state:?} should prepare");
+            assert_eq!(after.1, before.1, "{state:?} should not release");
+        }
+    }
+
+    #[test]
+    fn a_client_restart_does_not_churn_the_capture_backend() {
+        // A restart emits StopGameflowWatch + StartGameflowWatch while
+        // staying in ClientRunning. Syncing off the state — not the actions
+        // — means nothing is torn down and brought straight back up.
+        let (sup, counts) = counting_supervisor();
+        sup.sync_capture_backend(&GameState::ClientRunning);
+        sup.sync_capture_backend(&GameState::ClientRunning);
+        assert_eq!(counts.get().1, 0, "no release across a restart");
+    }
 
     fn test_supervisor() -> (Arc<Supervisor>, PathBuf) {
         // `line!()` used to stand in for a per-test discriminator here, but
