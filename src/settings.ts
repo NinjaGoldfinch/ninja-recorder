@@ -17,6 +17,7 @@ import type {
   AudioInputDevice,
   AudioPreset,
   AudioPresetKey,
+  AutostartStatus,
   EnforcementReport,
   RetentionPolicy,
 } from "./types";
@@ -25,6 +26,8 @@ interface Els {
   open: HTMLButtonElement;
   back: HTMLButtonElement;
   themeToggle: HTMLElement;
+  autostart: HTMLInputElement;
+  autostartHint: HTMLElement;
   closeAction: HTMLSelectElement;
   notifyMaster: HTMLInputElement;
   notifyStarted: HTMLInputElement;
@@ -55,6 +58,8 @@ export function initSettings() {
     open: el<HTMLButtonElement>("#open-settings-btn"),
     back: el<HTMLButtonElement>("#back-to-library-from-settings-btn"),
     themeToggle: el("#theme-toggle"),
+    autostart: el<HTMLInputElement>("#autostart-toggle"),
+    autostartHint: el("#autostart-hint"),
     closeAction: el<HTMLSelectElement>("#close-action-select"),
     notifyMaster: el<HTMLInputElement>("#notify-master"),
     notifyStarted: el<HTMLInputElement>("#notify-started"),
@@ -80,6 +85,10 @@ export function initSettings() {
 
   els.open.addEventListener("click", () => showView("settings"));
   els.back.addEventListener("click", () => showView("library"));
+
+  els.autostart.addEventListener("change", () => {
+    void saveAutostart(els.autostart.checked);
+  });
 
   // Fire-and-forget like the theme rather than awaited like the audio preset:
   // this only decides what the close button does, and Rust re-reads it from
@@ -150,6 +159,9 @@ export function initSettings() {
 
   els.openFolder.addEventListener("click", openFolder);
 
+  defaultAutostartHint = els.autostartHint.textContent ?? "";
+
+  void loadAutostart();
   void loadRetentionPolicy();
   void loadRecordingsDir();
   void loadAudioSettings();
@@ -177,6 +189,55 @@ function syncThemeToggle(active: ThemePref) {
       "aria-checked",
       String(button.dataset.themeChoice === active),
     );
+  }
+}
+
+// --- Start on login -------------------------------------------------------
+
+// Captured at init so the hint's wording stays in `index.html` alone.
+let defaultAutostartHint = "";
+
+// The one setting `syncSettingsFromPrefs` does not touch, because it is not a
+// pref: the registry entry is the source of truth (Rust's `get_autostart`
+// says why), so the checkbox is filled in from the backend instead of from
+// the cached `Prefs`.
+async function loadAutostart() {
+  try {
+    applyAutostart(await call<AutostartStatus>("get_autostart"));
+  } catch (err) {
+    // A readable failure, not a silent one: the user is looking at a
+    // checkbox whose state we could not determine, and leaving it unticked
+    // would claim the app does not start on login.
+    console.error("Failed to read the start-on-login setting", err);
+    els.autostart.checked = false;
+    els.autostart.disabled = true;
+    els.autostartHint.textContent = `Couldn't read this setting: ${err}`;
+  }
+}
+
+function applyAutostart(status: AutostartStatus) {
+  els.autostart.checked = status.enabled;
+  els.autostart.disabled = !status.supported;
+  // Restored rather than re-written, so the copy lives in the HTML only: a
+  // failed read leaves an error in this slot and a later success has to clear
+  // it.
+  els.autostartHint.textContent = status.supported
+    ? defaultAutostartHint
+    : "Not available in this build.";
+}
+
+async function saveAutostart(enabled: boolean) {
+  els.autostart.disabled = true;
+  try {
+    // The returned status is what the platform says afterwards, which is not
+    // necessarily what was asked for — a Run-key write can be overruled by
+    // policy. Applying the response rather than the request is what keeps the
+    // checkbox honest.
+    applyAutostart(await call<AutostartStatus>("set_autostart", { enabled }));
+  } catch (err) {
+    els.autostart.checked = !enabled;
+    els.autostart.disabled = false;
+    toast(`Couldn't change start on login: ${err}`, "error");
   }
 }
 

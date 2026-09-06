@@ -141,12 +141,22 @@ a shipped build.
 | `delete_recording` | — | library card |
 | `get_recordings_dir` / `open_recordings_folder` | path / — | settings |
 | `get_ui_prefs` / `set_ui_pref` | `HashMap<String,String>` / — | `prefs.ts` |
+| `get_autostart` / `set_autostart` | `AutostartStatus` | settings → background & tray |
 | `get_audio_preset` / `set_audio_preset` | `AudioPreset` / — | settings → audio |
 | `list_audio_inputs` | `Vec<AudioInputDevice>` | settings → microphone picker |
 | `extract_audio_track` | path to a cached sidecar | review player, stem selection |
 | `lcu_status` | `LcuStatus` | header strip |
 | `game_state_status` | `SupervisorStatus` | header strip, About block |
 | `start_recording` / `stop_recording` / `is_recording` | — | registered but unreferenced by the main UI; the dev portal's Recorder panel drives them |
+
+**Start on login is the one setting that is not a pref.** It lives in the
+platform's own store — `HKCU\…\Run` on Windows — which the user can also edit
+from Task Manager, so `settings.ts` reads it from `get_autostart` when the view
+loads instead of from the `prefs.ts` cache, and applies whatever
+`set_autostart` reports *back* rather than the value it just sent
+([DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave)).
+It is the only row in the settings form that can come back disabled, when the
+build has no autostart control or the read failed.
 
 ## Routing and the tray
 

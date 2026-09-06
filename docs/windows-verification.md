@@ -153,7 +153,53 @@ by a test.**
 - [ ] Measure idle RAM with the window closed vs hidden — the whole premise of
       "close-window" as the default is that hiding reclaims nothing.
 
-### 5.0.2 Notifications
+### 5.0.2 Start on login
+
+The one setting that writes outside the app's own data, and the one whose
+source of truth is not ours: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+Nothing in `cargo test` can reach it (`Ctx::new` leaves the control unset), and
+the macOS dev loop exercises a LaunchAgent, not this — so every row below is
+Windows-only.
+
+**Check the registry directly, not just the checkbox**, since the checkbox is
+supposed to be a report of that key and the whole failure mode is the two
+disagreeing:
+
+```powershell
+Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' |
+  Select-Object -ExpandProperty 'ninja-recorder'
+```
+
+- [ ] A fresh install registers **nothing**: the key is absent and the
+      Settings checkbox is off before it is ever touched.
+- [ ] Ticking it creates the value, and it holds the installed exe's full path
+      **followed by `--hidden`**. A path with no flag means a login start that
+      opens a window.
+- [ ] Unticking it removes the value entirely.
+- [ ] The setting survives a restart of the app: reopen Settings and confirm
+      the checkbox still reflects the key.
+- [ ] **Sign out and back in.** The app comes up with no window and no taskbar
+      button, the tray icon is there, and the recorder is live — start a game
+      without opening the window and confirm it records.
+- [ ] Delete the entry from **Task Manager → Startup** with the app running,
+      then reopen Settings: the checkbox must now read *off*. This is the case
+      the "no `settings_kv` mirror" decision exists for
+      ([DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave)).
+- [ ] Disabling the entry in Task Manager (rather than deleting it) — note what
+      the checkbox says. Windows records that state outside the `Run` key, so
+      the app is expected to still report "on"; confirm it, and that toggling
+      off then on clears it.
+- [ ] Uninstall with autostart enabled, then check the key: NSIS does not know
+      about it, so a stale entry pointing at a removed exe is the expected —
+      and harmless — outcome. Confirm it does not produce an error dialog on
+      the next login.
+- [ ] Reinstall over an existing install with autostart on: the path must still
+      resolve, or the entry silently stops working.
+- [ ] Both product names side by side (`ninja-recorder` and
+      `ninja-recorder-dev`) get **separate** `Run` values; confirm enabling one
+      does not show as enabled in the other.
+
+### 5.0.3 Notifications
 
 **None of this can be checked before installing.** The plugin only sets the
 `System.AppUserModel.ID` for a non-`target/debug|release` exe, and Windows

@@ -140,6 +140,31 @@ fn open_recordings_folder(state: tauri::State<AppState>) -> Result<(), String> {
 }
 
 
+/// `core::Autostart` over `tauri-plugin-autostart`.
+///
+/// Lives here rather than in `core` because `autolaunch()` hangs off an
+/// `AppHandle`, and `core` may not name one (see its header). The manager is
+/// resolved per call rather than cached: it is a cheap state lookup, and the
+/// plugin owns the lifetime.
+struct PluginAutostart(tauri::AppHandle);
+
+impl core::Autostart for PluginAutostart {
+    fn is_enabled(&self) -> Result<bool, String> {
+        use tauri_plugin_autostart::ManagerExt;
+        self.0.autolaunch().is_enabled().map_err(|e| e.to_string())
+    }
+
+    fn enable(&self) -> Result<(), String> {
+        use tauri_plugin_autostart::ManagerExt;
+        self.0.autolaunch().enable().map_err(|e| e.to_string())
+    }
+
+    fn disable(&self) -> Result<(), String> {
+        use tauri_plugin_autostart::ManagerExt;
+        self.0.autolaunch().disable().map_err(|e| e.to_string())
+    }
+}
+
 /// The main window's label. Matches `capabilities/default.json`'s
 /// `"windows": ["main"]`, which is what Tauri would have used implicitly when
 /// the window came from `tauri.conf.json`.
@@ -186,6 +211,19 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        // The argument list is the on-disk contract: it is written into
+        // `HKCU\...\Run` once, when the user ticks the box, and handed
+        // back to whatever build is installed years later — which is why
+        // `launch.rs` owns the string and pins it with a test. `--hidden`
+        // and not `--daemon`: the daemon is still reserved, and registering
+        // a flag that exits 2 would mean a login start that records nothing.
+        //
+        // Nothing is registered by installing; the entry only appears when
+        // the settings toggle is turned on.
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![launch::HIDDEN_FLAG]),
+        ))
         .setup(move |app| {
             let backend: Box<dyn Recorder> = {
                 #[cfg(target_os = "windows")]
@@ -366,6 +404,7 @@ pub fn run() {
                 dir,
                 ffmpeg_path(app.handle()),
             );
+            ctx.set_autostart(Box::new(PluginAutostart(app.handle().clone())));
             let notify_handle = app.handle().clone();
             ctx.set_library_changed_notifier(Box::new(move || {
                 use tauri::Emitter;

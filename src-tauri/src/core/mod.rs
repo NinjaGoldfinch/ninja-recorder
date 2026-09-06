@@ -56,6 +56,16 @@ pub struct Ctx {
     /// `None` simply means nothing is emitted, which is what the unit tests
     /// want.
     on_library_changed: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Start-on-login control, behind a trait for the same reason: the only
+    /// implementation wraps `tauri-plugin-autostart`, whose manager is
+    /// reached through an `AppHandle`.
+    ///
+    /// **`None` means the tests cannot reach the real registry.** `Ctx::new`
+    /// leaves it unset, so `set_autostart` in a unit test fails loudly
+    /// instead of writing a `Run` entry on whatever machine ran `cargo
+    /// test` — which on a developer's Windows box would be an app that
+    /// starts itself on login forever after.
+    autostart: Option<Box<dyn Autostart>>,
 }
 
 impl Ctx {
@@ -73,6 +83,7 @@ impl Ctx {
             recordings_dir,
             ffmpeg,
             on_library_changed: None,
+            autostart: None,
         }
     }
 
@@ -81,6 +92,13 @@ impl Ctx {
     /// the same reason.
     pub fn set_library_changed_notifier(&mut self, notify: Box<dyn Fn() + Send + Sync>) {
         self.on_library_changed = Some(notify);
+    }
+
+    /// Called once from `lib.rs`'s `setup`, for the same reason as
+    /// `set_library_changed_notifier`: the implementation needs an
+    /// `AppHandle`, which cannot be named here.
+    pub fn set_autostart(&mut self, autostart: Box<dyn Autostart>) {
+        self.autostart = Some(autostart);
     }
 
     fn notify_library_changed(&self) {
@@ -430,6 +448,83 @@ pub fn get_ui_prefs(ctx: &Ctx) -> Result<HashMap<String, String>, String> {
 
 pub fn set_ui_pref(ctx: &Ctx, key: String, value: String) -> Result<(), String> {
     ctx.db.set_ui_pref(&key, &value).map_err(|e| e.to_string())
+}
+
+// -------------------------------------------------------------- autostart
+
+/// Registering the app to run at login.
+///
+/// A trait rather than a direct call because the only implementation wraps
+/// `tauri-plugin-autostart`, whose manager comes off an `AppHandle` — and
+/// nothing here may name a `tauri` type (module header). It also makes the
+/// commands below testable without a login item existing anywhere.
+///
+/// Every method returns the platform's own answer. On Windows all three are
+/// registry operations against `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`,
+/// which the user can also edit from Task Manager's Startup tab or a policy
+/// can forbid outright, so none of them is assumed to succeed.
+pub trait Autostart: Send + Sync {
+    /// Whether a login entry for *this* executable exists right now.
+    fn is_enabled(&self) -> Result<bool, String>;
+    fn enable(&self) -> Result<(), String>;
+    fn disable(&self) -> Result<(), String>;
+}
+
+/// What the settings screen needs to render the start-on-login row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct AutostartStatus {
+    /// The platform's answer, re-read after any change — never what was
+    /// asked for.
+    pub enabled: bool,
+    /// False when this build has no autostart control at all, which is the
+    /// signal to show the row disabled rather than a checkbox that lies.
+    pub supported: bool,
+}
+
+/// Whether the app is registered to start on login.
+///
+/// **Read live from the platform, not mirrored into `settings_kv`.** Every
+/// other preference here is ours alone, but this one has a second owner: the
+/// user can delete the entry from Task Manager's Startup tab, an installer or
+/// a group policy can remove it, and a copy in SQLite would then be a
+/// checkbox confidently describing something that will not happen. The
+/// registry is the truth; this just reports it.
+pub fn get_autostart(ctx: &Ctx) -> Result<AutostartStatus, String> {
+    let Some(autostart) = ctx.autostart.as_ref() else {
+        return Ok(AutostartStatus {
+            enabled: false,
+            supported: false,
+        });
+    };
+    Ok(AutostartStatus {
+        enabled: autostart.is_enabled()?,
+        supported: true,
+    })
+}
+
+/// Turns start-on-login on or off, and reports what the platform says
+/// afterwards.
+///
+/// The re-read is the point. A `Run` entry write can be silently overruled —
+/// by policy, by permissions, by another copy of the app owning the same key
+/// — and returning `enabled` on the strength of "the call didn't error" would
+/// leave the checkbox ticked for a machine that will never launch us.
+pub fn set_autostart(ctx: &Ctx, enabled: bool) -> Result<AutostartStatus, String> {
+    let autostart = ctx
+        .autostart
+        .as_ref()
+        .ok_or("start-on-login is not available in this build")?;
+
+    if enabled {
+        autostart.enable()?;
+    } else {
+        autostart.disable()?;
+    }
+
+    Ok(AutostartStatus {
+        enabled: autostart.is_enabled()?,
+        supported: true,
+    })
 }
 
 /// The audio capture preset, read and written through `serde` rather than

@@ -57,6 +57,12 @@ rusqlite_migration = "1"
 # (DEVELOPMENT.md §6) — std has no such API.
 fs2 = "0.4"
 tauri-plugin-notification = "2"
+# Start-on-login. Windows is the one that matters (it writes the app's path
+# plus `--hidden` into `HKCU\...\Run`); the plugin covers macOS and Linux
+# too, which is what makes the flag testable in the macOS dev loop. The
+# registry entry — not a `settings_kv` row — is the source of truth, so the
+# checkbox can't drift from what Windows will actually do (DEVELOPMENT.md §12).
+tauri-plugin-autostart = "2"
 
 # Real capture backend. Fork of github.com/FFFFFFFXXXXXXX/libobs-recorder
 # that swaps the injection-based `game_capture` source for `window_capture`

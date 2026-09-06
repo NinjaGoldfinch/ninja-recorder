@@ -553,13 +553,14 @@ it. `core` itself still names no async runtime — callers choose the thread.
 `--daemon` (reserved), `--hidden`, or nothing. Parsing lives in
 `src-tauri/src/launch.rs`, pure and unit-tested, and names no `tauri` type.
 
-**The flags are an on-disk contract, which is why they are fixed before the
-tray exists.** `tauri-plugin-autostart` writes the flag into `HKCU\…\Run`
+**The flags are an on-disk contract, which is why they were fixed before the
+tray existed.** `tauri-plugin-autostart` writes the flag into `HKCU\…\Run`
 once, at enable time; a flag that changes meaning later silently strands every
-user who turned autostart on before the change. `--daemon` is therefore
-recognised now and *rejected with a message and exit code 2* rather than
-falling back to a normal window — a build that quietly ignored it would look
-like it worked while recording nothing.
+user who turned autostart on before the change. That is no longer hypothetical
+— "Start on login" below registers `--hidden` — and `--daemon` is therefore
+recognised but *rejected with a message and exit code 2* rather than falling
+back to a normal window: a build that quietly ignored it would look like it
+worked while recording nothing.
 
 **The main window is created in Rust, not by `tauri.conf.json`.** `app.windows`
 is now `[]`. Tauri creates entries in that array automatically, before `setup`
@@ -626,6 +627,47 @@ a state worth restoring into.
 from `run()`, which is dead code in a test build and gets stripped, keeping the
 Win32 GUI import stack out of the test binary. The one testable thing —
 `CloseAction` parsing — lives in `core`, which names no `tauri` type.
+
+### Start on login
+
+Recording unattended is worth very little if the user has to remember to launch
+the recorder first. `tauri-plugin-autostart` registers the app under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (a LaunchAgent on
+macOS, a `.desktop` entry on Linux — which is what makes the whole thing
+exercisable in the macOS dev loop), and it is registered with `--hidden`, so a
+login start costs a tray icon and no webview at all.
+
+**`--hidden`, not `--daemon`.** The daemon is still reserved and exits 2, so
+registering it would produce a login start that launches nothing and records
+nothing, with no console to say why. This is the reason the flags were fixed
+before the tray existed: the string goes into the registry once, at enable
+time, and the build that reads it back may be years newer. `launch.rs` owns
+both flags as constants and has a test pinning their exact spelling — renaming
+the constant is free, changing its value strands every machine that already has
+the old one.
+
+**Off until asked for, and never written by the installer.** Nothing registers
+at install or first run; the entry appears only when the settings toggle is
+turned on. An app that quietly adds itself to startup is one the user finds in
+Task Manager and uninstalls.
+
+**The registry is the source of truth — this is the one setting not mirrored
+into `settings_kv`.** Every other preference is ours alone, but this one has a
+second owner: the user can delete the entry from Task Manager's Startup tab, and
+policy or another install can remove it. A cached copy in SQLite would be a
+checkbox confidently describing a login start that will never happen, so
+`get_autostart` reads the platform live and `set_autostart` **re-reads after
+writing** and returns that, not what was asked for. A `Run` write can be
+overruled; reporting success on "the call didn't error" is how the checkbox
+starts lying.
+
+`core` can't name an `AppHandle`, so the plugin sits behind a `core::Autostart`
+trait implemented in `lib.rs` — the same seam shape as
+`set_library_changed_notifier`. `Ctx::new` leaves it `None`, which does double
+duty: the commands are unit-testable against a fake, and **`cargo test` cannot
+reach a real registry**. A test that ran `set_autostart` for real on a
+developer's Windows box would leave that machine launching the app on every
+login, so `None` refuses the write rather than defaulting to the live one.
 
 ### Notifications
 

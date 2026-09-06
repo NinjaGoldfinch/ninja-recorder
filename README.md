@@ -17,8 +17,8 @@ No OBS to install. No scenes to configure. No injection into the game, ever.
 > the per-application capture behind every preset that records "game audio" has
 > never run against a Vanguard-protected process, so if your game track comes
 > out silent, switch the preset to Desktop, which uses ordinary loopback; and
-> the tray, the close-button setting and the notifications are **newer than any
-> Windows testing**, so treat them as unproven there. See
+> the tray, the close-button setting, start-on-login and the notifications are
+> **newer than any Windows testing**, so treat them as unproven there. See
 > [docs/windows-verification.md](docs/windows-verification.md) for exactly
 > what those checks involve.
 
@@ -44,7 +44,8 @@ You do not press a button anywhere in that chain.
 ## Why
 
 - **Zero-config recording.** The League Client API tells the app when a game
-  starts. That's the whole trigger.
+  starts. That's the whole trigger. Turn on start-on-login and it comes up in
+  the tray with your PC, so there is nothing to remember to launch.
 - **Event-tagged VODs.** Every kill, death, dragon, baron, herald and turret
   becomes a marker on the timeline. Jump straight to your deaths. Clip the
   teamfight. A per-second advantage curve sits under the markers.
