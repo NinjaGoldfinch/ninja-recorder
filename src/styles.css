@@ -372,6 +372,27 @@ button:disabled {
   min-height: 320px;
   max-height: 60vh;
   background-color: #000;
+  /* Letterbox rather than stretch: a recording that isn't the display's
+   * aspect ratio (ultrawide, or a windowed capture) would otherwise be
+   * distorted once `height: 100%` is forced on it in fullscreen. */
+  object-fit: contain;
+}
+
+/* Fullscreen sizing. Without these the video keeps `max-height: 60vh` and
+ * renders as a small rectangle floating in the middle of a black screen —
+ * the Fullscreen API is working, the CSS just never stopped constraining
+ * it. Unprefixed `:fullscreen` is fine; the only shipping target is
+ * WebView2, which is modern Chromium. */
+.player-wrap:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  border-radius: 0;
+}
+
+.player-wrap:fullscreen #review-video {
+  height: 100%;
+  max-height: none;
+  min-height: 0;
 }
 
 /* Deliberately NOT tokenised. This overlay sits on top of black video in
@@ -409,23 +430,163 @@ button:disabled {
   color: #ccc;
 }
 
+/* --- In-player controls ----------------------------------------------
+ *
+ * Deliberately NOT tokenised, for the same reason as `.video-error` above:
+ * this bar sits over black video in both themes, so light-theme `--text`
+ * would put dark text on a dark frame. Fixed light colours instead.
+ *
+ * The whole overlay lives inside `.player-wrap` because that is the element
+ * `requestFullscreen` is called on — see the `:fullscreen` rules above. */
+.player-overlay {
+  position: absolute;
+  inset: auto 0 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-5) var(--sp-3) var(--sp-2);
+  color: #eee;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.75), transparent);
+}
+
+/* Seek track. The visible bar is thin, but the hit area is the padded
+ * element around it — a 4px pointer target is unusable. */
+.player-scrub {
+  padding: var(--sp-2) 0;
+  cursor: pointer;
+  /* Without this the browser claims the drag for panning and the
+   * pointermove stream stops mid-scrub. */
+  touch-action: none;
+}
+
+.player-scrub::before {
+  content: "";
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background-color: rgba(255, 255, 255, 0.3);
+}
+
+.player-progress {
+  position: relative;
+  width: 0;
+  height: 4px;
+  margin-top: -4px;
+  border-radius: 2px;
+  background-color: var(--accent);
+}
+
+/* Handle. On the fill rather than the track so it rides the played edge
+ * without any extra positioning maths in JS. */
+.player-progress::after {
+  content: "";
+  position: absolute;
+  right: -6px;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  background-color: var(--accent);
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease);
+}
+
+.player-scrub:hover .player-progress::after,
+.player-scrub:focus-visible .player-progress::after,
+.player-scrub.open .player-progress::after {
+  opacity: 1;
+}
+
 .player-controls {
   display: flex;
   align-items: center;
-  gap: var(--sp-4);
-  margin: var(--sp-3) 0;
+  gap: var(--sp-2);
   font-size: var(--fs-md);
 }
 
-.player-controls label {
-  display: inline-flex;
+.player-controls .icon-btn {
+  border-color: transparent;
+  background: none;
+  color: inherit;
+  font-size: 1.1rem;
+}
+
+.player-controls .icon-btn:hover {
+  background-color: rgba(255, 255, 255, 0.15);
+}
+
+.player-controls .time-display {
+  color: #ddd;
+}
+
+/* Pushes the gear and fullscreen to the right-hand end. */
+.player-menu {
+  position: relative;
+  margin-left: auto;
+}
+
+.player-menu-panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + var(--sp-2));
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  white-space: nowrap;
+  border-radius: var(--r-md);
+  background-color: var(--bg-surface);
+  box-shadow: var(--shadow-3);
+  /* Above the timeline tooltip's 10, below the app bar's 20. */
+  z-index: 12;
+}
+
+/* The panel is a real surface rather than part of the scrim, so it takes
+ * the theme tokens the rest of the bar deliberately avoids. */
+.player-menu-panel label {
+  display: flex;
   align-items: center;
-  gap: var(--sp-1);
+  justify-content: space-between;
+  gap: var(--sp-3);
   color: var(--text-muted);
 }
 
-.player-controls select {
+.player-menu-panel select {
   padding: 0.3em 0.5em;
+}
+
+/* Volume expands from an icon, following the one hover-reveal precedent in
+ * this sheet (`.vod-actions`). `.open` is held by JS for the duration of a
+ * drag so the slider can't collapse out from under the pointer when it
+ * leaves the control. */
+.volume-control {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.volume-control .volume-slider {
+  width: 0;
+  opacity: 0;
+  transition:
+    width var(--dur) var(--ease),
+    opacity var(--dur) var(--ease);
+}
+
+.volume-control:hover .volume-slider,
+.volume-control:focus-within .volume-slider,
+.volume-control.open .volume-slider {
+  width: 6rem;
+  opacity: 1;
+}
+
+/* No hover to reveal on, so it never collapses. */
+@media (hover: none) {
+  .volume-control .volume-slider {
+    width: 6rem;
+    opacity: 1;
+  }
 }
 
 /* --- VOD timeline ----------------------------------------------------
@@ -675,7 +836,6 @@ button:disabled {
 }
 
 .volume-slider {
-  width: 6rem;
   accent-color: var(--accent);
 }
 

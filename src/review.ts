@@ -36,11 +36,6 @@ const MARKER_PRIORITY = [
   "assist",
 ];
 
-// Real per-recording frame rate isn't probed anywhere yet (it's a
-// capture-backend concern) — 1/30s is a reasonable approximation for
-// review purposes, not frame-exact.
-const FRAME_SECONDS = 1 / 30;
-
 // Volume and mute are the *user's* intent, held here rather than read back
 // off the video element. Playing an isolated stem means muting the video and
 // letting a separate <audio> carry the sound, and if the controls read
@@ -66,15 +61,18 @@ let video: HTMLVideoElement | null;
 let videoError: HTMLElement | null;
 let videoErrorText: HTMLElement | null;
 let videoErrorDetail: HTMLElement | null;
-let frameBackBtn: HTMLButtonElement | null;
-let frameFwdBtn: HTMLButtonElement | null;
 let rateSelect: HTMLSelectElement | null;
 let markerListEl: HTMLElement | null;
 let playerWrap: HTMLElement | null;
+let playerScrub: HTMLElement | null;
+let playerProgress: HTMLElement | null;
 let playPauseBtn: HTMLButtonElement | null;
 let timeDisplay: HTMLElement | null;
 let muteBtn: HTMLButtonElement | null;
+let volumeControl: HTMLElement | null;
 let volumeSlider: HTMLInputElement | null;
+let settingsBtn: HTMLButtonElement | null;
+let settingsMenu: HTMLElement | null;
 let trackField: HTMLElement | null;
 let trackSelect: HTMLSelectElement | null;
 let fullscreenBtn: HTMLButtonElement | null;
@@ -97,7 +95,14 @@ let currentMetric: MetricKey = "gold_diff";
 /// so hover can list a cluster's members without re-deriving them.
 let currentClusters: MarkerRow[][] = [];
 let rafHandle: number | null = null;
-let isScrubbing = false;
+/// Which seek track is currently being dragged, or null. There are two of
+/// them — the in-player scrub bar and the rich `#vod-timeline` — and a drag
+/// on one must not be ended by a stray pointer event on the other.
+let scrubbingTrack: HTMLElement | null = null;
+/// Whether the settings menu was open when the pointer went down on the
+/// video. A click that only dismissed the menu must not also toggle
+/// playback, and by the time `click` fires the menu is already closed.
+let menuWasOpenOnPointerDown = false;
 
 export function initReview() {
   document.addEventListener("visibilitychange", onVisibilityChange);
@@ -107,15 +112,18 @@ export function initReview() {
   videoError = document.querySelector("#review-video-error");
   videoErrorText = document.querySelector("#review-video-error-text");
   videoErrorDetail = document.querySelector("#review-video-error-detail");
-  frameBackBtn = document.querySelector("#frame-back-btn");
-  frameFwdBtn = document.querySelector("#frame-fwd-btn");
   rateSelect = document.querySelector("#playback-rate-select");
   markerListEl = document.querySelector("#marker-list");
   playerWrap = document.querySelector(".player-wrap");
+  playerScrub = document.querySelector("#player-scrub");
+  playerProgress = document.querySelector("#player-progress");
   playPauseBtn = document.querySelector("#play-pause-btn");
   timeDisplay = document.querySelector("#time-display");
   muteBtn = document.querySelector("#mute-btn");
+  volumeControl = document.querySelector("#volume-control");
   volumeSlider = document.querySelector("#volume-slider");
+  settingsBtn = document.querySelector("#player-settings-btn");
+  settingsMenu = document.querySelector("#player-settings-menu");
   fullscreenBtn = document.querySelector("#fullscreen-btn");
   timelineBody = document.querySelector("#timeline-body");
   timelineGraph = document.querySelector("#timeline-graph");
@@ -129,8 +137,6 @@ export function initReview() {
   metricSummary = document.querySelector("#timeline-metric-summary");
 
   backBtn?.addEventListener("click", closeReview);
-  frameBackBtn?.addEventListener("click", () => stepFrame(-1));
-  frameFwdBtn?.addEventListener("click", () => stepFrame(1));
   rateSelect?.addEventListener("change", () => {
     if (video && rateSelect) video.playbackRate = Number(rateSelect.value);
   });
@@ -165,8 +171,8 @@ export function initReview() {
   video?.addEventListener("waiting", () => stemAudio?.pause());
   video?.addEventListener("stalled", () => stemAudio?.pause());
   video?.addEventListener("playing", () => void resumeStem());
-  // Hooked on the event rather than in the rate <select>'s handler, so the
-  // frame-step buttons and hotkeys are covered too.
+  // Hooked on the event rather than in the rate <select>'s handler, so any
+  // other path that changes the rate is covered too.
   video?.addEventListener("ratechange", () => {
     if (stemAudio) stemAudio.playbackRate = video!.playbackRate;
   });
@@ -183,6 +189,48 @@ export function initReview() {
     syncVolumeControls();
   });
 
+  // The volume slider is revealed by hovering its group, but a drag routinely
+  // wanders outside it — which would collapse the slider mid-drag. Pin it
+  // open until the pointer is released anywhere.
+  volumeSlider?.addEventListener("pointerdown", () => {
+    volumeControl?.classList.add("open");
+  });
+  const releaseVolume = () => volumeControl?.classList.remove("open");
+  document.addEventListener("pointerup", releaseVolume);
+  document.addEventListener("pointercancel", releaseVolume);
+
+  // Click the picture to play/pause, as every other video player does.
+  // Bound to the <video> itself, so clicks on the overlay bar (a sibling
+  // painted above it) are control interactions and never reach here.
+  video?.addEventListener("pointerdown", () => {
+    menuWasOpenOnPointerDown = isSettingsMenuOpen();
+  });
+  video?.addEventListener("click", () => {
+    if (menuWasOpenOnPointerDown) return;
+    togglePlay();
+  });
+
+  settingsBtn?.addEventListener("click", () => setSettingsMenu(!isSettingsMenuOpen()));
+  // Outside-click dismissal, using the same delegation idiom as
+  // `library.ts`'s card actions.
+  document.addEventListener("pointerdown", (e) => {
+    if (!isSettingsMenuOpen()) return;
+    if ((e.target as HTMLElement).closest("#player-settings-menu, #player-settings-btn")) {
+      return;
+    }
+    setSettingsMenu(false);
+  });
+
+  // Entering or leaving fullscreen — including via Escape or the OS, which
+  // never go through `toggleFullscreen` — has to be reflected on the button,
+  // or it sits there advertising the wrong state.
+  document.addEventListener("fullscreenchange", () => {
+    syncFullscreenButton();
+    // The panel is positioned against a control bar that has just moved and
+    // resized; reopening it is cheaper than reasoning about that.
+    setSettingsMenu(false);
+  });
+
   trackSelect?.addEventListener("change", () => {
     void selectTrack(Number(trackSelect!.value));
   });
@@ -192,40 +240,18 @@ export function initReview() {
     renderGraph();
   });
 
-  // Seeking. A click on a glyph keeps its existing precise-jump behaviour;
-  // anywhere else on the track seeks to that position, and holding scrubs.
-  timelineBody?.addEventListener("pointerdown", (e) => {
-    if (!video) return;
-    const target = (e.target as HTMLElement).closest<HTMLElement>("[data-time]");
-    if (target) {
+  // Seeking, on both tracks. On the rich timeline a click on a glyph keeps
+  // its existing precise-jump behaviour; anywhere else on either track seeks
+  // to that position, and holding scrubs.
+  if (playerScrub) bindScrubbing(playerScrub);
+  if (timelineBody) {
+    bindScrubbing(timelineBody, (e) => {
+      const target = (e.target as HTMLElement).closest<HTMLElement>("[data-time]");
+      if (!target || !video) return false;
       video.currentTime = Number(target.dataset.time);
-      return;
-    }
-    // Seek first, capture second: the seek is the part that must happen, and
-    // pointer capture can throw (a pointer that's already been released, a
-    // synthetic event) — losing the click to that would be the worse bug.
-    seekFromPointer(e.clientX);
-    isScrubbing = true;
-    try {
-      timelineBody?.setPointerCapture(e.pointerId);
-    } catch {
-      // Dragging still works; it just stops tracking outside the element.
-    }
-  });
-  timelineBody?.addEventListener("pointermove", (e) => {
-    if (isScrubbing) seekFromPointer(e.clientX);
-  });
-  const endScrub = (e: PointerEvent) => {
-    if (!isScrubbing) return;
-    isScrubbing = false;
-    try {
-      timelineBody?.releasePointerCapture(e.pointerId);
-    } catch {
-      // Never captured (see above) — nothing to release.
-    }
-  };
-  timelineBody?.addEventListener("pointerup", endScrub);
-  timelineBody?.addEventListener("pointercancel", endScrub);
+      return true;
+    });
+  }
 
   timelineGlyphs?.addEventListener("mouseover", showClusterTooltip);
   timelineGlyphs?.addEventListener("mouseout", hideClusterTooltip);
@@ -307,12 +333,6 @@ function showVideoError() {
   }
 }
 
-function stepFrame(direction: 1 | -1) {
-  if (!video) return;
-  video.pause();
-  video.currentTime = Math.max(0, video.currentTime + direction * FRAME_SECONDS);
-}
-
 function isReviewOpen(): boolean {
   return currentView() === "review";
 }
@@ -334,7 +354,11 @@ function seekBy(seconds: number) {
 
 /**
  * Hotkeys: Space play/pause, arrows seek 5s, `[`/`]` prev/next marker,
- * `d`/`D` prev/next death, `f` fullscreen, `m` mute.
+ * `d`/`D` prev/next death, `f` fullscreen, `m` mute, Escape closes the
+ * settings menu.
+ *
+ * These are the only marker navigation available in fullscreen: the rich
+ * `#vod-timeline` lives outside `.player-wrap` and so isn't rendered there.
  */
 function handleHotkey(e: KeyboardEvent) {
   if (!isReviewOpen() || isTypingInField()) return;
@@ -371,6 +395,12 @@ function handleHotkey(e: KeyboardEvent) {
   } else if (e.key === "D") {
     e.preventDefault();
     jumpToMarker(1, (m) => m.kind === "death");
+  } else if (e.key === "Escape" && isSettingsMenuOpen()) {
+    // Guarded on the menu being open so this never shadows the user agent's
+    // own Escape-exits-fullscreen.
+    e.preventDefault();
+    setSettingsMenu(false);
+    settingsBtn?.focus();
   }
 }
 
@@ -671,9 +701,22 @@ function renderRuler() {
 
 function updatePlayhead() {
   if (!video || !isFinite(video.duration) || !video.duration) return;
+  const pct = clamp((video.currentTime / video.duration) * 100, 0, 100);
   if (timelinePlayhead) {
-    const pct = clamp((video.currentTime / video.duration) * 100, 0, 100);
     timelinePlayhead.style.left = `${pct.toFixed(3)}%`;
+  }
+  // Same rAF loop, `seeked` and `loadedmetadata` paths as the playhead above
+  // — the in-player bar is just another view of the position.
+  if (playerProgress) {
+    playerProgress.style.width = `${pct.toFixed(3)}%`;
+  }
+  if (playerScrub) {
+    playerScrub.setAttribute("aria-valuemax", video.duration.toFixed(0));
+    playerScrub.setAttribute("aria-valuenow", video.currentTime.toFixed(0));
+    playerScrub.setAttribute(
+      "aria-valuetext",
+      `${formatTime(video.currentTime)} of ${formatTime(video.duration)}`
+    );
   }
   if (timeDisplay) {
     timeDisplay.textContent = `${formatTime(video.currentTime)} / ${formatTime(
@@ -727,11 +770,54 @@ function stopPlayheadLoop() {
   }
 }
 
-function seekFromPointer(clientX: number) {
-  if (!video || !timelineBody || !isFinite(video.duration) || !video.duration) return;
-  const rect = timelineBody.getBoundingClientRect();
+/// Seeks to the position `clientX` falls at along `track`. Takes the element
+/// to measure against so the in-player scrub bar and the rich timeline can
+/// share it — they differ only in geometry.
+function seekFromPointer(track: HTMLElement, clientX: number) {
+  if (!video || !isFinite(video.duration) || !video.duration) return;
+  const rect = track.getBoundingClientRect();
   if (rect.width === 0) return;
   video.currentTime = clamp((clientX - rect.left) / rect.width, 0, 1) * video.duration;
+}
+
+/// Makes `track` a click-to-seek, hold-to-scrub surface.
+///
+/// `intercept` runs first and returns true if it fully handled the press —
+/// the timeline uses it so a click on a marker glyph jumps precisely instead
+/// of seeking to the glyph's pixel position.
+function bindScrubbing(track: HTMLElement, intercept?: (e: PointerEvent) => boolean) {
+  track.addEventListener("pointerdown", (e) => {
+    if (!video) return;
+    if (intercept?.(e)) return;
+    // Seek first, capture second: the seek is the part that must happen, and
+    // pointer capture can throw (a pointer that's already been released, a
+    // synthetic event) — losing the click to that would be the worse bug.
+    seekFromPointer(track, e.clientX);
+    scrubbingTrack = track;
+    // "Being dragged", set on either track. Only the in-player bar styles it
+    // today (to pin its handle visible while the pointer is off the element).
+    track.classList.add("open");
+    try {
+      track.setPointerCapture(e.pointerId);
+    } catch {
+      // Dragging still works; it just stops tracking outside the element.
+    }
+  });
+  track.addEventListener("pointermove", (e) => {
+    if (scrubbingTrack === track) seekFromPointer(track, e.clientX);
+  });
+  const endScrub = (e: PointerEvent) => {
+    if (scrubbingTrack !== track) return;
+    scrubbingTrack = null;
+    track.classList.remove("open");
+    try {
+      track.releasePointerCapture(e.pointerId);
+    } catch {
+      // Never captured (see above) — nothing to release.
+    }
+  };
+  track.addEventListener("pointerup", endScrub);
+  track.addEventListener("pointercancel", endScrub);
 }
 
 function showClusterTooltip(e: MouseEvent) {
@@ -936,6 +1022,31 @@ function toggleFullscreen() {
   else playerWrap.requestFullscreen().catch(() => {});
 }
 
+/// Reflects the real fullscreen state on the button. Driven by
+/// `fullscreenchange`, not by `toggleFullscreen`, because Escape and the OS
+/// can both change it without going through us.
+///
+/// The glyph stays ⛶ in both states: the icon set already in use here is
+/// emoji, and there is no exit-fullscreen emoji with dependable coverage —
+/// a missing-glyph box would be worse than a static icon. The state is
+/// carried by `aria-pressed` (which screen readers announce) and the title.
+function syncFullscreenButton() {
+  if (!fullscreenBtn) return;
+  const on = document.fullscreenElement === playerWrap;
+  fullscreenBtn.setAttribute("aria-pressed", String(on));
+  fullscreenBtn.title = on ? "Exit fullscreen (f)" : "Fullscreen (f)";
+}
+
+function isSettingsMenuOpen(): boolean {
+  return !!settingsMenu && !settingsMenu.hidden;
+}
+
+function setSettingsMenu(open: boolean) {
+  if (!settingsMenu) return;
+  settingsMenu.hidden = !open;
+  settingsBtn?.setAttribute("aria-expanded", String(open));
+}
+
 function markerLabel(m: MarkerRow): string {
   let payload: Record<string, unknown> = {};
   try {
@@ -1032,11 +1143,15 @@ function closeReview() {
   pausedByHide = false;
   stopPlayheadLoop();
   hideClusterTooltip();
+  setSettingsMenu(false);
   detachStem();
   renderTrackPicker(null);
   video.pause();
   video.removeAttribute("src");
   video.load();
+  // `updatePlayhead` bails out without a duration, so the bar would otherwise
+  // keep the last recording's position until the next one loads.
+  if (playerProgress) playerProgress.style.width = "0%";
   currentRecordingPath = null;
   currentSamples = [];
   currentClusters = [];

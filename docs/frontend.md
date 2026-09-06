@@ -195,15 +195,37 @@ truth and wins any disagreement.
 ## Review player
 
 - A plain `<video>` element. H.264/AAC MP4 decodes natively in the webview, so
-  seeking, playback rate and frame-stepping come for free.
+  seeking and playback rate come for free.
 - Video loads through Tauri's asset protocol (`convertFileSrc`), scoped in
   `tauri.conf.json` to `$APPDATA/recordings/*` and
   `$APPDATA/recordings/audio-tracks/*` — this needs the `protocol-asset` Cargo
   feature, not just the config entry. The second entry is not redundant:
   Tauri's scope matcher won't let `*` cross a `/`.
-- Frame-step is a ±1/30 s nudge, not true frame-accurate seeking: no
-  per-recording frame rate is probed anywhere. Good enough for review, not for
-  precision editing.
+- **The controls live inside `.player-wrap`**, over a scrim at the bottom of
+  the video, not in a bar beneath it. That is not cosmetic:
+  `requestFullscreen` is called on `.player-wrap`, and anything outside the
+  fullscreened subtree is not rendered at all — controls beside the video
+  simply vanished when you pressed `f`. The `:fullscreen` rules in
+  `styles.css` are load-bearing for the same feature: without them
+  `#review-video` keeps its `max-height: 60vh` and renders as a small
+  rectangle in the middle of a black screen.
+- **Two seek surfaces, one implementation.** The plain progress bar inside the
+  player and the rich `#vod-timeline` below it both go through
+  `bindScrubbing` + `seekFromPointer`, which take the element to measure
+  against. The in-player bar carries no marker ticks; the timeline keeps the
+  metric graph, marker glyphs and ruler. The timeline is *outside*
+  `.player-wrap`, so it is unavailable in fullscreen — there, marker
+  navigation is the `[` / `]` / `d` / `D` hotkeys, which are bound at the
+  document level and keep working.
+- **Speed and audio-track pickers sit behind the gear button**, in a popover
+  that closes on outside pointerdown, on Escape, on `fullscreenchange` and in
+  `closeReview`. Escape is guarded on the menu actually being open, so it
+  never shadows the user agent's own Escape-exits-fullscreen. Volume is an
+  icon that expands into a slider on hover or focus, with an `.open` class
+  held for the duration of a drag so it cannot collapse mid-drag.
+- The fullscreen button's state is synced from a `fullscreenchange` listener
+  rather than from the click handler, since Escape and the OS can both leave
+  fullscreen without going through the app.
 - Markers closer together than the timeline can resolve (common around a
   teamfight) collapse into one cluster glyph; `MARKER_PRIORITY` decides which
   icon the cluster shows.

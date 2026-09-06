@@ -182,6 +182,90 @@
             <p id="review-video-error-text"></p>
             <code id="review-video-error-detail"></code>
           </div>
+
+          <!-- Inside .player-wrap on purpose: that is the element passed to
+               requestFullscreen, and anything outside the fullscreened
+               subtree is simply not rendered. Controls that lived beside it
+               vanished the moment you pressed `f`. -->
+          <div class="player-overlay">
+            <div
+              id="player-scrub"
+              class="player-scrub"
+              role="slider"
+              tabindex="0"
+              aria-label="Seek"
+              aria-valuemin="0"
+              aria-valuemax="0"
+              aria-valuenow="0"
+              aria-valuetext="0:00 of 0:00"
+            >
+              <div id="player-progress" class="player-progress"></div>
+            </div>
+            <div class="player-controls">
+              <button
+                id="play-pause-btn"
+                type="button"
+                class="icon-btn"
+                title="Play / pause (Space)"
+              >
+                ▶
+              </button>
+              <div id="volume-control" class="volume-control">
+                <button id="mute-btn" type="button" class="icon-btn" title="Mute">
+                  🔊
+                </button>
+                <input
+                  id="volume-slider"
+                  class="volume-slider"
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value="1"
+                  aria-label="Volume"
+                />
+              </div>
+              <span id="time-display" class="time-display">0:00 / 0:00</span>
+              <div class="player-menu">
+                <button
+                  id="player-settings-btn"
+                  type="button"
+                  class="icon-btn"
+                  title="Settings"
+                  aria-haspopup="true"
+                  aria-expanded="false"
+                  aria-controls="player-settings-menu"
+                >
+                  ⚙
+                </button>
+                <div id="player-settings-menu" class="player-menu-panel" hidden>
+                  <label>
+                    Speed
+                    <select id="playback-rate-select">
+                      <option value="0.25">0.25×</option>
+                      <option value="0.5">0.5×</option>
+                      <option value="1" selected>1×</option>
+                      <option value="1.5">1.5×</option>
+                      <option value="2">2×</option>
+                    </select>
+                  </label>
+                  <label id="audio-track-field" hidden>
+                    Audio
+                    <select id="audio-track-select" aria-label="Audio track"></select>
+                  </label>
+                </div>
+              </div>
+              <button
+                id="fullscreen-btn"
+                type="button"
+                class="icon-btn"
+                title="Fullscreen (f)"
+                aria-pressed="false"
+              >
+                ⛶
+              </button>
+            </div>
+          </div>
         </div>
 
         <div id="vod-timeline" class="vod-timeline">
@@ -211,54 +295,6 @@
             <div id="timeline-playhead" class="timeline-playhead"></div>
           </div>
           <div id="timeline-tooltip" class="timeline-tooltip" hidden></div>
-        </div>
-
-        <div class="player-controls">
-          <button id="play-pause-btn" type="button" title="Play / pause (Space)">
-            ▶
-          </button>
-          <span id="time-display" class="time-display">0:00 / 0:00</span>
-          <button id="frame-back-btn" type="button" title="Step back one frame">
-            ⏮ Frame
-          </button>
-          <button id="frame-fwd-btn" type="button" title="Step forward one frame">
-            Frame ⏭
-          </button>
-          <label>
-            Speed
-            <select id="playback-rate-select">
-              <option value="0.25">0.25×</option>
-              <option value="0.5">0.5×</option>
-              <option value="1" selected>1×</option>
-              <option value="1.5">1.5×</option>
-              <option value="2">2×</option>
-            </select>
-          </label>
-          <label id="audio-track-field" hidden>
-            Audio
-            <select id="audio-track-select" aria-label="Audio track"></select>
-          </label>
-          <button id="mute-btn" type="button" class="icon-btn" title="Mute">
-            🔊
-          </button>
-          <input
-            id="volume-slider"
-            class="volume-slider"
-            type="range"
-            min="0"
-            max="1"
-            step="0.05"
-            value="1"
-            aria-label="Volume"
-          />
-          <button
-            id="fullscreen-btn"
-            type="button"
-            class="icon-btn"
-            title="Fullscreen (f)"
-          >
-            ⛶
-          </button>
         </div>
 
         <ul id="marker-list" class="marker-list"></ul>
