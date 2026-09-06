@@ -16,7 +16,7 @@
 //! takes elapsed time as an argument rather than reading the clock so a
 //! whole game's poll sequence can be replayed in a test.
 
-use crate::{error, info, warn};
+use crate::{debug, error, info, warn};
 use super::machine::{Action, GameState, StateEvent, StateMachine};
 use crate::db::{self, Db};
 use crate::lcu;
@@ -202,6 +202,14 @@ impl RecordingSession {
         let alignment = self.align.observe(game_time_s, elapsed_s);
 
         let fresh = self.tracker.ingest(snapshot);
+        // One line per poll, at debug: 1 Hz would bury the log at any
+        // higher level, but it is the only record of what the app was
+        // seeing when a game went wrong (#70).
+        debug!(
+            "live-poll",
+            "{}",
+            live_client::poll_trace(snapshot, elapsed_s, alignment, fresh.len())
+        );
         self.markers
             .extend(fresh.into_iter().map(|marker| PendingMarker { marker, alignment }));
 
@@ -588,6 +596,13 @@ impl Supervisor {
 
         let mut guard = self.session.lock().unwrap();
         let Some(session) = guard.as_mut() else {
+            // Polls before capture begins. Traced too: "the endpoint was
+            // answering for 40s before recording started" is the answer to
+            // a recording that begins late.
+            debug!(
+                "live-poll",
+                "game={:.1} waiting (not recording yet)", snapshot.game_data.game_time
+            );
             return;
         };
         let elapsed_s = session.record_started_at.elapsed().as_secs_f64();

@@ -174,6 +174,58 @@ with `None`.
 `inhibitor`, `ace`, `multikill`, `first_blood`. `custom` exists in the
 schema for hand-added markers.
 
+### What each poll leaves behind
+
+Markers and samples are the *product* of a poll. They are not a record of
+what the poll **showed**, and the difference matters: a game where the
+champion came out NULL, or the markers landed twenty seconds out, or the
+recording stopped early leaves nothing behind that says why.
+
+So every poll also writes one distilled line to the log
+([DEVELOPMENT.md §13](../DEVELOPMENT.md)), tagged `live-poll`:
+
+```
+game=1512.3 cap=1530.0 off=17.70 matched=yes champ=Ahri kda=3/1/2 gold=450 lvl=11 events=12 new=2
+```
+
+- `game` / `cap` — the game clock the poll reported, and how long capture
+  had been running when it landed. The pair is what the offset is derived
+  from
+- `off` — the alignment in force, or `-` while the clock has not been seen
+  to advance. `-` is not `0.00`: "not yet known" and "aligned" are
+  different states and reading one as the other is how a marker ends up in
+  the wrong place
+- `matched` — whether we could be found in `allPlayers`. `no` silently
+  empties champion, KDA and the advantage curve, and the Practice Tool
+  ambiguity means it is a real recurring state, not a corner case
+- `events` / `new` — how many events the payload carried, and how many the
+  `MarkerTracker` had not already seen
+
+The key set and order are fixed even when a value is unknown, so the
+stream is greppable and parseable; unknown reads as `-`.
+
+**Distilled rather than raw, deliberately.** A real `allgamedata` response
+is tens of kilobytes and arrives at 1 Hz, so keeping every payload would
+cost hundreds of megabytes per game. A trace line is about 120 bytes —
+roughly 200 KB across a game. When the raw stream is genuinely wanted,
+that is what fixture capture is for
+([DEVELOPMENT.md §3.3](../DEVELOPMENT.md)), and it is on by default until
+v1.0.
+
+It is written at `debug`, which is **off** unless
+`NINJA_RECORDER_LOG_LEVEL=debug` asks for it: at 1 Hz it would otherwise
+rotate a session's real errors out of the file within a single game.
+
+A poll that **fails** is logged too, and that one is not at `debug`. The
+first failure after a healthy run is what ends a recording
+([#74](https://github.com/NinjaGoldfinch/ninja-recorder/issues/74)), so it
+is a `warn` carrying the error — which is what separates "the endpoint went
+away" from "the payload would not parse", a distinction that cost a real
+game before the error was being recorded at all. Failures *before* the
+endpoint has ever answered stay at `debug`: the poller starts when gameflow
+says `InProgress`, which is before the game has finished loading, so those
+are expected.
+
 ### A marker is a seek target, so it has to be about the player
 
 Every kind above is gated on the recording player appearing in the event —

@@ -3,6 +3,7 @@
 //! game just ended). DEVELOPMENT.md §3.2, issue acceptance: "poller with
 //! backoff while port 2999 is down."
 
+use crate::{debug, warn};
 use super::client::LiveClientDataClient;
 use super::events::AllGameData;
 use std::time::Duration;
@@ -35,9 +36,20 @@ pub async fn watch<OnSnapshot, OnDown>(
                 on_snapshot(snapshot);
                 tokio::time::sleep(poll_interval).await;
             }
-            Err(_) => {
+            Err(e) => {
                 if was_up {
+                    // The transition that ends a recording (#74), so this
+                    // is the one poll failure that must be visible at the
+                    // default level. `LiveClientError`'s Display is what
+                    // separates a transport failure from a payload that
+                    // would not parse — the distinction #74's triage could
+                    // not make, because this arm used to discard it.
+                    warn!("live-poll", "endpoint stopped responding: {e}");
                     on_down();
+                } else {
+                    // Expected: the endpoint is not up until the game has
+                    // loaded, and the poller starts before that.
+                    debug!("live-poll", "not up yet: {e}");
                 }
                 was_up = false;
                 tokio::time::sleep(backoff).await;
