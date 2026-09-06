@@ -14,7 +14,7 @@ is skipped until a commit reaches `main`.
 ```mermaid
 flowchart TB
     subgraph PR["Pull request"]
-        T1["<b>Test</b> (windows-latest)<br/>tsc --noEmit<br/>cargo test ×2<br/>cargo clippy ×2"]
+        T1["<b>Test</b> (windows-latest)<br/>tsc --noEmit<br/>cargo test ×2<br/>cargo clippy ×2<br/><small>±devtools, no --all-targets</small>"]
     end
     subgraph MAIN["Push to main / manual dispatch"]
         T["<b>Test</b> (windows-latest)"]
@@ -30,6 +30,18 @@ flowchart TB
     style T fill:#e8f5e9,stroke:#2e7d32
     style R fill:#ede7f6,stroke:#5e35b1
 ```
+
+### What `test` runs
+
+`tsc --noEmit`, then the Rust half twice — with and without `--features
+devtools` — for both `cargo test` and `cargo clippy -- -D warnings`. An
+off-by-default feature is otherwise never compiled by CI, and a broken
+`#[cfg]` would stay green until someone opened the dev portal
+([DEVELOPMENT.md §9](../DEVELOPMENT.md#9-development-workflow)).
+
+Clippy is **not** passed `--all-targets`, so the test targets are never
+compiled and anything only the tests call is dead code under `-D warnings`.
+A local run that adds `--all-targets` will not reproduce that failure.
 
 ### Why pull requests don't build
 

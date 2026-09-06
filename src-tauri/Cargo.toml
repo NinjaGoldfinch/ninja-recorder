@@ -70,6 +70,11 @@ libobs-recorder = { git = "https://github.com/NinjaGoldfinch/libobs-recorder.git
 # IPropertyStore + PKEY_Device_FriendlyName for their display names. Done
 # here rather than through libobs so the picker still works when the capture
 # backend failed to initialize.
+#
+# `Win32_System_Variant` looks unused from our imports and is not: windows-rs
+# gates `IPropertyStore::GetValue` on it, because the method returns a
+# `PROPVARIANT`. Drop the feature and the method silently stops existing —
+# a "no method named GetValue" error at the call site, nowhere near here.
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
