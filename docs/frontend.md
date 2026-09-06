@@ -113,6 +113,11 @@ seconds and fight scroll and focus.
 
 ### Command surface
 
+The names and arguments below are the IPC contract and are unchanged by the
+`core` extraction — each `#[tauri::command]` in `lib.rs` is now a thin wrapper
+over a `core` free function, so the frontend sees exactly the same surface
+([DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave)).
+
 | Command | Returns | Used by |
 |---|---|---|
 | `list_recordings` | `Vec<RecordingRow>` | library grid |

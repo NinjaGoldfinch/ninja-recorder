@@ -1,4 +1,5 @@
 mod audio_tracks;
+mod core;
 mod db;
 #[cfg(feature = "devtools")]
 mod dev;
@@ -12,9 +13,8 @@ mod state_machine;
 use recorder::audio::{AudioInputDevice, AudioPreset};
 #[cfg(not(target_os = "windows"))]
 use recorder::stub::StubRecorder;
-use recorder::{RecordConfig, Recorder};
+use recorder::Recorder;
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
@@ -24,11 +24,35 @@ use tauri::Manager;
 /// appeared after a manual Refresh.
 pub(crate) const LIBRARY_CHANGED_EVENT: &str = "library-changed";
 
-pub(crate) struct AppState {
-    pub(crate) recorder: Arc<Mutex<Box<dyn Recorder>>>,
-    pub(crate) supervisor: Arc<state_machine::Supervisor>,
-    pub(crate) db: Arc<db::Db>,
-    pub(crate) recordings_dir: std::path::PathBuf,
+/// Tauri's managed state: a handle on the `core::Ctx` that actually holds
+/// everything.
+///
+/// A newtype rather than `Ctx` directly because `Ctx` must stay free of
+/// `tauri` types (see `core`'s header), and this is the boundary where the
+/// two meet. It `Deref`s to `Ctx`, so the dev portal's many `state.db` /
+/// `state.recorder` / `state.supervisor` field reads keep working unchanged.
+pub(crate) struct AppState(pub(crate) Arc<core::Ctx>);
+
+impl std::ops::Deref for AppState {
+    type Target = core::Ctx;
+
+    fn deref(&self) -> &core::Ctx {
+        &self.0
+    }
+}
+
+impl AppState {
+    /// The explicit spelling, for the command wrappers — clearer at the call
+    /// site than relying on deref coercion through `tauri::State`.
+    pub(crate) fn ctx(&self) -> &core::Ctx {
+        &self.0
+    }
+
+    /// A cheap owned handle, for the commands that hand work to a blocking
+    /// thread and so can't hold a borrow of managed state across an await.
+    pub(crate) fn clone_ctx(&self) -> Arc<core::Ctx> {
+        Arc::clone(&self.0)
+    }
 }
 
 fn recordings_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
@@ -69,168 +93,103 @@ fn which_ffmpeg() -> Option<std::path::PathBuf> {
         .find(|p| p.exists())
 }
 
+// Every command below is a thin wrapper over `core`, which holds the actual
+// logic and names no `tauri` type. See that module's header for why the
+// split exists. Two commands are *not* wrappers — `open_recordings_folder`
+// here and `dev_open_portal` in `dev/` — because they drive the desktop
+// shell, which only a UI process can do.
+
 #[tauri::command]
-fn start_recording(state: tauri::State<AppState>, app: tauri::AppHandle) -> Result<(), String> {
-    let dir = recordings_dir(&app)?;
-    if !retention::has_room_to_record(&dir) {
-        return Err("Not enough free disk space to start recording".to_string());
-    }
-    let config = RecordConfig {
-        output_dir: dir,
-        file_stem: format!("recording-{}", chrono_stamp()),
-        audio: state.db.get_audio_preset().map_err(|e| e.to_string())?,
-    };
-    state
-        .recorder
-        .lock()
-        .map_err(|e| e.to_string())?
-        .start(config)
-        .map_err(|e| e.to_string())
+fn start_recording(state: tauri::State<AppState>) -> Result<(), String> {
+    core::start_recording(state.ctx())
 }
 
 #[tauri::command]
 fn stop_recording(state: tauri::State<AppState>) -> Result<String, String> {
-    let output = state
-        .recorder
-        .lock()
-        .map_err(|e| e.to_string())?
-        .stop()
-        .map_err(|e| e.to_string())?;
-    Ok(output.path.display().to_string())
+    core::stop_recording(state.ctx())
 }
 
 #[tauri::command]
 fn is_recording(state: tauri::State<AppState>) -> Result<bool, String> {
-    Ok(state
-        .recorder
-        .lock()
-        .map_err(|e| e.to_string())?
-        .is_recording())
+    core::is_recording(state.ctx())
 }
 
 #[tauri::command]
 fn list_recordings(state: tauri::State<AppState>) -> Result<Vec<db::RecordingRow>, String> {
-    state.db.list_recordings().map_err(|e| e.to_string())
+    core::list_recordings(state.ctx())
 }
 
-/// Re-runs folder-scan reconciliation on demand (also runs once at
-/// startup). DEVELOPMENT.md §4 — "the library must survive users touching
-/// the folder."
 #[tauri::command]
-fn rescan_recordings(state: tauri::State<AppState>) -> Result<db::reconcile::ReconcileReport, String> {
-    db::reconcile::reconcile(&state.db, &state.recordings_dir).map_err(|e| e.to_string())
+fn rescan_recordings(
+    state: tauri::State<AppState>,
+) -> Result<db::reconcile::ReconcileReport, String> {
+    core::rescan_recordings(state.ctx())
 }
 
-/// Markers for the review timeline.
 #[tauri::command]
 fn get_recording_markers(
     state: tauri::State<AppState>,
     recording_id: i64,
 ) -> Result<Vec<db::MarkerRow>, String> {
-    state
-        .db
-        .get_markers(recording_id)
-        .map_err(|e| e.to_string())
+    core::get_recording_markers(state.ctx(), recording_id)
 }
 
-/// Advantage-curve samples for the review timeline's graph. Returns an
-/// empty vec for any recording made before sampling existed — the frontend
-/// treats that as "no metric data" rather than an error.
 #[tauri::command]
 fn get_recording_samples(
     state: tauri::State<AppState>,
     recording_id: i64,
 ) -> Result<Vec<db::SampleRow>, String> {
-    state
-        .db
-        .get_samples(recording_id)
-        .map_err(|e| e.to_string())
+    core::get_recording_samples(state.ctx(), recording_id)
 }
 
-#[derive(serde::Serialize)]
-struct DiskUsage {
-    total_bytes: i64,
-    recording_count: i64,
-    free_bytes: i64,
-}
-
-/// Usage summary for the library UI (DEVELOPMENT.md §6) — shown
-/// alongside the retention policy so nothing gets deleted as a surprise.
 #[tauri::command]
-fn get_disk_usage(state: tauri::State<AppState>) -> Result<DiskUsage, String> {
-    let total_bytes = state.db.total_size_bytes().map_err(|e| e.to_string())?;
-    let recording_count = state.db.list_recordings().map_err(|e| e.to_string())?.len() as i64;
-    let free_bytes = retention::free_space_bytes(&state.recordings_dir).unwrap_or(0) as i64;
-    Ok(DiskUsage {
-        total_bytes,
-        recording_count,
-        free_bytes,
-    })
+fn get_disk_usage(state: tauri::State<AppState>) -> Result<core::DiskUsage, String> {
+    core::get_disk_usage(state.ctx())
 }
 
 #[tauri::command]
 fn get_retention_policy(state: tauri::State<AppState>) -> Result<db::RetentionPolicy, String> {
-    state.db.get_retention_policy().map_err(|e| e.to_string())
+    core::get_retention_policy(state.ctx())
 }
 
-/// Saves the policy and immediately re-enforces it — otherwise a
-/// newly-tightened limit wouldn't take effect until the next finalize or
-/// app restart, which would leave the UI's own usage number stale.
 #[tauri::command]
 fn set_retention_policy(
     state: tauri::State<AppState>,
-    app: tauri::AppHandle,
     policy: db::RetentionPolicy,
 ) -> Result<retention::EnforcementReport, String> {
-    state
-        .db
-        .set_retention_policy(&policy)
-        .map_err(|e| e.to_string())?;
-    let report = retention::enforce_now(&state.db, &policy).map_err(|e| e.to_string())?;
-    if !report.deleted.is_empty() {
-        use tauri::Emitter;
-        let _ = app.emit(LIBRARY_CHANGED_EVENT, ());
-    }
-    Ok(report)
+    core::set_retention_policy(state.ctx(), policy)
 }
 
 #[tauri::command]
-fn set_pinned(state: tauri::State<AppState>, recording_id: i64, pinned: bool) -> Result<(), String> {
-    state
-        .db
-        .set_pinned(recording_id, pinned)
-        .map_err(|e| e.to_string())
+fn set_pinned(
+    state: tauri::State<AppState>,
+    recording_id: i64,
+    pinned: bool,
+) -> Result<(), String> {
+    core::set_pinned(state.ctx(), recording_id, pinned)
 }
 
-/// Dry run for the settings form: what `set_retention_policy` would delete
-/// if saved with `policy`. Nothing is written.
 #[tauri::command]
 fn preview_retention_policy(
     state: tauri::State<AppState>,
     policy: db::RetentionPolicy,
 ) -> Result<retention::EnforcementReport, String> {
-    retention::preview(&state.db, &policy).map_err(|e| e.to_string())
+    core::preview_retention_policy(state.ctx(), policy)
 }
 
-/// User-initiated delete of a single recording — file first, then row.
-/// Unlike retention's sweep this reports a file it couldn't remove instead
-/// of dropping the row anyway, so the library still shows what's on disk.
 #[tauri::command]
 fn delete_recording(state: tauri::State<AppState>, recording_id: i64) -> Result<(), String> {
-    let row = state
-        .db
-        .get_recording(recording_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("recording {recording_id} not found"))?;
-    retention::delete_recording_and_file(&state.db, &row).map_err(|e| e.to_string())
+    core::delete_recording(state.ctx(), recording_id)
 }
 
 #[tauri::command]
 fn get_recordings_dir(state: tauri::State<AppState>) -> String {
-    state.recordings_dir.display().to_string()
+    core::get_recordings_dir(state.ctx())
 }
 
-/// Reveals the recordings folder in Finder/Explorer.
+/// Reveals the recordings folder in Finder/Explorer. **Not** a `core`
+/// wrapper: this drives the desktop shell, so it stays in the UI process
+/// when the recorder moves into its own.
 ///
 /// Deliberately done here rather than from the frontend with
 /// `@tauri-apps/plugin-opener`: the JS `openPath` command is gated on the
@@ -244,165 +203,62 @@ fn open_recordings_folder(state: tauri::State<AppState>) -> Result<(), String> {
     tauri_plugin_opener::open_path(&state.recordings_dir, None::<&str>).map_err(|e| e.to_string())
 }
 
-/// Every UI preference in one call — the frontend reads the whole set at
-/// boot. Missing keys are absent rather than defaulted: the defaults live
-/// in the frontend, so adding a pref needs no migration.
 #[tauri::command]
 fn get_ui_prefs(state: tauri::State<AppState>) -> Result<HashMap<String, String>, String> {
-    state.db.get_ui_prefs().map_err(|e| e.to_string())
+    core::get_ui_prefs(state.ctx())
 }
 
 #[tauri::command]
 fn set_ui_pref(state: tauri::State<AppState>, key: String, value: String) -> Result<(), String> {
-    state.db.set_ui_pref(&key, &value).map_err(|e| e.to_string())
+    core::set_ui_pref(state.ctx(), &key, &value)
 }
 
-/// The audio capture preset, read and written through `serde` rather than as
-/// a raw `settings_kv` string like `theme` is.
-///
-/// The distinction matters: a bad theme value looks wrong, but a bad audio
-/// preset changes what gets recorded — including whether the microphone is
-/// live. Validating on this side keeps that decision next to the recorder
-/// that acts on it instead of trusting the frontend.
 #[tauri::command]
 fn get_audio_preset(state: tauri::State<AppState>) -> Result<AudioPreset, String> {
-    state.db.get_audio_preset().map_err(|e| e.to_string())
+    core::get_audio_preset(state.ctx())
 }
 
 #[tauri::command]
 fn set_audio_preset(state: tauri::State<AppState>, preset: AudioPreset) -> Result<(), String> {
-    // Rejected here rather than at record time: the user is looking at the
-    // settings screen right now and can act on the message. Only a `Custom`
-    // layout can actually fail this.
-    preset.layout().validate()?;
-    state
-        .db
-        .set_audio_preset(&preset)
-        .map_err(|e| e.to_string())
+    core::set_audio_preset(state.ctx(), preset)
 }
 
-/// Audio inputs for the microphone picker, default first. Empty off Windows,
-/// where nothing can be captured anyway.
+/// `core::list_audio_inputs` is blocking, so it gets a thread of its own
+/// here rather than stalling the command runtime — the daemon will make the
+/// same call from its own per-request task.
 #[tauri::command]
 async fn list_audio_inputs() -> Result<Vec<AudioInputDevice>, String> {
-    tauri::async_runtime::spawn_blocking(recorder::devices::list_audio_inputs)
+    tauri::async_runtime::spawn_blocking(core::list_audio_inputs)
         .await
         .map_err(|e| e.to_string())?
 }
 
-/// Extracts one audio track out of a recording into a standalone file the
-/// review player can play alongside the (muted) video.
-///
-/// This exists because WebView2 gives us no way to select among the audio
-/// tracks of a single `<video>`: `HTMLMediaElement.audioTracks` sits behind
-/// an experimental Blink flag on a runtime whose version we don't control.
-/// Track 0 is the combined mix and needs none of this — only stem selection
-/// comes through here, so the cost is paid by the rare case.
-///
-/// Cheap despite appearances: `-c copy` on one audio stream rewrites tens of
-/// megabytes, not the multi-gigabyte video. Cached, so switching back to a
-/// stem already extracted is free. See DEVELOPMENT.md §2.5.
+/// Blocking for the same reason as `list_audio_inputs` — and more so, since
+/// this one shells out to ffmpeg.
 #[tauri::command]
 async fn extract_audio_track(
-    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
     recording_path: String,
     track_index: usize,
 ) -> Result<String, String> {
-    if track_index == 0 {
-        return Err("track 0 is the combined mix and plays from the video itself".into());
-    }
-    let dir = recordings_dir(&app)?;
-    let ffmpeg = ffmpeg_path(&app)
-        .ok_or("ffmpeg was not bundled with this build, so audio stems can't be extracted")?;
-
+    let ctx = state.clone_ctx();
     tauri::async_runtime::spawn_blocking(move || {
-        audio_tracks::extract(&ffmpeg, &dir, Path::new(&recording_path), track_index)
+        core::extract_audio_track(&ctx, &recording_path, track_index)
     })
     .await
     .map_err(|e| e.to_string())?
-    .map(|path| path.display().to_string())
 }
 
-#[derive(serde::Serialize)]
-struct LcuStatus {
-    connected: bool,
-    phase: Option<String>,
-    summoner: Option<String>,
-    error: Option<String>,
-}
-
-/// One-shot LCU status check for the dev panel: is the client running, and
-/// if so, what's its current gameflow phase / summoner. The state machine
-/// is what keeps this live continuously via `lcu::gameflow::watch`;
-/// this command is just a smoke test that the client + auth + parsing work.
 #[tauri::command]
-async fn lcu_status() -> LcuStatus {
-    let lockfile = match lcu::lockfile::discover() {
-        Ok(Some(lf)) => lf,
-        Ok(None) => {
-            return LcuStatus {
-                connected: false,
-                phase: None,
-                summoner: None,
-                error: None,
-            }
-        }
-        Err(e) => {
-            return LcuStatus {
-                connected: false,
-                phase: None,
-                summoner: None,
-                error: Some(e.to_string()),
-            }
-        }
-    };
-
-    let client = match lcu::LcuHttpClient::new(&lockfile) {
-        Ok(c) => c,
-        Err(e) => {
-            return LcuStatus {
-                connected: false,
-                phase: None,
-                summoner: None,
-                error: Some(e.to_string()),
-            }
-        }
-    };
-
-    let phase = client
-        .get_json::<lcu::GameflowPhase>("/lol-gameflow/v1/gameflow-phase")
-        .await;
-    let summoner = client
-        .get_json::<lcu::match_data::CurrentSummoner>("/lol-summoner/v1/current-summoner")
-        .await;
-
-    LcuStatus {
-        connected: true,
-        phase: phase.ok().map(|p| format!("{:?}", p)),
-        summoner: summoner.ok().and_then(|s| s.display()),
-        error: None,
-    }
+async fn lcu_status() -> core::LcuStatus {
+    core::lcu_status().await
 }
 
-/// Timestamp for default filenames. Only used by the manual dev-panel
-/// start button now — the state machine has its own copy since
-/// it drives recording independently, from gameflow events rather than a
-/// button click.
-fn chrono_stamp() -> u128 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0)
-}
-
-/// Current game state and the most recently finished recording (if any),
-/// for the dev panel. The real, always-on driver is `Supervisor::start`,
-/// spawned once at app startup below — this command just reads its status.
 #[tauri::command]
 fn game_state_status(state: tauri::State<AppState>) -> state_machine::SupervisorStatus {
-    state.supervisor.status()
+    core::game_state_status(state.ctx())
 }
+
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -530,12 +386,26 @@ pub fn run() {
             }));
             supervisor.start();
 
-            app.manage(AppState {
+            // `ffmpeg` and `recordings_dir` are resolved once here rather
+            // than per call from an `AppHandle`, which is what the three
+            // commands that used to take one were doing — and is what lets
+            // `core` stay free of `tauri` types.
+            let mut ctx = core::Ctx::new(
                 recorder,
                 supervisor,
                 db,
-                recordings_dir: dir,
-            });
+                dir,
+                ffmpeg_path(app.handle()),
+            );
+            let notify_handle = app.handle().clone();
+            ctx.set_library_changed_notifier(Box::new(move || {
+                use tauri::Emitter;
+                if let Err(e) = notify_handle.emit(LIBRARY_CHANGED_EVENT, ()) {
+                    eprintln!("[core] failed to emit library-changed: {e}");
+                }
+            }));
+
+            app.manage(AppState(Arc::new(ctx)));
             #[cfg(feature = "devtools")]
             app.manage(dev::DevState::default());
             Ok(())

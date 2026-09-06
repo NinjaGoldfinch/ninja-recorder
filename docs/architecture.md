@@ -82,7 +82,15 @@ flowchart TB
 | `retention.rs` | Deletion policy and free-space preflight | `select_for_deletion`, `enforce_now`, `has_room_to_record` |
 | `fixtures.rs` | Capturing live API responses to `fixtures/` | `enabled`, `record` |
 | `dev/` | Dev portal backend, compiled out without `--features devtools` | `dev_*` commands |
-| `lib.rs` | Tauri setup, app state, the command surface | `run` |
+| `core/mod.rs` | Every command's logic, with no `tauri` types in any signature | `Ctx`, the command free functions |
+| `lib.rs` | Tauri setup, app state, and thin command wrappers over `core` | `run` |
+
+`core` exists because Tauri v2 cannot invoke a registered command by name from
+Rust, so a windowless recorder daemon could not reuse `#[tauri::command]`
+functions at all ([DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave)).
+`AppState` is a newtype that `Deref`s to `core::Ctx`. Two commands stay in
+`lib.rs` rather than moving down — `open_recordings_folder` and
+`dev_open_portal` — because they drive the desktop shell.
 
 The consistent shape across `state_machine`, `db::reconcile` and `retention`
 is **a pure decision function plus a thin I/O wrapper**. The decision is unit
