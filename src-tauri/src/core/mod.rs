@@ -23,6 +23,11 @@
 //! Both drive the desktop shell — an opener call and a window — which only
 //! the UI process can meaningfully do.
 
+mod dispatch;
+
+#[cfg_attr(not(feature = "devtools"), allow(unused_imports))]
+pub use dispatch::{command_names, dispatch, dispatch_blocking, is_async_command};
+
 use crate::db;
 use crate::lcu;
 use crate::recorder::audio::{AudioInputDevice, AudioPreset};
@@ -237,8 +242,8 @@ pub fn get_ui_prefs(ctx: &Ctx) -> Result<HashMap<String, String>, String> {
     ctx.db.get_ui_prefs().map_err(|e| e.to_string())
 }
 
-pub fn set_ui_pref(ctx: &Ctx, key: &str, value: &str) -> Result<(), String> {
-    ctx.db.set_ui_pref(key, value).map_err(|e| e.to_string())
+pub fn set_ui_pref(ctx: &Ctx, key: String, value: String) -> Result<(), String> {
+    ctx.db.set_ui_pref(&key, &value).map_err(|e| e.to_string())
 }
 
 /// The audio capture preset, read and written through `serde` rather than
@@ -288,7 +293,7 @@ pub fn list_audio_inputs() -> Result<Vec<AudioInputDevice>, String> {
 /// the same reason as `list_audio_inputs`.
 pub fn extract_audio_track(
     ctx: &Ctx,
-    recording_path: &str,
+    recording_path: String,
     track_index: usize,
 ) -> Result<String, String> {
     if track_index == 0 {
@@ -302,7 +307,7 @@ pub fn extract_audio_track(
     audio_tracks::extract(
         ffmpeg,
         &ctx.recordings_dir,
-        Path::new(recording_path),
+        Path::new(&recording_path),
         track_index,
     )
     .map(|path| path.display().to_string())

@@ -59,11 +59,30 @@ function push(entry: LogEntry) {
   emit();
 }
 
+/**
+ * Production commands are not registered individually any more — they are
+ * reached through the `rpc` passthrough and routed by name in Rust
+ * (DEVELOPMENT.md §12). Invoking them directly from here would fail with
+ * "command not found", which would break the Commands panel for every command
+ * that isn't a `dev_*` one.
+ *
+ * `dev_*` commands are still registered individually behind the `devtools`
+ * feature, and `open_recordings_folder` stays a real command because it drives
+ * the desktop shell.
+ */
+function isDirectCommand(command: string): boolean {
+  return command.startsWith("dev_") || command === "open_recordings_folder";
+}
+
 /** `invoke`, plus timing and a log entry. Errors still throw. */
 export async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const started = performance.now();
   try {
-    const result = await invoke<T>(command, args);
+    // The log below records the *logical* command, not `rpc`, so the panel
+    // still shows what was actually asked for.
+    const result = isDirectCommand(command)
+      ? await invoke<T>(command, args)
+      : await invoke<T>("rpc", { command, args: args ?? {} });
     push({
       id: nextId++,
       at: Date.now(),

@@ -516,14 +516,42 @@ and an Explorer window launched from a background daemon can open behind the
 foreground app. They stay in the UI process, which only needs `recordings_dir`
 to do its job.
 
+### The `rpc` passthrough
+
+Built. `bridge.ts` sends every production command through one Tauri command,
+`invoke("rpc", { command, args })`, and `core::dispatch` routes it by name. The
+UI now registers two commands instead of twenty-three, and
+`dev_registered_commands` derives its list from `core::command_names()` — the
+same macro invocation that generates the `match` arms — so the Rust half of the
+drift check cannot go stale. Adding a command is two edits (a table row and
+`src/dev/registry.ts`) rather than four.
+
+Three commands stay directly registered: `open_recordings_folder` and
+`dev_open_portal` drive the desktop shell, and `dev_registered_commands` has to,
+because `devportal.ts` detects whether the portal exists by watching that call
+reject in a shipped build — routing it through `rpc` would make it reject in
+*every* build and permanently hide the button.
+
+**The cost, stated plainly.** `#[tauri::command]` used to generate argument
+deserialization, camelCase→snake_case mapping included. The passthrough owns
+that now, and a wrong name or type is a runtime failure rather than a compile
+error. Two things hold it down: the table is the only place it's written, and
+`every_command_round_trips` exercises every entry with the payload the frontend
+really sends. Note the rename applies to *argument names* only — types nested
+inside an argument keep their own serde attributes, and because those fields are
+usually `Option`, a mis-cased nested key is silently dropped rather than
+rejected. That was equally true of the Tauri macro, but it is worth knowing when
+adding a nested argument type.
+
+`dispatch` is async because `lcu_status` is; everything else is blocking work,
+so `rpc` sends it to `spawn_blocking` and only awaits the one command that needs
+it. `core` itself still names no async runtime — callers choose the thread.
+
 ### Still to build
 
-The socket itself, and with it: a generic `Rpc::Invoke { command, args }`
-passthrough so the UI registers one command instead of 51 (which also removes
-`generate_handler!`'s inability to host a `#[cfg]`, and lets
-`dev_registered_commands` derive its list instead of hand-mirroring it);
-per-request ids, because a slow `extract_audio_track` must not head-of-line
-block a status poll; and a socket name scoped by build identity, because
+The socket itself, and with it: per-request ids, because a slow
+`extract_audio_track` must not head-of-line block a status poll; and a socket
+name scoped by build identity, because
 `tauri.devtools.conf.json` overrides `productName` but **not** `identifier` — so
 a dev build and an installed release already share `app_data_dir()`, the
 database and the recordings folder. For the same reason a version-mismatched
