@@ -28,6 +28,7 @@
 //! carries champion, KDA and outcome from the live path — a missing queue
 //! id is not worth interrupting somebody's next game over.
 
+use crate::{info, warn};
 use crate::db::{Db, MatchMetadata};
 use crate::lcu::{self, MatchDataError, MatchSummary};
 use crate::live_client::LiveSummary;
@@ -180,7 +181,7 @@ pub async fn patch(db: &Db, request: &SummaryRequest) -> bool {
     let client = match lcu::LcuHttpClient::new(&request.lockfile) {
         Ok(client) => client,
         Err(e) => {
-            eprintln!("[match-summary] could not build an LCU client: {e}");
+            warn!("match-summary", "could not build an LCU client: {e}");
             return false;
         }
     };
@@ -191,8 +192,7 @@ pub async fn patch(db: &Db, request: &SummaryRequest) -> bool {
             Ok(summary) => break summary,
             Err(e) => {
                 if !worth_retrying(&e) {
-                    eprintln!(
-                        "[match-summary] giving up on game {}: {e}",
+                    warn!("match-summary", "giving up on game {}: {e}",
                         request.game_id
                     );
                     return false;
@@ -225,15 +225,13 @@ pub async fn patch(db: &Db, request: &SummaryRequest) -> bool {
         // any point. Nothing went wrong; there is just nothing to say.
         Ok(0) => false,
         Ok(_) => {
-            println!(
-                "[match-summary] patched recording {} from game {}",
+            info!("match-summary", "patched recording {} from game {}",
                 request.recording_id, request.game_id
             );
             true
         }
         Err(e) => {
-            eprintln!(
-                "[match-summary] could not patch recording {}: {e}",
+            warn!("match-summary", "could not patch recording {}: {e}",
                 request.recording_id
             );
             false

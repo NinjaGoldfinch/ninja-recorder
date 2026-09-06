@@ -39,6 +39,7 @@
 //! Full reasoning, and why bypassing the plugin was judged not worth it:
 //! DEVELOPMENT.md's "Notifications" section.
 
+use crate::{warn};
 use crate::core::{self, Ctx, NotifyKind};
 use tauri::AppHandle;
 use tauri_plugin_notification::NotificationExt;
@@ -78,6 +79,6 @@ pub(crate) fn close_to_tray_notice(app: &AppHandle, ctx: &Ctx) {
 
 fn show(app: &AppHandle, title: &str, body: &str) {
     if let Err(e) = app.notification().builder().title(title).body(body).show() {
-        eprintln!("[notify] could not show a notification: {e}");
+        warn!("notify", "could not show a notification: {e}");
     }
 }

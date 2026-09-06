@@ -1,10 +1,13 @@
 /**
  * Every IPC call the portal has made this session.
  *
- * The backend logs to stdout with `println!`, which is only visible in the
- * terminal running `tauri dev`; the frontend logged nothing at all before
- * this. Polled commands are hidden by default — at 1 Hz they bury
- * everything a person actually clicked within seconds.
+ * The frontend logged nothing at all before this. Polled commands are
+ * hidden by default — at 1 Hz they bury everything a person actually
+ * clicked within seconds.
+ *
+ * This is still only the *portal's* own calls. The backend now writes to a
+ * real file (`src-tauri/src/log.rs`), which a release build has too;
+ * surfacing that file here is #72.
  */
 import type { Panel } from "../main";
 import { clearLog, logEntries, onLog, POLLED_COMMANDS, type LogEntry } from "../ipc";
@@ -73,10 +76,11 @@ export const logPanel: Panel = {
         <button type="button" class="ghost" data-copy>Copy as JSON</button>
         <button type="button" class="ghost" data-clear>Clear</button>
       </div>
-      <p class="hint-block" style="margin-top:0">Backend logging is <code>println!</code> to
-       stdout — look at the terminal running <code>npm run tauri:dev</code> for
-       <code>[db]</code>, <code>[retention]</code>, <code>[recorder]</code> and
-       <code>[state_machine]</code> lines.</p>
+      <p class="hint-block" style="margin-top:0">These are the portal's own IPC calls. The
+       backend writes <code>[db]</code>, <code>[retention]</code>, <code>[recorder]</code> and
+       <code>[state_machine]</code> lines to <code>logs/ninja-recorder.log</code> under the app
+       data directory — and to this terminal as well under <code>npm run tauri:dev</code>.
+       Reading that file in here is #72.</p>
       <div class="log-list" id="log-list"></div>`;
 
     const filterInput = el.querySelector<HTMLInputElement>("#log-filter")!;

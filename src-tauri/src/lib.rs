@@ -8,6 +8,7 @@ mod launch;
 mod notify;
 mod lcu;
 mod live_client;
+mod log;
 mod match_summary;
 mod recorder;
 mod retention;
@@ -15,6 +16,7 @@ mod state_machine;
 mod tray;
 
 #[cfg(not(target_os = "windows"))]
+use crate::{error, info, warn};
 use recorder::stub::StubRecorder;
 use recorder::Recorder;
 use std::sync::{Arc, Mutex};
@@ -230,6 +232,9 @@ pub(crate) fn create_main_window(app: &tauri::AppHandle, view: Option<&str>) -> 
 pub fn run() {
     let mode = launch::Launch::from_env();
     if let Some(why) = mode.unsupported() {
+        // Deliberately not through the log facade: this runs before
+        // `setup`, so before `log::init`, and exits immediately. There is
+        // no file to write to yet.
         eprintln!("[launch] {why}");
         std::process::exit(2);
     }
@@ -251,6 +256,22 @@ pub fn run() {
             Some(vec![launch::HIDDEN_FLAG]),
         ))
         .setup(move |app| {
+            // First thing in setup, and deliberately before the recorder
+            // backend and the database: a release build has no console
+            // (`main.rs`), so until this runs, anything that goes wrong
+            // goes nowhere. Failing to open the library is one of the
+            // failures most worth having a record of.
+            match app.path().app_data_dir() {
+                Ok(data_dir) => match log::init(&data_dir.join("logs")) {
+                    Some(path) => info!("log", "logging to {}", path.display()),
+                    // Only reachable via stderr, which in a release build
+                    // is nowhere — but in `tauri:dev` it is exactly where
+                    // someone would be looking.
+                    None => eprintln!("[log] could not open a log file; this session logs to stderr only"),
+                },
+                Err(e) => eprintln!("[log] no app data directory, so no log file: {e}"),
+            }
+
             let backend: Box<dyn Recorder> = {
                 #[cfg(target_os = "windows")]
                 {
@@ -268,8 +289,9 @@ pub fn run() {
                     {
                         Ok(path) => Box::new(recorder::libobs::LibObsRecorder::new(path, ffmpeg)),
                         Err(e) => {
-                            eprintln!(
-                                "[recorder] could not locate the libobs worker, recording disabled: {e}"
+                            error!(
+                                "recorder",
+                                "could not locate the libobs worker, recording disabled: {e}"
                             );
                             Box::new(recorder::FailedRecorder(e.to_string()))
                         }
@@ -286,7 +308,7 @@ pub fn run() {
             // startup rather than only being discoverable by trying to
             // record. On Windows this now says "idle" rather than "ready":
             // libobs comes up with the League client, not with the app.
-            println!("[recorder] backend: {}", backend.backend_name());
+            info!("recorder", "backend: {}", backend.backend_name());
 
             let recorder: Arc<Mutex<Box<dyn Recorder>>> = Arc::new(Mutex::new(backend));
             let dir = recordings_dir(app.handle())?;
@@ -308,6 +330,10 @@ pub fn run() {
                 // without the library), so print something actionable and
                 // leave quietly.
                 Err(e @ db::DbError::SchemaTooNew { .. }) => {
+                    error!("db", "cannot open the VOD library at {}: {e}", db_path.display());
+                    // Kept as a console write on top of the log line: this
+                    // is a wall of actionable prose aimed at a person in a
+                    // terminal, not a log entry.
                     eprintln!(
                         "\n[db] cannot open the VOD library: {e}.\n\
                          \n  {}\n\
@@ -321,20 +347,21 @@ pub fn run() {
                     std::process::exit(1);
                 }
                 Err(e) => {
-                    eprintln!("\n[db] cannot open the VOD library at {}: {e}\n", db_path.display());
+                    error!("db", "cannot open the VOD library at {}: {e}", db_path.display());
                     std::process::exit(1);
                 }
             });
 
             match db::reconcile::reconcile(&db, &dir) {
                 Ok(report) if report.orphans_removed > 0 || report.imported > 0 => {
-                    println!(
-                        "[db] startup reconcile: removed {} orphan row(s), imported {} untracked file(s)",
+                    info!(
+                        "db",
+                        "startup reconcile: removed {} orphan row(s), imported {} untracked file(s)",
                         report.orphans_removed, report.imported
                     );
                 }
                 Ok(_) => {}
-                Err(e) => eprintln!("[db] startup reconcile failed: {e}"),
+                Err(e) => error!("db", "startup reconcile failed: {e}"),
             }
 
             // Retention (DEVELOPMENT.md §6): enforced here and
@@ -344,15 +371,16 @@ pub fn run() {
             // — still gets applied on the next launch.
             match db.get_retention_policy() {
                 Ok(policy) => match retention::enforce_now(&db, &policy) {
-                    Ok(report) if !report.deleted.is_empty() => println!(
-                        "[retention] startup enforcement: removed {} recording(s), freed {} bytes",
+                    Ok(report) if !report.deleted.is_empty() => info!(
+                        "retention",
+                        "startup enforcement: removed {} recording(s), freed {} bytes",
                         report.deleted.len(),
                         report.freed_bytes
                     ),
                     Ok(_) => {}
-                    Err(e) => eprintln!("[retention] startup enforcement failed: {e}"),
+                    Err(e) => error!("retention", "startup enforcement failed: {e}"),
                 },
-                Err(e) => eprintln!("[retention] failed to load policy: {e}"),
+                Err(e) => error!("retention", "failed to load policy: {e}"),
             }
 
             let supervisor =
@@ -379,7 +407,7 @@ pub fn run() {
                 match event {
                     SupervisorEvent::LibraryChanged => {
                         if let Err(e) = notify_handle.emit(LIBRARY_CHANGED_EVENT, ()) {
-                            eprintln!("[state_machine] failed to emit library-changed: {e}");
+                            warn!("state_machine", "failed to emit library-changed: {e}");
                         }
                     }
                     SupervisorEvent::RecordingStarted => notify_for(
@@ -389,7 +417,7 @@ pub fn run() {
                     ),
                     SupervisorEvent::Finalized(finalized) => {
                         if let Err(e) = notify_handle.emit(LIBRARY_CHANGED_EVENT, ()) {
-                            eprintln!("[state_machine] failed to emit library-changed: {e}");
+                            warn!("state_machine", "failed to emit library-changed: {e}");
                         }
                         let name = std::path::Path::new(&finalized.path)
                             .file_stem()
@@ -435,7 +463,7 @@ pub fn run() {
                         // Nothing else will tell the frontend: the row
                         // changed minutes after the library last refreshed.
                         if let Err(e) = handle.emit(LIBRARY_CHANGED_EVENT, ()) {
-                            eprintln!("[match-summary] failed to emit library-changed: {e}");
+                            warn!("match-summary", "failed to emit library-changed: {e}");
                         }
                     }
                 });
@@ -458,7 +486,7 @@ pub fn run() {
             ctx.set_library_changed_notifier(Box::new(move || {
                 use tauri::Emitter;
                 if let Err(e) = notify_handle.emit(LIBRARY_CHANGED_EVENT, ()) {
-                    eprintln!("[core] failed to emit library-changed: {e}");
+                    warn!("core", "failed to emit library-changed: {e}");
                 }
             }));
 
@@ -470,7 +498,7 @@ pub fn run() {
             // reachable at all, so it must exist even if window creation
             // fails.
             if let Err(e) = tray::build(app.handle()) {
-                eprintln!("[tray] could not create the tray icon: {e}");
+                error!("tray", "could not create the tray icon: {e}");
             }
 
             // Last, so the window never renders against half-built state:
@@ -478,7 +506,7 @@ pub fn run() {
             if mode.creates_window() {
                 create_main_window(app.handle(), None)?;
             } else {
-                println!("[launch] started in the tray with no window");
+                info!("launch", "started in the tray with no window");
             }
             Ok(())
         });

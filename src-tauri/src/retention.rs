@@ -8,6 +8,7 @@
 //! Also home to the record-start free-space preflight check, since it's
 //! the same "don't let capture run the disk dry" concern.
 
+use crate::{error, warn};
 use crate::db::{Db, DbError, RecordingRow, RetentionPolicy};
 use serde::Serialize;
 use std::path::Path;
@@ -142,7 +143,7 @@ pub fn enforce(db: &Db, policy: &RetentionPolicy, now_millis: i64) -> Result<Enf
         match delete_recording_and_file(db, row) {
             Ok(()) => {}
             Err(DeleteError::Io { path, source }) => {
-                eprintln!("[retention] failed to remove {path}: {source}");
+                error!("retention", "failed to remove {path}: {source}");
                 db.delete_recording(id)?;
             }
             Err(DeleteError::Db(e)) => return Err(e),
@@ -193,8 +194,7 @@ pub fn has_room_to_record(dir: &Path) -> bool {
     match free_space_bytes(dir) {
         Ok(free) => free >= MIN_FREE_BYTES_TO_RECORD,
         Err(e) => {
-            eprintln!(
-                "[retention] failed to check free space for {}: {e}",
+            warn!("retention", "failed to check free space for {}: {e}",
                 dir.display()
             );
             true

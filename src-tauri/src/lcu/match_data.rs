@@ -48,6 +48,7 @@
 //! unrecognised response degrades to "this source knew less" rather than
 //! failing the fetch.
 
+use crate::{warn};
 use super::client::{LcuClientError, LcuHttpClient};
 use serde::{Deserialize, Serialize};
 
@@ -408,7 +409,7 @@ pub async fn fetch_match_summary(
             // The eog block already answered, so a match history that
             // hasn't caught up only costs `role` and `patch`. Reported at
             // the level it deserves and not retried.
-            Err(e) => eprintln!("[lcu] match history unavailable for game {game_id}: {e}"),
+            Err(e) => warn!("lcu", "match history unavailable for game {game_id}: {e}"),
         }
     }
 

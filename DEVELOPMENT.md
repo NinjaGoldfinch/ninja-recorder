@@ -781,3 +781,27 @@ a dev build and an installed release already share `app_data_dir()`, the
 database and the recordings folder. For the same reason a version-mismatched
 handshake must refuse to attach and say so, never tell the other daemon to quit:
 it might be recording.
+
+---
+
+## 13. Logging
+
+`main.rs` sets `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]`, which is what stops a console window flashing over the game. It also means a **release build has no console at all** — so the ~50 `eprintln!`/`println!` calls this app used to make were writing to a closed handle on the one machine where capture problems actually happen. The dev portal's Log panel recorded only the portal's own IPC calls, and said so in its header. In practice the app could not tell you why anything went wrong.
+
+`log.rs` is the fix: a file under `app_data_dir()/logs/`, **written in release builds**, plus one way to write to it.
+
+- **The log ships; the viewers do not.** CLAUDE.md forbids attaching the devtools build to a release, so a devtools-only log could never observe a real failure. The panels that read and present it stay behind `--features devtools` (#72), which keeps the shipped surface to one file and no UI.
+- **`error!` / `warn!` / `info!` / `debug!`, each taking the `[tag]` the codebase already wrote by hand.** The tags (`state_machine`, `lcu`, `retention`, `recorder`, …) were already consistent and already greppable; the facade keeps them and adds a timestamp and a level. `error!` is reserved for what a user actually feels — a lost recording, a library that will not open, a deletion that did not free space. Everything that degraded and carried on is `warn!`.
+- **`debug!` is off by default**, and exists for the high-volume streams still to come: libobs's own log (#69) and the per-poll Live Client Data tracker (#70). Either at `info` would rotate a session's real errors out of the file within one game. `NINJA_RECORDER_LOG_LEVEL=debug` turns them on.
+- **Rotation is 5 MiB × 3.** About two play sessions of history, which is the window a capture bug is diagnosed in.
+- **Nothing here may fail the app.** A read-only data dir, a locked file, a full disk: each degrades to "no file logging this session", never to an error a caller has to handle. `write` returns `()` and swallows I/O errors — recording a game matters more than recording *about* recording one. A failed write drops the sink for the rest of the session rather than retrying every line, because the usual causes do not fix themselves.
+
+### Why not `tracing`
+
+`tracing`, and `log` + `fern`, both do this and more. What was needed was a timestamp, a level, a tag and a file that rotates; `tracing`'s value is spans and structured fields, and nothing in this app has asked for either. This project has kept its dependency tree deliberately small (§1.2), and a date crate would have been a second dependency purely to format a timestamp — so `log.rs` hand-rolls Howard Hinnant's `civil_from_days`, which is the same closed form a date crate would run, and pins it with tests for the leap-year and century rules. Revisit when something genuinely wants spans.
+
+### The three things that deliberately do not go through it
+
+- `launch.rs`'s unsupported-mode message, which runs in `run()` **before** `setup` and so before `log::init` — there is no file yet, and it exits immediately.
+- The two lines reporting that logging itself could not start. Saying so through the log would say nothing.
+- The `SchemaTooNew` block, which is a wall of actionable prose aimed at a person in a terminal. That one keeps its `eprintln!` *and* gets an `error!` line, so the fact is recorded and the explanation is still readable.

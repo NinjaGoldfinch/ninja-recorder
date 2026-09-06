@@ -16,6 +16,7 @@
 //! takes elapsed time as an argument rather than reading the clock so a
 //! whole game's poll sequence can be replayed in a test.
 
+use crate::{error, info, warn};
 use super::machine::{Action, GameState, StateEvent, StateMachine};
 use crate::db::{self, Db};
 use crate::lcu;
@@ -449,7 +450,7 @@ impl Supervisor {
         } else if let Err(e) = recorder.prepare() {
             // Not fatal: `start` retries the bring-up itself, and a warning
             // now is more useful than silence until someone tries to record.
-            eprintln!("[state_machine] capture backend not ready: {e}");
+            warn!("state_machine", "capture backend not ready: {e}");
         }
     }
 
@@ -471,7 +472,7 @@ impl Supervisor {
             let client = match lcu::LcuHttpClient::new(&lockfile) {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("[state_machine] failed to build LCU client: {e}");
+                    warn!("state_machine", "failed to build LCU client: {e}");
                     return;
                 }
             };
@@ -512,7 +513,7 @@ impl Supervisor {
         let client = match lcu::LcuHttpClient::new(&lockfile) {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("[state_machine] could not build an LCU client to identify the game: {e}");
+                warn!("state_machine", "could not build an LCU client to identify the game: {e}");
                 return;
             }
         };
@@ -523,13 +524,14 @@ impl Supervisor {
                 // tells a Windows tester the id resolution works, and
                 // `is_custom` is why a later summary fetch may find
                 // nothing (custom games never reach match history).
-                println!(
-                    "[state_machine] game identified: id={:?} queue={:?} custom={}",
+                info!(
+                    "state_machine",
+                    "game identified: id={:?} queue={:?} custom={}",
                     identity.game_id, identity.queue_id, identity.is_custom
                 );
                 *self.pending_game.lock().unwrap() = identity;
             }
-            Err(e) => eprintln!("[state_machine] could not identify the game: {e}"),
+            Err(e) => warn!("state_machine", "could not identify the game: {e}"),
         }
     }
 
@@ -544,7 +546,7 @@ impl Supervisor {
             let client = match live_client::LiveClientDataClient::new() {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("[state_machine] failed to build Live Client Data client: {e}");
+                    error!("state_machine", "failed to build Live Client Data client: {e}");
                     return;
                 }
             };
@@ -602,7 +604,7 @@ impl Supervisor {
     /// double-start collision.
     fn start_recording(&self) {
         if !crate::retention::has_room_to_record(&self.recordings_dir) {
-            eprintln!("[state_machine] refusing to start recording: insufficient free disk space");
+            error!("state_machine", "refusing to start recording: insufficient free disk space");
             self.emit(SupervisorEvent::RecordingFailed(
                 "not enough free disk space to record this game".into(),
             ));
@@ -617,7 +619,7 @@ impl Supervisor {
             output_dir: self.recordings_dir.clone(),
             file_stem: format!("recording-{started_at_millis}"),
             audio: self.db.get_audio_preset().unwrap_or_else(|e| {
-                eprintln!("[state_machine] could not read the audio preset ({e}), using the default");
+                warn!("state_machine", "could not read the audio preset ({e}), using the default");
                 Default::default()
             }),
         };
@@ -635,7 +637,7 @@ impl Supervisor {
                 self.emit(SupervisorEvent::RecordingStarted);
             }
             Err(e) => {
-                eprintln!("[state_machine] failed to start recording: {e}");
+                error!("state_machine", "failed to start recording: {e}");
                 // Silence here means the user finds out after the game, when
                 // the VOD isn't in the library.
                 self.emit(SupervisorEvent::RecordingFailed(format!(
@@ -694,7 +696,7 @@ impl Supervisor {
                 let audio_tracks_json = match serde_json::to_string(&output.audio) {
                     Ok(json) => Some(json),
                     Err(e) => {
-                        eprintln!("[state_machine] could not encode the audio track layout: {e}");
+                        warn!("state_machine", "could not encode the audio track layout: {e}");
                         None
                     }
                 };
@@ -726,7 +728,10 @@ impl Supervisor {
                             })
                             .collect();
                         if let Err(e) = self.db.insert_markers(id, &new_markers) {
-                            eprintln!("[state_machine] failed to insert markers for recording {id}: {e}");
+                            error!(
+                                "state_machine",
+                                "failed to insert markers for recording {id}: {e}"
+                            );
                         }
 
                         let new_samples: Vec<db::NewSample> = samples
@@ -743,12 +748,15 @@ impl Supervisor {
                             })
                             .collect();
                         if let Err(e) = self.db.insert_samples(id, &new_samples) {
-                            eprintln!("[state_machine] failed to insert samples for recording {id}: {e}");
+                            error!(
+                                "state_machine",
+                                "failed to insert samples for recording {id}: {e}"
+                            );
                         }
                         Some(id)
                     }
                     Err(e) => {
-                        eprintln!("[state_machine] failed to insert recording row: {e}");
+                        error!("state_machine", "failed to insert recording row: {e}");
                         None
                     }
                 };
@@ -766,15 +774,16 @@ impl Supervisor {
                 // never restarts.
                 match self.db.get_retention_policy() {
                     Ok(policy) => match crate::retention::enforce_now(&self.db, &policy) {
-                        Ok(report) if !report.deleted.is_empty() => println!(
-                            "[retention] post-finalize enforcement: removed {} recording(s), freed {} bytes",
+                        Ok(report) if !report.deleted.is_empty() => info!(
+                            "retention",
+                            "post-finalize enforcement: removed {} recording(s), freed {} bytes",
                             report.deleted.len(),
                             report.freed_bytes
                         ),
                         Ok(_) => {}
-                        Err(e) => eprintln!("[retention] post-finalize enforcement failed: {e}"),
+                        Err(e) => error!("retention", "post-finalize enforcement failed: {e}"),
                     },
-                    Err(e) => eprintln!("[retention] failed to load policy: {e}"),
+                    Err(e) => error!("retention", "failed to load policy: {e}"),
                 }
 
                 // After the row, its markers/samples, and any retention
@@ -800,7 +809,7 @@ impl Supervisor {
                 self.request_summary(recording_id, game, &live);
             }
             Err(e) => {
-                eprintln!("[state_machine] failed to stop recording: {e}");
+                error!("state_machine", "failed to stop recording: {e}");
                 // The user is mid-game with the window closed; a failed
                 // finalize is the one thing they cannot otherwise discover.
                 self.emit(SupervisorEvent::RecordingFailed(format!(

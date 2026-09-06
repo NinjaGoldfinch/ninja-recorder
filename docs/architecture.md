@@ -81,6 +81,7 @@ flowchart TB
 | `db/reconcile.rs` | Reconciling DB rows against files on disk | `reconcile` |
 | `match_summary.rs` | Waiting out the LCU after a finalize, then patching the row with what it eventually says | `patch`, `next_delay` |
 | `retention.rs` | Deletion policy and free-space preflight | `select_for_deletion`, `enforce_now`, `has_room_to_record` |
+| `log.rs` | The log file under `app_data_dir()/logs/`, written in release builds too, and the `error!`/`warn!`/`info!`/`debug!` macros everything else writes through | `init`, `write` |
 | `fixtures.rs` | Capturing live API responses to `fixtures/` | `enabled`, `record` |
 | `dev/` | Dev portal backend, compiled out without `--features devtools` | `dev_*` commands |
 | `core/mod.rs` | Every command's logic, with no `tauri` types in any signature | `Ctx`, the command free functions |

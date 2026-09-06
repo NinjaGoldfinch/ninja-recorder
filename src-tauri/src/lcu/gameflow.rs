@@ -7,6 +7,7 @@
 //! connection yet — no League client is installed on the machine this was
 //! written on (DEVELOPMENT.md §9).
 
+use crate::{warn};
 use super::client::{basic_auth_header, LcuClientError, LcuHttpClient};
 use super::lockfile::LockfileInfo;
 use futures_util::{SinkExt, StreamExt};
@@ -110,7 +111,7 @@ pub async fn watch<F>(
 {
     loop {
         if let Err(e) = watch_via_websocket(lockfile, &mut on_update).await {
-            eprintln!("[lcu::gameflow] websocket unavailable ({e}), falling back to polling");
+            warn!("lcu", "websocket unavailable ({e}), falling back to polling");
             watch_via_polling(http, poll_interval, &mut on_update).await;
         }
         tokio::time::sleep(Duration::from_secs(2)).await;

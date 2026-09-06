@@ -28,6 +28,7 @@ mod dispatch;
 #[cfg_attr(not(feature = "devtools"), allow(unused_imports))]
 pub use dispatch::{command_names, dispatch, dispatch_blocking, is_async_command};
 
+use crate::{warn};
 use crate::db;
 use crate::lcu;
 use crate::recorder::audio::{AudioInputDevice, AudioPreset};
@@ -172,7 +173,7 @@ pub fn close_action(ctx: &Ctx) -> CloseAction {
     let prefs = match ctx.db.get_ui_prefs() {
         Ok(prefs) => prefs,
         Err(e) => {
-            eprintln!("[core] could not read {CLOSE_ACTION_KEY}, using the default: {e}");
+            warn!("core", "could not read {CLOSE_ACTION_KEY}, using the default: {e}");
             return CloseAction::default();
         }
     };
@@ -265,7 +266,7 @@ pub fn notification_prefs(ctx: &Ctx) -> NotificationPrefs {
     match ctx.db.get_ui_prefs() {
         Ok(prefs) => NotificationPrefs::from_prefs(&prefs),
         Err(e) => {
-            eprintln!("[core] could not read notification prefs, using defaults: {e}");
+            warn!("core", "could not read notification prefs, using defaults: {e}");
             NotificationPrefs::default()
         }
     }
@@ -290,7 +291,7 @@ pub fn notice_seen(ctx: &Ctx, key: &str) -> bool {
 /// Records that a one-time notice has been shown.
 pub fn mark_notice_seen(ctx: &Ctx, key: &str) {
     if let Err(e) = ctx.db.set_ui_pref(key, "1") {
-        eprintln!("[core] could not record notice {key} as seen: {e}");
+        warn!("core", "could not record notice {key} as seen: {e}");
     }
 }
 

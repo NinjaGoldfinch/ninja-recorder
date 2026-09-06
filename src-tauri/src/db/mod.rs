@@ -7,6 +7,7 @@
 
 pub mod reconcile;
 
+use crate::{warn};
 use rusqlite::{params, Connection, OptionalExtension};
 use rusqlite_migration::{Migrations, M};
 use crate::recorder::audio::AudioPreset;
@@ -743,8 +744,9 @@ impl Db {
         Ok(match raw {
             None => AudioPreset::default(),
             Some(json) => serde_json::from_str(&json).unwrap_or_else(|e| {
-                eprintln!(
-                    "[db] unreadable {AUDIO_PRESET_KEY} preference ({e}), recording game audio only: {json}"
+                warn!(
+                    "db",
+                    "unreadable {AUDIO_PRESET_KEY} preference ({e}), recording game audio only: {json}"
                 );
                 AudioPreset::default()
             }),
