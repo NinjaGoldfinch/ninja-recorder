@@ -4,6 +4,7 @@ mod db;
 #[cfg(feature = "devtools")]
 mod dev;
 mod fixtures;
+mod launch;
 mod lcu;
 mod live_client;
 mod recorder;
@@ -137,11 +138,47 @@ fn open_recordings_folder(state: tauri::State<AppState>) -> Result<(), String> {
 }
 
 
+/// The main window's label. Matches `capabilities/default.json`'s
+/// `"windows": ["main"]`, which is what Tauri would have used implicitly when
+/// the window came from `tauri.conf.json`.
+const MAIN_WINDOW_LABEL: &str = "main";
+
+/// Builds the main window.
+///
+/// It used to come from `app.windows` in `tauri.conf.json`, which Tauri
+/// creates automatically *before* `setup` runs — so there was no way to not
+/// have one. A hidden start needs exactly that: `visible: false` still
+/// constructs the WebView2 instance and pays its full cost, which defeats the
+/// purpose of starting in the tray (DEVELOPMENT.md §12).
+///
+/// Safe to call from `setup`, unlike `dev_open_portal`, which documents why it
+/// must be `async`: that hazard is building a window re-entrantly from inside
+/// a WebView2 IPC callback, and `setup` is not one. Any window created later
+/// from a tray click or an IPC notification does have to worry about it.
+fn create_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
+    tauri::WebviewWindowBuilder::new(
+        app,
+        MAIN_WINDOW_LABEL,
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title("ninja-recorder")
+    .inner_size(1160.0, 800.0)
+    .min_inner_size(880.0, 600.0)
+    .build()?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let mode = launch::Launch::from_env();
+    if let Some(why) = mode.unsupported() {
+        eprintln!("[launch] {why}");
+        std::process::exit(2);
+    }
+
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
+        .setup(move |app| {
             let backend: Box<dyn Recorder> = {
                 #[cfg(target_os = "windows")]
                 {
@@ -285,6 +322,17 @@ pub fn run() {
             app.manage(AppState(Arc::new(ctx)));
             #[cfg(feature = "devtools")]
             app.manage(dev::DevState::default());
+
+            // Last, so the window never renders against half-built state:
+            // the frontend starts polling as soon as it loads.
+            if mode.creates_window() {
+                create_main_window(app.handle())?;
+            } else {
+                println!(
+                    "[launch] started without a window; there is no tray yet, so quit the \
+                     process to stop it"
+                );
+            }
             Ok(())
         });
 

@@ -110,6 +110,23 @@ Manager that **no `extprocess_recorder.exe` exists at all** before the client
 starts, that one appears within a few seconds of it starting, and that it goes
 away again when the client closes.
 
+### 5.0 Launch modes
+
+The main window is created in Rust now rather than by `tauri.conf.json`, and
+argv selects the mode. Verified on macOS; the Windows behaviour of a windowless
+process is what needs confirming.
+
+- [ ] A normal start still opens the window at 1160x800 with an 880x600
+      minimum, titled `ninja-recorder`.
+- [ ] `ninja-recorder.exe --hidden` starts with **no** window, no taskbar
+      button, and keeps running. Until the tray exists the only way to stop it
+      is Task Manager — expected, not a bug.
+- [ ] `ninja-recorder.exe --daemon` prints its message and exits 2. Note
+      `windows_subsystem = "windows"` means release builds have no console, so
+      the message goes nowhere visible; confirm the **exit code**, not the text.
+- [ ] Unknown arguments (a shell verb, a file path from "Open with") do not
+      prevent startup.
+
 ### 5.1 Capture-backend lifecycle
 
 New with `prepare`/`release`; none of it can be exercised off Windows.

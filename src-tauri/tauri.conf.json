@@ -11,15 +11,7 @@
   },
   "app": {
     "withGlobalTauri": true,
-    "windows": [
-      {
-        "title": "ninja-recorder",
-        "width": 1160,
-        "height": 800,
-        "minWidth": 880,
-        "minHeight": 600
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null,
       "assetProtocol": {
