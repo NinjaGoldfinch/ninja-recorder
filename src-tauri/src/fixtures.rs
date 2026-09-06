@@ -1,8 +1,22 @@
-//! Optional fixture recording, shared by every API client (LCU, Live
-//! Client Data). When `NINJA_RECORDER_RECORD_FIXTURES` is set, every
-//! response is written to `<base>/<group>/<endpoint>.json`, so real
+//! Fixture recording, shared by every API client (LCU, Live Client Data).
+//! Every response is written to `<base>/<group>/<endpoint>.json`, so real
 //! response shapes can be replayed in tests without a live client running.
-//! Off by default — never runs in a normal session. DEVELOPMENT.md §3.3.
+//! DEVELOPMENT.md §3.3.
+//!
+//! ## On by default, temporarily
+//!
+//! This used to be opt-in via `NINJA_RECORDER_RECORD_FIXTURES`. It is now
+//! **on unless that variable says otherwise**, because almost every shape
+//! this app parses was written by hand and has never been checked against
+//! a real client — and the cost of that came due in #74, where a payload
+//! the parser could not read ended a recording nine minutes into a game
+//! and no copy of it was kept.
+//!
+//! Recording every response means the payload that broke something is on
+//! disk when you go looking, because `record` runs *before* the parse.
+//!
+//! **Revert this to opt-in for the v1.0 release.** Search for
+//! `DEFAULT_ON_UNTIL_V1`.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,8 +29,15 @@ static BASE_DIR: OnceLock<PathBuf> = OnceLock::new();
 /// immutable for the process lifetime (and mutating the environment at
 /// runtime is process-global and racy with any other reader), so the env
 /// var is the *initial* value and `set_enabled` — used by the dev portal
-/// to flip capture on for a single game — is the running one.
+/// to flip capture off for a single game — is the running one.
+///
+/// Starts `false` and is set by `init_from_env` during startup, so a test
+/// binary — which never calls it — writes no files.
 static ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// DEFAULT_ON_UNTIL_V1: capture is on unless explicitly disabled. See the
+/// module header, and flip this back for the v1.0 release.
+const DEFAULT_ENABLED: bool = true;
 
 /// Sets the directory fixtures are written under. Call once at startup
 /// with a runtime-resolved, writable location — the app data dir, in
@@ -33,11 +54,29 @@ pub fn set_base_dir(dir: PathBuf) {
 
 /// Reads the initial enabled state from the environment. Call once at
 /// startup, alongside `set_base_dir`.
+///
+/// The variable is now an *override*, not a switch-on: unset means the
+/// `DEFAULT_ENABLED` above, and only an explicitly falsey value turns
+/// capture off. That inversion is deliberate and temporary — see the
+/// module header.
 pub fn init_from_env() {
-    ENABLED.store(
-        std::env::var_os("NINJA_RECORDER_RECORD_FIXTURES").is_some(),
-        Ordering::Relaxed,
-    );
+    let enabled = match std::env::var("NINJA_RECORDER_RECORD_FIXTURES") {
+        Ok(value) => is_truthy(&value),
+        // Unset, or not valid UTF-8 — neither is somebody asking for it off.
+        Err(_) => DEFAULT_ENABLED,
+    };
+    ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// How the env var reads. Anything explicitly falsey turns capture off;
+/// anything else — including an empty value, which is how a shell spells
+/// "I set this but did not think about it" — leaves the default alone.
+fn is_truthy(value: &str) -> bool {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "0" | "false" | "off" | "no" => false,
+        "" => DEFAULT_ENABLED,
+        _ => true,
+    }
 }
 
 pub fn enabled() -> bool {
@@ -108,8 +147,11 @@ fn fixtures_dir(group: &str) -> PathBuf {
 mod tests {
     use super::*;
 
+    /// The static starts `false` and only `init_from_env` turns it on, so a
+    /// test binary — which never calls that — writes no fixture files
+    /// however the default is set.
     #[test]
-    fn enabled_defaults_off_and_follows_set_enabled() {
+    fn the_flag_starts_off_and_follows_set_enabled() {
         // The static is process-wide, so restore whatever it was.
         let before = enabled();
         ENABLED.store(false, Ordering::Relaxed);
@@ -117,6 +159,25 @@ mod tests {
         ENABLED.store(true, Ordering::Relaxed);
         assert!(enabled());
         ENABLED.store(before, Ordering::Relaxed);
+    }
+
+    /// The variable is an override, not a switch-on: capture is on unless
+    /// something explicitly says otherwise (DEFAULT_ON_UNTIL_V1).
+    #[test]
+    fn only_an_explicitly_falsey_value_turns_capture_off() {
+        assert!(!is_truthy("0"));
+        assert!(!is_truthy("false"));
+        assert!(!is_truthy(" OFF "));
+        assert!(!is_truthy("no"));
+    }
+
+    #[test]
+    fn anything_else_leaves_capture_on() {
+        assert!(is_truthy("1"));
+        assert!(is_truthy("true"));
+        assert!(is_truthy("yes"));
+        // How a shell spells "I set this but did not think about it".
+        assert_eq!(is_truthy(""), DEFAULT_ENABLED);
     }
 
     #[test]

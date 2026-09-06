@@ -320,6 +320,17 @@ pub fn run() {
             // fixtures::set_base_dir's doc comment.
             fixtures::set_base_dir(app.path().app_data_dir()?.join("fixtures"));
             fixtures::init_from_env();
+            // Worth a line: capture is on by default until v1.0 and writes
+            // a file per response, so a user should be able to find out
+            // that it is happening and where it is going without reading
+            // the source (DEVELOPMENT.md §3.3).
+            if fixtures::enabled() {
+                info!(
+                    "fixtures",
+                    "capturing API responses to {}",
+                    app.path().app_data_dir()?.join("fixtures").display()
+                );
+            }
 
             let db_path = app.path().app_data_dir()?.join("library.sqlite3");
             std::fs::create_dir_all(db_path.parent().expect("db path always has a parent"))?;
