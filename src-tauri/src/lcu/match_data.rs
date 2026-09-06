@@ -1,27 +1,52 @@
-//! Post-game match metadata: champion, KDA, win/loss, queue. DEVELOPMENT.md
-//! §3.1. Champion *name* resolution (id → display name, e.g. via Data
-//! Dragon) is out of scope here — the VOD library UI owns that; this
-//! module only surfaces what the LCU itself returns.
+//! Post-game match metadata from the LCU: win/loss, KDA, champion, queue,
+//! role and patch. DEVELOPMENT.md §3.1.
 //!
-//! `fetch_match_summary` still isn't called anywhere — the state machine's
-//! Finalizing step stops short of fetching it, since reliably resolving
-//! *which* gameId just finished needs LCU endpoint research this machine
-//! can't verify live (no League client installed). Wire it in once that's
-//! confirmed. The extraction logic itself (`extract_summary`) is
-//! unit-tested against fixture JSON below.
+//! Champion *name* resolution (id → display name) is out of scope here —
+//! this module only surfaces what the LCU itself returns. The common path
+//! never needs it anyway: Live Client Data writes a display name during
+//! the game, and only a game whose poller never came up arrives here
+//! without one.
 //!
-//! **Identifying ourselves in the response is the fragile part.** The
-//! participant list and the identity list are joined by `participantId`,
-//! and the identity has to be matched back to us by *some* account key —
-//! but which keys the endpoint actually sends has changed over time, and
-//! a fixture written by hand proves nothing about the wire. The LCU's own
-//! OpenAPI spec has no `puuid` on a match-history participant identity at
-//! all (only `accountId`, `summonerId`, `summonerName`), even though 74
-//! other schemas in that spec do carry one. So every key is optional here
-//! and `CurrentSummoner::is_me` tries each in turn — a client that sends
-//! `puuid` and one that doesn't both work, without needing to know which
-//! this one is.
-#![allow(dead_code)]
+//! Called after a finalize, not during one — see `crate::match_summary`
+//! for the retry loop and the DB patch that own the timing. At the instant
+//! a recording stops, the LCU is still in `WaitingForStats` and neither
+//! endpoint below has an answer yet.
+//!
+//! ## Two endpoints, in this order
+//!
+//! 1. `/lol-end-of-game/v1/eog-stats-block` is *our own* stats block, not a
+//!    ten-player document we have to find ourselves in. `teams[]` carries
+//!    `isPlayerTeam` and `isWinningTeam`, so the outcome needs no
+//!    participant join at all — which removes the most fragile step in the
+//!    whole path. It is also populated during the `EndOfGame` phase,
+//!    exactly when a finalize runs, so it usually answers on the first
+//!    attempt.
+//! 2. `/lol-match-history/v1/games/{gameId}` is authoritative and the only
+//!    source for `role` and `patch`, but it is a full match document that
+//!    has to be joined back to us, and it lags the end of the game.
+//!
+//! Whatever the first answers, the second fills the gaps in
+//! (`MatchSummary::fill_gaps_from`). Neither endpoint carries a queue *id*
+//! we can use — the eog block spells its queue as a string
+//! (`RANKED_SOLO_5x5`) — so the `queue` column keeps coming from the
+//! gameflow session captured while the game was running (`gameflow`).
+//!
+//! **Identifying ourselves in the match-history response is the fragile
+//! part.** The participant list and the identity list are joined by
+//! `participantId`, and the identity has to be matched back to us by
+//! *some* account key — but which keys the endpoint actually sends has
+//! changed over time, and a fixture written by hand proves nothing about
+//! the wire. The LCU's own OpenAPI spec has no `puuid` on a match-history
+//! participant identity at all (only `accountId`, `summonerId`,
+//! `summonerName`), even though 74 other schemas in that spec do carry
+//! one. So every key is optional here and `CurrentSummoner::is_me` tries
+//! each in turn — a client that sends `puuid` and one that doesn't both
+//! work, without needing to know which this one is.
+//!
+//! **None of these shapes has been seen off a real client.** Both are
+//! modelled from that same spec, so every field is optional and an
+//! unrecognised response degrades to "this source knew less" rather than
+//! failing the fetch.
 
 use super::client::{LcuClientError, LcuHttpClient};
 use serde::{Deserialize, Serialize};
@@ -103,6 +128,8 @@ fn real_id(field: Option<i64>) -> Option<i64> {
     field.filter(|id| *id > 0)
 }
 
+// --- `/lol-match-history/v1/games/{gameId}` ----------------------------
+
 #[derive(Debug, Clone, Deserialize)]
 struct GameParticipant {
     #[serde(rename = "championId")]
@@ -110,6 +137,11 @@ struct GameParticipant {
     #[serde(rename = "participantId")]
     participant_id: i64,
     stats: ParticipantStats,
+    /// Where `role` comes from. Optional because it is the one part of the
+    /// participant this module treats as a nice-to-have — a response
+    /// without a timeline still yields a usable summary.
+    #[serde(default)]
+    timeline: Option<ParticipantTimeline>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -118,6 +150,17 @@ struct ParticipantStats {
     deaths: i64,
     assists: i64,
     win: bool,
+}
+
+/// Riot's two-field spelling of a position: `lane` says where, `role` says
+/// what — `BOTTOM` + `DUO_SUPPORT` is a support, `MIDDLE` + `SOLO` a
+/// midlaner. Neither field alone is worth storing.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct ParticipantTimeline {
+    #[serde(default)]
+    lane: Option<String>,
+    #[serde(default)]
+    role: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -148,20 +191,180 @@ struct GameDto {
     game_id: i64,
     #[serde(rename = "queueId")]
     queue_id: i64,
+    /// `"15.3.412.9873"`. Stored whole rather than trimmed to `15.3`: the
+    /// build number is what distinguishes two recordings made either side
+    /// of a hotfix, and a display that wants the short form can cut it.
+    #[serde(rename = "gameVersion", default)]
+    game_version: Option<String>,
     participants: Vec<GameParticipant>,
     #[serde(rename = "participantIdentities")]
     participant_identities: Vec<ParticipantIdentity>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+/// Riot's `lane`/`role` pair reduced to the position a human would name.
+///
+/// Unrecognised pairs yield `None` rather than a passthrough of whatever
+/// the client said. `role` is one column, and a column holding both
+/// `"Support"` and `"DUO_SUPPORT"` is one that nothing can group by —
+/// the same reason #54 leaves an unknown champion id NULL instead of
+/// writing `"Champion 157"`.
+fn position(timeline: Option<&ParticipantTimeline>) -> Option<String> {
+    let timeline = timeline?;
+    let lane = non_empty(&timeline.lane)?.to_ascii_uppercase();
+    let role = non_empty(&timeline.role)
+        .map(|r| r.to_ascii_uppercase())
+        .unwrap_or_default();
+
+    let named = match (lane.as_str(), role.as_str()) {
+        ("TOP", _) => "Top",
+        ("JUNGLE", _) => "Jungle",
+        ("MIDDLE", _) | ("MID", _) => "Middle",
+        ("BOTTOM", "DUO_SUPPORT") | ("BOT", "DUO_SUPPORT") => "Support",
+        ("BOTTOM", _) | ("BOT", _) => "Bottom",
+        _ => return None,
+    };
+    Some(named.to_string())
+}
+
+// --- `/lol-end-of-game/v1/eog-stats-block` -----------------------------
+
+/// Our own end-of-game stats block. Everything is optional: this shape
+/// comes from the LCU's OpenAPI spec rather than a captured response, and
+/// a field we cannot read has to mean "ask the other endpoint", never
+/// "fail the fetch".
+#[derive(Debug, Clone, Default, Deserialize)]
+struct EogStatsBlock {
+    #[serde(rename = "gameId", default)]
+    game_id: Option<i64>,
+    /// Our champion, at the top level — the block is already scoped to us.
+    #[serde(rename = "championId", default)]
+    champion_id: Option<i64>,
+    #[serde(rename = "summonerId", default)]
+    summoner_id: Option<i64>,
+    #[serde(default)]
+    teams: Vec<EogTeam>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct EogTeam {
+    #[serde(rename = "isPlayerTeam", default)]
+    is_player_team: Option<bool>,
+    #[serde(rename = "isWinningTeam", default)]
+    is_winning_team: Option<bool>,
+    #[serde(default)]
+    players: Vec<EogPlayer>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct EogPlayer {
+    #[serde(rename = "summonerId", default)]
+    summoner_id: Option<i64>,
+    /// The scoreboard, as the client's own stats vocabulary spells it.
+    /// Left as a map rather than modelled: the keys are a legacy stats
+    /// enum (`CHAMPIONS_KILLED`, `NUM_DEATHS`, `ASSISTS`) that this repo
+    /// has never seen on the wire, and a struct would turn an unexpected
+    /// spelling into a parse failure for the whole block.
+    #[serde(default)]
+    stats: std::collections::HashMap<String, serde_json::Value>,
+}
+
+/// One scoreboard number, under whichever of its spellings this client
+/// uses, and whether it arrived as a number or a string.
+fn stat(stats: &std::collections::HashMap<String, serde_json::Value>, keys: &[&str]) -> Option<i64> {
+    keys.iter().find_map(|key| {
+        let value = stats.get(*key)?;
+        value
+            .as_i64()
+            .or_else(|| value.as_str().and_then(|s| s.trim().parse().ok()))
+    })
+}
+
+/// Pure half of the eog fetch.
+///
+/// The outcome is the point: `isPlayerTeam` + `isWinningTeam` answers it
+/// with no participant join at all, so it holds even on a block whose
+/// player list we cannot read.
+fn extract_eog(block: &EogStatsBlock) -> MatchSummary {
+    let mut summary = MatchSummary {
+        champion_id: block.champion_id.filter(|id| *id > 0),
+        win: block
+            .teams
+            .iter()
+            .find(|t| t.is_player_team.unwrap_or(false))
+            .and_then(|t| t.is_winning_team),
+        ..Default::default()
+    };
+
+    // Our row on the scoreboard, for the KDA the top level doesn't carry.
+    // Matched on `summonerId` like everything else here; a block that
+    // doesn't say which player is us keeps its outcome and loses only the
+    // numbers, which Live Client Data has usually already written anyway.
+    let me = real_id(block.summoner_id).and_then(|mine| {
+        block
+            .teams
+            .iter()
+            .flat_map(|t| t.players.iter())
+            .find(|p| real_id(p.summoner_id) == Some(mine))
+    });
+    if let Some(me) = me {
+        summary.kills = stat(&me.stats, &["CHAMPIONS_KILLED", "kills"]);
+        summary.deaths = stat(&me.stats, &["NUM_DEATHS", "deaths"]);
+        summary.assists = stat(&me.stats, &["ASSISTS", "assists"]);
+    }
+    summary
+}
+
+// --- The merged answer -------------------------------------------------
+
+/// What the LCU could tell us about one game of ours.
+///
+/// Every field is optional because the two endpoints answer different
+/// subsets and either may be unavailable: the eog block has the outcome
+/// but no queue id or patch, match history has everything but arrives
+/// late. A `None` means "this was not established", and the DB patch
+/// leaves the column alone rather than nulling it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct MatchSummary {
-    pub game_id: i64,
-    pub queue_id: i64,
-    pub champion_id: i64,
-    pub win: bool,
-    pub kills: i64,
-    pub deaths: i64,
-    pub assists: i64,
+    pub game_id: Option<i64>,
+    pub queue_id: Option<i64>,
+    pub champion_id: Option<i64>,
+    pub win: Option<bool>,
+    pub kills: Option<i64>,
+    pub deaths: Option<i64>,
+    pub assists: Option<i64>,
+    /// `Top` / `Jungle` / `Middle` / `Bottom` / `Support` — see `position`.
+    pub role: Option<String>,
+    /// `gameVersion`, e.g. `"15.3.412.9873"`.
+    pub patch: Option<String>,
+}
+
+impl MatchSummary {
+    /// Takes from `other` only what this summary doesn't already have.
+    ///
+    /// Direction matters: the eog block is fetched first *because* it is
+    /// the one that needs no participant join, so where both sources
+    /// answer, the one that cannot have matched the wrong player wins.
+    fn fill_gaps_from(&mut self, other: MatchSummary) {
+        self.game_id = self.game_id.or(other.game_id);
+        self.queue_id = self.queue_id.or(other.queue_id);
+        self.champion_id = self.champion_id.or(other.champion_id);
+        self.win = self.win.or(other.win);
+        self.kills = self.kills.or(other.kills);
+        self.deaths = self.deaths.or(other.deaths);
+        self.assists = self.assists.or(other.assists);
+        self.role = self.role.take().or(other.role);
+        self.patch = self.patch.take().or(other.patch);
+    }
+
+    /// Whether this is worth writing to a row at all. A summary that
+    /// established nothing is not an answer, just a parse that succeeded.
+    pub fn is_empty(&self) -> bool {
+        self.win.is_none()
+            && self.champion_id.is_none()
+            && self.kills.is_none()
+            && self.role.is_none()
+            && self.patch.is_none()
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -170,14 +373,76 @@ pub enum MatchDataError {
     Client(#[from] LcuClientError),
     #[error("could not identify our participant in game {0}")]
     ParticipantNotFound(i64),
+    #[error("the client has no stats for game {0} yet")]
+    NotReady(i64),
 }
 
-/// Fetches the current summoner and the given game's data from the LCU,
-/// then extracts the caller's own stats from it.
+/// Everything the LCU can say about `game_id`, from whichever of the two
+/// endpoints answers.
+///
+/// `skip_match_history` is for custom games: they never reach match
+/// history, so asking costs a request and a retry cycle for a 404 that
+/// will never become a 200 (`gameflow::GameIdentity::is_custom`). The eog
+/// block still answers for them.
+///
+/// Errors only when *neither* source established anything. A `NotReady`
+/// is the normal answer in the seconds after a game ends and is what the
+/// caller's retry loop waits out.
 pub async fn fetch_match_summary(
     http: &LcuHttpClient,
     game_id: i64,
+    skip_match_history: bool,
 ) -> Result<MatchSummary, MatchDataError> {
+    let mut summary = match fetch_eog(http, game_id).await {
+        Ok(eog) => eog,
+        Err(e) => {
+            // Not fatal on its own: the block is transient (the client
+            // clears it when the player leaves the post-game screen) and
+            // match history outlives it.
+            eprintln!("[lcu] end-of-game stats unavailable for game {game_id}: {e}");
+            MatchSummary::default()
+        }
+    };
+
+    if !skip_match_history {
+        match fetch_history(http, game_id).await {
+            Ok(history) => summary.fill_gaps_from(history),
+            Err(e) if summary.is_empty() => return Err(e),
+            // The eog block already answered, so a match history that
+            // hasn't caught up only costs `role` and `patch`. Reported at
+            // the level it deserves and not retried.
+            Err(e) => eprintln!("[lcu] match history unavailable for game {game_id}: {e}"),
+        }
+    }
+
+    if summary.is_empty() {
+        return Err(MatchDataError::NotReady(game_id));
+    }
+    summary.game_id = summary.game_id.or(Some(game_id));
+    Ok(summary)
+}
+
+async fn fetch_eog(http: &LcuHttpClient, game_id: i64) -> Result<MatchSummary, MatchDataError> {
+    let block: EogStatsBlock = http.get_json("/lol-end-of-game/v1/eog-stats-block").await?;
+
+    // The block is whatever game the client last showed a scoreboard for,
+    // not the one we asked about. A stale one from the previous game would
+    // put the wrong result on this recording, which is the single worst
+    // thing this feature can do.
+    if let Some(block_id) = block.game_id.filter(|id| *id > 0) {
+        if block_id != game_id {
+            return Err(MatchDataError::NotReady(game_id));
+        }
+    }
+
+    let summary = extract_eog(&block);
+    if summary.is_empty() {
+        return Err(MatchDataError::NotReady(game_id));
+    }
+    Ok(summary)
+}
+
+async fn fetch_history(http: &LcuHttpClient, game_id: i64) -> Result<MatchSummary, MatchDataError> {
     let me: CurrentSummoner = http.get_json("/lol-summoner/v1/current-summoner").await?;
     let game: GameDto = http
         .get_json(&format!("/lol-match-history/v1/games/{}", game_id))
@@ -201,13 +466,15 @@ fn extract_summary(me: &CurrentSummoner, game: &GameDto) -> Result<MatchSummary,
         .ok_or(MatchDataError::ParticipantNotFound(game.game_id))?;
 
     Ok(MatchSummary {
-        game_id: game.game_id,
-        queue_id: game.queue_id,
-        champion_id: participant.champion_id,
-        win: participant.stats.win,
-        kills: participant.stats.kills,
-        deaths: participant.stats.deaths,
-        assists: participant.stats.assists,
+        game_id: Some(game.game_id),
+        queue_id: Some(game.queue_id),
+        champion_id: Some(participant.champion_id),
+        win: Some(participant.stats.win),
+        kills: Some(participant.stats.kills),
+        deaths: Some(participant.stats.deaths),
+        assists: Some(participant.stats.assists),
+        role: position(participant.timeline.as_ref()),
+        patch: non_empty(&game.game_version).map(str::to_string),
     })
 }
 
@@ -270,13 +537,15 @@ mod tests {
         assert_eq!(
             summary,
             MatchSummary {
-                game_id: 555,
-                queue_id: 420,
-                champion_id: 99,
-                win: true,
-                kills: 7,
-                deaths: 2,
-                assists: 5,
+                game_id: Some(555),
+                queue_id: Some(420),
+                champion_id: Some(99),
+                win: Some(true),
+                kills: Some(7),
+                deaths: Some(2),
+                assists: Some(5),
+                role: None,
+                patch: None,
             }
         );
     }
@@ -308,8 +577,8 @@ mod tests {
         );
 
         let summary = extract_summary(&me, &game).unwrap();
-        assert_eq!(summary.champion_id, 99);
-        assert!(summary.win);
+        assert_eq!(summary.champion_id, Some(99));
+        assert_eq!(summary.win, Some(true));
     }
 
     /// Third key down. A client that sends neither of the first two still
@@ -330,7 +599,7 @@ mod tests {
             }"#,
         );
 
-        assert_eq!(extract_summary(&me, &game).unwrap().champion_id, 99);
+        assert_eq!(extract_summary(&me, &game).unwrap().champion_id, Some(99));
     }
 
     /// The LCU writes `summonerId: 0` for a participant it will not name.
@@ -392,5 +661,201 @@ mod tests {
             extract_summary(&fixture_me(), &game),
             Err(MatchDataError::ParticipantNotFound(555))
         ));
+    }
+
+    // --- role -----------------------------------------------------------
+
+    fn timeline(json: &str) -> ParticipantTimeline {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn a_bottom_lane_duo_is_told_apart_by_its_role() {
+        assert_eq!(
+            position(Some(&timeline(r#"{"lane": "BOTTOM", "role": "DUO_SUPPORT"}"#))),
+            Some("Support".to_string())
+        );
+        assert_eq!(
+            position(Some(&timeline(r#"{"lane": "BOTTOM", "role": "DUO_CARRY"}"#))),
+            Some("Bottom".to_string())
+        );
+    }
+
+    #[test]
+    fn a_solo_lane_needs_no_role_at_all() {
+        assert_eq!(
+            position(Some(&timeline(r#"{"lane": "MIDDLE", "role": "SOLO"}"#))),
+            Some("Middle".to_string())
+        );
+        assert_eq!(
+            position(Some(&timeline(r#"{"lane": "JUNGLE"}"#))),
+            Some("Jungle".to_string())
+        );
+    }
+
+    /// A lane this mapping doesn't know is left NULL rather than written
+    /// through raw. One column holding both `"Support"` and `"DUO_SUPPORT"`
+    /// is one nothing can group by.
+    #[test]
+    fn an_unrecognized_lane_is_nothing_rather_than_a_passthrough() {
+        assert_eq!(position(Some(&timeline(r#"{"lane": "NONE"}"#))), None);
+        assert_eq!(position(Some(&timeline("{}"))), None);
+        assert_eq!(position(None), None);
+    }
+
+    #[test]
+    fn the_patch_comes_off_the_game_version_whole() {
+        let game = fixture_game(
+            r#"{
+                "gameId": 555,
+                "queueId": 420,
+                "gameVersion": "15.3.412.9873",
+                "participants": [
+                    {"championId": 99, "participantId": 2, "timeline": {"lane": "TOP", "role": "SOLO"},
+                     "stats": {"kills": 7, "deaths": 2, "assists": 5, "win": true}}
+                ],
+                "participantIdentities": [{"participantId": 2, "player": {"puuid": "my-puuid"}}]
+            }"#,
+        );
+
+        let summary = extract_summary(&fixture_me(), &game).unwrap();
+        assert_eq!(summary.patch.as_deref(), Some("15.3.412.9873"));
+        assert_eq!(summary.role.as_deref(), Some("Top"));
+    }
+
+    // --- the end-of-game stats block ------------------------------------
+
+    fn eog(json: &str) -> EogStatsBlock {
+        serde_json::from_str(json).unwrap()
+    }
+
+    /// The reason this endpoint is tried first: the outcome falls out of
+    /// two booleans, with no participant list to join ourselves against.
+    #[test]
+    fn the_outcome_comes_off_the_team_flags_with_no_join() {
+        let block = eog(
+            r#"{
+                "gameId": 555,
+                "championId": 99,
+                "summonerId": 42,
+                "teams": [
+                    {"isPlayerTeam": false, "isWinningTeam": false, "players": []},
+                    {"isPlayerTeam": true, "isWinningTeam": true, "players": [
+                        {"summonerId": 42, "stats": {"CHAMPIONS_KILLED": 7, "NUM_DEATHS": 2, "ASSISTS": 5}}
+                    ]}
+                ]
+            }"#,
+        );
+
+        let summary = extract_eog(&block);
+        assert_eq!(summary.win, Some(true));
+        assert_eq!(summary.champion_id, Some(99));
+        assert_eq!(
+            (summary.kills, summary.deaths, summary.assists),
+            (Some(7), Some(2), Some(5))
+        );
+    }
+
+    /// The stats keys are a legacy enum this repo has never seen on the
+    /// wire, and the values may arrive as strings. Neither may cost us the
+    /// outcome, which is the field that actually matters.
+    #[test]
+    fn an_unreadable_scoreboard_still_yields_the_outcome() {
+        let block = eog(
+            r#"{
+                "gameId": 555,
+                "summonerId": 42,
+                "teams": [
+                    {"isPlayerTeam": true, "isWinningTeam": false, "players": [
+                        {"summonerId": 42, "stats": {"SOME_FUTURE_SPELLING": 7}}
+                    ]}
+                ]
+            }"#,
+        );
+
+        let summary = extract_eog(&block);
+        assert_eq!(summary.win, Some(false));
+        assert_eq!(summary.kills, None);
+        assert!(!summary.is_empty(), "an outcome on its own is worth writing");
+    }
+
+    #[test]
+    fn scoreboard_numbers_sent_as_strings_still_parse() {
+        let block = eog(
+            r#"{
+                "summonerId": 42,
+                "teams": [{"isPlayerTeam": true, "isWinningTeam": true, "players": [
+                    {"summonerId": 42, "stats": {"CHAMPIONS_KILLED": "7", "NUM_DEATHS": "2", "ASSISTS": "5"}}
+                ]}]
+            }"#,
+        );
+
+        let summary = extract_eog(&block);
+        assert_eq!(
+            (summary.kills, summary.deaths, summary.assists),
+            (Some(7), Some(2), Some(5))
+        );
+    }
+
+    /// A block with no player team flagged tells us nothing, and "nothing"
+    /// must not read as a loss.
+    #[test]
+    fn a_block_that_names_no_player_team_is_empty_not_a_loss() {
+        let block = eog(r#"{"teams": [{"isWinningTeam": true, "players": []}]}"#);
+        let summary = extract_eog(&block);
+        assert_eq!(summary.win, None);
+        assert!(summary.is_empty());
+    }
+
+    #[test]
+    fn an_unrecognized_block_shape_degrades_to_empty() {
+        assert!(extract_eog(&eog("{}")).is_empty());
+    }
+
+    // --- merging the two sources ----------------------------------------
+
+    /// The eog block cannot have matched the wrong player, so where both
+    /// sources answer it keeps its answer; match history only fills what
+    /// it left blank.
+    #[test]
+    fn match_history_fills_the_gaps_without_overwriting_the_eog_block() {
+        let mut summary = MatchSummary {
+            champion_id: Some(99),
+            win: Some(true),
+            kills: Some(7),
+            ..Default::default()
+        };
+        summary.fill_gaps_from(MatchSummary {
+            game_id: Some(555),
+            queue_id: Some(420),
+            champion_id: Some(1),
+            win: Some(false),
+            kills: Some(0),
+            deaths: Some(9),
+            assists: Some(1),
+            role: Some("Middle".to_string()),
+            patch: Some("15.3.412.9873".to_string()),
+        });
+
+        assert_eq!(summary.win, Some(true), "the un-joined source wins");
+        assert_eq!(summary.champion_id, Some(99));
+        assert_eq!(summary.kills, Some(7));
+        // Everything the eog block had no answer for comes across.
+        assert_eq!(summary.deaths, Some(9));
+        assert_eq!(summary.queue_id, Some(420));
+        assert_eq!(summary.role.as_deref(), Some("Middle"));
+        assert_eq!(summary.patch.as_deref(), Some("15.3.412.9873"));
+    }
+
+    /// A summary that established nothing is not an answer. Writing one
+    /// would burn the retry loop's budget on a row that gained no columns.
+    #[test]
+    fn a_summary_carrying_only_a_queue_id_is_still_empty() {
+        let summary = MatchSummary {
+            game_id: Some(555),
+            queue_id: Some(420),
+            ..Default::default()
+        };
+        assert!(summary.is_empty());
     }
 }

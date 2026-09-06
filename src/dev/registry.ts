@@ -432,8 +432,26 @@ export const COMMANDS: CommandSpec[] = [
     group: "Dev · Simulate",
     dev: true,
     description:
-      "Exercises lcu::match_data::fetch_match_summary — implemented and tested, but called from nowhere in the app.",
+      "One shot at the post-game summary — end-of-game block, then match history — with no retries. Needs the League Client running.",
     args: [{ name: "gameId", kind: "number" }],
+  },
+  {
+    name: "dev_patch_match_summary",
+    group: "Dev · Simulate",
+    dev: true,
+    danger: true,
+    description:
+      "Runs the whole deferred patch against a real client and writes the result to an existing recording. May block for up to a minute — that is the real retry schedule.",
+    args: [
+      { name: "recordingId", kind: "number", help: "The row to patch. Its queue/role/patch columns are overwritten." },
+      { name: "gameId", kind: "number", help: "Which game to ask the client about." },
+      {
+        name: "isCustom",
+        kind: "boolean",
+        default: false,
+        help: "Skips match history — a custom game never reaches it.",
+      },
+    ],
   },
   {
     name: "dev_live_client_probe",

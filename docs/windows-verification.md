@@ -288,6 +288,20 @@ here are silent, and the app's own UI will not show you most of them.
       sync across seeks, speed changes and pauses, and mute/volume behave.
       Confirm the sidecar cache lands in `recordings/audio-tracks/` and that
       deleting the VOD removes it.
+- [ ] **The two post-game LCU shapes, which no one here has seen.** Both
+      `/lol-end-of-game/v1/eog-stats-block` and
+      `/lol-match-history/v1/games/{gameId}` are modelled from the LCU's own
+      OpenAPI spec, not from a captured response. Run `dev_lcu_get` on each
+      after a real game, commit the trimmed responses under `fixtures/lcu/`,
+      and correct the parsers if they differ. Specifically: does the eog block
+      carry `teams[].isPlayerTeam`/`isWinningTeam`, and are its scoreboard keys
+      really `CHAMPIONS_KILLED`/`NUM_DEATHS`/`ASSISTS`?
+- [ ] **The deferred patch end to end.** Play a game, then watch the card fill
+      in `role` and a queue label on its own within a minute of the finalize —
+      no manual refresh. `dev_patch_match_summary` drives the same path against
+      an existing row without playing another game. Check the log for a
+      disagreement warning: the LCU and Live Client Data must never report a
+      different winner, and if they do, the wrong game was matched.
 - [ ] Does gameflow report a distinct phase while spectating? If it reports
       `InProgress`, spectated games are currently recorded, which the design
       says they should not be.

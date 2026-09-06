@@ -105,6 +105,17 @@ impl PendingSample {
 /// split has one type to change.
 type EventNotifier = Box<dyn Fn(SupervisorEvent) + Send + Sync>;
 
+/// The seam for "this recording is written; go and find out what the LCU
+/// says about the game it was".
+///
+/// Type-erased for exactly the reason `on_event` is, and it matters more
+/// here: `stop_recording` is one of the few pieces of this file's async
+/// glue that is directly unit-tested, and a bare
+/// `tauri::async_runtime::spawn` in it would drag the Tauri runtime into a
+/// code path `cargo test` executes. The tests leave this `None`, so
+/// nothing spawns and the finalize path they drive is unchanged.
+type SummaryFetcher = Box<dyn Fn(crate::match_summary::SummaryRequest) + Send + Sync>;
+
 /// Something the supervisor wants the rest of the app to know about.
 ///
 /// A single enum behind a single notifier, rather than one callback per
@@ -271,6 +282,11 @@ pub struct Supervisor {
     /// Type-erasing the emit keeps all of that inside `lib.rs`'s `run()`,
     /// which stays dead code — and so gets stripped — in a test build.
     on_event: Mutex<Option<EventNotifier>>,
+    /// Set once at startup from `lib.rs`, like `on_event`. `None` means a
+    /// finalized recording keeps whatever Live Client Data established and
+    /// is never revisited — which is what every unit test below wants, and
+    /// what a build with no League client running gets anyway.
+    summary_fetcher: Mutex<Option<SummaryFetcher>>,
 }
 
 impl Supervisor {
@@ -291,6 +307,7 @@ impl Supervisor {
             pending_game: Mutex::new(lcu::GameIdentity::default()),
             last_finalized: Mutex::new(None),
             on_event: Mutex::new(None),
+            summary_fetcher: Mutex::new(None),
         })
     }
 
@@ -304,6 +321,16 @@ impl Supervisor {
     /// write, and having a single seam to replace is the point.
     pub fn set_event_notifier(&self, notify: EventNotifier) {
         *self.on_event.lock().unwrap() = Some(notify);
+    }
+
+    /// Gives the supervisor somewhere to send post-game summary requests.
+    /// Called once from `lib.rs`'s `setup`, alongside `set_event_notifier`.
+    ///
+    /// Whatever is installed here **must return immediately** — it is
+    /// called from inside `stop_recording`, under the recorder lock. The
+    /// real one spawns a task and returns; see `crate::match_summary`.
+    pub fn set_summary_fetcher(&self, fetch: SummaryFetcher) {
+        *self.summary_fetcher.lock().unwrap() = Some(fetch);
     }
 
     fn emit(&self, event: SupervisorEvent) {
@@ -678,12 +705,12 @@ impl Supervisor {
                     duration_s,
                     game_id: game.game_id,
                     queue: game.queue_id,
-                    champion: live.champion,
+                    champion: live.champion.clone(),
                     win: live.win,
                     kda_k: live.kda.map(|k| k.kills),
                     kda_d: live.kda.map(|k| k.deaths),
                     kda_a: live.kda.map(|k| k.assists),
-                    game_mode: live.game_mode,
+                    game_mode: live.game_mode.clone(),
                     size_bytes,
                     audio_tracks_json,
                     ..Default::default()
@@ -764,6 +791,13 @@ impl Supervisor {
                 if let Some(finalized) = self.last_finalized.lock().unwrap().clone() {
                     self.emit(SupervisorEvent::Finalized(finalized));
                 }
+
+                // Last, and deliberately after retention: the LCU still
+                // has no stats for this game — it is in `WaitingForStats`
+                // — so `queue`, `role` and `patch` are filled in later,
+                // off this path entirely. `crate::match_summary` owns the
+                // waiting; this only hands over the identifiers.
+                self.request_summary(recording_id, game, &live);
             }
             Err(e) => {
                 eprintln!("[state_machine] failed to stop recording: {e}");
@@ -773,6 +807,40 @@ impl Supervisor {
                     "the recording could not be finished: {e}"
                 )));
             }
+        }
+    }
+
+    /// Asks whoever is listening to fetch the LCU's post-game summary for
+    /// the recording just written.
+    ///
+    /// Silent when there is nothing to do. No `recording_id` means the row
+    /// write itself failed; no `game_id` means the gameflow read lost its
+    /// race or there was no client to ask, which is simply what Practice
+    /// Tool looks like. Neither is a problem worth a log line every game.
+    fn request_summary(
+        &self,
+        recording_id: Option<i64>,
+        game: lcu::GameIdentity,
+        live: &LiveSummary,
+    ) {
+        let (Some(recording_id), Some(game_id)) = (recording_id, game.game_id) else {
+            return;
+        };
+        // Stashed when the gameflow watch started, and deliberately not
+        // cleared by `stop_gameflow_watch` — the client is still running
+        // and this is exactly when it is needed.
+        let Some(lockfile) = self.lockfile.lock().unwrap().clone() else {
+            return;
+        };
+
+        if let Some(fetch) = self.summary_fetcher.lock().unwrap().as_ref() {
+            fetch(crate::match_summary::SummaryRequest {
+                recording_id,
+                game_id,
+                is_custom: game.is_custom,
+                lockfile,
+                live: live.clone(),
+            });
         }
     }
 }
@@ -1303,6 +1371,127 @@ mod tests {
 
         assert_eq!(sup.db.list_recordings().unwrap()[0].queue, Some(0));
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- the deferred summary request ------------------------------------
+
+    fn a_lockfile() -> lcu::LockfileInfo {
+        lcu::LockfileInfo {
+            name: "LeagueClient".into(),
+            pid: 1234,
+            port: 2999,
+            password: "hunter2".into(),
+            protocol: "https".into(),
+        }
+    }
+
+    /// Collects what `stop_recording` hands over, standing in for the
+    /// closure `lib.rs` installs — which spawns a task, which is exactly
+    /// what must not happen in a test binary.
+    fn recording_fetcher(sup: &Supervisor) -> Arc<Mutex<Vec<crate::match_summary::SummaryRequest>>> {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        sup.set_summary_fetcher(Box::new(move |request| {
+            sink.lock().unwrap().push(request);
+        }));
+        seen
+    }
+
+    /// The finalize's whole contribution to the LCU patch: hand over the
+    /// identifiers and return. Everything else — the HTTP client, the
+    /// retry schedule, the UPDATE — lives behind this seam in
+    /// `crate::match_summary`.
+    #[test]
+    fn a_finalize_asks_for_the_summary_of_the_game_it_identified() {
+        let (sup, dir) = test_supervisor();
+        let seen = recording_fetcher(&sup);
+
+        sup.start_recording();
+        sup.on_snapshot(fixture_snapshot("won"));
+        // Set after the poll, not before: this test drives the supervisor
+        // directly, so the machine is still `Idle`, and a dispatch from
+        // `Idle` clears the lockfile stash on purpose (`dispatch_one` —
+        // idle means the client is gone). In a real game the machine is in
+        // `Recording` and both of these were established long before.
+        *sup.lockfile.lock().unwrap() = Some(a_lockfile());
+        *sup.pending_game.lock().unwrap() = lcu::GameIdentity {
+            game_id: Some(5147823901),
+            queue_id: Some(420),
+            is_custom: false,
+        };
+
+        sup.stop_recording();
+
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].game_id, 5147823901);
+        assert!(!seen[0].is_custom);
+        assert_eq!(
+            seen[0].recording_id,
+            sup.db.list_recordings().unwrap()[0].id,
+            "the request must name the row that was just written"
+        );
+        // Carried so the patch can report a disagreement rather than
+        // silently overwriting one source with the other.
+        assert_eq!(seen[0].live.win, Some(true));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Practice Tool, or a game where the gameflow read lost its race.
+    /// There is nothing to fetch a summary *by*, and asking anyway would
+    /// mean a minute of retries against a game id we do not have.
+    #[test]
+    fn no_game_id_means_no_summary_is_asked_for() {
+        let (sup, dir) = test_supervisor();
+        let seen = recording_fetcher(&sup);
+        *sup.lockfile.lock().unwrap() = Some(a_lockfile());
+
+        sup.start_recording();
+        sup.stop_recording();
+
+        assert!(seen.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The client exited between the game and the finalize. Nothing to
+    /// ask, and `discover`ing a fresh one would risk answering about a
+    /// different client session than the one that played the game.
+    #[test]
+    fn no_lockfile_means_no_summary_is_asked_for() {
+        let (sup, dir) = test_supervisor();
+        let seen = recording_fetcher(&sup);
+        *sup.pending_game.lock().unwrap() = lcu::GameIdentity {
+            game_id: Some(5147823901),
+            queue_id: Some(420),
+            is_custom: false,
+        };
+
+        sup.start_recording();
+        sup.stop_recording();
+
+        assert!(seen.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The acceptance criterion for the whole seam: with nothing
+    /// installed, a finalize is exactly what it was before this existed.
+    /// Every other test in this module relies on it.
+    #[test]
+    fn a_finalize_with_no_fetcher_installed_still_writes_its_row() {
+        let (sup, dir) = test_supervisor();
+        *sup.lockfile.lock().unwrap() = Some(a_lockfile());
+        *sup.pending_game.lock().unwrap() = lcu::GameIdentity {
+            game_id: Some(5147823901),
+            queue_id: Some(420),
+            is_custom: false,
+        };
+
+        sup.start_recording();
+        sup.stop_recording();
+
+        assert_eq!(sup.db.list_recordings().unwrap().len(), 1);
         std::fs::remove_dir_all(&dir).ok();
     }
 

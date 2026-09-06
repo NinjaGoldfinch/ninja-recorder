@@ -369,21 +369,59 @@ pub async fn dev_lcu_get(path: String) -> Result<serde_json::Value, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Exercises `lcu::match_data::fetch_match_summary`, which is fully
-/// implemented and unit-tested but called from nowhere in the app — which
-/// is why every `RecordingRow`'s `queue`/`role`/`patch`/`game_id` is NULL
-/// in practice. (`champion`/`win`/`kda_*` come from Live Client Data
-/// during the game instead.) Wiring it into finalize is a separate
-/// change; this at least makes it runnable against a real client.
+/// One shot at `lcu::match_data::fetch_match_summary` — both endpoints,
+/// no retries — so its parsing can be checked against a real client
+/// without waiting out a schedule. `dev_patch_match_summary` is the same
+/// fetch with the retry loop and the DB write around it.
 #[tauri::command]
 pub async fn dev_fetch_match_summary(game_id: i64) -> Result<lcu::MatchSummary, String> {
     let lockfile = lcu::lockfile::discover()
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "League Client not running (no lockfile found)".to_string())?;
     let client = lcu::LcuHttpClient::new(&lockfile).map_err(|e| e.to_string())?;
-    lcu::fetch_match_summary(&client, game_id)
+    lcu::fetch_match_summary(&client, game_id, false)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Drives the entire post-game patch — fetch, retry schedule, the UPDATE
+/// and the disagreement check — against a real client, for a recording
+/// that is already in the library.
+///
+/// This is how the path gets exercised without playing a game and waiting
+/// for a finalize: find a row in the Library panel, get its `game_id` from
+/// the Tables panel (or pass one from match history), and run it.
+///
+/// **May block for up to a minute**, because that is the real schedule.
+/// Returns whether a row was actually patched — `false` covers "the client
+/// never produced stats", "the row is gone" and "we gave up", which the
+/// logs distinguish and a single boolean cannot.
+#[tauri::command]
+pub async fn dev_patch_match_summary(
+    state: tauri::State<'_, AppState>,
+    recording_id: i64,
+    game_id: i64,
+    is_custom: bool,
+) -> Result<bool, String> {
+    let ctx = state.clone_ctx();
+    let lockfile = lcu::lockfile::discover()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "League Client not running (no lockfile found)".to_string())?;
+
+    Ok(crate::match_summary::patch(
+        &ctx.db,
+        &crate::match_summary::SummaryRequest {
+            recording_id,
+            game_id,
+            is_custom,
+            lockfile,
+            // Empty rather than read back off the row: this is the LCU
+            // half under test, and a synthetic "live" summary would only
+            // produce disagreement noise.
+            live: Default::default(),
+        },
+    )
+    .await)
 }
 
 /// One-shot fetch from the in-game Live Client Data API, returned raw so

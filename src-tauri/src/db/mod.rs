@@ -251,6 +251,35 @@ pub struct RecordingRow {
     pub game_mode: Option<String>,
 }
 
+/// The post-game columns `update_match_metadata` may fill in, once the LCU
+/// has stats for a game that has already been finalized.
+///
+/// Separate from `NewRecording` because it is a strictly smaller thing: a
+/// row already exists, and everything absent from this struct — the path,
+/// the size, the pin, the duration, the audio layout, the live client's
+/// game mode — must survive the patch untouched.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MatchMetadata {
+    pub game_id: Option<i64>,
+    pub queue: Option<i64>,
+    pub role: Option<String>,
+    pub patch: Option<String>,
+    pub win: Option<bool>,
+    pub kda_k: Option<i64>,
+    pub kda_d: Option<i64>,
+    pub kda_a: Option<i64>,
+    /// Only written when the column is **NULL**, unlike every other field
+    /// here.
+    ///
+    /// `champion` is sorted on, filtered on and used as the card title, so
+    /// the two paths that can write it have to agree byte for byte. Live
+    /// Client Data writes a display name (`Wukong`); resolving an id gives
+    /// the internal alias (`MonkeyKing`) unless it goes through the lookup
+    /// in #54. Overwriting a good name with a second source's spelling
+    /// would split one champion into two everywhere in the UI.
+    pub champion: Option<String>,
+}
+
 /// Disk retention policy (DEVELOPMENT.md §6): `None` means that
 /// dimension is unbounded. Mirrors the single-row `settings` table.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -427,6 +456,60 @@ impl Db {
             |row| row.get(0),
         )
         .map_err(DbError::from)
+    }
+
+    /// Patches the post-game columns of one existing row, and nothing
+    /// else.
+    ///
+    /// Deliberately **not** `insert_recording`. That method upserts on
+    /// `path` and takes `started_at`, `duration_s`, `pinned` and
+    /// `size_bytes` straight from `excluded` — so re-upserting a summary
+    /// would silently unpin the recording and zero its size. This is a
+    /// plain `UPDATE` of the columns the LCU actually answers for.
+    ///
+    /// Every field COALESCEs, so a `None` never erases what is already
+    /// there: the summary arrives seconds after the row, and the columns
+    /// it cannot fill were filled by Live Client Data during the game.
+    /// `champion` COALESCEs the *other way* — see `MatchMetadata`.
+    ///
+    /// Returns the number of rows changed. **Zero is a normal outcome, not
+    /// an error**: retention runs during the same finalize, and the user
+    /// can delete a card at any point, so the row can legitimately be gone
+    /// by the time the patch lands.
+    pub fn update_match_metadata(
+        &self,
+        recording_id: i64,
+        meta: &MatchMetadata,
+    ) -> Result<usize, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let changed = conn.execute(
+            "UPDATE recordings SET
+                game_id  = COALESCE(?2, game_id),
+                queue    = COALESCE(?3, queue),
+                role     = COALESCE(?4, role),
+                patch    = COALESCE(?5, patch),
+                win      = COALESCE(?6, win),
+                kda_k    = COALESCE(?7, kda_k),
+                kda_d    = COALESCE(?8, kda_d),
+                kda_a    = COALESCE(?9, kda_a),
+                -- Reversed on purpose: the existing value wins. See
+                -- `MatchMetadata::champion`.
+                champion = COALESCE(champion, ?10)
+             WHERE id = ?1",
+            params![
+                recording_id,
+                meta.game_id,
+                meta.queue,
+                meta.role,
+                meta.patch,
+                meta.win,
+                meta.kda_k,
+                meta.kda_d,
+                meta.kda_a,
+                meta.champion,
+            ],
+        )?;
+        Ok(changed)
     }
 
     /// Inserts all `markers` for `recording_id` in one transaction.
@@ -1064,6 +1147,164 @@ mod tests {
 
         let row = db.get_recording(id).unwrap().unwrap();
         assert_eq!(row.game_mode.as_deref(), Some("ARAM"));
+    }
+
+    // --- update_match_metadata -------------------------------------------
+
+    /// The row the LCU summary patch lands on: already finalized, already
+    /// carrying what Live Client Data established, already pinned by a
+    /// user who liked the game.
+    fn a_finalized_row(db: &Db) -> i64 {
+        db.insert_recording(&NewRecording {
+            path: "/game.mp4".into(),
+            started_at: 1,
+            duration_s: Some(1830.5),
+            champion: Some("Wukong".into()),
+            win: Some(true),
+            kda_k: Some(7),
+            kda_d: Some(2),
+            kda_a: Some(5),
+            game_mode: Some("CLASSIC".into()),
+            pinned: true,
+            size_bytes: 4_200_000_000,
+            audio_tracks_json: Some(r#"{"tracks":[]}"#.into()),
+            ..Default::default()
+        })
+        .unwrap()
+    }
+
+    /// The whole reason this isn't `insert_recording`: that method's
+    /// `ON CONFLICT(path)` takes `pinned`, `size_bytes`, `started_at` and
+    /// `duration_s` from `excluded`, so re-upserting a summary would unpin
+    /// the recording and zero its size.
+    #[test]
+    fn patching_a_summary_leaves_everything_it_does_not_own_alone() {
+        let db = Db::open_in_memory().unwrap();
+        let id = a_finalized_row(&db);
+
+        let changed = db
+            .update_match_metadata(
+                id,
+                &MatchMetadata {
+                    game_id: Some(5147823901),
+                    queue: Some(420),
+                    role: Some("Middle".into()),
+                    patch: Some("15.3.412.9873".into()),
+                    win: Some(true),
+                    kda_k: Some(7),
+                    kda_d: Some(2),
+                    kda_a: Some(5),
+                    champion: Some("MonkeyKing".into()),
+                },
+            )
+            .unwrap();
+        assert_eq!(changed, 1);
+
+        let row = db.get_recording(id).unwrap().unwrap();
+        assert!(row.pinned);
+        assert_eq!(row.size_bytes, 4_200_000_000);
+        assert_eq!(row.duration_s, Some(1830.5));
+        assert_eq!(row.started_at, 1);
+        assert_eq!(row.game_mode.as_deref(), Some("CLASSIC"));
+        assert_eq!(row.audio_tracks_json.as_deref(), Some(r#"{"tracks":[]}"#));
+        // And the columns it does own are now filled in.
+        assert_eq!(row.game_id, Some(5147823901));
+        assert_eq!(row.queue, Some(420));
+        assert_eq!(row.role.as_deref(), Some("Middle"));
+        assert_eq!(row.patch.as_deref(), Some("15.3.412.9873"));
+    }
+
+    /// `champion` COALESCEs the other way round from every other column.
+    /// The live path wrote a display name; an id-derived one would be
+    /// `MonkeyKing`, and one champion under two spellings splits its games
+    /// in two everywhere the library sorts or filters.
+    #[test]
+    fn a_champion_the_live_client_already_named_is_never_overwritten() {
+        let db = Db::open_in_memory().unwrap();
+        let id = a_finalized_row(&db);
+
+        db.update_match_metadata(
+            id,
+            &MatchMetadata {
+                champion: Some("MonkeyKing".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            db.get_recording(id).unwrap().unwrap().champion.as_deref(),
+            Some("Wukong")
+        );
+    }
+
+    /// The other half of that rule: a game whose Live Client Data poller
+    /// never came up has no name at all, and then the LCU's is the only
+    /// one there is.
+    #[test]
+    fn a_null_champion_is_filled_in_by_the_patch() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db
+            .insert_recording(&NewRecording {
+                path: "/game.mp4".into(),
+                started_at: 1,
+                ..Default::default()
+            })
+            .unwrap();
+
+        db.update_match_metadata(
+            id,
+            &MatchMetadata {
+                champion: Some("Ahri".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            db.get_recording(id).unwrap().unwrap().champion.as_deref(),
+            Some("Ahri")
+        );
+    }
+
+    /// The summary answers for some columns and not others, and the ones
+    /// it can't answer for were filled in during the game. A `None` must
+    /// not erase them.
+    #[test]
+    fn a_field_the_summary_could_not_establish_does_not_null_the_column() {
+        let db = Db::open_in_memory().unwrap();
+        let id = a_finalized_row(&db);
+
+        db.update_match_metadata(
+            id,
+            &MatchMetadata {
+                queue: Some(420),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let row = db.get_recording(id).unwrap().unwrap();
+        assert_eq!(row.win, Some(true));
+        assert_eq!((row.kda_k, row.kda_d, row.kda_a), (Some(7), Some(2), Some(5)));
+    }
+
+    /// Retention runs during the same finalize, and the user can delete a
+    /// card at any point — so by the time a patch lands its row may be
+    /// gone. That is a no-op, not a failure worth surfacing.
+    #[test]
+    fn patching_a_row_that_no_longer_exists_changes_nothing_and_is_not_an_error() {
+        let db = Db::open_in_memory().unwrap();
+        let changed = db
+            .update_match_metadata(
+                404,
+                &MatchMetadata {
+                    queue: Some(420),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(changed, 0);
     }
 
     /// A row that predates migration 5, or any file `reconcile` imported,
