@@ -6,7 +6,9 @@ pub mod events;
 pub mod poller;
 
 pub use client::LiveClientDataClient;
-pub use events::{team_diff, AllGameData, Marker, MarkerTracker, TeamDiff, TimeAlignment};
+pub use events::{
+    team_diff, AlignmentTracker, AllGameData, Marker, MarkerTracker, TeamDiff, TimeAlignment,
+};
 
 // Re-exported for consumers outside this module (the supervisor, the dev
 // portal) — not used internally.
