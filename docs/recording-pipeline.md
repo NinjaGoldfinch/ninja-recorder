@@ -84,8 +84,8 @@ supervisor is the only thing that executes them, so "what should happen" and
 | Signal | Source | Cadence |
 |---|---|---|
 | `LockfileChanged` | `lcu::lockfile::watch` | poll every 2 s, backing off to 30 s while absent |
-| `GameflowPhase` | `lcu::gameflow::watch` | LCU WebSocket, falling back to 1 s polling |
-| `LiveClientUp` / `LiveClientDown` | `live_client::poller::watch` | 1 Hz, exponential backoff to 10 s while down |
+| `GameflowPhase` | `lcu::gameflow::watch` | LCU WebSocket, falling back to 1 s polling. Both read the *current* phase on connect, not just changes to it |
+| `LiveClientUp` / `LiveClientDown` | `live_client::poller::watch` | 1 Hz. `Down` needs 5 consecutive *transport* failures, ~5 s; backoff to 10 s only once down |
 | `FinalizeComplete` | the supervisor itself, after `stop()` and teardown | once per game |
 
 Alongside those, one request that drives no transition: entering
@@ -173,6 +173,40 @@ with `None`.
 `kill`, `death`, `assist`, `dragon`, `baron`, `herald`, `turret`,
 `inhibitor`, `ace`, `multikill`, `first_blood`. `custom` exists in the
 schema for hand-added markers.
+
+### What ends a recording, and what must not
+
+`LiveClientDown` transitions `Recording → Finalizing`, so whatever decides
+to fire it decides when a VOD stops. It used to fire on the **first** failed
+poll, which cost a real game half an hour of footage after 543 consecutive
+successful polls ([#74](https://github.com/NinjaGoldfinch/ninja-recorder/issues/74)).
+
+Two rules now stand between a failed request and a finalize.
+
+**A response we could not read never ends a recording.** It is proof of the
+opposite: something answered, so the game is running. It is also the one
+failure guaranteed to repeat — a payload the parser cannot read will not
+start parsing next second — so treating it as "game over" turns a cosmetic
+problem into a lost game. `LiveClientError::means_endpoint_gone` draws the
+line: only a request that got **no response at all** (connection refused, or
+the 3-second timeout) counts. An HTTP error status came from a live server
+and does not.
+
+**Five consecutive transport failures, not one.** The trade is asymmetric:
+being too tolerant costs a few seconds of post-game screen on the end of a
+VOD, being too strict costs the VOD. While still hoping, the poller stays at
+its normal 1 Hz rather than backing off — the exponential backoff exists for
+the long stretch between games, and applying it here would stretch five
+failures across fifteen seconds instead of five.
+
+Underneath both, the event list is parsed **entry by entry**: an event whose
+shape we cannot read is dropped and the rest of the snapshot survives. The
+events array is the only part of `AllGameData` that both grows during a game
+and can fail to deserialize — everything in `allPlayers` is defaulted — so it
+is the one place a shape nobody here has seen can arrive mid-game and take
+the payload with it. `Stolen` and `KillStreak` additionally accept whichever
+spelling the client uses, since Riot has historically sent booleans in this
+API as the strings `"True"`/`"False"`.
 
 ### What each poll leaves behind
 
