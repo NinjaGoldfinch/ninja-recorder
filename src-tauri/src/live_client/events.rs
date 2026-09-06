@@ -6,7 +6,8 @@
 //! without a live poller — see the tests module and
 //! `fixtures/live-client/sample-allgamedata.json`.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use crate::debug;
 use std::collections::HashSet;
 
 // --- Live Client Data response shape (subset we care about) ------------
@@ -129,8 +130,81 @@ impl ActivePlayer {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct EventsWrapper {
-    #[serde(rename = "Events", default)]
+    #[serde(rename = "Events", default, deserialize_with = "lenient_events")]
     pub events: Vec<GameEvent>,
+}
+
+/// Deserializes the event list **entry by entry**, dropping any it cannot
+/// read instead of failing the whole snapshot.
+///
+/// This is the difference between losing one marker and losing a
+/// recording. The events array is the only part of `AllGameData` that both
+/// grows during a game and can fail to deserialize — everything in
+/// `allPlayers` is defaulted — so it is the one place where a shape nobody
+/// here has seen can arrive mid-game and take the payload with it. In #74
+/// something did, nine minutes in, and the recording ended.
+///
+/// Riot may also add event types we have never modelled. Being unable to
+/// read one of those should cost that event and nothing else.
+fn lenient_events<'de, D>(deserializer: D) -> Result<Vec<GameEvent>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    let mut events = Vec::with_capacity(raw.len());
+    for value in raw {
+        // Borrowing deserializer, so the value survives for the log line
+        // on the failure path without cloning on the success path.
+        match GameEvent::deserialize(&value) {
+            Ok(event) => events.push(event),
+            // Debug, not warn: the array is cumulative, so one bad event
+            // repeats on every poll for the rest of the game. Fixture
+            // capture (DEVELOPMENT.md §3.3) is what preserves the shape
+            // itself.
+            Err(e) => debug!("live-client", "skipped an unreadable event ({e}): {value}"),
+        }
+    }
+    Ok(events)
+}
+
+/// `Stolen` and friends: accept the value however this client spells it.
+///
+/// Every one of these shapes was written from documentation rather than
+/// from a captured response, and a field present with an unexpected *type*
+/// fails deserialization even when it is `Option` and `default` — `default`
+/// only covers a missing key. Riot has historically sent booleans in this
+/// API as the strings `"True"`/`"False"`, so a bare `Option<bool>` is a
+/// live grenade on an event type we cannot test against.
+///
+/// An unrecognised value reads as `None` rather than erroring: not knowing
+/// whether a baron was stolen is worth strictly less than the recording.
+fn flexible_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(match Option::<serde_json::Value>::deserialize(deserializer)? {
+        Some(serde_json::Value::Bool(b)) => Some(b),
+        Some(serde_json::Value::String(s)) => match s.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" => Some(true),
+            "false" | "0" | "no" => Some(false),
+            _ => None,
+        },
+        Some(serde_json::Value::Number(n)) => n.as_i64().map(|i| i != 0),
+        _ => None,
+    })
+}
+
+/// The same tolerance for a whole number — `KillStreak` on a `Multikill`.
+/// See `flexible_bool`.
+fn flexible_i64<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(match Option::<serde_json::Value>::deserialize(deserializer)? {
+        Some(serde_json::Value::Number(n)) => n.as_i64(),
+        Some(serde_json::Value::String(s)) => s.trim().parse().ok(),
+        _ => None,
+    })
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -160,11 +234,11 @@ pub struct GameEvent {
     #[serde(rename = "InhibKilled", default)]
     pub inhib_killed: Option<String>,
     /// On `Multikill`: 2 for a double, 5 for a penta.
-    #[serde(rename = "KillStreak", default)]
+    #[serde(rename = "KillStreak", default, deserialize_with = "flexible_i64")]
     pub kill_streak: Option<i64>,
     /// On the neutral-objective kills. A stolen Baron is precisely the
     /// moment someone scrubs back to find, so it rides in the payload.
-    #[serde(rename = "Stolen", default)]
+    #[serde(rename = "Stolen", default, deserialize_with = "flexible_bool")]
     pub stolen: Option<bool>,
     /// Only ever set on the `GameEnd` event: "Win" or "Lose", from the
     /// active player's point of view. This is the whole of the live path's
@@ -1393,5 +1467,110 @@ mod tests {
     fn a_trace_line_stays_small_enough_to_write_every_second() {
         let line = poll_trace(&fixture(), 1530.0, Some(TimeAlignment::new(1512.3, 1530.0)), 2);
         assert!(line.len() < 160, "{} bytes: {line}", line.len());
+    }
+
+    // --- lenient parsing (#74) --------------------------------------------
+
+    /// **The #74 regression.** Riot has historically sent booleans in this
+    /// API as the strings `"True"`/`"False"`, and `Stolen` rides on
+    /// `DragonKill`/`HeraldKill`/`BaronKill` — events that first appear
+    /// several minutes into a game. A bare `Option<bool>` rejected the
+    /// value, which failed the *whole snapshot*, which the poller read as
+    /// "the game is gone", which ended the recording.
+    ///
+    /// The whole payload must survive, not just the field.
+    #[test]
+    fn a_string_valued_stolen_does_not_take_the_snapshot_with_it() {
+        let snapshot: AllGameData = serde_json::from_str(
+            r#"{
+                "gameData": {"gameTime": 549.7, "gameMode": "CLASSIC"},
+                "events": {"Events": [
+                    {"EventID": 1, "EventName": "GameStart", "EventTime": 0.0},
+                    {"EventID": 9, "EventName": "HeraldKill", "EventTime": 549.0,
+                     "KillerName": "Ninja#NA1", "Stolen": "False"}
+                ]}
+            }"#,
+        )
+        .expect("a string-valued Stolen must not fail the snapshot");
+
+        assert_eq!(snapshot.events.events.len(), 2, "no event should be dropped");
+        assert_eq!(snapshot.events.events[1].stolen, Some(false));
+    }
+
+    #[test]
+    fn stolen_is_read_however_it_is_spelled() {
+        let stolen = |json: &str| -> Option<bool> {
+            let e: GameEvent = serde_json::from_str(&format!(
+                r#"{{"EventID": 1, "EventName": "BaronKill", "EventTime": 1.0, "Stolen": {json}}}"#
+            ))
+            .unwrap();
+            e.stolen
+        };
+
+        assert_eq!(stolen("true"), Some(true));
+        assert_eq!(stolen("false"), Some(false));
+        assert_eq!(stolen(r#""True""#), Some(true));
+        assert_eq!(stolen(r#""False""#), Some(false));
+        assert_eq!(stolen("1"), Some(true));
+        assert_eq!(stolen("0"), Some(false));
+        assert_eq!(stolen("null"), None);
+        // Unrecognised reads as "we do not know", never as an error: not
+        // knowing whether a baron was stolen is worth less than the VOD.
+        assert_eq!(stolen(r#""perhaps""#), None);
+    }
+
+    #[test]
+    fn kill_streak_is_read_as_a_number_or_a_string() {
+        let streak = |json: &str| -> Option<i64> {
+            let e: GameEvent = serde_json::from_str(&format!(
+                r#"{{"EventID": 1, "EventName": "Multikill", "EventTime": 1.0, "KillStreak": {json}}}"#
+            ))
+            .unwrap();
+            e.kill_streak
+        };
+
+        assert_eq!(streak("5"), Some(5));
+        assert_eq!(streak(r#""5""#), Some(5));
+        assert_eq!(streak("null"), None);
+        assert_eq!(streak(r#""penta""#), None);
+    }
+
+    /// The backstop for a shape no tolerance anticipated — including an
+    /// event type Riot adds after this was written. One bad entry costs
+    /// that entry, not the snapshot and not the recording.
+    #[test]
+    fn an_unreadable_event_is_dropped_and_the_rest_survive() {
+        let snapshot: AllGameData = serde_json::from_str(
+            r#"{
+                "gameData": {"gameTime": 100.0},
+                "events": {"Events": [
+                    {"EventID": 1, "EventName": "GameStart", "EventTime": 0.0},
+                    {"EventID": 2, "EventTime": 50.0},
+                    {"EventID": 3, "EventName": "ChampionKill", "EventTime": 60.0},
+                    {"EventID": 4, "EventName": "FutureEvent", "EventTime": "not a number"}
+                ]}
+            }"#,
+        )
+        .expect("one bad event must not fail the snapshot");
+
+        let names: Vec<&str> = snapshot
+            .events
+            .events
+            .iter()
+            .map(|e| e.event_name.as_str())
+            .collect();
+        assert_eq!(names, vec!["GameStart", "ChampionKill"]);
+    }
+
+    /// A snapshot whose events are entirely unreadable still parses, so
+    /// the recording continues with no markers rather than ending.
+    #[test]
+    fn a_wholly_unreadable_event_list_still_yields_a_snapshot() {
+        let snapshot: AllGameData = serde_json::from_str(
+            r#"{"gameData": {"gameTime": 42.0}, "events": {"Events": [{"nope": true}]}}"#,
+        )
+        .unwrap();
+        assert!(snapshot.events.events.is_empty());
+        assert_eq!(snapshot.game_data.game_time, 42.0);
     }
 }

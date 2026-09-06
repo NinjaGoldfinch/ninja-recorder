@@ -257,9 +257,10 @@ Two official local HTTP APIs. Both use self-signed TLS on localhost — pin/acce
 
 ### 3.2 Live Client Data API (in-game)
 
-- `https://127.0.0.1:2999/liveclientdata/allgamedata` — no auth, only up while a game is running.
+- `https://127.0.0.1:2999/liveclientdata/allgamedata` — no auth, only up while a game is running. A 3-second request timeout: reqwest applies none by default, and a stalled request on a loopback endpoint that normally answers in ten milliseconds is a hang, not a slow reply — it silently stopped markers while the recording carried on, because no error was ever returned to declare the endpoint down.
+- **Failing to read a response is not the same as the game being gone**, and conflating the two cost a real game (#74). A payload we cannot parse proves the game is *running*; only a request that got no response at all means the process behind port 2999 has ended. The poller tolerates five consecutive transport failures before finalizing, and never finalizes on a parse failure. Events are parsed entry by entry so one unreadable event costs that event rather than the snapshot — the events array is the only part of the payload that both grows during a game and can fail to deserialize.
 - Poll ~1 Hz. Relevant pieces:
-  - `events.Events[]` — `ChampionKill`, `Multikill`, `TurretKilled`, `InhibKilled`, `DragonKill`, `BaronKill`, `HeraldKill`, `Ace`, `FirstBlood`, each with `EventTime` (seconds of game time). The neutral objectives also carry `Stolen`, which rides in the marker payload.
+  - `events.Events[]` — `ChampionKill`, `Multikill`, `TurretKilled`, `InhibKilled`, `DragonKill`, `BaronKill`, `HeraldKill`, `Ace`, `FirstBlood`, each with `EventTime` (seconds of game time). The neutral objectives also carry `Stolen`, which rides in the marker payload — and which is read leniently, because Riot has historically sent booleans in this API as the strings `"True"`/`"False"` and a bare `Option<bool>` rejected the whole snapshot over it.
   - **Not every event becomes a marker.** See "only events the player is named in" below.
   - `activePlayer.summonerName` / `allPlayers` — identify which events involve *us* (our kills/deaths vs. someone else's).
   - `gameData.gameTime` — for aligning game time to recording time.
