@@ -829,8 +829,12 @@ impl AlignmentTracker {
         self.first.unwrap_or(TimeAlignment { offset_s: 0.0 })
     }
 
-    /// The offset currently in force, for the dev portal's live readout.
-    #[cfg(feature = "devtools")]
+    /// The offset currently in force: the dev portal's live readout, and
+    /// the value the finalize records in `RecordingDiagnostics`.
+    ///
+    /// `None` means the clock was never seen to advance, which is a
+    /// different thing from an offset of zero — markers then fall back to
+    /// the first alignment the recording proved, or to 1:1.
     pub fn current_offset_s(&self) -> Option<f64> {
         self.current.map(|a| a.offset_s)
     }

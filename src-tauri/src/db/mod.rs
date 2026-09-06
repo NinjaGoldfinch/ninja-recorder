@@ -175,6 +175,29 @@ static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
         -- imported, and any game where the poller never got a snapshot.
         ALTER TABLE recordings ADD COLUMN game_mode TEXT;
         ",
+    ), M::up(
+        "
+        -- What the app *observed* while making this recording, as opposed
+        -- to what the recording contains. How many Live Client Data polls
+        -- landed, whether we were ever found in `allPlayers`, the
+        -- alignment the markers were mapped through, which capture backend
+        -- was live.
+        --
+        -- None of it is derivable after the fact: the API is gone the
+        -- moment the game ends, and a recording whose champion came out
+        -- NULL or whose markers landed twenty seconds out otherwise leaves
+        -- nothing behind that says why.
+        --
+        -- JSON rather than a child table, for the same reasons as
+        -- `audio_tracks_json`: always read whole, never queried by
+        -- predicate, one per recording. A column also means retention and
+        -- `delete_recording` dispose of it with the row, with no cascade
+        -- to get wrong.
+        --
+        -- Nullable, and NULL for every row that predates this, everything
+        -- `reconcile` imported, and any finalize where serializing failed.
+        ALTER TABLE recordings ADD COLUMN diagnostics_json TEXT;
+        ",
     )];
     let count = migrations.len() as i64;
     (Migrations::new(migrations), count)
@@ -202,6 +225,11 @@ pub struct NewRecording {
     pub audio_tracks_json: Option<String>,
     /// Live Client Data's `gameMode`. Not a queue id — see migration 6.
     pub game_mode: Option<String>,
+    /// JSON `state_machine::supervisor::RecordingDiagnostics` — what was observed
+    /// while recording, not what the file contains. See migration 7.
+    /// COALESCEd on upsert like `audio_tracks_json`, so a `reconcile`
+    /// rescan cannot erase it.
+    pub diagnostics_json: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -250,6 +278,9 @@ pub struct RecordingRow {
     /// Live Client Data's `gameMode`. The library card falls back to this
     /// for its Queue label when `queue` is NULL — see migration 6.
     pub game_mode: Option<String>,
+    /// JSON `state_machine::supervisor::RecordingDiagnostics`. `None` for anything
+    /// recorded before migration 7 and anything `reconcile` imported.
+    pub diagnostics_json: Option<String>,
 }
 
 /// The post-game columns `update_match_metadata` may fill in, once the LCU
@@ -335,6 +366,7 @@ fn row_to_recording(row: &rusqlite::Row) -> rusqlite::Result<RecordingRow> {
         size_bytes: row.get(14)?,
         audio_tracks_json: row.get(15)?,
         game_mode: row.get(16)?,
+        diagnostics_json: row.get(17)?,
     })
 }
 
@@ -410,8 +442,8 @@ impl Db {
             "INSERT INTO recordings
                 (path, started_at, duration_s, game_id, queue, champion, role,
                  win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
-                 audio_tracks_json, game_mode)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                 audio_tracks_json, game_mode, diagnostics_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
              ON CONFLICT(path) DO UPDATE SET
                 started_at = excluded.started_at,
                 duration_s = excluded.duration_s,
@@ -434,7 +466,9 @@ impl Db {
                 audio_tracks_json =
                     COALESCE(excluded.audio_tracks_json, recordings.audio_tracks_json),
                 game_mode =
-                    COALESCE(excluded.game_mode, recordings.game_mode)
+                    COALESCE(excluded.game_mode, recordings.game_mode),
+                diagnostics_json =
+                    COALESCE(excluded.diagnostics_json, recordings.diagnostics_json)
              RETURNING id",
             params![
                 new.path,
@@ -453,6 +487,7 @@ impl Db {
                 new.size_bytes,
                 new.audio_tracks_json,
                 new.game_mode,
+                new.diagnostics_json,
             ],
             |row| row.get(0),
         )
@@ -598,7 +633,7 @@ impl Db {
         let mut stmt = conn.prepare(
             "SELECT id, path, started_at, duration_s, game_id, queue, champion, role,
                     win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
-                    audio_tracks_json, game_mode
+                    audio_tracks_json, game_mode, diagnostics_json
              FROM recordings ORDER BY started_at DESC",
         )?;
         let rows = stmt.query_map([], row_to_recording)?;
@@ -693,7 +728,7 @@ impl Db {
         conn.query_row(
             "SELECT id, path, started_at, duration_s, game_id, queue, champion, role,
                     win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
-                    audio_tracks_json, game_mode
+                    audio_tracks_json, game_mode, diagnostics_json
              FROM recordings WHERE id = ?1",
             [id],
             row_to_recording,

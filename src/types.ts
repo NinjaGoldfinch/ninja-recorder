@@ -27,6 +27,15 @@ export interface RecordingRow {
   /// "PRACTICETOOL". Not a queue id: `queue` holds Riot's real one and
   /// only the LCU can fill it, so a row can have either, both or neither.
   game_mode: string | null;
+  /// JSON-encoded `RecordingDiagnostics` — what the app *observed* while
+  /// making this recording, as against what the recording contains: how
+  /// many Live Client Data polls landed, whether we were ever found in
+  /// `allPlayers`, the alignment the markers were mapped through, which
+  /// capture backend was live.
+  ///
+  /// Null for every row predating it and anything a rescan imported.
+  /// Nothing in the main UI reads this; the dev portal does (#72).
+  diagnostics_json: string | null;
 }
 
 /** One capturable audio source. Mirrors Rust's `AudioSourceKind`. */

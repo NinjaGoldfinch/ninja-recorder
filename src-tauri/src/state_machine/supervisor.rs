@@ -160,6 +160,52 @@ pub struct SupervisorStatus {
     pub recording_elapsed_s: Option<f64>,
 }
 
+/// What the app *observed* while making a recording, as against what the
+/// recording contains.
+///
+/// Written to `recordings.diagnostics_json` at finalize (migration 7).
+/// None of it survives the game otherwise: Live Client Data is gone the
+/// moment the game ends, and a recording whose champion came out NULL, or
+/// whose markers landed twenty seconds out, leaves nothing behind that
+/// says why. `DevSessionView` carries some of the same numbers and is gone
+/// on restart.
+///
+/// Deliberately not a copy of the row. Everything here is something the
+/// columns cannot say.
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+pub struct RecordingDiagnostics {
+    /// What the gameflow session said, and `game_id: None` is itself the
+    /// answer to "why is queue NULL".
+    pub game_id: Option<i64>,
+    pub queue_id: Option<i64>,
+    pub is_custom: bool,
+
+    /// Successful Live Client Data polls. Not the same as `samples`, which
+    /// only grow when the game clock advances — a gap between the two is a
+    /// loading screen, a pause, or a stalled clock.
+    pub polls: usize,
+    pub first_game_time_s: Option<f64>,
+    pub last_game_time_s: Option<f64>,
+    /// Whether we were ever found in `allPlayers`. `false` is the whole
+    /// explanation for a NULL champion, a NULL KDA and an empty advantage
+    /// curve, and it is otherwise invisible — see `find_us`.
+    pub ever_matched: bool,
+
+    /// The game-time-to-video-time offset in force at the end, or `None`
+    /// if the clock was never seen to advance. A marker that seeks to the
+    /// wrong moment is this number being wrong.
+    pub alignment_offset_s: Option<f64>,
+
+    /// Which capture backend was actually live, which on Windows may be
+    /// `FailedRecorder` carrying its init error.
+    pub backend: String,
+
+    /// What the finalize wrote. A count here that disagrees with the
+    /// `markers`/`samples` tables means an insert failed.
+    pub markers: usize,
+    pub samples: usize,
+}
+
 struct RecordingSession {
     tracker: MarkerTracker,
     markers: Vec<PendingMarker>,
@@ -170,6 +216,11 @@ struct RecordingSession {
     /// why the last snapshot alone isn't enough — the poll carrying
     /// `GameEnd` is often the last one that ever succeeds.
     live: LiveSummary,
+    /// Diagnostic counters, for `RecordingDiagnostics` at finalize.
+    polls: usize,
+    first_game_time_s: Option<f64>,
+    last_game_time_s: Option<f64>,
+    ever_matched: bool,
     record_started_at: Instant,
     /// Wall-clock capture alongside `record_started_at` — `Instant` is
     /// monotonic only, not convertible to a real timestamp, but the DB's
@@ -191,7 +242,17 @@ impl RecordingSession {
         // Before the early-exit-free alignment work below, because it has no
         // preconditions: champion and mode are readable on the very first
         // poll, and the outcome on whichever poll happens to carry `GameEnd`.
-        self.live.absorb(live_client::self_summary(snapshot));
+        let summary = live_client::self_summary(snapshot);
+        // `kda` is `Some` exactly when we were found in `allPlayers`, which
+        // is the one thing about a poll that is otherwise unrecoverable
+        // afterwards.
+        self.ever_matched |= summary.kda.is_some();
+        self.live.absorb(summary);
+
+        self.polls += 1;
+        self.first_game_time_s
+            .get_or_insert(snapshot.game_data.game_time);
+        self.last_game_time_s = Some(snapshot.game_data.game_time);
 
         let game_time_s = snapshot.game_data.game_time;
         // `None` until the clock is first seen to advance. Markers stamped
@@ -646,6 +707,10 @@ impl Supervisor {
                     samples: Vec::new(),
                     align: AlignmentTracker::new(),
                     live: LiveSummary::default(),
+                    polls: 0,
+                    first_game_time_s: None,
+                    last_game_time_s: None,
+                    ever_matched: false,
                     record_started_at: Instant::now(),
                     started_at_millis,
                 });
@@ -670,6 +735,11 @@ impl Supervisor {
     /// even if the row never made it to disk.
     fn stop_recording(&self) {
         let session = self.session.lock().unwrap().take();
+        // Read *before* the `match` below: that match holds the recorder
+        // lock for the whole of its body (the guard is a temporary in the
+        // scrutinee), and `std::sync::Mutex` is not reentrant, so asking
+        // the recorder anything inside it would deadlock the finalize.
+        let backend = self.recorder.lock().unwrap().backend_name();
         // Read the clock here rather than after `stop()`: stopping runs the
         // recorder's shutdown and ffmpeg remux, which takes seconds on a long
         // game, and every one of them would be counted as footage the library
@@ -716,6 +786,31 @@ impl Supervisor {
                     }
                 };
 
+                // What we saw while recording, as against what the file
+                // holds. Nothing else keeps any of it (#71).
+                let diagnostics = RecordingDiagnostics {
+                    game_id: game.game_id,
+                    queue_id: game.queue_id,
+                    is_custom: game.is_custom,
+                    polls: session.as_ref().map(|s| s.polls).unwrap_or(0),
+                    first_game_time_s: session.as_ref().and_then(|s| s.first_game_time_s),
+                    last_game_time_s: session.as_ref().and_then(|s| s.last_game_time_s),
+                    ever_matched: session.as_ref().is_some_and(|s| s.ever_matched),
+                    alignment_offset_s: session.as_ref().and_then(|s| s.align.current_offset_s()),
+                    backend,
+                    markers: markers.len(),
+                    samples: samples.len(),
+                };
+                let diagnostics_json = match serde_json::to_string(&diagnostics) {
+                    Ok(json) => Some(json),
+                    // A row without diagnostics is worth strictly more than
+                    // no row, so this never fails the finalize.
+                    Err(e) => {
+                        warn!("state_machine", "could not encode the recording diagnostics: {e}");
+                        None
+                    }
+                };
+
                 let recording_id = match self.db.insert_recording(&db::NewRecording {
                     path: path_str.clone(),
                     started_at,
@@ -730,6 +825,7 @@ impl Supervisor {
                     game_mode: live.game_mode.clone(),
                     size_bytes,
                     audio_tracks_json,
+                    diagnostics_json,
                     ..Default::default()
                 }) {
                     Ok(id) => {
@@ -1106,6 +1202,10 @@ mod tests {
             samples: Vec::new(),
             align: AlignmentTracker::new(),
             live: LiveSummary::default(),
+            polls: 0,
+            first_game_time_s: None,
+            last_game_time_s: None,
+            ever_matched: false,
             record_started_at: Instant::now(),
             started_at_millis: 0,
         }
@@ -1324,6 +1424,12 @@ mod tests {
                 env!("CARGO_MANIFEST_DIR"),
                 "/../fixtures/live-client/game-end-win.json"
             )),
+            // Trimmed to have no `allPlayers` at all, so `find_us` cannot
+            // place us — the state a NULL champion comes from.
+            "unmatched" => include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../fixtures/live-client/summoner-name-mismatch.json"
+            )),
             other => panic!("no such fixture: {other}"),
         };
         serde_json::from_str(json).unwrap()
@@ -1395,6 +1501,105 @@ mod tests {
 
         assert_eq!(sup.db.list_recordings().unwrap()[0].queue, Some(0));
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- recording diagnostics (#71) --------------------------------------
+
+    fn diagnostics_of(sup: &Supervisor) -> RecordingDiagnostics {
+        let rows = sup.db.list_recordings().unwrap();
+        let json = rows[0]
+            .diagnostics_json
+            .as_ref()
+            .expect("a finalize should always record what it observed");
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn a_finalize_records_what_it_observed_not_just_what_it_wrote() {
+        let (sup, dir) = test_supervisor();
+        *sup.pending_game.lock().unwrap() = lcu::GameIdentity {
+            game_id: Some(5147823901),
+            queue_id: Some(420),
+            is_custom: false,
+        };
+
+        sup.start_recording();
+        sup.on_snapshot(fixture_snapshot("mid-game"));
+        sup.on_snapshot(fixture_snapshot("won"));
+        sup.stop_recording();
+
+        let d = diagnostics_of(&sup);
+        assert_eq!(d.game_id, Some(5147823901));
+        assert_eq!(d.queue_id, Some(420));
+        assert!(!d.is_custom);
+        assert_eq!(d.polls, 2, "both polls should be counted");
+        assert!(d.ever_matched);
+        assert_eq!(d.backend, "stub");
+        assert!(d.first_game_time_s.is_some());
+        assert!(d.last_game_time_s.is_some());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The single most useful thing in the record. A game where we were
+    /// never found in `allPlayers` has a NULL champion, a NULL KDA and an
+    /// empty advantage curve, and nothing else afterwards says why — the
+    /// payload is gone the moment the game ends.
+    #[test]
+    fn a_game_we_were_never_placed_in_says_so() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+        sup.on_snapshot(fixture_snapshot("unmatched"));
+        sup.stop_recording();
+
+        let d = diagnostics_of(&sup);
+        assert!(!d.ever_matched);
+        assert_eq!(d.polls, 1);
+        // And the row it explains.
+        assert_eq!(sup.db.list_recordings().unwrap()[0].champion, None);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A recording whose poller never came up at all still gets a record,
+    /// and the record is what says the poller never came up.
+    #[test]
+    fn a_recording_with_no_polls_still_records_that_it_had_none() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+        sup.stop_recording();
+
+        let d = diagnostics_of(&sup);
+        assert_eq!(d.polls, 0);
+        assert_eq!(d.first_game_time_s, None);
+        assert_eq!(d.alignment_offset_s, None, "no clock, so no proven offset");
+        assert!(!d.ever_matched);
+        assert_eq!(d.game_id, None);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `reconcile` upserts on `path` with an all-default row, so a rescan
+    /// landing after a finalize must not erase the record — the same rule
+    /// `audio_tracks_json` and `game_mode` already have.
+    #[test]
+    fn a_rescan_upsert_cannot_erase_the_diagnostics() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+        sup.on_snapshot(fixture_snapshot("mid-game"));
+        sup.stop_recording();
+
+        let path = sup.db.list_recordings().unwrap()[0].path.clone();
+        sup.db
+            .insert_recording(&db::NewRecording {
+                path,
+                started_at: 1,
+                ..Default::default()
+            })
+            .unwrap();
+
+        assert_eq!(diagnostics_of(&sup).polls, 1);
         std::fs::remove_dir_all(&dir).ok();
     }
 

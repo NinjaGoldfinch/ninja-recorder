@@ -95,6 +95,23 @@ function row(
     pinned: false,
     size_bytes: 1_900_000_000,
     audio_tracks_json: JSON.stringify(LAYOUTS.game_mic),
+    // What the finalize observed, as against what the file holds. Nothing
+    // in the main UI reads it — the dev portal does (#72) — but the mock
+    // carries a realistic one so a browser-only session is not the odd
+    // case out.
+    diagnostics_json: JSON.stringify({
+      game_id: 5000 + id,
+      queue_id: 420,
+      is_custom: false,
+      polls: 1487,
+      first_game_time_s: 0.4,
+      last_game_time_s: 1495.2,
+      ever_matched: true,
+      alignment_offset_s: 18.6,
+      backend: "stub",
+      markers: 6,
+      samples: 1486,
+    }),
     ...overrides,
   };
 }
