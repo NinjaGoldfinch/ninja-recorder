@@ -56,6 +56,7 @@ rusqlite_migration = "1"
 # Cross-platform free-disk-space query for the record-start preflight check
 # (DEVELOPMENT.md §6) — std has no such API.
 fs2 = "0.4"
+tauri-plugin-notification = "2"
 
 # Real capture backend. Fork of github.com/FFFFFFFXXXXXXX/libobs-recorder
 # that swaps the injection-based `game_capture` source for `window_capture`

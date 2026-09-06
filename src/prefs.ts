@@ -7,17 +7,39 @@ export type SortKey = "newest" | "oldest" | "longest" | "champion";
 // the values. "close-window" is the default because a *hidden* window keeps
 // the webview fully resident and reclaims nothing.
 export type CloseActionPref = "close-window" | "hide" | "quit";
+// Notification switches. Stored as "on"/"off" strings rather than booleans
+// because `settings_kv` is a text table and Rust parses the same two words.
+export type TogglePref = "on" | "off";
+export type NotifyPrefKey =
+  | "notifications"
+  | "notifyRecordingStarted"
+  | "notifyRecordingFinished"
+  | "notifyRecordingFailed";
 
 export interface Prefs {
   theme: ThemePref;
   defaultSort: SortKey;
   closeAction: CloseActionPref;
+  notifications: TogglePref;
+  notifyRecordingStarted: TogglePref;
+  notifyRecordingFinished: TogglePref;
+  notifyRecordingFailed: TogglePref;
+  // Not a user-facing toggle: "" means the notice is armed, anything else
+  // means it has been shown. Reset blanks it.
+  "notice.closeToTray.seen": string;
 }
 
 export const DEFAULT_PREFS: Prefs = {
   theme: "system",
   defaultSort: "newest",
   closeAction: "close-window",
+  // These four mirror Rust's `NotificationPrefs::default`; both sides have to
+  // agree, because either can be the one that reads a missing key.
+  notifications: "on",
+  notifyRecordingStarted: "off",
+  notifyRecordingFinished: "on",
+  notifyRecordingFailed: "on",
+  "notice.closeToTray.seen": "",
 };
 
 // localStorage is a cache, not the store. Its one job is to be readable
@@ -31,6 +53,10 @@ let prefs: Prefs = { ...DEFAULT_PREFS };
 
 export function getPrefs(): Prefs {
   return prefs;
+}
+
+function isToggle(value: unknown): value is TogglePref {
+  return value === "on" || value === "off";
 }
 
 function isCloseAction(value: unknown): value is CloseActionPref {
@@ -73,6 +99,11 @@ export async function loadPrefs(): Promise<Prefs> {
     // Not read from the cache: nothing needs it before first paint, and Rust
     // reads the value straight out of SQLite anyway.
     closeAction: DEFAULT_PREFS.closeAction,
+    notifications: DEFAULT_PREFS.notifications,
+    notifyRecordingStarted: DEFAULT_PREFS.notifyRecordingStarted,
+    notifyRecordingFinished: DEFAULT_PREFS.notifyRecordingFinished,
+    notifyRecordingFailed: DEFAULT_PREFS.notifyRecordingFailed,
+    "notice.closeToTray.seen": DEFAULT_PREFS["notice.closeToTray.seen"],
   };
 
   try {
@@ -80,6 +111,14 @@ export async function loadPrefs(): Promise<Prefs> {
     if (isTheme(stored.theme)) prefs.theme = stored.theme;
     if (isSort(stored.defaultSort)) prefs.defaultSort = stored.defaultSort;
     if (isCloseAction(stored.closeAction)) prefs.closeAction = stored.closeAction;
+    for (const key of [
+      "notifications",
+      "notifyRecordingStarted",
+      "notifyRecordingFinished",
+      "notifyRecordingFailed",
+    ] as const) {
+      if (isToggle(stored[key])) prefs[key] = stored[key];
+    }
   } catch (err) {
     console.error("Failed to load preferences", err);
   }

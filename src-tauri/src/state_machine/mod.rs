@@ -4,7 +4,7 @@
 pub mod machine;
 pub mod supervisor;
 
-pub use supervisor::{Supervisor, SupervisorStatus};
+pub use supervisor::{Supervisor, SupervisorEvent, SupervisorStatus};
 
 // Re-exported for consumers outside this module (the dev portal's state
 // injection, tests elsewhere); `machine`'s own tests and `supervisor`

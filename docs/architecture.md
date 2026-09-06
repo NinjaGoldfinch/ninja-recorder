@@ -85,6 +85,7 @@ flowchart TB
 | `core/mod.rs` | Every command's logic, with no `tauri` types in any signature | `Ctx`, the command free functions |
 | `launch.rs` | Which mode argv asked for (`--daemon`, `--hidden`) | `Launch::from_env` |
 | `tray.rs` | The tray icon and its Open / Settings / Quit menu. No tests, deliberately | `build`, `request_quit` |
+| `notify.rs` | Desktop notifications, best-effort. No tests, deliberately | `notify`, `close_to_tray_notice` |
 | `lib.rs` | Tauri setup, app state, the `rpc` command, and main-window creation | `run` |
 
 `core` exists because Tauri v2 cannot invoke a registered command by name from
@@ -159,6 +160,7 @@ flowchart LR
     W1 -. invoke .-> RT
     W2 -. dev_* invoke .-> RT
     RT -. library-changed event .-> W1
+    RT -. notifications .-> OS["Tray + desktop notifications"]
 ```
 
 The main window is built in `lib.rs`'s `setup` rather than declared in

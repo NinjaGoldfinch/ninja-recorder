@@ -43,6 +43,31 @@ pub struct SessionSample {
     pub our_level: i64,
 }
 
+/// The one seam between the supervisor and whatever is listening. Named so
+/// the `Mutex<Option<Box<dyn ...>>>` stack stays readable, and so the process
+/// split has one type to change.
+type EventNotifier = Box<dyn Fn(SupervisorEvent) + Send + Sync>;
+
+/// Something the supervisor wants the rest of the app to know about.
+///
+/// A single enum behind a single notifier, rather than one callback per
+/// signal: when the recorder moves into its own process this seam becomes a
+/// socket write, and there should be exactly one place to change.
+#[derive(Debug, Clone)]
+pub enum SupervisorEvent {
+    /// The VOD library changed behind the frontend's back.
+    LibraryChanged,
+    /// Capture began.
+    RecordingStarted,
+    /// A recording was finalized. Carries what was written so a notification
+    /// can describe it without going back to the database.
+    Finalized(FinalizedRecording),
+    /// A recording could not be started or could not be finished. Carries a
+    /// message fit to show the user — they are in a game and cannot see the
+    /// window.
+    RecordingFailed(String),
+}
+
 /// What the supervisor learned about the most recently finished recording,
 /// surfaced to the frontend via `game_state_status`. Also written to the
 /// SQLite VOD library (`db`) — `recording_id` is `None` only if that write
@@ -87,7 +112,7 @@ pub struct Supervisor {
     live_client_task: Mutex<Option<JoinHandle<()>>>,
     session: Mutex<Option<RecordingSession>>,
     last_finalized: Mutex<Option<FinalizedRecording>>,
-    /// Set once at startup via `set_library_changed_notifier`, rather
+    /// Set once at startup via `set_event_notifier`, rather
     /// than taken in `new`, so the unit tests below can still build a
     /// `Supervisor` without a Tauri runtime. `None` simply means nothing
     /// is emitted.
@@ -105,7 +130,7 @@ pub struct Supervisor {
     /// STATUS_ENTRYPOINT_NOT_FOUND before running a single test.
     /// Type-erasing the emit keeps all of that inside `lib.rs`'s `run()`,
     /// which stays dead code — and so gets stripped — in a test build.
-    on_library_changed: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    on_event: Mutex<Option<EventNotifier>>,
 }
 
 impl Supervisor {
@@ -123,16 +148,26 @@ impl Supervisor {
             live_client_task: Mutex::new(None),
             session: Mutex::new(None),
             last_finalized: Mutex::new(None),
-            on_library_changed: Mutex::new(None),
+            on_event: Mutex::new(None),
         })
     }
 
     /// Gives the supervisor a way to tell the frontend the library
     /// changed. Called once from `lib.rs`'s `setup`, after the app is
-    /// built. See `on_library_changed` for why this takes a closure and
-    /// not an `AppHandle`.
-    pub fn set_library_changed_notifier(&self, notify: Box<dyn Fn() + Send + Sync>) {
-        *self.on_library_changed.lock().unwrap() = Some(notify);
+    /// built. See `on_event` for why this takes a closure and not an
+    /// `AppHandle`.
+    ///
+    /// One notifier over an event enum rather than one per signal: the
+    /// process split will replace what sits behind this seam with a socket
+    /// write, and having a single seam to replace is the point.
+    pub fn set_event_notifier(&self, notify: EventNotifier) {
+        *self.on_event.lock().unwrap() = Some(notify);
+    }
+
+    fn emit(&self, event: SupervisorEvent) {
+        if let Some(notify) = self.on_event.lock().unwrap().as_ref() {
+            notify(event);
+        }
     }
 
     /// Tells the frontend the VOD library changed on disk. Until this
@@ -140,9 +175,7 @@ impl Supervisor {
     /// recording finalized by the supervisor stayed invisible until the
     /// user happened to press Refresh.
     fn emit_library_changed(&self) {
-        if let Some(notify) = self.on_library_changed.lock().unwrap().as_ref() {
-            notify();
-        }
+        self.emit(SupervisorEvent::LibraryChanged);
     }
 
     pub fn status(&self) -> SupervisorStatus {
@@ -371,6 +404,9 @@ impl Supervisor {
     fn start_recording(&self) {
         if !crate::retention::has_room_to_record(&self.recordings_dir) {
             eprintln!("[state_machine] refusing to start recording: insufficient free disk space");
+            self.emit(SupervisorEvent::RecordingFailed(
+                "not enough free disk space to record this game".into(),
+            ));
             return;
         }
 
@@ -396,8 +432,16 @@ impl Supervisor {
                     record_started_at: Instant::now(),
                     started_at_millis,
                 });
+                self.emit(SupervisorEvent::RecordingStarted);
             }
-            Err(e) => eprintln!("[state_machine] failed to start recording: {e}"),
+            Err(e) => {
+                eprintln!("[state_machine] failed to start recording: {e}");
+                // Silence here means the user finds out after the game, when
+                // the VOD isn't in the library.
+                self.emit(SupervisorEvent::RecordingFailed(format!(
+                    "the recording could not be started: {e}"
+                )));
+            }
         }
     }
 
@@ -503,8 +547,26 @@ impl Supervisor {
                 // After the row, its markers/samples, and any retention
                 // deletions — one notification for the whole finalize.
                 self.emit_library_changed();
+                // Separate from the library signal because it carries what was
+                // written: the frontend refreshes off the first, a tray
+                // notification describes the second.
+                //
+                // Note this still runs under the recorder lock, like the DB
+                // writes above — recorder-then-db, so no lock-order inversion.
+                // Whatever is behind this notifier must stay quick; it is not
+                // the place to do work.
+                if let Some(finalized) = self.last_finalized.lock().unwrap().clone() {
+                    self.emit(SupervisorEvent::Finalized(finalized));
+                }
             }
-            Err(e) => eprintln!("[state_machine] failed to stop recording: {e}"),
+            Err(e) => {
+                eprintln!("[state_machine] failed to stop recording: {e}");
+                // The user is mid-game with the window closed; a failed
+                // finalize is the one thing they cannot otherwise discover.
+                self.emit(SupervisorEvent::RecordingFailed(format!(
+                    "the recording could not be finished: {e}"
+                )));
+            }
         }
     }
 }

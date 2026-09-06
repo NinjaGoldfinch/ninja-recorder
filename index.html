@@ -341,6 +341,54 @@
         </section>
 
         <section class="settings-group">
+          <h3>Notifications</h3>
+          <div class="setting-row">
+            <div class="setting-copy">
+              <span class="setting-label">Notifications</span>
+              <p class="setting-hint">
+                Desktop notifications while ninja-recorder is in the tray.
+                Turning this off silences all of them.
+              </p>
+            </div>
+            <input type="checkbox" id="notify-master" aria-label="Notifications" />
+          </div>
+          <div class="setting-row">
+            <div class="setting-copy">
+              <span class="setting-label">Recording started</span>
+              <p class="setting-hint">Off by default &#8212; you are about to be in a game.</p>
+            </div>
+            <input type="checkbox" id="notify-started" aria-label="Notify when recording starts" />
+          </div>
+          <div class="setting-row">
+            <div class="setting-copy">
+              <span class="setting-label">Recording finished</span>
+              <p class="setting-hint">Tells you the VOD was saved, and how many markers it has.</p>
+            </div>
+            <input type="checkbox" id="notify-finished" aria-label="Notify when a recording is saved" />
+          </div>
+          <div class="setting-row">
+            <div class="setting-copy">
+              <span class="setting-label">Recording problems</span>
+              <p class="setting-hint">
+                A recording that failed to start or finish, or a disk too full
+                to record. The only way to find out mid-game.
+              </p>
+            </div>
+            <input type="checkbox" id="notify-failed" aria-label="Notify about recording problems" />
+          </div>
+          <div class="setting-row">
+            <div class="setting-copy">
+              <span class="setting-label">One-time notices</span>
+              <p class="setting-hint">
+                Show the &#8220;still running in the tray&#8221; notice again
+                next time you close the window.
+              </p>
+            </div>
+            <button type="button" id="reset-notices-btn">Reset</button>
+          </div>
+        </section>
+
+        <section class="settings-group">
           <h3>Audio</h3>
           <div class="setting-row">
             <div class="setting-copy">
