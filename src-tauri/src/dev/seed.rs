@@ -391,7 +391,11 @@ fn plan_markers(spec: &SeedSpec, rng: &mut Rng, duration_s: f64) -> Vec<db::NewM
         // timestamps: teamfight pile-ups are what the timeline's pixel
         // clustering exists for.
         let t = rng.range_f64(30.0, (duration_s - 10.0).max(60.0));
-        let marker = match rng.range_usize(0, 9) {
+        // Exclusive of the upper bound, so this yields 0..=11 and the
+        // catch-all arm is the twelfth. It read `(0, 9)` before, which
+        // stopped at 8 and left `_ => ace` unreachable — no seeded library
+        // has ever contained an ace marker.
+        let marker = match rng.range_usize(0, 12) {
             0..=2 => mk("kill", t, serde_json::json!({ "victim": rng.pick(ENEMIES) })),
             3..=4 => mk("death", t, serde_json::json!({ "killer": rng.pick(ENEMIES) })),
             5 => mk(
@@ -409,7 +413,25 @@ fn plan_markers(spec: &SeedSpec, rng: &mut Rng, duration_s: f64) -> Vec<db::NewM
                 t,
                 serde_json::json!({ "killer": rng.pick(CHAMPIONS), "turret": "Turret_T1_C_05_A" }),
             ),
-            8 => mk("baron", t, serde_json::json!({ "killer": rng.pick(CHAMPIONS) })),
+            8 => mk(
+                "baron",
+                t,
+                // Half of them stolen, so the review list's "(stolen)"
+                // suffix is exercised alongside the plain case.
+                serde_json::json!({ "killer": rng.pick(CHAMPIONS), "stolen": rng.next_bool() }),
+            ),
+            9 => mk(
+                "inhibitor",
+                t,
+                serde_json::json!({ "killer": rng.pick(CHAMPIONS), "inhibitor": "Barracks_T2_L1" }),
+            ),
+            10 => mk(
+                "multikill",
+                t,
+                // 2..=5 covers every named streak, so the label table is
+                // exercised rather than only its numeric fallback.
+                serde_json::json!({ "kill_streak": rng.range_i64(2, 6) }),
+            ),
             _ => mk(
                 "ace",
                 t,
@@ -620,7 +642,12 @@ mod tests {
                 "dragon" => &["killer", "dragon_type"],
                 "turret" => &["killer", "turret"],
                 "baron" | "herald" => &["killer"],
+                "inhibitor" => &["killer", "inhibitor"],
                 "ace" => &["acer", "acing_team"],
+                // `kill_streak` is a number, not a string, so it has no
+                // string key to check — the kind still has to be listed
+                // here or the panic below calls it unexpected.
+                "multikill" => &[],
                 "first_blood" => &["recipient"],
                 other => panic!("unexpected seeded marker kind {other}"),
             };

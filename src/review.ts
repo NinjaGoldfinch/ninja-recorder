@@ -15,7 +15,9 @@ const MARKER_STYLE: Record<string, { icon: string; label: string; color: string 
   baron: { icon: "👑", label: "Baron", color: "#6d4c41" },
   herald: { icon: "🦅", label: "Herald", color: "#00897b" },
   turret: { icon: "🏰", label: "Turret", color: "#fb8c00" },
+  inhibitor: { icon: "💠", label: "Inhibitor", color: "#5e35b1" },
   ace: { icon: "⭐", label: "Ace", color: "#fdd835" },
+  multikill: { icon: "🔥", label: "Multikill", color: "#f4511e" },
   first_blood: { icon: "🩸", label: "First Blood", color: "#d81b60" },
 };
 
@@ -25,11 +27,13 @@ const MARKER_STYLE: Record<string, { icon: string; label: string; color: string 
 // then objectives by value, with assists last because they're the most
 // numerous and the least individually interesting.
 const MARKER_PRIORITY = [
+  "multikill",
   "death",
   "kill",
   "baron",
   "dragon",
   "herald",
+  "inhibitor",
   "ace",
   "first_blood",
   "turret",
@@ -1047,6 +1051,27 @@ function setSettingsMenu(open: boolean) {
   settingsBtn?.setAttribute("aria-expanded", String(open));
 }
 
+// Only ever appended when the flag is explicitly true: it is absent on
+// every marker recorded before steals were captured, and `undefined` is
+// not "it wasn't stolen", it's "nobody asked".
+function stolen(payload: Record<string, unknown>): string {
+  return payload.stolen === true ? " (stolen)" : "";
+}
+
+// 2 through 5 have names everyone uses; anything beyond that is either a
+// pentakill already or a game mode where counting up is the wrong answer.
+const MULTIKILL_NAMES: Record<number, string> = {
+  2: "Double Kill",
+  3: "Triple Kill",
+  4: "Quadra Kill",
+  5: "Penta Kill",
+};
+
+function multikillLabel(streak: unknown): string {
+  if (typeof streak !== "number") return "Multikill";
+  return MULTIKILL_NAMES[streak] ?? `${streak}× Multikill`;
+}
+
 function markerLabel(m: MarkerRow): string {
   let payload: Record<string, unknown> = {};
   try {
@@ -1064,15 +1089,19 @@ function markerLabel(m: MarkerRow): string {
     case "assist":
       return `${str("killer")} killed ${str("victim")}`;
     case "dragon":
-      return `${str("dragon_type")} Dragon — ${str("killer")}`;
+      return `${str("dragon_type")} Dragon${stolen(payload)} — ${str("killer")}`;
     case "baron":
-      return `Baron — ${str("killer")}`;
+      return `Baron${stolen(payload)} — ${str("killer")}`;
     case "herald":
-      return `Herald — ${str("killer")}`;
+      return `Herald${stolen(payload)} — ${str("killer")}`;
     case "turret":
       return `Turret destroyed — ${str("killer")}`;
+    case "inhibitor":
+      return `Inhibitor destroyed — ${str("killer")}`;
     case "ace":
       return `Ace (${str("acing_team")})`;
+    case "multikill":
+      return multikillLabel(payload.kill_streak);
     case "first_blood":
       return `First Blood — ${str("recipient")}`;
     default:

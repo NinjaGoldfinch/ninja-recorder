@@ -41,7 +41,7 @@ erDiagram
         INTEGER recording_id FK "ON DELETE CASCADE"
         REAL    game_time_s
         REAL    video_time_s "aligned seek target"
-        TEXT    kind "kill, death, assist, dragon, baron, herald, turret, ace, first_blood, custom"
+        TEXT    kind "kill, death, assist, dragon, baron, herald, turret, inhibitor, ace, multikill, first_blood, custom"
         TEXT    payload_json "raw event detail"
     }
     samples {
@@ -66,6 +66,12 @@ erDiagram
         TEXT value
     }
 ```
+
+`markers.kind` is an open TEXT column with no CHECK constraint, so adding a
+kind needs no migration. The list above is the authority; the inline comment
+in migration 1 is a frozen snapshot of what existed when that migration was
+written and is deliberately left alone (migrations are append-only, comments
+included).
 
 ### Migration history
 

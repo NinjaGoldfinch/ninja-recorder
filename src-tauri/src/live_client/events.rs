@@ -157,6 +157,15 @@ pub struct GameEvent {
     pub dragon_type: Option<String>,
     #[serde(rename = "TurretKilled", default)]
     pub turret_killed: Option<String>,
+    #[serde(rename = "InhibKilled", default)]
+    pub inhib_killed: Option<String>,
+    /// On `Multikill`: 2 for a double, 5 for a penta.
+    #[serde(rename = "KillStreak", default)]
+    pub kill_streak: Option<i64>,
+    /// On the neutral-objective kills. A stolen Baron is precisely the
+    /// moment someone scrubs back to find, so it rides in the payload.
+    #[serde(rename = "Stolen", default)]
+    pub stolen: Option<bool>,
     /// Only ever set on the `GameEnd` event: "Win" or "Lose", from the
     /// active player's point of view. This is the whole of the live path's
     /// win/loss detection — see `outcome`.
@@ -371,7 +380,9 @@ pub enum MarkerKind {
     Baron,
     Herald,
     Turret,
+    Inhibitor,
     Ace,
+    Multikill,
     FirstBlood,
 }
 
@@ -387,7 +398,9 @@ impl MarkerKind {
             MarkerKind::Baron => "baron",
             MarkerKind::Herald => "herald",
             MarkerKind::Turret => "turret",
+            MarkerKind::Inhibitor => "inhibitor",
             MarkerKind::Ace => "ace",
+            MarkerKind::Multikill => "multikill",
             MarkerKind::FirstBlood => "first_blood",
         }
     }
@@ -416,77 +429,108 @@ fn classify_event(event: &GameEvent, our_names: &[&str]) -> Option<Marker> {
             None => false,
         }
     };
+    let assisted = || {
+        event
+            .assisters
+            .iter()
+            .any(|a| our_names.iter().any(|us| names_match(a, us)))
+    };
+    // Did we have a hand in this at all? Every objective below is gated on
+    // it, so a turret our team took while we were on the other side of the
+    // map never becomes a seek target.
+    let took_part = || is_ours(&event.killer_name) || assisted();
+
+    let marker = |kind: MarkerKind, payload: serde_json::Value| {
+        Some(Marker {
+            kind,
+            game_time_s: event.event_time,
+            payload,
+        })
+    };
 
     match event.event_name.as_str() {
         "ChampionKill" => {
             if is_ours(&event.killer_name) {
-                Some(Marker {
-                    kind: MarkerKind::Kill,
-                    game_time_s: event.event_time,
-                    payload: serde_json::json!({ "victim": event.victim_name }),
-                })
+                marker(
+                    MarkerKind::Kill,
+                    serde_json::json!({ "victim": event.victim_name }),
+                )
             } else if is_ours(&event.victim_name) {
-                Some(Marker {
-                    kind: MarkerKind::Death,
-                    game_time_s: event.event_time,
-                    payload: serde_json::json!({ "killer": event.killer_name }),
-                })
-            } else if event
-                .assisters
-                .iter()
-                .any(|a| our_names.iter().any(|us| names_match(a, us)))
-            {
-                Some(Marker {
-                    kind: MarkerKind::Assist,
-                    game_time_s: event.event_time,
-                    payload: serde_json::json!({
+                marker(
+                    MarkerKind::Death,
+                    serde_json::json!({ "killer": event.killer_name }),
+                )
+            } else if assisted() {
+                marker(
+                    MarkerKind::Assist,
+                    serde_json::json!({
                         "victim": event.victim_name,
                         "killer": event.killer_name,
                     }),
-                })
+                )
             } else {
                 None
             }
         }
-        "TurretKilled" => Some(Marker {
-            kind: MarkerKind::Turret,
-            game_time_s: event.event_time,
-            payload: serde_json::json!({
+        "Multikill" if is_ours(&event.killer_name) => marker(
+            MarkerKind::Multikill,
+            serde_json::json!({ "kill_streak": event.kill_streak }),
+        ),
+        "TurretKilled" if took_part() => marker(
+            MarkerKind::Turret,
+            serde_json::json!({
                 "killer": event.killer_name,
                 "turret": event.turret_killed,
             }),
-        }),
-        "DragonKill" => Some(Marker {
-            kind: MarkerKind::Dragon,
-            game_time_s: event.event_time,
-            payload: serde_json::json!({
+        ),
+        "InhibKilled" if took_part() => marker(
+            MarkerKind::Inhibitor,
+            serde_json::json!({
+                "killer": event.killer_name,
+                "inhibitor": event.inhib_killed,
+            }),
+        ),
+        "DragonKill" if took_part() => marker(
+            MarkerKind::Dragon,
+            serde_json::json!({
                 "killer": event.killer_name,
                 "dragon_type": event.dragon_type,
+                "stolen": event.stolen,
             }),
-        }),
-        "BaronKill" => Some(Marker {
-            kind: MarkerKind::Baron,
-            game_time_s: event.event_time,
-            payload: serde_json::json!({ "killer": event.killer_name }),
-        }),
-        "HeraldKill" => Some(Marker {
-            kind: MarkerKind::Herald,
-            game_time_s: event.event_time,
-            payload: serde_json::json!({ "killer": event.killer_name }),
-        }),
-        "Ace" => Some(Marker {
-            kind: MarkerKind::Ace,
-            game_time_s: event.event_time,
-            payload: serde_json::json!({
+        ),
+        "BaronKill" if took_part() => marker(
+            MarkerKind::Baron,
+            serde_json::json!({
+                "killer": event.killer_name,
+                "stolen": event.stolen,
+            }),
+        ),
+        "HeraldKill" if took_part() => marker(
+            MarkerKind::Herald,
+            serde_json::json!({
+                "killer": event.killer_name,
+                "stolen": event.stolen,
+            }),
+        ),
+        // `Acer` is whoever landed the final kill of the ace, so this is
+        // "an ace I closed out", not "an ace my team got". Being *on* the
+        // acing team without appearing anywhere in it is the same absent
+        // bystander case as the turret above.
+        "Ace" if is_ours(&event.acer) => marker(
+            MarkerKind::Ace,
+            serde_json::json!({
                 "acer": event.acer,
                 "acing_team": event.acing_team,
             }),
-        }),
-        "FirstBlood" => Some(Marker {
-            kind: MarkerKind::FirstBlood,
-            game_time_s: event.event_time,
-            payload: serde_json::json!({ "recipient": event.recipient }),
-        }),
+        ),
+        // Deliberately not handled: `FirstBrick`, the first turret of the
+        // game. The API also emits an ordinary `TurretKilled` for the same
+        // structure with its own `EventID`, so the tracker would not dedupe
+        // them and the VOD would carry two markers a frame apart.
+        "FirstBlood" if is_ours(&event.recipient) => marker(
+            MarkerKind::FirstBlood,
+            serde_json::json!({ "recipient": event.recipient }),
+        ),
         _ => None,
     }
 }
@@ -684,6 +728,30 @@ mod tests {
         serde_json::from_str(json).unwrap()
     }
 
+    /// A `GameEvent` with everything unset, for building one event by
+    /// hand. Deliberately a test helper rather than a `Default` derive on
+    /// `GameEvent` itself: a default *wire* event is not a thing the API
+    /// can send, and `EventName: ""` would silently classify as nothing.
+    fn blank_event() -> GameEvent {
+        GameEvent {
+            event_id: 0,
+            event_name: String::new(),
+            event_time: 0.0,
+            killer_name: None,
+            victim_name: None,
+            assisters: Vec::new(),
+            recipient: None,
+            acer: None,
+            acing_team: None,
+            dragon_type: None,
+            turret_killed: None,
+            inhib_killed: None,
+            kill_streak: None,
+            stolen: None,
+            result: None,
+        }
+    }
+
     fn won_fixture() -> AllGameData {
         let json = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -823,16 +891,117 @@ mod tests {
         assert!(kinds.contains(&MarkerKind::FirstBlood), "kinds were: {kinds:?}");
     }
 
+    /// The fixture's objectives are deliberately mixed: we kill the turret
+    /// and the Baron, we assist the dragon, and the enemy takes Herald with
+    /// no involvement from us at all.
     #[test]
-    fn extracts_all_objective_events_regardless_of_team() {
+    fn keeps_the_objectives_we_had_a_hand_in() {
         let markers = MarkerTracker::new().ingest(&fixture());
         let kinds: Vec<MarkerKind> = markers.iter().map(|m| m.kind).collect();
-        assert!(kinds.contains(&MarkerKind::Turret));
-        assert!(kinds.contains(&MarkerKind::Dragon));
-        assert!(kinds.contains(&MarkerKind::Baron));
-        assert!(kinds.contains(&MarkerKind::Herald));
-        assert!(kinds.contains(&MarkerKind::Ace));
-        assert!(kinds.contains(&MarkerKind::FirstBlood));
+
+        assert!(kinds.contains(&MarkerKind::Turret), "we killed it");
+        assert!(kinds.contains(&MarkerKind::Dragon), "we assisted it");
+        assert!(kinds.contains(&MarkerKind::Baron), "we killed it");
+        assert!(kinds.contains(&MarkerKind::Ace), "we closed it out");
+        assert!(kinds.contains(&MarkerKind::FirstBlood), "we got it");
+    }
+
+    /// The whole point of the filter. A marker is a seek target, and an
+    /// objective taken while we were on the other side of the map is a stop
+    /// on `[`/`]` that shows the player nothing they were part of.
+    #[test]
+    fn drops_an_objective_we_took_no_part_in() {
+        // Fixture Herald: killed by EnemyA, assisted by EnemyB.
+        let markers = MarkerTracker::new().ingest(&fixture());
+        let kinds: Vec<MarkerKind> = markers.iter().map(|m| m.kind).collect();
+
+        assert!(
+            !kinds.contains(&MarkerKind::Herald),
+            "kinds were: {kinds:?}"
+        );
+    }
+
+    /// Same rule for a *friendly* objective — the case that prompted this.
+    /// Being on the team that took it is not taking part in it.
+    #[test]
+    fn a_teammates_uncontested_turret_is_not_our_marker() {
+        let mut snapshot = fixture();
+        snapshot.events.events.retain(|e| e.event_name == "TurretKilled");
+        snapshot.events.events[0].killer_name = Some("Blitz#NA1".into());
+        snapshot.events.events[0].assisters = vec![];
+
+        assert!(MarkerTracker::new().ingest(&snapshot).is_empty());
+    }
+
+    #[test]
+    fn a_multikill_of_ours_becomes_a_marker_carrying_the_streak() {
+        let mut snapshot = fixture();
+        snapshot.events.events = vec![GameEvent {
+            event_id: 99,
+            event_name: "Multikill".into(),
+            event_time: 612.0,
+            killer_name: Some("Ninja#NA1".into()),
+            kill_streak: Some(3),
+            ..blank_event()
+        }];
+
+        let markers = MarkerTracker::new().ingest(&snapshot);
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0].kind, MarkerKind::Multikill);
+        assert_eq!(markers[0].payload["kill_streak"], 3);
+    }
+
+    #[test]
+    fn someone_elses_multikill_is_not_our_marker() {
+        let mut snapshot = fixture();
+        snapshot.events.events = vec![GameEvent {
+            event_id: 99,
+            event_name: "Multikill".into(),
+            event_time: 612.0,
+            killer_name: Some("EnemyA#NA1".into()),
+            kill_streak: Some(5),
+            ..blank_event()
+        }];
+
+        assert!(MarkerTracker::new().ingest(&snapshot).is_empty());
+    }
+
+    #[test]
+    fn an_inhibitor_we_assisted_becomes_a_marker() {
+        let mut snapshot = fixture();
+        snapshot.events.events = vec![GameEvent {
+            event_id: 99,
+            event_name: "InhibKilled".into(),
+            event_time: 1650.0,
+            killer_name: Some("Blitz#NA1".into()),
+            assisters: vec!["Ninja#NA1".into()],
+            inhib_killed: Some("Barracks_T2_L1".into()),
+            ..blank_event()
+        }];
+
+        let markers = MarkerTracker::new().ingest(&snapshot);
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0].kind, MarkerKind::Inhibitor);
+        assert_eq!(markers[0].payload["inhibitor"], "Barracks_T2_L1");
+    }
+
+    /// A stolen Baron is exactly the moment someone scrubs back to find, so
+    /// the flag has to survive into the payload rather than being dropped
+    /// on the way through.
+    #[test]
+    fn a_steal_is_recorded_on_the_objective_marker() {
+        let mut snapshot = fixture();
+        snapshot.events.events = vec![GameEvent {
+            event_id: 99,
+            event_name: "BaronKill".into(),
+            event_time: 1500.0,
+            killer_name: Some("Ninja#NA1".into()),
+            stolen: Some(true),
+            ..blank_event()
+        }];
+
+        let markers = MarkerTracker::new().ingest(&snapshot);
+        assert_eq!(markers[0].payload["stolen"], true);
     }
 
     #[test]
