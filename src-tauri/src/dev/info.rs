@@ -147,6 +147,10 @@ pub fn dev_registered_commands() -> Vec<&'static str> {
         "open_recordings_folder",
         "get_ui_prefs",
         "set_ui_pref",
+        "get_audio_preset",
+        "set_audio_preset",
+        "list_audio_inputs",
+        "extract_audio_track",
         "lcu_status",
         "game_state_status",
     ]

@@ -33,6 +33,7 @@ erDiagram
         TEXT    patch "nullable"
         INTEGER pinned "default 0, exempt from retention"
         INTEGER size_bytes
+        TEXT    audio_tracks_json "nullable, JSON AudioLayout"
     }
     markers {
         INTEGER id PK
@@ -73,6 +74,25 @@ erDiagram
 | 2 | `settings` (single row, seeded) | Retention has to protect the user out of the box, so it ships with real defaults rather than "unlimited until configured" |
 | 3 | `samples`, `idx_samples_recording_id` | 1 Hz advantage series behind the review timeline. ~2100 rows for a 35-minute game; downsampling happens at render time |
 | 4 | `settings_kv` (unseeded) | UI preferences. A missing key means "use the frontend default", which makes adding a preference a zero-migration change |
+| 5 | `recordings.audio_tracks_json` (nullable) | Which audio source landed on which MP4 track. Nullable because NULL is the honest answer twice over: every row predating multi-track audio, and anything `reconcile` imported from a file we didn't record. The review player renders NULL as no stem picker rather than as a guess |
+
+### The audio layout is JSON, not a child table
+
+`recordings.audio_tracks_json` holds a serialized `AudioLayout` — the ordered
+track list and the sources feeding each one ([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#25-multi-track-audio)).
+A `recording_audio_tracks` table would be the orthodox shape, and it would buy
+nothing here: the value is written once, always read whole, never queried by
+predicate, and at most six rows long.
+
+The upsert in `insert_recording` treats it specially:
+
+```sql
+audio_tracks_json = COALESCE(excluded.audio_tracks_json, recordings.audio_tracks_json)
+```
+
+`reconcile` upserts on `path` with an all-default row. Without the `COALESCE`,
+a rescan landing after a finalize would overwrite a known layout with NULL and
+the VOD would silently lose its stem picker. A NULL never wins.
 
 ### Two settings tables, on purpose
 

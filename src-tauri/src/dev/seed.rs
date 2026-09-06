@@ -145,6 +145,13 @@ pub fn dev_seed_library(
                 // The row must agree with the file, or the very first
                 // retention pass computes a total that doesn't match disk.
                 size_bytes: written as i64,
+                // Alternate layouts so the review player's stem picker has
+                // something to render against seeded rows — including the
+                // single-track case, where it must not appear at all. The
+                // seeded media has no audio (fixtures/README.md), so
+                // selecting a stem still fails; this exercises the UI, not
+                // playback. See docs/dev-portal.md's known limits.
+                audio_tracks_json: serde_json::to_string(&audio_layout_for(i)).ok(),
             })
             .map_err(|e| e.to_string())?;
 
@@ -265,6 +272,18 @@ struct RecordingPlan {
     win: Option<bool>,
     kda: Option<(i64, i64, i64)>,
     pinned: bool,
+}
+
+/// Cycles the seeded rows through the real presets so the library contains
+/// a mix of single-track and multi-track recordings.
+fn audio_layout_for(index: usize) -> crate::recorder::audio::AudioLayout {
+    use crate::recorder::audio::AudioPreset;
+    match index % 3 {
+        0 => AudioPreset::Game,
+        1 => AudioPreset::GameMic { mic_device_id: None },
+        _ => AudioPreset::GameMicDiscord { mic_device_id: None },
+    }
+    .layout()
 }
 
 fn plan_recording(spec: &SeedSpec, rng: &mut Rng, index: usize, now: i64) -> RecordingPlan {

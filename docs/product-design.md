@@ -249,6 +249,28 @@ widget-shaped files into state-ownership-shaped ones
 | Pull-only; no backend→frontend events | One event, `library-changed` | Polling `list_recordings` to notice a finished game rebuilt the grid every few seconds and fought scroll and focus |
 | Match metadata written at finalize | Metadata columns stay `NULL` | `fetch_match_summary` is implemented and unit-tested but still unwired: resolving *which* `gameId` just ended needs LCU behaviour that no one has been able to check against a live client |
 
+### Audio was treated as a backend default, and it is a product decision
+
+The eleven phases never mention audio. It appears once in the capture phase as
+a single line — `AudioSource::SYSTEM`, desktop loopback — filed under encoding
+defaults alongside bitrate and resolution, on the assumption that the user has
+no more opinion about it than they do about CBR.
+
+That was wrong in a way the plan couldn't see from the outside. Whether your
+own voice is in the VOD, whether your Discord call is, and whether you can
+remove either one later are all things people care about — and the last of
+them is a *recording-time* decision, because an audio track that wasn't
+captured can't be recovered afterwards. A default that silently mixes
+everything into one stream forecloses it permanently for every game already
+recorded.
+
+The fix (track 0 the combined mix, isolated stems after it —
+[DEVELOPMENT.md §2.5](../DEVELOPMENT.md#25-multi-track-audio)) is the same
+shape as the retention decision in §2: pick the option that keeps the user's
+future choices open, and pay a little for it now. It also needed a second
+patch to the capture fork, which is the concrete cost of having treated the
+question as settled.
+
 ### One phase is still open, and it is the honest gate
 
 Phase 8 — real hardware, real Vanguard — has not run. The capture backend

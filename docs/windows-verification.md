@@ -84,6 +84,8 @@ VOD is playable:
 - [ ] In-game resolution change mid-recording
 - [ ] Mid-game reconnect — disconnect the client (brief network drop or manual
       client kill), then reconnect; exercises the `Reconnect` path
+- [ ] Unplug the microphone mid-game on a mic preset — the recording should
+      survive with its remaining tracks rather than failing
 
 Record: pass/fail per case, and what the output VOD looked like for any
 failure (gap, corruption, truncation).
@@ -110,9 +112,42 @@ These are the things nobody has been able to answer by reading the code:
 - [ ] Does the bundled resource path (`target/libobs` → next to the installed
       `.exe`) resolve correctly in an installed build, and does dev mode need
       the staging step to also copy into `target/debug/libobs`?
-- [ ] Are encoder priority, the window-size retry timing and the
-      `AudioSource::SYSTEM` choice sensible against real hardware? They are
-      first-cut defaults, not tuned.
+- [ ] Are encoder priority and the window-size retry timing sensible against
+      real hardware? They are first-cut defaults, not tuned.
+
+### Multi-track audio ([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#25-multi-track-audio))
+
+Nothing below can be checked off Windows. Use `ffprobe` — the failure modes
+here are silent, and the app's own UI will not show you most of them.
+
+- [ ] **Does `wasapi_process_output_capture` produce non-silent samples for a
+      Vanguard-protected `League of Legends.exe`?** This is the big one: every
+      preset naming "game audio" depends on it and there is no automatic
+      fallback. If it fails, Desktop is the documented workaround.
+- [ ] Record with each preset. Confirm the track *count* and order match the
+      table in §2.5, and that a Game-only recording contains no microphone
+      audio.
+- [ ] Confirm track 0 is the combined mix and tracks 1+ are genuinely
+      isolated — **not four copies of the same mix**, which is what a missing
+      `obs_source_set_audio_mixers` call produces and what the app cannot
+      detect on its own.
+- [ ] Confirm the faststart remux preserved every track. `-c copy` without
+      `-map` silently keeps one audio stream, and the remux renames over the
+      original, so this is unrecoverable if it regresses.
+- [ ] `ffprobe` shows `DISPOSITION:default=1` on `a:0` and `0` on the rest.
+- [ ] Discord audio lands on its own track and is absent from the game stem.
+      With Discord *not* running, the track should be silent rather than the
+      recording failing.
+- [ ] On a non-English client, game audio is still captured — this is what the
+      `priority = 2` (match-by-executable) fix in the fork is for.
+- [ ] The microphone picker lists real devices, and "Windows default" records
+      from the device the user expects. libobs resolves an input `device_id`
+      of `"default"` as the default *communications* device, which commonly
+      differs from the default device when a headset is plugged in.
+- [ ] In the review player: switching stems plays the right audio, stays in
+      sync across seeks, speed changes and pauses, and mute/volume behave.
+      Confirm the sidecar cache lands in `recordings/audio-tracks/` and that
+      deleting the VOD removes it.
 - [ ] Does gameflow report a distinct phase while spectating? If it reports
       `InProgress`, spectated games are currently recorded, which the design
       says they should not be.

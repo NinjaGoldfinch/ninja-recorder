@@ -24,7 +24,7 @@ No OBS to install. No scenes to configure. No injection into the game, ever.
 flowchart LR
     A["You launch<br/>League"] --> B["App detects the client<br/><small>lockfile</small>"]
     B --> C["Game starts<br/><small>gameflow phase</small>"]
-    C --> D["Recording starts<br/><small>WGC capture,<br/>hardware encode</small>"]
+    C --> D["Recording starts<br/><small>WGC capture, hardware encode,<br/>audio on separate tracks</small>"]
     D --> E["Events become markers<br/><small>Live Client Data @ 1 Hz</small>"]
     E --> F["Game ends"]
     F --> G["Tagged VOD in<br/>your library"]
@@ -42,6 +42,11 @@ You do not press a button anywhere in that chain.
 - **Event-tagged VODs.** Every kill, death, dragon, baron, herald and turret
   becomes a marker on the timeline. Jump straight to your deaths. Clip the
   teamfight. A per-second advantage curve sits under the markers.
+- **Separate audio tracks.** Pick what to capture — game only, game plus your
+  mic, game plus mic plus Discord, or the whole desktop. Track 0 is always the
+  combined mix, so the VOD just plays; the tracks after it are isolated stems,
+  so you can still pull your mic out of a game you recorded months ago. Your
+  microphone is only ever recorded on a preset that names it.
 - **Lightweight.** A Tauri shell (~10 MB, uses the OS webview) plus embedded
   libobs. No Electron, no bundled Chromium. Idle RAM and install size are
   tracked targets, not vibes.

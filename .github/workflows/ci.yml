@@ -451,6 +451,12 @@ jobs:
           Windows-only (DEVELOPMENT.md §1.1). The Windows build includes the
           libobs capture backend, but it has not been verified against a real
           Vanguard-protected game yet (docs/windows-verification.md).
+
+          Multi-track audio (DEVELOPMENT.md §2.5) is new and unverified on
+          real hardware. In particular, per-application capture — the source
+          behind every preset that records "game audio" — has never been run
+          against a Vanguard-protected process. If your game track comes out
+          silent, switch the preset to Desktop, which uses ordinary loopback.
           CAVEATS
           } > notes.md
           echo "--- generated notes ---"

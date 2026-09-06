@@ -70,7 +70,7 @@ Rules:
 
 Implemented in `src-tauri/src/recorder/`: `Recorder`, `RecordConfig`, `RecorderError` in `mod.rs` (with a `RecorderError::Backend(String)` catch-all for wrapping libobs/IPC failures without leaking their type above the trait); `stub.rs` unchanged; `libobs/mod.rs` + `libobs/window.rs` (Windows-only, `#[cfg(target_os = "windows")]`) are the real backend, wired into `lib.rs`'s `setup` behind the same cfg gate.
 
-`LibObsRecorder` picks the game window (`FindWindowA` on title `"League of Legends (TM) Client"` / class `RiotWindowClass` / process `League of Legends.exe` — same identifiers league_record uses, verified against its actual source) and captures at its real client-area size (`GetClientRect`, retried briefly since the size can report (1,1) for a moment right after the window appears) rather than a hardcoded resolution, which is what §2.4's "resolution follows the game window" means in practice. Encoder choice walks `available_encoders()` (already returned in NVENC→AMD→QSV priority order by the crate) and picks the first **H.264** one, explicitly excluding both `OBS_X264` (§2.4's no-silent-software-fallback rule — `start()` errors instead) and the AV1 variants the crate would otherwise prefer for NVENC (§2.4's WebView2-native-H.264-decode requirement, §5). Audio is `AudioSource::SYSTEM` (default output device loopback); rate control is `CBR(8000)` at 60fps per §2.4's defaults.
+`LibObsRecorder` picks the game window (`FindWindowA` on title `"League of Legends (TM) Client"` / class `RiotWindowClass` / process `League of Legends.exe` — same identifiers league_record uses, verified against its actual source) and captures at its real client-area size (`GetClientRect`, retried briefly since the size can report (1,1) for a moment right after the window appears) rather than a hardcoded resolution, which is what §2.4's "resolution follows the game window" means in practice. Encoder choice walks `available_encoders()` (already returned in NVENC→AMD→QSV priority order by the crate) and picks the first **H.264** one, explicitly excluding both `OBS_X264` (§2.4's no-silent-software-fallback rule — `start()` errors instead) and the AV1 variants the crate would otherwise prefer for NVENC (§2.4's WebView2-native-H.264-decode requirement, §5). Audio is whatever the user's preset asks for, split across separate mp4 tracks (§2.5); rate control is `CBR(8000)` at 60fps per §2.4's defaults.
 
 **Runtime files: staged outside Cargo, not via artifact-dependencies.** league_record gets `extprocess_recorder.exe` + its libobs DLLs into the build via Cargo's artifact-dependency feature (`artifact = "bin:..."`), which needs nightly Rust + the unstable `bindeps` flag — their whole project builds on nightly (CI: `dtolnay/rust-toolchain@nightly`). We can't do that: `-Z bindeps` syntax in `Cargo.toml` breaks manifest parsing *for every platform*, confirmed locally (`cargo check` on macOS failed until the artifact-dependency lines were removed) — it would force every macOS dev's `cargo check`/`npm run tauri dev` onto nightly + an unstable flag just to support an optional Windows-only binary, which is a real regression against §9's dual-platform dev loop. Instead, CI's "Stage libobs capture backend" step (`.github/workflows/ci.yml`'s `build` job, Windows leg only) builds the fork's `extprocess_recorder` binary as a fully separate `cargo build` invocation and copies it + the matching `libobs_<version>/` DLL folder into `src-tauri/target/libobs/` directly — no Cargo dependency-graph involvement, ordinary stable Rust throughout. `tauri.windows.conf.json` then bundles that folder as a resource, and `LibObsRecorder::new` (lib.rs) resolves it at runtime via Tauri's path resolver. Anyone working on the capture backend locally on the Windows box needs to run the same clone-build-copy sequence by hand before `cargo run`/`npm run tauri dev` until that's scripted for local use too.
 
@@ -80,7 +80,8 @@ Implemented in `src-tauri/src/recorder/`: `Recorder`, `RecordConfig`, `RecorderE
 - Does `window_capture` forced to WGC actually produce frames for League's borderless/windowed modes, and does Vanguard tolerate it (the whole point of this fork — needs a real check, not just "should work").
 - The CI staging step's assumption that `Sort-Object Name -Descending` on `libobs_<version>/` directory names picks the newest — string sort, not version-aware, but the fork's directory names so far (`libobs_28.1.1` … `libobs_32.0.4`) happen to sort correctly that way.
 - The `tauri.windows.conf.json` resource path (`target/libobs` → bundled next to the installed .exe) matches league_record's own working config, but its interaction with `cargo tauri dev` — where the running binary is `target/debug/ninja-recorder.exe`, one level deeper than `target/libobs` — is unclear from reading the source alone; may need the staging step to also copy into `target/debug/libobs` for dev mode to work.
-- Encoder priority, window-size retry timing, and the `AudioSource::SYSTEM` choice are first-cut defaults, not tuned against real hardware.
+- Encoder priority and window-size retry timing are first-cut defaults, not tuned against real hardware.
+- Does `wasapi_process_output_capture` produce non-silent samples for a Vanguard-protected `League of Legends.exe`? Per-application loopback is the source behind every preset that names "game audio" (§2.5), and it is the one part of the audio design with no fallback if the answer is no — desktop capture is the documented workaround.
 
 ### 2.3 Alternatives considered (and why not)
 
@@ -96,6 +97,96 @@ Implemented in `src-tauri/src/recorder/`: `Recorder`, `RecordConfig`, `RecorderE
 - Detect encoder: NVENC → AMF → QSV → refuse-with-warning (no silent x264 fallback on the gameplay machine).
 - 1080p60, H.264, ~8 Mbps CBR as defaults; resolution follows the game window.
 - H.264 + AAC specifically: WebView2's `<video>` decodes it natively, which is what makes the review player trivial (§5).
+- Audio is one AAC track per captured source at 160 kbps, track 0 being the combined mix (§2.5). MP4 rather than MKV even though OBS recommends MKV for multi-track: §2.2's crash-safety rule is already satisfied by fragmented MP4, and MKV would cost the review player its native `<video>` playback for no gain.
+
+### 2.5 Multi-track audio
+
+The user picks *what* to capture; the recorder writes each source to its own
+MP4 audio track.
+
+| Preset | Track 0 | Track 1 | Track 2 | Track 3 |
+|---|---|---|---|---|
+| Game | Game | — | — | — |
+| Game + mic | Everything | Game | Mic | — |
+| Game + mic + Discord | Everything | Game | Mic | Discord |
+| Desktop | System audio | Game | — | — |
+
+**Track 0 is always the combined mix.** This is the decision the rest of the
+design follows from. It means a player that knows nothing about any of this —
+including our own review player's `<video>` element, and whatever the user
+drags the file into — plays the right thing by default. Everything after
+track 0 is an isolated stem, so a clip exporter written later can cut the
+microphone out of a VOD recorded today. That is the whole reason the stems
+exist; without it the tracks would only be a settings screen.
+
+**Only the sources a preset names are captured.** "Game audio only" writes one
+track and never opens the microphone. Recording the mic anyway "just in case"
+would be cheap (~160 kbps) and useful, and it is still the wrong default: the
+preset names would stop being true, and a recorder that captures your voice
+when you told it not to is a bug regardless of what it does with the result.
+
+**Game-only is one track, not two.** With a single source the combined mix and
+the stem are the same signal, so the second track would be a byte-identical
+duplicate. Desktop is the only two-track preset — system audio already
+contains the game, so track 1 isolates the game back out of it.
+
+**Discord is captured as a named application, not a Discord-shaped special
+case.** `AudioSourceKind::Application { exe }` takes any executable, matched
+by `WINDOW_PRIORITY_EXE` rather than window title — Discord retitles itself to
+whatever channel is open, so title matching would break constantly. The same
+mechanism is what a future "custom" preset needs for Spotify or anything else.
+
+**The capture fork had to change; a separately-captured mic was the
+alternative.** Upstream `libobs-recorder` creates one AAC encoder on mixer 0
+and mixes every source into it. The alternative to patching it was capturing
+the microphone ourselves and muxing it in afterwards with ffmpeg — which means
+owning A/V sync for the mic, exactly the class of bug §2.1 chose libobs to
+avoid. The fork now creates one encoder per track; `obs_audio_encoder_create`
+fixes an encoder's mixer index at creation with no setter, so encoder *i* is
+permanently track *i*, and what varies per recording is a per-source mixer
+bitmask. A libobs source can feed several mixes at once, which is what makes
+the combined-mix-plus-stems layout nearly free — game audio on both track 0
+and track 1 is one extra bit, not a second capture.
+
+Two traps in that area, both of which fail silently:
+- libobs defaults a source's `audio_mixers` to `0xFF` (every mix). Left alone,
+  every track would contain an identical full mix.
+- `num_audio_mixes` walks the output's encoder array and stops at the first
+  null, so binding tracks 0 and 2 while leaving 1 unbound truncates the file
+  to **one** track.
+
+**The faststart remux had to be fixed in the same change.** `remux_faststart`
+ran `-c copy` with no `-map`, so ffmpeg's default stream selection kept a
+single "best" audio stream — which would have deleted every stem on the way
+out, permanently, since the remux renames over the original. It now maps all
+streams explicitly and marks track 0 as the default disposition, which
+`obs-ffmpeg-mux` never sets.
+
+**Track switching in the review player uses ffmpeg, not the browser.**
+WebView2 offers no way to select among the audio tracks of one `<video>`:
+`HTMLMediaElement.audioTracks` sits behind Chromium's `AudioVideoTracks`
+Blink flag, which has been at status "test" for roughly a decade with no
+standards track, on an Evergreen runtime whose version we don't control.
+Enabling it via `additionalBrowserArgs` would also silently replace wry's
+default `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection`.
+Selecting a stem instead extracts it to a cached sidecar (`-c copy`, so tens
+of megabytes rather than the multi-gigabyte video) which a hidden `<audio>`
+plays against the muted video, with drift correction in the playhead loop the
+player already runs. Track 0 — the common case — needs none of it.
+
+This does mean owning a small amount of A/V sync after all, which §2.1 says
+we didn't want. The mitigating difference is that it is *playback* sync over
+a file that already exists, recoverable by reloading, rather than capture sync
+that would corrupt a recording. It is confined to the review player and
+touches nothing on the recording path.
+
+**Preferences.** The preset is one `settings_kv` row (`audio_preset`) holding
+JSON — a zero-migration change, per §4's reasoning. Unlike `theme` it is read
+and validated backend-side: a bad theme value looks wrong, a bad audio preset
+changes what gets recorded, and an unreadable one falls back to game-audio-only
+rather than to whatever parses. The per-recording layout is a separate,
+nullable column (`recordings.audio_tracks_json`), because NULL is the honest
+answer for the VODs that predate this and for anything a rescan imported.
 
 ---
 
@@ -309,7 +400,9 @@ Two changes leaked usefully out of the portal into the app proper. `Supervisor` 
 | Riot changes LCU/Live Client endpoints | Unofficial-but-tolerated APIs; fixtures + thin client layer localize breakage. Watch league_record and lcu-driver communities |
 | Vanguard behavior changes re: WGC | WGC is a core OS compositor API used by Xbox Game Bar itself — lowest-risk capture path that exists. No fallback plan needed beyond display capture |
 | libobs Rust bindings immaturity | Using a patched fork of `libobs-recorder` (§2.1) rather than raw bindings — but it's still a young, single-maintainer ecosystem and now a fork we own the patch for. Budget time; fallback is a thin C shim over the (stable, C) libobs API. The trait keeps this contained |
-| Our `libobs-recorder` fork falls behind upstream | We only carry a single small commit on top of upstream (capture source + muxer settings); re-basing onto a newer upstream tag is cheap. Watch for upstream libobs version bumps we might want (new encoders, bug fixes) |
+| Our `libobs-recorder` fork falls behind upstream | The patch is now two commits, not one (capture source + muxer settings, then multi-track audio §2.5), and the second one touches encoder/source lifetime rather than just settings — so a re-base is no longer free. Still small and self-contained; watch for upstream libobs version bumps we might want (new encoders, bug fixes) |
+| Per-app audio capture doesn't work for League | `wasapi_process_output_capture` needs Win10 2004+, is still flagged beta in OBS 30.x, and has never been tried against a Vanguard-protected process. Every preset naming "game audio" depends on it (§2.5). Fallback is the Desktop preset, which uses ordinary loopback — documented rather than automatic, so a silent game track is diagnosable |
+| Stem playback drifts out of sync | The review player syncs a sidecar `<audio>` against the video by hand (§2.5). Bounded blast radius: playback only, over a file that already exists, fixed by reopening the VOD. Track 0 — the default — never uses this path |
 | YouTube quota audit friction | Ship upload as "bring your own consent" early; apply for quota increase well before it matters |
 | Disk-full during recording | Preflight free-space check at record start; stop gracefully + notify rather than corrupt |
 | Window mode edge cases (exclusive fullscreen) | WGC needs a composited surface. Detect and nudge user toward borderless (the League default) |

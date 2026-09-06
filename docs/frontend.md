@@ -117,6 +117,9 @@ seconds and fight scroll and focus.
 | `delete_recording` | — | library card |
 | `get_recordings_dir` / `open_recordings_folder` | path / — | settings |
 | `get_ui_prefs` / `set_ui_pref` | `HashMap<String,String>` / — | `prefs.ts` |
+| `get_audio_preset` / `set_audio_preset` | `AudioPreset` / — | settings → audio |
+| `list_audio_inputs` | `Vec<AudioInputDevice>` | settings → microphone picker |
+| `extract_audio_track` | path to a cached sidecar | review player, stem selection |
 | `lcu_status` | `LcuStatus` | header strip |
 | `game_state_status` | `SupervisorStatus` | header strip, About block |
 | `start_recording` / `stop_recording` / `is_recording` | — | registered but unreferenced by the main UI; the dev portal's Recorder panel drives them |
@@ -152,14 +155,28 @@ truth and wins any disagreement.
 - A plain `<video>` element. H.264/AAC MP4 decodes natively in the webview, so
   seeking, playback rate and frame-stepping come for free.
 - Video loads through Tauri's asset protocol (`convertFileSrc`), scoped in
-  `tauri.conf.json` to `$APPDATA/recordings/*` — this needs the
-  `protocol-asset` Cargo feature, not just the config entry.
+  `tauri.conf.json` to `$APPDATA/recordings/*` and
+  `$APPDATA/recordings/audio-tracks/*` — this needs the `protocol-asset` Cargo
+  feature, not just the config entry. The second entry is not redundant:
+  Tauri's scope matcher won't let `*` cross a `/`.
 - Frame-step is a ±1/30 s nudge, not true frame-accurate seeking: no
   per-recording frame rate is probed anywhere. Good enough for review, not for
   precision editing.
 - Markers closer together than the timeline can resolve (common around a
   teamfight) collapse into one cluster glyph; `MARKER_PRIORITY` decides which
   icon the cluster shows.
+- **Audio stems.** Track 0 is the combined mix and plays from the `<video>`
+  itself, so most recordings need nothing here and the picker stays hidden
+  (fewer than two tracks, or an unknown layout). Selecting any other track
+  calls `extract_audio_track`, then plays the returned sidecar through a
+  hidden `<audio>` synced against the muted video — WebView2 offers no way to
+  switch tracks within one element
+  ([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#25-multi-track-audio)).
+- Because of that, **volume and mute are held as state, not read off the video
+  element** (`userVolume` / `userMuted` → `applyAudioOutput`). The video is
+  muted whenever a stem is playing, and controls that read `video.muted` would
+  render a muted player over audible sound. The `volumechange` listener was
+  removed for the same reason — it would re-enter on the programmatic mute.
 
 The library grid's filters, sort and stats bar all operate client-side over
 the already-fetched row set. That is fine at solo-user library sizes and would

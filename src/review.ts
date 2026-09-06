@@ -2,7 +2,8 @@ import { assetUrl, call } from "./bridge";
 import { escapeHtml } from "./dom";
 import { formatTime } from "./format";
 import { currentView, showView } from "./router";
-import type { MarkerRow, RecordingRow, SampleRow } from "./types";
+import { toast } from "./toast";
+import type { AudioLayout, MarkerRow, RecordingRow, SampleRow } from "./types";
 
 export type { RecordingRow };
 
@@ -40,6 +41,25 @@ const MARKER_PRIORITY = [
 // review purposes, not frame-exact.
 const FRAME_SECONDS = 1 / 30;
 
+// Volume and mute are the *user's* intent, held here rather than read back
+// off the video element. Playing an isolated stem means muting the video and
+// letting a separate <audio> carry the sound, and if the controls read
+// `video.muted` they would then render a muted player over audible audio.
+let userVolume = 1;
+let userMuted = false;
+
+// The <audio> carrying the selected stem, or null while track 0 (the
+// combined mix) plays from the video element itself.
+let stemAudio: HTMLAudioElement | null = null;
+let selectedTrack = 0;
+
+// Drift thresholds for keeping the stem aligned to the video.
+// 0.04s is ~2.4 frames at 60fps — below the point A/V desync is noticeable —
+// and a rate nudge beyond ~2% is audible as a pitch shift, so anything
+// worse than SYNC_HARD is re-seeked instead of nudged.
+const SYNC_NUDGE = 0.04;
+const SYNC_HARD = 0.25;
+
 let backBtn: HTMLButtonElement | null;
 let reviewTitle: HTMLElement | null;
 let video: HTMLVideoElement | null;
@@ -55,6 +75,8 @@ let playPauseBtn: HTMLButtonElement | null;
 let timeDisplay: HTMLElement | null;
 let muteBtn: HTMLButtonElement | null;
 let volumeSlider: HTMLInputElement | null;
+let trackField: HTMLElement | null;
+let trackSelect: HTMLSelectElement | null;
 let fullscreenBtn: HTMLButtonElement | null;
 let timelineBody: HTMLElement | null;
 let timelineGraph: SVGSVGElement | null;
@@ -100,6 +122,8 @@ export function initReview() {
   timelineRuler = document.querySelector("#timeline-ruler");
   timelinePlayhead = document.querySelector("#timeline-playhead");
   timelineTooltip = document.querySelector("#timeline-tooltip");
+  trackField = document.querySelector("#audio-track-field");
+  trackSelect = document.querySelector("#audio-track-select");
   metricSelect = document.querySelector("#timeline-metric-select");
   metricSummary = document.querySelector("#timeline-metric-summary");
 
@@ -118,24 +142,48 @@ export function initReview() {
   video?.addEventListener("play", () => {
     syncPlayButton();
     startPlayheadLoop();
+    void resumeStem();
   });
   video?.addEventListener("pause", () => {
     syncPlayButton();
     stopPlayheadLoop();
     updatePlayhead();
+    stemAudio?.pause();
   });
-  video?.addEventListener("ended", stopPlayheadLoop);
-  video?.addEventListener("seeked", updatePlayhead);
+  video?.addEventListener("ended", () => {
+    stopPlayheadLoop();
+    stemAudio?.pause();
+  });
+  video?.addEventListener("seeked", () => {
+    updatePlayhead();
+    void resumeStem();
+  });
+  // The stem is a slave clock: pause it while the video is between frames
+  // rather than letting it run on and then snap back.
+  video?.addEventListener("seeking", () => stemAudio?.pause());
+  video?.addEventListener("waiting", () => stemAudio?.pause());
+  video?.addEventListener("stalled", () => stemAudio?.pause());
+  video?.addEventListener("playing", () => void resumeStem());
+  // Hooked on the event rather than in the rate <select>'s handler, so the
+  // frame-step buttons and hotkeys are covered too.
+  video?.addEventListener("ratechange", () => {
+    if (stemAudio) stemAudio.playbackRate = video!.playbackRate;
+  });
   video?.addEventListener("loadedmetadata", updatePlayhead);
-  video?.addEventListener("volumechange", syncVolumeControls);
 
   playPauseBtn?.addEventListener("click", togglePlay);
   muteBtn?.addEventListener("click", toggleMute);
   fullscreenBtn?.addEventListener("click", toggleFullscreen);
   volumeSlider?.addEventListener("input", () => {
-    if (!video || !volumeSlider) return;
-    video.volume = Number(volumeSlider.value);
-    video.muted = video.volume === 0;
+    if (!volumeSlider) return;
+    userVolume = Number(volumeSlider.value);
+    userMuted = userVolume === 0;
+    applyAudioOutput();
+    syncVolumeControls();
+  });
+
+  trackSelect?.addEventListener("change", () => {
+    void selectTrack(Number(trackSelect!.value));
   });
 
   metricSelect?.addEventListener("change", () => {
@@ -637,6 +685,7 @@ function startPlayheadLoop() {
   stopPlayheadLoop();
   const tick = () => {
     updatePlayhead();
+    correctStemDrift();
     rafHandle = requestAnimationFrame(tick);
   };
   rafHandle = requestAnimationFrame(tick);
@@ -698,16 +747,157 @@ function syncPlayButton() {
 }
 
 function toggleMute() {
-  if (!video) return;
-  video.muted = !video.muted;
+  userMuted = !userMuted;
+  applyAudioOutput();
+  syncVolumeControls();
+}
+
+/// Pushes the user's volume/mute intent onto whichever element is actually
+/// producing sound. The video is muted whenever a stem is playing — not
+/// because the user asked, but because otherwise the combined mix and the
+/// isolated stem would play on top of each other.
+function applyAudioOutput() {
+  if (video) {
+    video.volume = userVolume;
+    video.muted = userMuted || stemAudio !== null;
+  }
+  if (stemAudio) {
+    stemAudio.volume = userVolume;
+    stemAudio.muted = userMuted;
+  }
 }
 
 function syncVolumeControls() {
-  if (!video) return;
-  if (volumeSlider) volumeSlider.value = String(video.muted ? 0 : video.volume);
+  if (volumeSlider) volumeSlider.value = String(userMuted ? 0 : userVolume);
   if (muteBtn) {
-    muteBtn.textContent = video.muted || video.volume === 0 ? "🔇" : "🔊";
-    muteBtn.title = video.muted ? "Unmute (m)" : "Mute (m)";
+    muteBtn.textContent = userMuted || userVolume === 0 ? "🔇" : "🔊";
+    muteBtn.title = userMuted ? "Unmute (m)" : "Mute (m)";
+  }
+}
+
+// --- Audio stems ----------------------------------------------------------
+
+/// The per-recording track layout, as stored by the recorder.
+///
+/// `null` for anything we didn't record — a rescan-imported file, or a VOD
+/// made before multi-track audio existed. Parse failures are treated the
+/// same way: an unreadable layout is an unknown one, and the picker hides
+/// rather than guessing at a file's contents.
+function parseAudioLayout(json: string | null): AudioLayout | null {
+  if (!json) return null;
+  try {
+    const parsed = JSON.parse(json) as AudioLayout;
+    return Array.isArray(parsed?.tracks) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/// Renders the stem picker for a recording, or hides it.
+///
+/// Hidden unless there are at least two tracks: a single-track recording has
+/// nothing to choose between, and neither does one imported by a rescan,
+/// whose layout we genuinely don't know.
+function renderTrackPicker(layout: AudioLayout | null) {
+  selectedTrack = 0;
+
+  const tracks = layout?.tracks ?? [];
+  if (trackField) trackField.hidden = tracks.length < 2;
+  if (!trackSelect) return;
+
+  trackSelect.innerHTML = tracks
+    .map((track, i) => `<option value="${i}">${escapeHtml(track.label)}</option>`)
+    .join("");
+  trackSelect.value = "0";
+}
+
+/// Switches which audio track is audible.
+///
+/// Track 0 is the combined mix and plays straight off the video element.
+/// Anything else has to be extracted to its own file first — WebView2 gives
+/// no way to select among the audio tracks of one `<video>`. See
+/// DEVELOPMENT.md §2.5.
+async function selectTrack(index: number) {
+  if (!video || !currentRecordingPath) return;
+  selectedTrack = index;
+
+  if (index === 0) {
+    detachStem();
+    applyAudioOutput();
+    return;
+  }
+
+  try {
+    const path = await call<string>("extract_audio_track", {
+      recordingPath: currentRecordingPath,
+      trackIndex: index,
+    });
+    // The user can switch again while an extraction is in flight, and a
+    // slow one must not stomp a newer choice.
+    if (selectedTrack !== index) return;
+    attachStem(assetUrl(path));
+  } catch (err) {
+    if (selectedTrack !== index) return;
+    toast(`Couldn't load that audio track: ${err}`, "error");
+    // Fall back to the combined mix rather than leaving the player silent
+    // with a picker claiming otherwise.
+    selectedTrack = 0;
+    if (trackSelect) trackSelect.value = "0";
+    detachStem();
+    applyAudioOutput();
+  }
+}
+
+function attachStem(src: string) {
+  if (!video) return;
+  detachStem();
+
+  const audio = new Audio(src);
+  audio.preload = "auto";
+  audio.currentTime = video.currentTime;
+  audio.playbackRate = video.playbackRate;
+  stemAudio = audio;
+  applyAudioOutput();
+  void resumeStem();
+}
+
+function detachStem() {
+  if (!stemAudio) return;
+  stemAudio.pause();
+  stemAudio.removeAttribute("src");
+  stemAudio.load();
+  stemAudio = null;
+  applyAudioOutput();
+}
+
+async function resumeStem() {
+  if (!stemAudio || !video) return;
+  stemAudio.currentTime = video.currentTime;
+  stemAudio.playbackRate = video.playbackRate;
+  if (video.paused) return;
+  try {
+    await stemAudio.play();
+  } catch {
+    // Autoplay rejection or a load race — the drift check re-tries on the
+    // next frame, so this doesn't need to be loud.
+  }
+}
+
+/// Keeps the stem aligned with the video. Called from the rAF playhead loop,
+/// which only runs while playing, so a paused player costs nothing.
+function correctStemDrift() {
+  if (!stemAudio || !video || video.paused || stemAudio.seeking) return;
+
+  const drift = stemAudio.currentTime - video.currentTime;
+  if (Math.abs(drift) > SYNC_HARD) {
+    stemAudio.currentTime = video.currentTime;
+    stemAudio.playbackRate = video.playbackRate;
+  } else if (Math.abs(drift) > SYNC_NUDGE) {
+    // Ease back into alignment instead of seeking, which would be audible
+    // as a click at this magnitude.
+    stemAudio.playbackRate = video.playbackRate * (drift > 0 ? 0.98 : 1.02);
+  } else {
+    stemAudio.playbackRate = video.playbackRate;
   }
 }
 
@@ -778,6 +968,8 @@ export async function openReview(row: RecordingRow) {
   if (videoErrorDetail) videoErrorDetail.textContent = "";
   video.src = assetUrl(row.path);
   video.playbackRate = rateSelect ? Number(rateSelect.value) : 1;
+  detachStem();
+  renderTrackPicker(parseAudioLayout(row.audio_tracks_json));
 
   currentMarkers = [];
   currentSamples = [];
@@ -785,6 +977,7 @@ export async function openReview(row: RecordingRow) {
   renderTimeline();
   renderMarkerList();
   syncPlayButton();
+  applyAudioOutput();
   syncVolumeControls();
 
   showView("review");
@@ -809,6 +1002,8 @@ function closeReview() {
   if (!video) return;
   stopPlayheadLoop();
   hideClusterTooltip();
+  detachStem();
+  renderTrackPicker(null);
   video.pause();
   video.removeAttribute("src");
   video.load();
