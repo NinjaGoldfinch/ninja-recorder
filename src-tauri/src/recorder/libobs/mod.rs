@@ -18,7 +18,7 @@
 
 mod window;
 
-use crate::{warn};
+use crate::warn;
 use super::audio::{AudioLayout, AudioSourceKind};
 use super::{RecordConfig, Recorder, RecorderError, RecordingOutput};
 use libobs_recorder::settings::{

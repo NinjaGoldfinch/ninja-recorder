@@ -39,7 +39,7 @@
 //! Full reasoning, and why bypassing the plugin was judged not worth it:
 //! DEVELOPMENT.md's "Notifications" section.
 
-use crate::{warn};
+use crate::warn;
 use crate::core::{self, Ctx, NotifyKind};
 use tauri::AppHandle;
 use tauri_plugin_notification::NotificationExt;

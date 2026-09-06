@@ -48,7 +48,7 @@
 //! unrecognised response degrades to "this source knew less" rather than
 //! failing the fetch.
 
-use crate::{warn};
+use crate::warn;
 use super::client::{LcuClientError, LcuHttpClient};
 use serde::{Deserialize, Serialize};
 

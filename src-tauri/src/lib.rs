@@ -15,8 +15,8 @@ mod retention;
 mod state_machine;
 mod tray;
 
-#[cfg(not(target_os = "windows"))]
 use crate::{error, info, warn};
+#[cfg(not(target_os = "windows"))]
 use recorder::stub::StubRecorder;
 use recorder::Recorder;
 use std::sync::{Arc, Mutex};

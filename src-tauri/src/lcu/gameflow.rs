@@ -7,7 +7,7 @@
 //! connection yet — no League client is installed on the machine this was
 //! written on (DEVELOPMENT.md §9).
 
-use crate::{warn};
+use crate::warn;
 use super::client::{basic_auth_header, LcuClientError, LcuHttpClient};
 use super::lockfile::LockfileInfo;
 use futures_util::{SinkExt, StreamExt};

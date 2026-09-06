@@ -28,7 +28,7 @@ mod dispatch;
 #[cfg_attr(not(feature = "devtools"), allow(unused_imports))]
 pub use dispatch::{command_names, dispatch, dispatch_blocking, is_async_command};
 
-use crate::{warn};
+use crate::warn;
 use crate::db;
 use crate::lcu;
 use crate::recorder::audio::{AudioInputDevice, AudioPreset};

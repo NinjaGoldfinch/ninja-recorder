@@ -7,7 +7,7 @@
 
 pub mod reconcile;
 
-use crate::{warn};
+use crate::warn;
 use rusqlite::{params, Connection, OptionalExtension};
 use rusqlite_migration::{Migrations, M};
 use crate::recorder::audio::AudioPreset;
