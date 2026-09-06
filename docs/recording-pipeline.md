@@ -122,9 +122,10 @@ recover after wake, untested). See
 
 ## 3. Events → markers
 
-Each 1 Hz snapshot goes through `live_client::events`, which owns both halves
-of the transform: discrete events become markers, and the same snapshot also
-yields one row of the advantage time series.
+Each 1 Hz snapshot goes through `live_client::events`, which owns all three
+halves of the transform: discrete events become markers, the same snapshot
+yields one row of the advantage time series, and it also updates the
+match summary the finalize writes onto the `recordings` row.
 
 ```mermaid
 flowchart TB
@@ -143,7 +144,23 @@ flowchart TB
     ID --> TD["team_diff<br/><small>gold estimate, kills, CS</small>"]
     SNAP --> TD
     TD --> SM["Sample rows @ 1 Hz"]
+    ID --> SS["self_summary<br/><small>champion, KDA, mode</small>"]
+    EV --> GE["GameEnd → Result<br/><small>Win / Lose, else unknown</small>"]
+    GE --> SS
+    SS --> ABS["LiveSummary::absorb<br/><small>newer wins, but a known<br/>value is never given back</small>"]
+    ABS --> ROW["recordings row @ finalize"]
 ```
+
+`find_us` — the `Match activePlayer against allPlayers` step above — is
+shared by `team_diff` and `self_summary`, so there is one answer in the
+module to "which of these ten players are we" and one place to fix it.
+
+**Why `absorb` and not just the last snapshot.** `GameEnd` appears in the
+event list on one poll and the game process routinely exits before the next
+one lands, so the poll that carries the outcome is often the last that ever
+succeeds. Reading metadata off the final snapshot alone would lose the
+result of most games. A value once known is therefore never overwritten
+with `None`.
 
 **Marker kinds** (`MarkerKind::as_str`, matching `markers.kind` in SQLite):
 `kill`, `death`, `assist`, `dragon`, `baron`, `herald`, `turret`, `ace`,
@@ -223,7 +240,8 @@ continues, because losing the footage is worse than losing its metadata.
 
 ```mermaid
 flowchart TB
-    A["Recorder::stop()"] --> B{"ok?"}
+    S["take session; read its clock<br/><small>duration_s, before the remux inflates it</small>"] --> A["Recorder::stop()"]
+    A --> B{"ok?"}
     B -->|"no"| Z["log; keep last_finalized empty"]
     B -->|"yes"| C["stat file for size_bytes<br/><small>+ serialize the reported audio layout</small>"]
     C --> D["db.insert_recording"]
@@ -238,12 +256,18 @@ flowchart TB
     style E fill:#fff3e0,stroke:#ef6c00
 ```
 
-**Known gap:** `lcu::fetch_match_summary` is implemented and unit-tested but
-is not called from finalize, so `champion`, `queue`, `win`, `kda_*`, `patch`
-and `game_id` are `NULL` on rows written by a real game. Resolving *which*
-`gameId` just ended needs LCU behaviour that has not been checked against a
-live client. The dev portal can invoke the fetch by hand
-(`dev_fetch_match_summary`).
+**Where the row's metadata comes from.** `champion`, `kda_*`, `win` and
+`game_mode` are captured *during* the game from Live Client Data, folded
+into the session on every poll by `events::self_summary` and written at
+finalize. Nothing about that path needs the LCU, so it works in Practice
+Tool and customs too.
+
+**Known gap:** `queue`, `game_id`, `role` and `patch` are still `NULL` on
+rows written by a real game — they have no Live Client Data equivalent, and
+`lcu::fetch_match_summary` is implemented and unit-tested but is not called
+from finalize. Resolving *which* `gameId` just ended needs LCU behaviour
+that has not been checked against a live client. The dev portal can invoke
+the fetch by hand (`dev_fetch_match_summary`). Tracked in #52 and #53.
 
 ## 5. Where recording can refuse to start
 

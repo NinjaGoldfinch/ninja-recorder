@@ -84,6 +84,7 @@ function row(
     duration_s: 1500 + id * 97,
     game_id: 5000 + id,
     queue: 420,
+    game_mode: "CLASSIC",
     champion,
     role: "MIDDLE",
     win,
@@ -129,6 +130,10 @@ const FIXTURE_ROWS: RecordingRow[] = [
   row(6, "Renata Glasc", false, { queue: 440 }),
   row(7, "Yasuo", true, { kda_k: 18, kda_d: 4, kda_a: 6 }),
   row(8, "Gwen", null, { win: null, kda_k: null, kda_d: null, kda_a: null }),
+  // Live Client Data only: a Practice Tool game, or one recorded with no
+  // LCU summary. There is no queue id to show, so the card has to fall
+  // back to the mode rather than going blank.
+  row(14, "Ahri", null, { queue: null, game_mode: "PRACTICETOOL", win: null }),
   // What `reconcile` produces for a file dropped into the folder: path and
   // size are all it knows.
   row(9, null, null, {
@@ -136,6 +141,7 @@ const FIXTURE_ROWS: RecordingRow[] = [
     win: null,
     duration_s: null,
     queue: null,
+    game_mode: null,
     kda_k: null,
     kda_d: null,
     kda_a: null,

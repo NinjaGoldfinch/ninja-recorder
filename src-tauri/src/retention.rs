@@ -224,6 +224,7 @@ mod tests {
             pinned,
             size_bytes,
             audio_tracks_json: None,
+            game_mode: None,
         }
     }
 

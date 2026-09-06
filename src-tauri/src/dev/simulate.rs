@@ -371,9 +371,10 @@ pub async fn dev_lcu_get(path: String) -> Result<serde_json::Value, String> {
 
 /// Exercises `lcu::match_data::fetch_match_summary`, which is fully
 /// implemented and unit-tested but called from nowhere in the app — which
-/// is why every `RecordingRow`'s `champion`/`win`/`kda_*` is NULL in
-/// practice. Wiring it into finalize is a separate change; this at least
-/// makes it runnable against a real client.
+/// is why every `RecordingRow`'s `queue`/`role`/`patch`/`game_id` is NULL
+/// in practice. (`champion`/`win`/`kda_*` come from Live Client Data
+/// during the game instead.) Wiring it into finalize is a separate
+/// change; this at least makes it runnable against a real client.
 #[tauri::command]
 pub async fn dev_fetch_match_summary(game_id: i64) -> Result<lcu::MatchSummary, String> {
     let lockfile = lcu::lockfile::discover()

@@ -71,7 +71,7 @@ flowchart TB
 | `lcu/client.rs` | HTTPS + Basic auth against the client's self-signed cert | `LcuHttpClient` |
 | `live_client/client.rs` | Port 2999 HTTPS client | `fetch_all_game_data` |
 | `live_client/poller.rs` | 1 Hz poll loop with exponential backoff (cap 10 s) | `watch` |
-| `live_client/events.rs` | Snapshot → markers, team-advantage samples, video-time alignment | `MarkerTracker`, `TimeAlignment`, `team_diff` |
+| `live_client/events.rs` | Snapshot → markers, team-advantage samples, the match summary, video-time alignment | `MarkerTracker`, `TimeAlignment`, `team_diff`, `self_summary` |
 | `state_machine/machine.rs` | The pure `(state, event) → (state, actions)` function | `StateMachine::handle` |
 | `state_machine/supervisor.rs` | Spawning/aborting watchers, driving the recorder, finalizing | `Supervisor` |
 | `recorder/mod.rs` | The `Recorder` trait and its config/error types | `Recorder`, `RecordConfig` |

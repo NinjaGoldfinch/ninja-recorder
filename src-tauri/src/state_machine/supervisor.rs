@@ -19,7 +19,9 @@
 use super::machine::{Action, GameState, StateEvent, StateMachine};
 use crate::db::{self, Db};
 use crate::lcu;
-use crate::live_client::{self, AlignmentTracker, AllGameData, Marker, MarkerTracker, TimeAlignment};
+use crate::live_client::{
+    self, AlignmentTracker, AllGameData, LiveSummary, Marker, MarkerTracker, TimeAlignment,
+};
 use crate::live_client::team_diff;
 use crate::recorder::{RecordConfig, Recorder};
 use serde::Serialize;
@@ -151,6 +153,11 @@ struct RecordingSession {
     markers: Vec<PendingMarker>,
     samples: Vec<PendingSample>,
     align: AlignmentTracker,
+    /// Champion, KDA, game mode and outcome, accumulated across polls
+    /// rather than read off the final one. `LiveSummary::absorb` explains
+    /// why the last snapshot alone isn't enough — the poll carrying
+    /// `GameEnd` is often the last one that ever succeeds.
+    live: LiveSummary,
     record_started_at: Instant,
     /// Wall-clock capture alongside `record_started_at` — `Instant` is
     /// monotonic only, not convertible to a real timestamp, but the DB's
@@ -159,15 +166,21 @@ struct RecordingSession {
 }
 
 impl RecordingSession {
-    /// Folds one Live Client Data poll into the session: updates the
-    /// game-time-to-video-time alignment, collects any markers new since the
-    /// last poll, and appends an advantage-curve sample.
+    /// Folds one Live Client Data poll into the session: updates the match
+    /// summary the finalize writes, updates the game-time-to-video-time
+    /// alignment, collects any markers new since the last poll, and appends
+    /// an advantage-curve sample.
     ///
     /// `elapsed_s` is how long capture had been running when this poll
     /// landed, passed in rather than read from `record_started_at` so tests
     /// can drive a whole game — loading screen, pauses and all — without
     /// waiting for one.
     fn ingest(&mut self, snapshot: &AllGameData, elapsed_s: f64) {
+        // Before the early-exit-free alignment work below, because it has no
+        // preconditions: champion and mode are readable on the very first
+        // poll, and the outcome on whichever poll happens to carry `GameEnd`.
+        self.live.absorb(live_client::self_summary(snapshot));
+
         let game_time_s = snapshot.game_data.game_time;
         // `None` until the clock is first seen to advance. Markers stamped
         // with it are resolved against the fallback at finalize rather than
@@ -464,9 +477,9 @@ impl Supervisor {
     ///
     /// The elapsed-time read is the only thing this does beyond locking and
     /// delegating: `RecordingSession::ingest` takes it as an argument so the
-    /// marker/sample/alignment logic is a pure function of its inputs and can
-    /// be unit-tested without a clock or a live game (CLAUDE.md: pure
-    /// decision, thin I/O wrapper).
+    /// summary/marker/sample/alignment logic is a pure function of its
+    /// inputs and can be unit-tested without a clock or a live game
+    /// (CLAUDE.md: pure decision, thin I/O wrapper).
     fn on_snapshot(self: &Arc<Self>, snapshot: AllGameData) {
         self.dispatch(StateEvent::LiveClientUp);
 
@@ -514,6 +527,7 @@ impl Supervisor {
                     markers: Vec::new(),
                     samples: Vec::new(),
                     align: AlignmentTracker::new(),
+                    live: LiveSummary::default(),
                     record_started_at: Instant::now(),
                     started_at_millis,
                 });
@@ -538,6 +552,13 @@ impl Supervisor {
     /// even if the row never made it to disk.
     fn stop_recording(&self) {
         let session = self.session.lock().unwrap().take();
+        // Read the clock here rather than after `stop()`: stopping runs the
+        // recorder's shutdown and ffmpeg remux, which takes seconds on a long
+        // game, and every one of them would be counted as footage the library
+        // claims the file contains.
+        let duration_s = session
+            .as_ref()
+            .map(|s| s.record_started_at.elapsed().as_secs_f64());
         match self.recorder.lock().unwrap().stop() {
             Ok(output) => {
                 let path = output.path;
@@ -555,6 +576,11 @@ impl Supervisor {
                     .as_ref()
                     .map(|s| s.started_at_millis)
                     .unwrap_or_else(timestamp_millis);
+                // Whatever the Live Client Data polls managed to establish.
+                // Every field is independently optional, so a game that
+                // ended before the poller ever came up still writes a row —
+                // just an emptier one, exactly as it does today.
+                let live = session.as_ref().map(|s| s.live.clone()).unwrap_or_default();
                 let path_str = path.display().to_string();
                 let size_bytes = std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0);
 
@@ -571,6 +597,13 @@ impl Supervisor {
                 let recording_id = match self.db.insert_recording(&db::NewRecording {
                     path: path_str.clone(),
                     started_at,
+                    duration_s,
+                    champion: live.champion,
+                    win: live.win,
+                    kda_k: live.kda.map(|k| k.kills),
+                    kda_d: live.kda.map(|k| k.deaths),
+                    kda_a: live.kda.map(|k| k.assists),
+                    game_mode: live.game_mode,
                     size_bytes,
                     audio_tracks_json,
                     ..Default::default()
@@ -900,6 +933,7 @@ mod tests {
             markers: Vec::new(),
             samples: Vec::new(),
             align: AlignmentTracker::new(),
+            live: LiveSummary::default(),
             record_started_at: Instant::now(),
             started_at_millis: 0,
         }
@@ -1088,9 +1122,85 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, finalized.recording_id.unwrap());
 
+        // The library's Length column and its Recorded total both read this;
+        // a NULL here is what made every card say "unknown".
+        let duration = rows[0]
+            .duration_s
+            .expect("finalize should record how long the capture ran");
+        assert!(
+            duration >= 0.0,
+            "duration should come from the session clock, got {duration}"
+        );
+
         assert!(
             sup.session.lock().unwrap().is_none(),
             "session should be cleared after stop"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A whole fixture file, unmodified — as against `snapshot` above,
+    /// which narrows the shared fixture down to one poll of a game.
+    fn fixture_snapshot(name: &str) -> AllGameData {
+        let json = match name {
+            "mid-game" => include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../fixtures/live-client/sample-allgamedata.json"
+            )),
+            "won" => include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../fixtures/live-client/game-end-win.json"
+            )),
+            other => panic!("no such fixture: {other}"),
+        };
+        serde_json::from_str(json).unwrap()
+    }
+
+    /// The end-to-end shape of the live metadata path: polls arrive, the
+    /// session accumulates, the finalize writes it. Everything the library
+    /// card shows without the LCU comes through here.
+    #[test]
+    fn a_finalized_recording_carries_what_the_live_client_reported() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+
+        // A mid-game poll, then the one carrying GameEnd — which in a real
+        // game is routinely the last poll that ever succeeds.
+        sup.on_snapshot(fixture_snapshot("mid-game"));
+        sup.on_snapshot(fixture_snapshot("won"));
+
+        sup.stop_recording();
+
+        let rows = sup.db.list_recordings().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].champion.as_deref(), Some("Ahri"));
+        assert_eq!(rows[0].win, Some(true));
+        assert_eq!(rows[0].kda_k, Some(3));
+        assert_eq!(rows[0].kda_d, Some(1));
+        assert_eq!(rows[0].kda_a, Some(2));
+        assert_eq!(rows[0].game_mode.as_deref(), Some("CLASSIC"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A game the poller never reached — it crashed on the loading screen,
+    /// or port 2999 never came up. The footage still has to land in the
+    /// library; it just lands without metadata, as it always has.
+    #[test]
+    fn a_recording_with_no_live_data_still_writes_its_row() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+        sup.stop_recording();
+
+        let rows = sup.db.list_recordings().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].champion, None);
+        assert_eq!(rows[0].win, None);
+        assert_eq!(rows[0].game_mode, None);
+        assert!(
+            rows[0].duration_s.is_some(),
+            "the session clock does not depend on the live client"
         );
 
         std::fs::remove_dir_all(&dir).ok();
@@ -1120,6 +1230,11 @@ mod tests {
             .expect("quitting mid-recording must still write the row");
         assert!(finalized.recording_id.is_some(), "DB write should have succeeded");
         assert!(sup.session.lock().unwrap().is_none(), "session should be cleared");
+
+        // Same finalize path, so the duration must survive the tray's Quit too.
+        let rows = sup.db.list_recordings().unwrap();
+        assert!(rows[0].duration_s.is_some());
+
         std::fs::remove_dir_all(&dir).ok();
     }
 
