@@ -538,6 +538,13 @@ impl Supervisor {
     /// even if the row never made it to disk.
     fn stop_recording(&self) {
         let session = self.session.lock().unwrap().take();
+        // Read the clock here rather than after `stop()`: stopping runs the
+        // recorder's shutdown and ffmpeg remux, which takes seconds on a long
+        // game, and every one of them would be counted as footage the library
+        // claims the file contains.
+        let duration_s = session
+            .as_ref()
+            .map(|s| s.record_started_at.elapsed().as_secs_f64());
         match self.recorder.lock().unwrap().stop() {
             Ok(output) => {
                 let path = output.path;
@@ -571,6 +578,7 @@ impl Supervisor {
                 let recording_id = match self.db.insert_recording(&db::NewRecording {
                     path: path_str.clone(),
                     started_at,
+                    duration_s,
                     size_bytes,
                     audio_tracks_json,
                     ..Default::default()
@@ -1088,6 +1096,16 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, finalized.recording_id.unwrap());
 
+        // The library's Length column and its Recorded total both read this;
+        // a NULL here is what made every card say "unknown".
+        let duration = rows[0]
+            .duration_s
+            .expect("finalize should record how long the capture ran");
+        assert!(
+            duration >= 0.0,
+            "duration should come from the session clock, got {duration}"
+        );
+
         assert!(
             sup.session.lock().unwrap().is_none(),
             "session should be cleared after stop"
@@ -1120,6 +1138,11 @@ mod tests {
             .expect("quitting mid-recording must still write the row");
         assert!(finalized.recording_id.is_some(), "DB write should have succeeded");
         assert!(sup.session.lock().unwrap().is_none(), "session should be cleared");
+
+        // Same finalize path, so the duration must survive the tray's Quit too.
+        let rows = sup.db.list_recordings().unwrap();
+        assert!(rows[0].duration_s.is_some());
+
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -223,7 +223,8 @@ continues, because losing the footage is worse than losing its metadata.
 
 ```mermaid
 flowchart TB
-    A["Recorder::stop()"] --> B{"ok?"}
+    S["take session; read its clock<br/><small>duration_s, before the remux inflates it</small>"] --> A["Recorder::stop()"]
+    A --> B{"ok?"}
     B -->|"no"| Z["log; keep last_finalized empty"]
     B -->|"yes"| C["stat file for size_bytes<br/><small>+ serialize the reported audio layout</small>"]
     C --> D["db.insert_recording"]
