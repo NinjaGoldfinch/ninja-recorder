@@ -697,10 +697,38 @@ checked on an installed build. On macOS in dev the plugin attributes
 notifications to `com.apple.Terminal`, so the wiring is exercisable here even
 though the Windows presentation is not.
 
-**Display-only, deliberately.** A *clickable* toast on Windows needs a
-registered COM notification activator CLSID; the Start-menu shortcut buys
-presentation, not activation callbacks. Nothing promises that clicking a toast
-does anything — the tray icon is the way back in.
+**Display-only, deliberately.** Nothing promises that clicking a toast does
+anything — the tray icon is the way back in.
+
+This was first written down as "a clickable toast needs a registered COM
+notification activator CLSID", which is only half right, and the half it gets
+wrong is the interesting one. Investigated properly against
+`tauri-plugin-notification` 2.4.0:
+
+- A **COM activator CLSID** (`System.AppUserModel.ToastActivatorCLSID` on the
+  Start-menu shortcut) is needed to activate an app that is *not running* —
+  the cold-start case, and a toast clicked out of the Action Center after the
+  process has exited. It is **not** needed for a toast clicked while the app
+  is alive: `ToastNotification.Activated` is an in-process event handler and
+  works without one. This app lives in the tray, so the running case is the
+  normal case, and that route was assumed closed when it isn't.
+- **The plugin is the real blocker, and it closes both routes.** Its Actions
+  API (`registerActionTypes` / `onAction`) is documented mobile-only and
+  exists only in the crate's `mobile.rs`. Its desktop path builds a
+  `notify_rust::Notification` and calls `.show()` inside
+  `tauri::async_runtime::spawn`, discarding the returned `NotificationHandle`
+  — which is precisely the object carrying the activation-event receiver.
+  `notify-rust`'s Windows backend *does* wire `on_activated`; the plugin
+  simply throws the result away, and exposes no hook to get at it.
+
+So activation is unreachable through the plugin at any currently shipping
+version, CLSID or not. Reaching it means bypassing the plugin on Windows and
+driving `tauri-winrt-notification` directly, holding each handle alive and
+pumping its receiver — a block of Windows-only code that neither this
+development machine nor a dev build can verify (the plugin's own AUMID skip
+under `target/debug` is a symptom of the same problem). That was judged not
+worth it for the payoff, which is saving one tray-icon click. Recorded here
+so the question is not re-opened from the same wrong premise.
 
 Everything in `notify.rs` is best-effort: a notification that fails to show is
 a logged warning, never an error that propagates. It is feedback *about* a

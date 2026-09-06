@@ -26,10 +26,18 @@
 //!   so notifications do appear, attributed to Terminal. That makes the wiring
 //!   testable here even though the Windows presentation cannot be.
 //!
-//! **Display-only, by design.** Making a toast *clickable* on Windows needs a
-//! registered COM notification activator CLSID; a Start-menu shortcut alone
-//! buys presentation, not activation callbacks. So nothing here promises that
-//! clicking does anything — the tray icon is the way back into the app.
+//! **Display-only, by design.** Nothing here promises that clicking a toast
+//! does anything — the tray icon is the way back into the app.
+//!
+//! The blocker is the plugin, not, as this comment used to claim, the lack of
+//! a COM notification activator CLSID. A CLSID is only needed to activate an
+//! app that *isn't running*; `ToastNotification.Activated` is an in-process
+//! handler and needs none, and this app is always running. But
+//! `tauri-plugin-notification`'s Actions API is mobile-only, and its desktop
+//! path discards the `NotificationHandle` — the object carrying activation
+//! events — inside a spawned task, so there is nothing to subscribe to.
+//! Full reasoning, and why bypassing the plugin was judged not worth it:
+//! DEVELOPMENT.md's "Notifications" section.
 
 use crate::core::{self, Ctx, NotifyKind};
 use tauri::AppHandle;
