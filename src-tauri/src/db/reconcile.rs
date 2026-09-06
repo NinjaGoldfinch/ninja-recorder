@@ -16,7 +16,14 @@ pub struct ReconcileReport {
     pub imported: usize,
 }
 
-pub fn reconcile(db: &Db, recordings_dir: &Path) -> Result<ReconcileReport, DbError> {
+/// `ffmpeg` is the bundled (or locally installed) binary, if this build has
+/// one. It is used to read a duration out of each file being imported, and
+/// `None` simply leaves that column NULL — see `probe`.
+pub fn reconcile(
+    db: &Db,
+    recordings_dir: &Path,
+    ffmpeg: Option<&Path>,
+) -> Result<ReconcileReport, DbError> {
     let mut report = ReconcileReport::default();
 
     for row in db.list_recordings()? {
@@ -40,10 +47,26 @@ pub fn reconcile(db: &Db, recordings_dir: &Path) -> Result<ReconcileReport, DbEr
             }
 
             let metadata = entry.metadata()?;
+            // Once per file, on the import path only: the `find_by_path`
+            // skip above means a rescan of a settled folder spawns nothing.
+            // A first run against a large existing folder is the case that
+            // costs — one ffmpeg per file, and startup reconcile is inline
+            // (`lib.rs`'s `setup`), so it is startup latency.
+            //
+            // The file may be an in-progress recording that this scan can't
+            // tell apart from an untracked one — the case `insert_recording`
+            // upserts for. Probing one is harmless: ffmpeg either reports a
+            // partial duration or fails, and the finalize's session clock
+            // overwrites it. It does widen the window between the lookup
+            // above and the insert below, so a finalize landing inside it
+            // leaves the probed duration in place; that race predates this
+            // and costs a slightly short length on one recording.
+            let duration_s = ffmpeg.and_then(|ffmpeg| crate::probe::duration_s(ffmpeg, &path));
             db.insert_recording(&NewRecording {
                 path: path_str,
                 started_at: file_modified_millis(&metadata),
                 size_bytes: metadata.len() as i64,
+                duration_s,
                 ..Default::default()
             })?;
             report.imported += 1;
@@ -95,7 +118,7 @@ mod tests {
         })
         .unwrap();
 
-        let report = reconcile(&db, &dir).unwrap();
+        let report = reconcile(&db, &dir, None).unwrap();
         assert_eq!(report.orphans_removed, 1);
         assert_eq!(report.imported, 0);
         assert!(db.list_recordings().unwrap().is_empty());
@@ -109,7 +132,7 @@ mod tests {
         let dir = temp_dir("import");
         std::fs::write(dir.join("untracked.mp4"), b"fake video bytes").unwrap();
 
-        let report = reconcile(&db, &dir).unwrap();
+        let report = reconcile(&db, &dir, None).unwrap();
         assert_eq!(report.orphans_removed, 0);
         assert_eq!(report.imported, 1);
 
@@ -122,12 +145,40 @@ mod tests {
     }
 
     #[test]
+    fn import_without_an_ffmpeg_leaves_duration_unknown() {
+        let db = Db::open_in_memory().unwrap();
+        let dir = temp_dir("no-ffmpeg");
+        std::fs::write(dir.join("untracked.mp4"), b"fake video bytes").unwrap();
+
+        assert_eq!(reconcile(&db, &dir, None).unwrap().imported, 1);
+        assert_eq!(db.list_recordings().unwrap()[0].duration_s, None);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_ffmpeg_that_cannot_be_run_still_imports_the_file() {
+        // The failure-tolerance the issue asks for: reconcile must not
+        // start failing over a cosmetic column. A path that isn't a binary
+        // stands in for every way the probe can come back empty.
+        let db = Db::open_in_memory().unwrap();
+        let dir = temp_dir("broken-ffmpeg");
+        std::fs::write(dir.join("untracked.mp4"), b"fake video bytes").unwrap();
+
+        let report = reconcile(&db, &dir, Some(Path::new("/definitely/not/ffmpeg"))).unwrap();
+        assert_eq!(report.imported, 1);
+        assert_eq!(db.list_recordings().unwrap()[0].duration_s, None);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn ignores_non_video_files() {
         let db = Db::open_in_memory().unwrap();
         let dir = temp_dir("ignore");
         std::fs::write(dir.join("notes.txt"), b"not a video").unwrap();
 
-        let report = reconcile(&db, &dir).unwrap();
+        let report = reconcile(&db, &dir, None).unwrap();
         assert_eq!(report.imported, 0);
         assert!(db.list_recordings().unwrap().is_empty());
 
@@ -148,7 +199,7 @@ mod tests {
         })
         .unwrap();
 
-        let report = reconcile(&db, &dir).unwrap();
+        let report = reconcile(&db, &dir, None).unwrap();
         assert_eq!(report, ReconcileReport::default());
 
         let rows = db.list_recordings().unwrap();
@@ -164,7 +215,7 @@ mod tests {
         let dir = std::env::temp_dir().join("ninja-recorder-reconcile-does-not-exist");
         std::fs::remove_dir_all(&dir).ok();
 
-        let report = reconcile(&db, &dir).unwrap();
+        let report = reconcile(&db, &dir, None).unwrap();
         assert_eq!(report, ReconcileReport::default());
     }
 }

@@ -249,6 +249,17 @@ These are the things nobody has been able to answer by reading the code:
 - [ ] Does `window_capture` forced to WGC (`method=2`) actually produce frames
       for League's borderless and windowed modes?
 - [ ] Does the faststart remux on stop actually run against a real capture?
+- [ ] **Does the duration probe work off the bundled `ffmpeg.exe`?** Drop a
+      handful of video files the app did not record into the recordings
+      folder, press Rescan, and confirm each card shows a real LENGTH rather
+      than `—`. This is the only place `ffmpeg -i` output is parsed
+      ([DEVELOPMENT.md §4.1](../DEVELOPMENT.md)), and the wording it parses
+      has only ever been checked against a hand-written sample.
+- [ ] **Time a first startup against a large existing folder** (a few hundred
+      files, none of them in the DB). The probe spawns one ffmpeg per file on
+      the import branch and startup reconcile is inline, so this is the cost
+      §4.1 says to watch. A settled folder should spawn nothing on the next
+      launch — confirm the second start is fast.
 - [ ] Does the bundled resource path (`target/libobs` → next to the installed
       `.exe`) resolve correctly in an installed build, and does dev mode need
       the staging step to also copy into `target/debug/libobs`?

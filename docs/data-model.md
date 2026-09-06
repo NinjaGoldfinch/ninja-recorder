@@ -230,19 +230,28 @@ Runs at app start and on demand via `rescan_recordings`.
 
 ```mermaid
 flowchart TB
-    START["reconcile(db, recordings_dir)"] --> ROWS["Read all recordings rows"]
+    START["reconcile(db, recordings_dir, ffmpeg)"] --> ROWS["Read all recordings rows"]
     START --> FILES["List *.mp4 / *.mkv in the recordings dir"]
     ROWS --> C1{"Row's file<br/>still exists?"}
     C1 -->|"no"| DROP["Delete the row<br/><small>user deleted the MP4</small>"]
     C1 -->|"yes"| KEEP["Leave the row alone"]
     FILES --> C2{"File has<br/>a row?"}
-    C2 -->|"no"| IMPORT["Insert as an unknown recording<br/><small>started_at from file mtime,<br/>all match metadata NULL</small>"]
+    C2 -->|"no"| PROBE["probe::duration_s<br/><small>ffmpeg -i, parse the Duration line;<br/>None on any failure</small>"]
+    PROBE --> IMPORT["Insert as an unknown recording<br/><small>started_at from file mtime,<br/>duration_s from the probe,<br/>all match metadata NULL</small>"]
     C2 -->|"yes"| SKIP["Nothing to do"]
     DROP --> REP["ReconcileReport<br/><small>orphans_removed, imported</small>"]
     KEEP --> REP
     IMPORT --> REP
     SKIP --> REP
 ```
+
+The duration probe runs **only on the import branch**, so a rescan of a folder
+whose files all have rows spawns nothing. A first run against a large existing
+folder is the case that costs — one ffmpeg per file, and startup reconcile is
+inline in `lib.rs`'s `setup`. Every failure (no ffmpeg bundled, an unreadable
+file, a file still being written, wording the parser doesn't recognize) leaves
+`duration_s` NULL rather than failing the import; see
+[DEVELOPMENT.md §4.1](../DEVELOPMENT.md).
 
 Because imported files can be anything the user dropped in the folder, their
 displayed names are **not** trusted markup — `src/dom.ts`'s `escapeHtml` /
