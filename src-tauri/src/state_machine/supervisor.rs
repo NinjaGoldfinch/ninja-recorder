@@ -3,17 +3,23 @@
 //! drives the `Recorder` and the marker pipeline (`live_client`).
 //! DEVELOPMENT.md §3.4.
 //!
-//! Unlike `machine.rs`, this glue can't be meaningfully unit-tested
+//! Unlike `machine.rs`, most of this glue can't be meaningfully unit-tested
 //! without a real LCU/Live Client Data connection — no League client is
 //! installed on the machine this was written on. It's kept as thin as
 //! possible over the well-tested pure transition function specifically so
 //! the untested surface is small: `execute` mostly just spawns/aborts
 //! tasks and calls the already-tested `Recorder` trait methods.
+//!
+//! The exceptions are the two pieces that hold real logic, and both are
+//! shaped so they can be driven directly: `start_recording`/`stop_recording`
+//! (stub `Recorder` + in-memory DB) and `RecordingSession::ingest`, which
+//! takes elapsed time as an argument rather than reading the clock so a
+//! whole game's poll sequence can be replayed in a test.
 
 use super::machine::{Action, GameState, StateEvent, StateMachine};
 use crate::db::{self, Db};
 use crate::lcu;
-use crate::live_client::{self, AllGameData, Marker, MarkerTracker, TimeAlignment};
+use crate::live_client::{self, AlignmentTracker, AllGameData, Marker, MarkerTracker, TimeAlignment};
 use crate::live_client::team_diff;
 use crate::recorder::{RecordConfig, Recorder};
 use serde::Serialize;
@@ -41,6 +47,55 @@ pub struct SessionSample {
     pub diff: Option<live_client::TeamDiff>,
     pub our_gold: f64,
     pub our_level: i64,
+}
+
+/// A marker as observed, before it has a position in the video.
+///
+/// `video_time_s` is deliberately *not* computed at ingest. The offset
+/// between game time and video time is not knowable on the first poll (the
+/// loading screen's clock is frozen) and does not stay constant afterwards
+/// (pauses, dropped frames) — see `AlignmentTracker`. So each marker carries
+/// the alignment that was in force when it arrived, and the mapping happens
+/// once, at finalize. A marker seen before the clock ever moved has `None`
+/// here and falls back at that point; it is never dropped.
+#[derive(Debug, Clone)]
+struct PendingMarker {
+    marker: Marker,
+    alignment: Option<TimeAlignment>,
+}
+
+impl PendingMarker {
+    fn resolve(&self, fallback: TimeAlignment) -> SessionMarker {
+        let alignment = self.alignment.unwrap_or(fallback);
+        SessionMarker {
+            video_time_s: alignment.video_time_s(self.marker.game_time_s),
+            marker: self.marker.clone(),
+        }
+    }
+}
+
+/// An advantage-curve sample before its video position is known. See
+/// `PendingMarker` for why the mapping is deferred.
+#[derive(Debug, Clone)]
+struct PendingSample {
+    game_time_s: f64,
+    diff: Option<live_client::TeamDiff>,
+    our_gold: f64,
+    our_level: i64,
+    alignment: Option<TimeAlignment>,
+}
+
+impl PendingSample {
+    fn resolve(&self, fallback: TimeAlignment) -> SessionSample {
+        let alignment = self.alignment.unwrap_or(fallback);
+        SessionSample {
+            game_time_s: self.game_time_s,
+            video_time_s: alignment.video_time_s(self.game_time_s),
+            diff: self.diff.clone(),
+            our_gold: self.our_gold,
+            our_level: self.our_level,
+        }
+    }
 }
 
 /// The one seam between the supervisor and whatever is listening. Named so
@@ -93,14 +148,70 @@ pub struct SupervisorStatus {
 
 struct RecordingSession {
     tracker: MarkerTracker,
-    markers: Vec<SessionMarker>,
-    samples: Vec<SessionSample>,
-    alignment: Option<TimeAlignment>,
+    markers: Vec<PendingMarker>,
+    samples: Vec<PendingSample>,
+    align: AlignmentTracker,
     record_started_at: Instant,
     /// Wall-clock capture alongside `record_started_at` — `Instant` is
     /// monotonic only, not convertible to a real timestamp, but the DB's
     /// `recordings.started_at` column needs one.
     started_at_millis: i64,
+}
+
+impl RecordingSession {
+    /// Folds one Live Client Data poll into the session: updates the
+    /// game-time-to-video-time alignment, collects any markers new since the
+    /// last poll, and appends an advantage-curve sample.
+    ///
+    /// `elapsed_s` is how long capture had been running when this poll
+    /// landed, passed in rather than read from `record_started_at` so tests
+    /// can drive a whole game — loading screen, pauses and all — without
+    /// waiting for one.
+    fn ingest(&mut self, snapshot: &AllGameData, elapsed_s: f64) {
+        let game_time_s = snapshot.game_data.game_time;
+        // `None` until the clock is first seen to advance. Markers stamped
+        // with it are resolved against the fallback at finalize rather than
+        // being discarded — bailing out early here would also skip
+        // `tracker.ingest`, so those events would never be deduped and would
+        // reappear as duplicates on the next poll.
+        let alignment = self.align.observe(game_time_s, elapsed_s);
+
+        let fresh = self.tracker.ingest(snapshot);
+        self.markers
+            .extend(fresh.into_iter().map(|marker| PendingMarker { marker, alignment }));
+
+        // Advantage-curve sample. Skipped unless game time actually moved:
+        // the poller re-fetches the same payload during loading screens and
+        // pauses, and a flat run of identical timestamps would draw a
+        // vertical artefact through the graph.
+        let moved = self
+            .samples
+            .last()
+            .is_none_or(|last| game_time_s > last.game_time_s);
+        if moved {
+            let active = snapshot.active_player.as_ref();
+            self.samples.push(PendingSample {
+                game_time_s,
+                diff: team_diff(snapshot),
+                our_gold: active.map(|p| p.current_gold).unwrap_or(0.0),
+                our_level: active.map(|p| p.level).unwrap_or(0),
+                alignment,
+            });
+        }
+    }
+
+    /// Markers with their video positions resolved. Called at finalize, and
+    /// by the dev portal's live readout.
+    fn resolved_markers(&self) -> Vec<SessionMarker> {
+        let fallback = self.align.fallback();
+        self.markers.iter().map(|m| m.resolve(fallback)).collect()
+    }
+
+    /// Samples with their video positions resolved. See `resolved_markers`.
+    fn resolved_samples(&self) -> Vec<SessionSample> {
+        let fallback = self.align.fallback();
+        self.samples.iter().map(|s| s.resolve(fallback)).collect()
+    }
 }
 
 pub struct Supervisor {
@@ -348,8 +459,14 @@ impl Supervisor {
 
     /// Every successful poll: (1) tells the state machine Live Client Data
     /// is reachable — a no-op unless we're still `WaitingForGame`, in
-    /// which case it starts recording; (2) if we're recording, extracts
-    /// and time-aligns any markers new since the last poll.
+    /// which case it starts recording; (2) if we're recording, hands the
+    /// snapshot to the session.
+    ///
+    /// The elapsed-time read is the only thing this does beyond locking and
+    /// delegating: `RecordingSession::ingest` takes it as an argument so the
+    /// marker/sample/alignment logic is a pure function of its inputs and can
+    /// be unit-tested without a clock or a live game (CLAUDE.md: pure
+    /// decision, thin I/O wrapper).
     fn on_snapshot(self: &Arc<Self>, snapshot: AllGameData) {
         self.dispatch(StateEvent::LiveClientUp);
 
@@ -357,40 +474,8 @@ impl Supervisor {
         let Some(session) = guard.as_mut() else {
             return;
         };
-
-        if session.alignment.is_none() {
-            let elapsed = session.record_started_at.elapsed().as_secs_f64();
-            session.alignment = Some(TimeAlignment::new(snapshot.game_data.game_time, elapsed));
-        }
-        let alignment = session.alignment.expect("just set above if it was None");
-
-        let fresh = session.tracker.ingest(&snapshot);
-        session
-            .markers
-            .extend(fresh.into_iter().map(|marker| SessionMarker {
-                video_time_s: alignment.video_time_s(marker.game_time_s),
-                marker,
-            }));
-
-        // Advantage-curve sample. Skipped unless game time actually moved:
-        // the poller re-fetches the same payload during loading screens and
-        // pauses, and a flat run of identical timestamps would draw a
-        // vertical artefact through the graph.
-        let game_time_s = snapshot.game_data.game_time;
-        let moved = session
-            .samples
-            .last()
-            .is_none_or(|last| game_time_s > last.game_time_s);
-        if moved {
-            let active = snapshot.active_player.as_ref();
-            session.samples.push(SessionSample {
-                game_time_s,
-                video_time_s: alignment.video_time_s(game_time_s),
-                diff: team_diff(&snapshot),
-                our_gold: active.map(|p| p.current_gold).unwrap_or(0.0),
-                our_level: active.map(|p| p.level).unwrap_or(0),
-            });
-        }
+        let elapsed_s = session.record_started_at.elapsed().as_secs_f64();
+        session.ingest(&snapshot, elapsed_s);
     }
 
     /// Executes `Action::StartRecording`. The state machine has already
@@ -428,7 +513,7 @@ impl Supervisor {
                     tracker: MarkerTracker::new(),
                     markers: Vec::new(),
                     samples: Vec::new(),
-                    alignment: None,
+                    align: AlignmentTracker::new(),
                     record_started_at: Instant::now(),
                     started_at_millis,
                 });
@@ -456,8 +541,16 @@ impl Supervisor {
         match self.recorder.lock().unwrap().stop() {
             Ok(output) => {
                 let path = output.path;
-                let markers = session.as_ref().map(|s| s.markers.clone()).unwrap_or_default();
-                let samples = session.as_ref().map(|s| s.samples.clone()).unwrap_or_default();
+                // Video positions are computed here, not at ingest: the
+                // alignment is only fully known once the game is over.
+                let markers = session
+                    .as_ref()
+                    .map(|s| s.resolved_markers())
+                    .unwrap_or_default();
+                let samples = session
+                    .as_ref()
+                    .map(|s| s.resolved_samples())
+                    .unwrap_or_default();
                 let started_at = session
                     .as_ref()
                     .map(|s| s.started_at_millis)
@@ -603,11 +696,16 @@ impl Supervisor {
         Some(DevSessionView {
             marker_count: session.markers.len(),
             sample_count: session.samples.len(),
-            alignment_offset_s: session.alignment.map(|a| a.offset_s()),
+            alignment_offset_s: session.align.current_offset_s(),
             elapsed_s: session.record_started_at.elapsed().as_secs_f64(),
             started_at_millis: session.started_at_millis,
-            recent_markers: session.markers.iter().rev().take(20).cloned().collect(),
-            last_sample: session.samples.last().cloned(),
+            recent_markers: session
+                .resolved_markers()
+                .into_iter()
+                .rev()
+                .take(20)
+                .collect(),
+            last_sample: session.resolved_samples().pop(),
         })
     }
 
@@ -618,10 +716,11 @@ impl Supervisor {
     }
 }
 
-/// See `Supervisor::dev_session_view`. `alignment_offset_s` is `None`
-/// until the first snapshot arrives — recording starts before Live Client
-/// Data is reachable, so there is always a window where the session
-/// exists but has no game-time-to-video-time mapping yet.
+/// See `Supervisor::dev_session_view`. `alignment_offset_s` is `None` until
+/// `gameTime` is first seen to advance — recording starts on the loading
+/// screen, where the game clock is frozen at 0, so there is always a window
+/// where the session exists but has no proven game-time-to-video-time
+/// mapping yet. See `AlignmentTracker`.
 #[cfg(feature = "devtools")]
 #[derive(Debug, Clone, Serialize)]
 pub struct DevSessionView {
@@ -774,6 +873,160 @@ mod tests {
         (Supervisor::new(recorder, dir.clone(), db), dir)
     }
 
+    // --- Time alignment across a real poll sequence ----------------------
+    //
+    // `RecordingSession::ingest` takes `elapsed_s` as an argument precisely
+    // so a whole game — loading screen, first blood, a pause — can be driven
+    // here in microseconds. `on_snapshot` adds only the lock and the clock
+    // read on top of this.
+
+    /// One poll, built from the shared Live Client Data fixture with the
+    /// game clock set and the event list narrowed to `event_ids` — so a test
+    /// controls exactly which events the API has revealed by that poll.
+    fn snapshot(game_time_s: f64, event_ids: &[i64]) -> AllGameData {
+        let json = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/live-client/sample-allgamedata.json"
+        ));
+        let mut data: AllGameData = serde_json::from_str(json).unwrap();
+        data.game_data.game_time = game_time_s;
+        data.events.events.retain(|e| event_ids.contains(&e.event_id));
+        data
+    }
+
+    fn empty_session() -> RecordingSession {
+        RecordingSession {
+            tracker: MarkerTracker::new(),
+            markers: Vec::new(),
+            samples: Vec::new(),
+            align: AlignmentTracker::new(),
+            record_started_at: Instant::now(),
+            started_at_millis: 0,
+        }
+    }
+
+    /// The regression this whole mechanism exists for. Recording starts on
+    /// the first successful poll, which lands on the loading screen where
+    /// `gameTime` is a frozen 0 — so the old "measure on the first poll"
+    /// rule computed `0 - 0` and placed every marker at
+    /// `video_time == game_time`, one entire loading screen early.
+    #[test]
+    fn markers_land_after_the_loading_screen_not_at_game_time() {
+        let mut session = empty_session();
+
+        // 11 seconds of loading screen at 1 Hz: the clock is stuck at 0
+        // while the video records the whole thing.
+        for i in 0..11 {
+            session.ingest(&snapshot(0.0, &[]), i as f64);
+        }
+        // The clock starts running.
+        session.ingest(&snapshot(1.0, &[]), 11.0);
+        // First blood, 210.5s of game time later.
+        session.ingest(&snapshot(210.5, &[3]), 221.0);
+
+        let markers = session.resolved_markers();
+        assert_eq!(markers.len(), 1, "the kill should be the only marker");
+        assert_eq!(markers[0].marker.game_time_s, 210.5);
+        assert_eq!(
+            markers[0].video_time_s, 221.0,
+            "the marker belongs at loading screen + game time, not at game time"
+        );
+    }
+
+    /// A marker extracted before the clock was ever seen to move must still
+    /// be kept — and, just as importantly, still be fed to the tracker, or
+    /// its event ID never gets deduped and it reappears on every later poll.
+    #[test]
+    fn markers_seen_during_the_loading_screen_are_kept_and_deduped() {
+        let mut session = empty_session();
+
+        // The event is already in the payload while the clock is frozen.
+        session.ingest(&snapshot(0.0, &[3]), 0.0);
+        assert_eq!(session.markers.len(), 1, "kept, not dropped");
+        assert!(
+            session.markers[0].alignment.is_none(),
+            "nothing was proven about the clock yet"
+        );
+
+        // Re-polled during the same loading screen: no duplicate.
+        session.ingest(&snapshot(0.0, &[3]), 1.0);
+        assert_eq!(session.markers.len(), 1, "the event ID was deduped");
+
+        // The clock moves and proves an offset of 8s.
+        session.ingest(&snapshot(1.0, &[3]), 9.0);
+        assert_eq!(session.markers.len(), 1);
+
+        let markers = session.resolved_markers();
+        assert_eq!(
+            markers[0].video_time_s, 218.5,
+            "resolved against the first proven alignment (210.5 + 8)"
+        );
+    }
+
+    /// The game ended during the loading screen, so no offset was ever
+    /// proven. Markers fall back to a 1:1 mapping rather than being lost.
+    #[test]
+    fn markers_survive_a_game_whose_clock_never_moves() {
+        let mut session = empty_session();
+        for i in 0..5 {
+            session.ingest(&snapshot(0.0, &[3]), i as f64);
+        }
+
+        let markers = session.resolved_markers();
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0].video_time_s, 210.5, "1:1 fallback");
+    }
+
+    /// Deferring the mapping is what makes this possible: a pause freezes
+    /// the game clock while the video keeps rolling, so markers after it need
+    /// a larger offset than markers before it. A single offset measured once
+    /// cannot express that.
+    #[test]
+    fn markers_on_either_side_of_a_pause_use_different_offsets() {
+        let mut session = empty_session();
+
+        session.ingest(&snapshot(0.0, &[]), 5.0);
+        // Clock live: offset 5s. A kill at 210.5 lands at 215.5.
+        session.ingest(&snapshot(210.5, &[3]), 215.5);
+
+        // 60s paused — the clock does not advance, so no re-derivation.
+        for i in 0..60 {
+            session.ingest(&snapshot(210.5, &[]), 216.5 + i as f64);
+        }
+
+        // Resumed. A dragon at 540 is now 60s further into the video than a
+        // fixed offset would have put it.
+        session.ingest(&snapshot(540.0, &[8]), 605.0);
+
+        let markers = session.resolved_markers();
+        assert_eq!(markers.len(), 2);
+        assert_eq!(markers[0].video_time_s, 215.5, "before the pause");
+        assert_eq!(
+            markers[1].video_time_s, 605.0,
+            "after the pause: 540 + 65, not 540 + 5"
+        );
+    }
+
+    /// Samples are time-aligned the same way, and the advantage graph is
+    /// drawn against `video_time_s`, so the same bug skewed the curve.
+    #[test]
+    fn samples_are_aligned_the_same_way_as_markers() {
+        let mut session = empty_session();
+        for i in 0..10 {
+            session.ingest(&snapshot(0.0, &[]), i as f64);
+        }
+        session.ingest(&snapshot(1.0, &[]), 10.0);
+        session.ingest(&snapshot(2.0, &[]), 11.0);
+
+        let samples = session.resolved_samples();
+        // One frozen-clock sample, then one per advancing poll.
+        assert_eq!(samples.len(), 3);
+        assert_eq!(samples[0].game_time_s, 0.0);
+        assert_eq!(samples[0].video_time_s, 9.0, "fallback: first proven offset");
+        assert_eq!(samples[2].game_time_s, 2.0);
+        assert_eq!(samples[2].video_time_s, 11.0);
+    }
+
     #[test]
     fn stop_recording_writes_recording_and_markers_to_db() {
         let (sup, dir) = test_supervisor();
@@ -786,13 +1039,13 @@ mod tests {
         {
             let mut guard = sup.session.lock().unwrap();
             let session = guard.as_mut().unwrap();
-            session.markers.push(SessionMarker {
+            session.markers.push(PendingMarker {
                 marker: Marker {
                     kind: MarkerKind::Kill,
                     game_time_s: 12.5,
                     payload: serde_json::json!({ "victim": "EnemyA" }),
                 },
-                video_time_s: 15.0,
+                alignment: Some(TimeAlignment::new(12.5, 15.0)),
             });
         }
 
@@ -800,9 +1053,8 @@ mod tests {
         {
             let mut guard = sup.session.lock().unwrap();
             let session = guard.as_mut().unwrap();
-            session.samples.push(SessionSample {
+            session.samples.push(PendingSample {
                 game_time_s: 12.0,
-                video_time_s: 14.5,
                 diff: Some(live_client::TeamDiff {
                     our_team: "CHAOS".into(),
                     gold_diff_est: -1250.0,
@@ -811,6 +1063,7 @@ mod tests {
                 }),
                 our_gold: 450.0,
                 our_level: 11,
+                alignment: Some(TimeAlignment::new(12.0, 14.5)),
             });
         }
 

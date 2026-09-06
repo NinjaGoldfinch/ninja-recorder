@@ -415,19 +415,23 @@ impl MarkerTracker {
 /// into the recording). DEVELOPMENT.md §3.2: recording starts on the
 /// loading screen, before `gameTime` reaches 0, so early-game markers need
 /// an offset rather than a direct 1:1 mapping.
-#[derive(Debug, Clone, Copy)]
+///
+/// One of these describes the mapping *at one instant*. It is not the whole
+/// story for a recording: see `AlignmentTracker`, which produces a fresh one
+/// per poll because the true offset moves during a game.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TimeAlignment {
     offset_s: f64,
 }
 
 impl TimeAlignment {
-    /// `first_game_time_s` is the `gameTime` seen on the first successful
-    /// poll after recording started; `elapsed_since_record_start_s` is how
-    /// long recording had already been running at that poll (typically a
-    /// few seconds — poll interval plus encoder spin-up).
-    pub fn new(first_game_time_s: f64, elapsed_since_record_start_s: f64) -> Self {
+    /// `game_time_s` and `elapsed_since_record_start_s` must be sampled at
+    /// the *same* instant — the game clock the poll reported, and how long
+    /// capture had been running when that poll landed. Any skew between the
+    /// two lands directly in the offset.
+    pub fn new(game_time_s: f64, elapsed_since_record_start_s: f64) -> Self {
         Self {
-            offset_s: elapsed_since_record_start_s - first_game_time_s,
+            offset_s: elapsed_since_record_start_s - game_time_s,
         }
     }
 
@@ -439,12 +443,86 @@ impl TimeAlignment {
         (game_time_s + self.offset_s).max(0.0)
     }
 
-    /// The raw offset, for the dev portal's live-session readout. Negative
-    /// means recording started *after* game time 0 (a reconnect); positive
-    /// is the normal loading-screen case.
-    #[cfg(feature = "devtools")]
-    pub fn offset_s(&self) -> f64 {
+    /// The raw offset, for assertions. Negative means recording started
+    /// *after* game time 0 (a reconnect); positive is the normal
+    /// loading-screen case.
+    ///
+    /// `#[cfg(test)]` because nothing in production reads the offset on its
+    /// own — callers map through `video_time_s`, and the dev portal reads
+    /// `AlignmentTracker::current_offset_s`. CI's clippy runs without
+    /// `--all-targets`, so an ungated method only the tests call is dead
+    /// code there and `-D warnings` fails the build (CLAUDE.md).
+    #[cfg(test)]
+    fn offset_s(&self) -> f64 {
         self.offset_s
+    }
+}
+
+/// Follows the game-time-to-video-time offset across a whole recording,
+/// re-deriving it on every poll that proves the game clock is running.
+///
+/// Two problems rule out measuring the offset once, on the first poll:
+///
+/// 1. **The loading screen reports a frozen `gameTime` of 0.** Recording
+///    starts on the first successful poll, so the first poll's `elapsed` is
+///    ~0 too, and `0 - 0` says the video and the game start together. It
+///    doesn't: the video contains the entire loading screen ahead of game
+///    time 0, so every marker lands one load too early.
+/// 2. **A single offset drifts.** A game pause freezes the clock while the
+///    video keeps rolling, and dropped encoder frames skew the mapping over
+///    a 40-minute game. An offset measured once at minute 0 is wrong by
+///    minute 40.
+///
+/// So the tracker waits for `gameTime` to *advance* — proving it is a clock
+/// and not the loading screen's frozen 0 — and from then on re-measures on
+/// every advancing poll. Markers are stamped with the alignment in force
+/// when they were observed, which is at most one poll (~1 s) old.
+#[derive(Debug, Clone, Default)]
+pub struct AlignmentTracker {
+    last_game_time_s: Option<f64>,
+    current: Option<TimeAlignment>,
+    first: Option<TimeAlignment>,
+}
+
+impl AlignmentTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Feeds one poll: the `gameTime` it reported and how long capture had
+    /// been running when it landed. Returns the alignment to stamp on
+    /// anything observed at this poll, or `None` while the clock is still
+    /// frozen and no offset has ever been proven.
+    pub fn observe(&mut self, game_time_s: f64, elapsed_s: f64) -> Option<TimeAlignment> {
+        // Strictly greater: a run of identical timestamps is the loading
+        // screen (or a pause), and re-deriving across it would fold the
+        // frozen interval into the offset.
+        if self.last_game_time_s.is_some_and(|last| game_time_s > last) {
+            let alignment = TimeAlignment::new(game_time_s, elapsed_s);
+            self.current = Some(alignment);
+            self.first.get_or_insert(alignment);
+        }
+        // Tracked even while frozen, so the *next* poll can tell it moved.
+        // A reconnect's first poll reports a live clock already at, say,
+        // 600 — indistinguishable from a frozen one until it ticks, which
+        // costs one poll of accuracy rather than the minutes a wrong offset
+        // would cost.
+        self.last_game_time_s = Some(game_time_s);
+        self.current
+    }
+
+    /// The alignment for anything observed *before* the clock was ever seen
+    /// to advance: the first one proven, or — if it never advanced, because
+    /// the game ended during loading — a 1:1 mapping. Both beat dropping the
+    /// markers.
+    pub fn fallback(&self) -> TimeAlignment {
+        self.first.unwrap_or(TimeAlignment { offset_s: 0.0 })
+    }
+
+    /// The offset currently in force, for the dev portal's live readout.
+    #[cfg(feature = "devtools")]
+    pub fn current_offset_s(&self) -> Option<f64> {
+        self.current.map(|a| a.offset_s)
     }
 }
 
@@ -574,6 +652,100 @@ mod tests {
     fn time_alignment_never_returns_negative() {
         let alignment = TimeAlignment::new(5.0, 0.0);
         assert_eq!(alignment.video_time_s(0.0), 0.0);
+    }
+
+    // --- AlignmentTracker ------------------------------------------------
+
+    /// The bug this type exists for: recording begins on the first poll, so
+    /// that poll sees `elapsed ~= 0` *and* the loading screen's frozen
+    /// `gameTime` of 0. Measuring there yields offset 0 and puts every
+    /// marker one loading screen early.
+    #[test]
+    fn tracker_ignores_the_loading_screens_frozen_clock() {
+        let mut tracker = AlignmentTracker::new();
+
+        // 12 seconds of loading screen, polled at 1 Hz, clock stuck at 0.
+        for i in 0..12 {
+            assert_eq!(
+                tracker.observe(0.0, i as f64),
+                None,
+                "a frozen clock must not produce an alignment"
+            );
+        }
+
+        // The clock ticks: 12s of video are already recorded at game time 1.
+        let alignment = tracker.observe(1.0, 12.0).expect("the clock advanced");
+        assert_eq!(alignment.offset_s(), 11.0);
+        assert_eq!(alignment.video_time_s(0.0), 11.0, "game start is 11s in");
+        assert_eq!(alignment.video_time_s(60.0), 71.0);
+    }
+
+    /// A game pause freezes `gameTime` while the video keeps rolling. A
+    /// once-measured offset would put every post-pause marker early by the
+    /// length of the pause; re-deriving on the next advancing poll absorbs
+    /// it.
+    #[test]
+    fn tracker_reabsorbs_the_offset_after_a_pause() {
+        let mut tracker = AlignmentTracker::new();
+        tracker.observe(0.0, 5.0);
+        let before = tracker.observe(1.0, 6.0).expect("the clock advanced");
+        assert_eq!(before.offset_s(), 5.0);
+
+        // 30s paused: elapsed climbs, the clock does not.
+        for i in 0..30 {
+            assert_eq!(
+                tracker.observe(1.0, 7.0 + i as f64).map(|a| a.offset_s()),
+                Some(5.0),
+                "a frozen clock holds the last good offset"
+            );
+        }
+
+        let after = tracker.observe(2.0, 37.0).expect("the clock advanced");
+        assert_eq!(after.offset_s(), 35.0, "the pause is now in the offset");
+    }
+
+    /// Reconnecting into a game in progress: the first poll already reports
+    /// a running clock, which is indistinguishable from a frozen one until
+    /// it ticks. Latching one poll later costs sub-second accuracy.
+    #[test]
+    fn tracker_handles_a_reconnect_one_poll_late() {
+        let mut tracker = AlignmentTracker::new();
+        assert_eq!(tracker.observe(600.0, 0.2), None);
+
+        let alignment = tracker.observe(601.0, 1.2).expect("the clock advanced");
+        assert!((alignment.offset_s() - -599.8).abs() < 1e-9);
+        assert!(
+            (alignment.video_time_s(601.0) - 1.2).abs() < 1e-9,
+            "game time 601 is 1.2s into this recording"
+        );
+    }
+
+    /// Markers observed before the clock moved still have to land somewhere.
+    #[test]
+    fn tracker_falls_back_to_the_first_proven_alignment() {
+        let mut tracker = AlignmentTracker::new();
+        tracker.observe(0.0, 8.0);
+        tracker.observe(1.0, 9.0);
+        tracker.observe(400.0, 408.0);
+
+        assert_eq!(
+            tracker.fallback().offset_s(),
+            8.0,
+            "early markers use the first offset proven, not the latest"
+        );
+    }
+
+    /// The game ended during the loading screen, so the clock never moved
+    /// and no offset was ever proven. A 1:1 mapping is a guess, but keeping
+    /// the markers beats dropping them.
+    #[test]
+    fn tracker_falls_back_to_identity_when_the_clock_never_moves() {
+        let mut tracker = AlignmentTracker::new();
+        tracker.observe(0.0, 3.0);
+        tracker.observe(0.0, 4.0);
+
+        assert_eq!(tracker.fallback().offset_s(), 0.0);
+        assert_eq!(tracker.fallback().video_time_s(0.0), 0.0);
     }
 
     // --- team_diff -------------------------------------------------------

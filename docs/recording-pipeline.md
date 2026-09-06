@@ -155,7 +155,7 @@ Recording starts on the loading screen — before game time 0 — so event times
 and video times do not share an origin.
 
 ```
-offset = elapsed_since_record_start_at_first_poll − first_observed_gameTime
+offset     = elapsed_since_record_start − gameTime   (sampled at one poll)
 video_time = max(0, game_time + offset)
 ```
 
@@ -173,6 +173,47 @@ recording   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓�
    Recorder::start    gameTime 0           kill at gameTime 12
                       (offset = +8s)       → video time 20s
 ```
+
+#### Which poll the offset is measured at
+
+The offset above is only correct if `elapsed` and `gameTime` are sampled at
+the same instant *and* `gameTime` is really a clock. Neither holds on the
+first poll:
+
+- Recording starts **on** the first successful poll (`WaitingForGame +
+  LiveClientUp -> StartRecording`, dispatched synchronously), so `elapsed` at
+  that poll is ~0.
+- That poll lands on the loading screen, where `gameTime` is a frozen `0`
+  rather than a running clock.
+
+`0 − 0 = 0` claims the video and the game start together, which puts every
+marker one whole loading screen early. So `AlignmentTracker` waits for
+`gameTime` to **advance** — proving it is a clock and not the frozen 0 —
+before measuring anything, and then re-measures on **every** advancing poll.
+Re-measuring also absorbs drift a single offset cannot: a game pause freezes
+the clock while the video keeps rolling, and dropped encoder frames skew a
+fixed offset over a long game.
+
+```mermaid
+flowchart TB
+    P["poll: (gameTime, elapsed)"] --> Q{"gameTime ><br/>previous gameTime?"}
+    Q -->|"no — loading screen,<br/>or paused"| H["hold the last alignment<br/><small>None if there isn't one yet</small>"]
+    Q -->|"yes — the clock is running"| N["alignment = elapsed − gameTime<br/><small>remembered as 'first' if it is</small>"]
+    H --> S["stamp markers/samples from<br/>this poll with that alignment"]
+    N --> S
+    S --> F["finalize: video_time = game_time + alignment<br/><small>alignment ?? first proven ?? 0</small>"]
+```
+
+**Markers are stored with `game_time_s` and mapped at finalize**, not at
+ingest. A marker seen before the clock ever moved has no alignment yet; it is
+still collected (and still fed to `MarkerTracker`, so its event ID is deduped)
+and resolved at finalize against the first alignment the recording ever
+proved. If the clock never moved at all — the game ended during loading —
+the fallback is a 1:1 mapping. Nothing is dropped.
+
+A reconnect's first poll reports a clock already at, say, 600, which is
+indistinguishable from a frozen one until it ticks. That costs one poll of
+accuracy (sub-second) instead of the minutes a wrong offset would cost.
 
 ## 4. Finalize
 
