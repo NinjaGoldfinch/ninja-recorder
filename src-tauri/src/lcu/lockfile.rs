@@ -110,8 +110,39 @@ struct RiotClientInstalls {
     associated_client: std::collections::HashMap<String, String>,
 }
 
+/// Cached wrapper around `read_windows_install_dir`. `candidate_paths` is
+/// called once per `watch` tick — every 2 s for the app's lifetime — and the
+/// uncached lookup reads *and JSON-parses* `RiotClientInstalls.json` every
+/// time, whether or not League is even installed. That is pure waste against
+/// DEVELOPMENT.md §1.2's idle-CPU target.
+///
+/// A resolved install directory is cached for the process's lifetime: League
+/// cannot move itself while we are running, and if it somehow did, the
+/// lockfile under the old path simply stops appearing. A *failed* lookup is
+/// only trusted for `MISS_TTL`, so installing League while the app is already
+/// running is still picked up.
 #[cfg(target_os = "windows")]
 fn windows_install_dir_from_installs_json() -> Option<PathBuf> {
+    use std::sync::Mutex;
+    use std::time::Instant;
+
+    const MISS_TTL: Duration = Duration::from_secs(60);
+    static CACHE: Mutex<Option<(Instant, Option<PathBuf>)>> = Mutex::new(None);
+
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((resolved_at, cached)) = cache.as_ref() {
+        if cached.is_some() || resolved_at.elapsed() < MISS_TTL {
+            return cached.clone();
+        }
+    }
+
+    let fresh = read_windows_install_dir();
+    *cache = Some((Instant::now(), fresh.clone()));
+    fresh
+}
+
+#[cfg(target_os = "windows")]
+fn read_windows_install_dir() -> Option<PathBuf> {
     let program_data = std::env::var("PROGRAMDATA").ok()?;
     let installs_path = PathBuf::from(program_data)
         .join("Riot Games")
@@ -143,18 +174,51 @@ pub enum LockfileState {
     Present(LockfileInfo),
 }
 
-/// Polls for lockfile appear/disappear/change every `interval`, invoking
-/// `on_change` whenever the state actually transitions (not on every
-/// poll). Runs until the calling task is aborted — callers spawn this via
-/// `tauri::async_runtime::spawn` and let it live for the app's lifetime.
+/// How long to wait before the next `discover()`, given how many polls in a
+/// row have found no lockfile.
+///
+/// This watch loop is the app's only unconditional background work — it runs
+/// from launch to exit whether or not League is installed, so at a flat 2 s it
+/// is the floor under idle CPU (DEVELOPMENT.md §1.2). But it is also how the
+/// state machine learns the client exists, so it cannot simply be slow: a
+/// grace window keeps the base cadence across a client *restart* (the lockfile
+/// vanishing and reappearing within a few seconds), and only a sustained
+/// absence — nobody is playing — ramps down.
+///
+/// With the caller's 2 s base that is: 2 s for the first 5 misses, then
+/// 4 s, 8 s, 16 s, and 30 s thereafter, reaching the cap ~38 s after the
+/// client disappears. Pure so it can be tested without a clock.
+fn poll_delay(base: Duration, consecutive_misses: u32) -> Duration {
+    /// Misses tolerated at the base cadence before ramping down.
+    const GRACE: u32 = 5;
+    const CAP: Duration = Duration::from_secs(30);
+
+    if consecutive_misses <= GRACE {
+        return base;
+    }
+    // Shift is clamped well below u32's width; `base * factor` cannot
+    // overflow for any sane base because of the `.min(CAP)`.
+    let factor = 1u32 << (consecutive_misses - GRACE).min(6);
+    base.saturating_mul(factor).min(CAP)
+}
+
+/// Polls for lockfile appear/disappear/change, invoking `on_change` whenever
+/// the state actually transitions (not on every poll). `interval` is the base
+/// cadence used while the client is running; see `poll_delay` for how it backs
+/// off while the client is absent. Runs until the calling task is aborted —
+/// callers spawn this via `tauri::async_runtime::spawn` and let it live for
+/// the app's lifetime.
 pub async fn watch<F>(interval: Duration, mut on_change: F)
 where
     F: FnMut(LockfileState) + Send,
 {
     let mut last: Option<LockfileState> = None;
-    let mut ticker = tokio::time::interval(interval);
+    let mut misses: u32 = 0;
     loop {
-        ticker.tick().await;
+        // Discover first, then sleep: `tokio::time::interval`'s first tick
+        // completes immediately, and the state machine depends on learning
+        // about an already-running client at startup rather than one
+        // interval later.
         let current = match discover() {
             Ok(Some(info)) => LockfileState::Present(info),
             Ok(None) => LockfileState::Absent,
@@ -162,10 +226,16 @@ where
             // for this tick, retry next tick rather than erroring out.
             Err(_) => LockfileState::Absent,
         };
+        if matches!(current, LockfileState::Present(_)) {
+            misses = 0;
+        } else {
+            misses = misses.saturating_add(1);
+        }
         if last.as_ref() != Some(&current) {
             on_change(current.clone());
             last = Some(current);
         }
+        tokio::time::sleep(poll_delay(interval, misses)).await;
     }
 }
 
@@ -232,5 +302,40 @@ mod tests {
     fn candidate_paths_without_override_has_platform_defaults() {
         let paths = candidate_paths(None);
         assert!(!paths.is_empty(), "expected at least one platform default path");
+    }
+
+    #[test]
+    fn poll_delay_holds_base_cadence_while_the_client_is_present() {
+        let base = Duration::from_secs(2);
+        assert_eq!(poll_delay(base, 0), base);
+    }
+
+    #[test]
+    fn poll_delay_holds_base_cadence_through_a_client_restart() {
+        // A client restart makes the lockfile vanish for a few polls. Backing
+        // off during that window would delay noticing it came back.
+        let base = Duration::from_secs(2);
+        for misses in 1..=5 {
+            assert_eq!(poll_delay(base, misses), base, "miss {misses}");
+        }
+    }
+
+    #[test]
+    fn poll_delay_ramps_down_once_the_client_is_sustainedly_absent() {
+        let base = Duration::from_secs(2);
+        assert_eq!(poll_delay(base, 6), Duration::from_secs(4));
+        assert_eq!(poll_delay(base, 7), Duration::from_secs(8));
+        assert_eq!(poll_delay(base, 8), Duration::from_secs(16));
+    }
+
+    #[test]
+    fn poll_delay_is_capped_and_never_overflows() {
+        let base = Duration::from_secs(2);
+        let cap = Duration::from_secs(30);
+        assert_eq!(poll_delay(base, 9), cap);
+        assert_eq!(poll_delay(base, 100), cap);
+        assert_eq!(poll_delay(base, u32::MAX), cap);
+        // A pathological base must still clamp rather than panic.
+        assert_eq!(poll_delay(Duration::MAX, u32::MAX), cap);
     }
 }
