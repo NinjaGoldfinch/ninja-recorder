@@ -64,7 +64,7 @@ expires on its own and cannot be published by accident.
 | **Recorder** | `start_recording` / `stop_recording` / `is_recording` directly, without a game |
 | **Fixtures** | Read/write `fixtures/`, toggle live capture at runtime — the replay mode the fixture strategy always called for. Capture is **on by default until v1.0** (DEVELOPMENT.md §3.3), so this panel is now mostly for turning it *off* |
 | **Diagnostics** | A recording's card tells you what it contains; nothing told you what the finalize *observed*. Reads `recordings.diagnostics_json` (migration 7) for the 25 most recent and leads with what is wrong or missing — never matched in `allPlayers`, no game id, an alignment that was never proven, or polling that stopped well before the recorder did (the #74 fingerprint). A row of eleven numbers is not an answer |
-| **Log** | Two logs: the backend's own file — the one a release build writes too, since a shipped app has no console — and the portal's IPC calls. Filter by level and tag, search, switch between rotated files. `live-poll` and `libobs` are hidden by default: at 1 Hz they bury everything else. Filtering runs in Rust because the file is capped at 5 MiB |
+| **Log** | Two logs: the backend's own file — the one a release build writes too, since a shipped app has no console — and the portal's IPC calls. Filter by level and tag, search, switch between rotated files. `live-poll` and `libobs` are hidden by default: at 1 Hz they bury everything else. Filtering runs in Rust because the file is capped at 5 MiB. On Windows it also lists `libobs.log`, which the capture worker writes; those lines carry no level, so the level filter lets level-less lines through rather than emptying the view |
 
 ## What the portal drove back into the app
 

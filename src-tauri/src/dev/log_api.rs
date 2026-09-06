@@ -75,25 +75,47 @@ pub struct LogPage {
 #[tauri::command]
 pub fn dev_log_files() -> Result<Vec<LogFileInfo>, String> {
     let dir = crate::log::dir().ok_or_else(|| "logging is not initialized".to_string())?;
-    Ok(crate::log::file_names()
-        .into_iter()
+    Ok(log_files_in(&dir))
+}
+
+/// Our own files first, in rotation order, then anything else the
+/// directory holds — on Windows that is `libobs.log`, which the capture
+/// worker writes and which nothing else would list (#69).
+fn log_files_in(dir: &std::path::Path) -> Vec<LogFileInfo> {
+    let ours = crate::log::file_names();
+    let mut files: Vec<LogFileInfo> = ours
+        .iter()
         .enumerate()
-        .map(|(i, name)| {
-            let path = dir.join(&name);
-            let meta = std::fs::metadata(&path).ok();
-            LogFileInfo {
-                exists: meta.is_some(),
-                bytes: meta.as_ref().map(|m| m.len()).unwrap_or(0),
-                modified_millis: meta
-                    .as_ref()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_millis() as i64),
-                active: i == 0,
-                name,
-            }
-        })
-        .collect())
+        .map(|(i, name)| describe(dir, name.clone(), i == 0))
+        .collect();
+
+    // Sorted, because `read_dir` order is whatever the filesystem says and
+    // a list that reshuffles between reloads is one nobody can use.
+    let mut extra: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.ends_with(".log") && !ours.contains(name))
+        .collect();
+    extra.sort();
+    files.extend(extra.into_iter().map(|name| describe(dir, name, false)));
+    files
+}
+
+fn describe(dir: &std::path::Path, name: String, active: bool) -> LogFileInfo {
+    let meta = std::fs::metadata(dir.join(&name)).ok();
+    LogFileInfo {
+        exists: meta.is_some(),
+        bytes: meta.as_ref().map(|m| m.len()).unwrap_or(0),
+        modified_millis: meta
+            .as_ref()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64),
+        active,
+        name,
+    }
 }
 
 /// One filtered window of a log file.
@@ -105,18 +127,20 @@ pub fn dev_log_files() -> Result<Vec<LogFileInfo>, String> {
 pub fn dev_read_log(query: LogQuery) -> Result<LogPage, String> {
     let dir = crate::log::dir().ok_or_else(|| "logging is not initialized".to_string())?;
 
-    let names = crate::log::file_names();
     let name = match query.file {
         Some(requested) => {
-            // Only files this module writes. The name reaches us from the
-            // webview, and joining an arbitrary string onto a directory is
-            // how a log viewer turns into a file reader.
-            if !names.contains(&requested) {
+            // Only a file this listing already offered. The name reaches
+            // us from the webview, and joining an arbitrary string onto a
+            // directory is how a log viewer turns into a file reader —
+            // matching against the enumeration rules out both traversal
+            // and anything outside this directory, without a separate
+            // sanitizer to get subtly wrong.
+            if !log_files_in(&dir).iter().any(|f| f.name == requested) {
                 return Err(format!("not a log file: {requested}"));
             }
             requested
         }
-        None => names[0].clone(),
+        None => crate::log::file_names()[0].clone(),
     };
 
     let path = dir.join(&name);

@@ -90,6 +90,9 @@ windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Media_Audio",
     "Win32_System_Com",
+    # SetStdHandle, for pointing the libobs worker's inherited stderr at a
+    # file it can actually be read from (recorder/libobs/worker_log.rs).
+    "Win32_System_Console",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Variant",
     "Win32_UI_Shell_PropertiesSystem",

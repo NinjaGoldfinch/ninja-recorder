@@ -813,6 +813,41 @@ The *parsing* lives in `log.rs` beside the formatter that defines the format, no
 
 Levels include and tags exclude, which looks inconsistent and is not. Levels are four known values a panel can list up front, so ticking them is an inclusion. Tags are discovered *from the file*, so a panel cannot say "everything except the noisy ones" as an inclusion list until it has already read the file once — and the noisy ones (`live-poll`, `libobs`) are exactly what should be hidden on the very first render.
 
+### The libobs worker's log
+
+libobs does not run in this process. `libobs-recorder` spawns
+`extprocess_recorder.exe` and calls `obs_startup` **there**, so
+`base_set_log_handler` called from here would attach a handler to a libobs
+instance we never initialize — it would compile, run, and capture nothing.
+The symbol being present in `libobs-sys` is what makes that look like a
+local change; it is not one.
+
+What the worker does do is write to stderr, via libobs's default handler.
+The fork's `ipc-link` spawns it with stdin and stdout piped — those carry
+the JSON IPC protocol — and **stderr inherited**. So the messages already
+arrive at our stderr, which in a release build has no console behind it.
+
+So `recorder::libobs::worker_log` points this process's stderr at
+`logs/libobs.log` before the worker is spawned, and the child inherits it.
+No change to the fork, no IPC change, and — a file rather than a pipe — no
+way to block the worker by failing to drain it, which the piped version
+would risk. One previous session is kept as `libobs.1.log`: appending
+forever grows unbounded, and truncating outright loses the session that
+crashed, which is the one anybody is looking for.
+
+Only in builds with no console (`debug_assertions` is exactly the condition
+`main.rs` gates `windows_subsystem` on), because taking stderr away from a
+`tauri:dev` terminal would be a downgrade. `NINJA_RECORDER_LIBOBS_LOG=1`
+forces it on so the path is exercisable from a dev build.
+
+The costs, stated: the lines land in their own file rather than interleaved
+with ours, and they carry no level to filter on, because the formatting is
+libobs's and not ours. The dev portal lists the file alongside ours and its
+level filter deliberately lets level-less lines through, or selecting it
+would show an empty view. Both costs are what a handler *inside* the worker
+would fix, and that is a change to the fork — worth making once a real
+capture shows it is needed (#69).
+
 ### Why not `tracing`
 
 `tracing`, and `log` + `fern`, both do this and more. What was needed was a timestamp, a level, a tag and a file that rotates; `tracing`'s value is spans and structured fields, and nothing in this app has asked for either. This project has kept its dependency tree deliberately small (§1.2), and a date crate would have been a second dependency purely to format a timestamp — so `log.rs` hand-rolls Howard Hinnant's `civil_from_days`, which is the same closed form a date crate would run, and pins it with tests for the leap-year and century rules. Revisit when something genuinely wants spans.

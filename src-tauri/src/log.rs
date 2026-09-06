@@ -376,7 +376,15 @@ pub fn line_matches(
     hidden_tags: &[String],
     search: &str,
 ) -> bool {
-    if !levels.is_empty() && !levels.iter().any(|l| l.eq_ignore_ascii_case(&parsed.level)) {
+    // A line with no level is one that did not fit our format at all — a
+    // panic backtrace, or the libobs worker's own file, whose every line
+    // looks like this. Filtering those out by a level they do not have
+    // would empty the whole view, and they are usually the interesting
+    // ones.
+    if !parsed.level.is_empty()
+        && !levels.is_empty()
+        && !levels.iter().any(|l| l.eq_ignore_ascii_case(&parsed.level))
+    {
         return false;
     }
     if hidden_tags.iter().any(|t| t.eq_ignore_ascii_case(&parsed.tag)) {
@@ -395,9 +403,13 @@ pub fn line_matches(
     true
 }
 
-/// Where the log is being written, so the portal can list the rotated
-/// files beside the active one. `None` before `init`.
-#[cfg(feature = "devtools")]
+/// Where the log is being written. `None` before `init`.
+///
+/// Two callers, which is why the gate is wider than the rest of this
+/// section: the dev portal lists the files here, and on Windows the
+/// libobs worker's stderr is pointed at this directory
+/// (`recorder::libobs::worker_log`) so its log lands beside ours.
+#[cfg(any(feature = "devtools", target_os = "windows"))]
 pub fn dir() -> Option<PathBuf> {
     let sink = SINK.get()?;
     let sink = match sink.lock() {
@@ -760,6 +772,21 @@ mod tests {
         assert!(line_matches(&line, &[], &["libobs".into()], ""));
         // Both filters apply, not either.
         assert!(!line_matches(&line, &["error".into()], &[], ""));
+    }
+
+    /// The libobs worker's file is not written by us and none of its
+    /// lines carry a level. Hiding them because they do not match a level
+    /// they never had would empty the view entirely — which is what
+    /// selecting that file in the portal does.
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn a_line_with_no_level_survives_the_level_filter() {
+        let foreign = parse_line("info: [window-capture] using WGC");
+        assert_eq!(foreign.level, "");
+        assert!(line_matches(&foreign, &["ERROR".into()], &[], ""));
+        // Search still applies to it, so it is filterable by content.
+        assert!(line_matches(&foreign, &[], &[], "wgc"));
+        assert!(!line_matches(&foreign, &[], &[], "nvenc"));
     }
 
     /// The reason tags exclude rather than include: the panel has to hide

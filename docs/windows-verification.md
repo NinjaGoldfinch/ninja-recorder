@@ -311,6 +311,11 @@ here are silent, and the app's own UI will not show you most of them.
       five consecutive transport failures; confirm a momentary blip no longer
       finalizes the VOD, and that a genuinely ended game still finalizes
       within a few seconds.
+- [ ] **`logs/libobs.log` exists and has content after a capture.** The
+      worker's stderr is redirected into it before the process spawns
+      (#69); confirm libobs's own startup lines, the encoder it chose and
+      the adapter it picked are all in there, and that the dev portal's Log
+      panel can select and read the file.
 - [ ] Does gameflow report a distinct phase while spectating? If it reports
       `InProgress`, spectated games are currently recorded, which the design
       says they should not be.
