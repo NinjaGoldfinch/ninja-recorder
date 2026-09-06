@@ -83,7 +83,8 @@ flowchart TB
 | `fixtures.rs` | Capturing live API responses to `fixtures/` | `enabled`, `record` |
 | `dev/` | Dev portal backend, compiled out without `--features devtools` | `dev_*` commands |
 | `core/mod.rs` | Every command's logic, with no `tauri` types in any signature | `Ctx`, the command free functions |
-| `lib.rs` | Tauri setup, app state, and thin command wrappers over `core` | `run` |
+| `launch.rs` | Which mode argv asked for (`--daemon`, `--hidden`) | `Launch::from_env` |
+| `lib.rs` | Tauri setup, app state, the `rpc` command, and main-window creation | `run` |
 
 `core` exists because Tauri v2 cannot invoke a registered command by name from
 Rust, so a windowless recorder daemon could not reuse `#[tauri::command]`
@@ -158,6 +159,11 @@ flowchart LR
     W2 -. dev_* invoke .-> RT
     RT -. library-changed event .-> W1
 ```
+
+The main window is built in `lib.rs`'s `setup` rather than declared in
+`tauri.conf.json`, whose `app.windows` is empty — Tauri creates config windows
+automatically before `setup`, and a `--hidden` start needs to create none at
+all ([DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave)).
 
 Both windows talk to the same Rust state and the same database. The dev
 portal is a second Vite entry point gated on the `NINJA_DEVTOOLS` env var and

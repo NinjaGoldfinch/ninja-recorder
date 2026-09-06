@@ -547,11 +547,44 @@ adding a nested argument type.
 so `rpc` sends it to `spawn_blocking` and only awaits the one command that needs
 it. `core` itself still names no async runtime — callers choose the thread.
 
+### Launch modes and the window
+
+`main.rs` reads a `Launch` mode out of argv before anything else:
+`--daemon` (reserved), `--hidden`, or nothing. Parsing lives in
+`src-tauri/src/launch.rs`, pure and unit-tested, and names no `tauri` type.
+
+**The flags are an on-disk contract, which is why they are fixed before the
+tray exists.** `tauri-plugin-autostart` writes the flag into `HKCU\…\Run`
+once, at enable time; a flag that changes meaning later silently strands every
+user who turned autostart on before the change. `--daemon` is therefore
+recognised now and *rejected with a message and exit code 2* rather than
+falling back to a normal window — a build that quietly ignored it would look
+like it worked while recording nothing.
+
+**The main window is created in Rust, not by `tauri.conf.json`.** `app.windows`
+is now `[]`. Tauri creates entries in that array automatically, before `setup`
+runs, so there was no way to *not* have a window — and `"visible": false` is
+not a substitute: it still constructs the WebView2 instance and pays its full
+cost, which is exactly what starting in the tray is meant to avoid. The label
+stays `"main"` so `capabilities/default.json` matches unchanged.
+
+Building it from `setup` is safe. The hazard `dev_open_portal` documents —
+building a window re-entrantly from inside a WebView2 IPC callback yields a
+blank window — applies to windows created from a command, which `setup` is not.
+A window created later from a tray click will have to respect it.
+
+Verified on macOS against the real binary: a default start registers a GUI
+window, `--hidden` starts with none and stays running, `--daemon` exits 2, and
+unknown arguments are ignored rather than fatal (both OSes hand launched apps
+arguments we never asked for). The windowless run also confirms Tauri's event
+loop survives with no windows, which is the daemon's prerequisite.
+
 ### Still to build
 
 The socket itself, and with it: per-request ids, because a slow
 `extract_audio_track` must not head-of-line block a status poll; and a socket
-name scoped by build identity, because
+name scoped by build identity — deferred until there is a socket to name rather
+than added speculatively — because
 `tauri.devtools.conf.json` overrides `productName` but **not** `identifier` — so
 a dev build and an installed release already share `app_data_dir()`, the
 database and the recordings folder. For the same reason a version-mismatched
