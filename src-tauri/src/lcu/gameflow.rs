@@ -7,7 +7,7 @@
 //! connection yet — no League client is installed on the machine this was
 //! written on (DEVELOPMENT.md §9).
 
-use super::client::{basic_auth_header, LcuHttpClient};
+use super::client::{basic_auth_header, LcuClientError, LcuHttpClient};
 use super::lockfile::LockfileInfo;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -194,6 +194,79 @@ where
     Ok(())
 }
 
+// --- Which game is running ------------------------------------------------
+
+/// Which game the client says is in progress, flattened out of
+/// `/lol-gameflow/v1/session` so nothing downstream carries the LCU's
+/// nesting.
+///
+/// Read *during* the game rather than worked out afterwards. Deciding
+/// which `gameId` just ended is the problem that kept `match_data` unwired
+/// for months; the client will simply tell you while it is still running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+pub struct GameIdentity {
+    /// `None` when the client reports no game — the session exists in the
+    /// lobby too, with a zeroed `gameId`.
+    pub game_id: Option<i64>,
+    /// Riot's real queue id, which is the only thing that can fill
+    /// `recordings.queue`. The Live Client Data API never exposes one.
+    pub queue_id: Option<i64>,
+    /// Custom games never reach match history, so a post-game summary
+    /// fetch for one would retry until it timed out and find nothing.
+    pub is_custom: bool,
+}
+
+/// The slice of the session response we read. Every field is optional and
+/// defaulted: this shape is taken from the LCU's own OpenAPI spec, not
+/// from a response anyone here has seen, so a client that nests things
+/// differently must degrade to "no id" rather than failing the request.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct SessionDto {
+    #[serde(rename = "gameData", default)]
+    game_data: Option<GameDataDto>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct GameDataDto {
+    #[serde(rename = "gameId", default)]
+    game_id: Option<i64>,
+    #[serde(rename = "isCustomGame", default)]
+    is_custom_game: Option<bool>,
+    #[serde(default)]
+    queue: Option<QueueDto>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct QueueDto {
+    #[serde(default)]
+    id: Option<i64>,
+}
+
+/// Asks the client which game is running.
+pub async fn fetch_session(http: &LcuHttpClient) -> Result<GameIdentity, LcuClientError> {
+    let session: SessionDto = http.get_json("/lol-gameflow/v1/session").await?;
+    Ok(identity(&session))
+}
+
+/// Pure half of `fetch_session`, so the shape can be tested against
+/// fixture JSON without a client.
+fn identity(session: &SessionDto) -> GameIdentity {
+    let Some(game) = session.game_data.as_ref() else {
+        return GameIdentity::default();
+    };
+
+    GameIdentity {
+        // A session that is not in a game still has a `gameData` block,
+        // with `gameId` zeroed. Zero is "no game", not game number zero.
+        game_id: game.game_id.filter(|id| *id > 0),
+        // Zero is *not* filtered here: it is the real queue id for a
+        // custom game, and the library labels it "Custom". The LCU uses
+        // negative values for "no queue".
+        queue_id: game.queue.as_ref().and_then(|q| q.id).filter(|id| *id >= 0),
+        is_custom: game.is_custom_game.unwrap_or(false),
+    }
+}
+
 /// Parses one LCU WS event frame and extracts a gameflow phase update if
 /// this frame is one. Pure and side-effect-free so it's testable against
 /// fixture frames without a live socket.
@@ -217,6 +290,75 @@ fn parse_gameflow_event(text: &str) -> Option<GameflowUpdate> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn session(json: &str) -> SessionDto {
+        serde_json::from_str(json).unwrap()
+    }
+
+    /// The shape the LCU's own OpenAPI spec describes for
+    /// `LolGameflowGameflowSession`.
+    #[test]
+    fn reads_the_game_and_queue_ids_out_of_a_session() {
+        let s = session(
+            r#"{
+                "phase": "InProgress",
+                "gameData": {
+                    "gameId": 5147823901,
+                    "isCustomGame": false,
+                    "queue": {"id": 420, "gameMode": "CLASSIC", "isRanked": true}
+                }
+            }"#,
+        );
+
+        assert_eq!(
+            identity(&s),
+            GameIdentity {
+                game_id: Some(5147823901),
+                queue_id: Some(420),
+                is_custom: false,
+            }
+        );
+    }
+
+    /// The session exists in the lobby too, with `gameId` zeroed. Zero is
+    /// "no game", not game number zero — recording it would attach every
+    /// out-of-game recording to the same nonexistent match.
+    #[test]
+    fn a_zeroed_game_id_is_no_game_at_all() {
+        let s = session(r#"{"gameData": {"gameId": 0, "queue": {"id": -1}}}"#);
+        assert_eq!(identity(&s), GameIdentity::default());
+    }
+
+    /// Zero is a real queue id — it is what a custom game reports, and the
+    /// library labels it "Custom". Only negatives mean "no queue".
+    #[test]
+    fn queue_zero_is_kept_because_it_means_custom() {
+        let s = session(r#"{"gameData": {"gameId": 7, "isCustomGame": true, "queue": {"id": 0}}}"#);
+        assert_eq!(
+            identity(&s),
+            GameIdentity {
+                game_id: Some(7),
+                queue_id: Some(0),
+                is_custom: true,
+            }
+        );
+    }
+
+    /// This shape came from a spec, not from a response anyone here has
+    /// seen. A client that nests it differently has to degrade to "no id",
+    /// not fail the whole read.
+    #[test]
+    fn an_unrecognized_session_shape_yields_nothing_rather_than_erroring() {
+        assert_eq!(identity(&session("{}")), GameIdentity::default());
+        assert_eq!(
+            identity(&session(r#"{"gameData": {"gameId": 9}}"#)),
+            GameIdentity {
+                game_id: Some(9),
+                queue_id: None,
+                is_custom: false,
+            }
+        );
+    }
 
     #[test]
     fn phase_from_known_string() {
