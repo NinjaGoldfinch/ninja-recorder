@@ -137,6 +137,8 @@ small to hide a bug. It is the trait boundary trick applied at function scale.
 | 9 | Disk retention: max size, max age, pinning, free-space preflight | `retention.rs` | done |
 | 10 | YouTube upload (OAuth desktop flow, resumable upload) | [DEVELOPMENT.md §7](../DEVELOPMENT.md#7-youtube-upload-designed-not-built) | not started |
 | 11 | `.rofl` replay download alongside video | [DEVELOPMENT.md §8](../DEVELOPMENT.md#8-rofl-replays-designed-not-built) | not started |
+| 12 | Background operation: tray icon, close-to-tray, notifications, and the idle-cost work that made staying resident defensible | `tray.rs`, `notify.rs`, `launch.rs` | built, **unverified on Windows** |
+| 13 | Splitting the recorder into its own process, so the UI can exit and a webview crash can't take a recording with it | [DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave) | in progress |
 
 ### Why that dependency order
 

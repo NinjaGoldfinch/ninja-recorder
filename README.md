@@ -9,13 +9,16 @@ No OBS to install. No scenes to configure. No injection into the game, ever.
 
 > **Status: pre-1.0, usable on Windows.** Recording, event markers, the VOD
 > library, the review player and disk retention are all built and running, and
-> installers ship from the [Releases](../../releases) page. Three caveats
-> before you install: builds are **unsigned**, so SmartScreen warns on first
-> run; the libobs capture backend **has not yet been verified against a real
-> Vanguard-protected game**; and multi-track audio is newer still — the
-> per-application capture behind every preset that records "game audio" has
+> installers ship from the [Releases](../../releases) page. It now lives in the
+> system tray: closing the window keeps it recording, and only Quit stops it.
+> Four caveats before you install: builds are **unsigned**, so SmartScreen
+> warns on first run; the libobs capture backend **has not yet been verified
+> against a real Vanguard-protected game**; multi-track audio is newer still —
+> the per-application capture behind every preset that records "game audio" has
 > never run against a Vanguard-protected process, so if your game track comes
-> out silent, switch the preset to Desktop, which uses ordinary loopback. See
+> out silent, switch the preset to Desktop, which uses ordinary loopback; and
+> the tray, the close-button setting and the notifications are **newer than any
+> Windows testing**, so treat them as unproven there. See
 > [docs/windows-verification.md](docs/windows-verification.md) for exactly
 > what those checks involve.
 

@@ -37,6 +37,7 @@ flowchart TB
     STATUS --> LIB
     SETTINGS --> LIB
     SETTINGS --> THEME
+    SETTINGS --> PREFS
     LIB --> REVIEW
     LIB --> BRIDGE
     REVIEW --> BRIDGE

@@ -94,6 +94,35 @@ audio_tracks_json = COALESCE(excluded.audio_tracks_json, recordings.audio_tracks
 a rescan landing after a finalize would overwrite a known layout with NULL and
 the VOD would silently lose its stem picker. A NULL never wins.
 
+### What lives in `settings_kv`
+
+Every key, and which side owns the default. There is no schema and no
+migration — a missing key means "use the default" — so the **two sides have to
+agree**, because either can be the one reading a key the other never wrote.
+
+| Key | Values | Default | Read by |
+|---|---|---|---|
+| `theme` | `system` / `light` / `dark` | `system` | `src/prefs.ts`, plus the pre-paint boot script |
+| `defaultSort` | `newest` / `oldest` / `longest` / `champion` | `newest` | `src/prefs.ts` |
+| `audio_preset` | JSON `AudioPreset` | `Game` | `db::get_audio_preset` |
+| `closeAction` | `close-window` / `hide` / `quit` | `close-window` | `core::CloseAction` |
+| `notifications` | `on` / `off` | `on` | `core::NotificationPrefs` |
+| `notifyRecordingStarted` | `on` / `off` | `off` | `core::NotificationPrefs` |
+| `notifyRecordingFinished` | `on` / `off` | `on` | `core::NotificationPrefs` |
+| `notifyRecordingFailed` | `on` / `off` | `on` | `core::NotificationPrefs` |
+| `notice.closeToTray.seen` | any non-empty string | empty (unseen) | `core::notice_seen` |
+
+Two conventions worth knowing before adding one:
+
+- **Unrecognised values fall back to the default, never error.** This table is
+  shared across versions, so a downgrade will read a value a newer build wrote.
+  `CloseAction::from_pref` and `NotificationPrefs::from_prefs` both do this, and
+  both have a test for it.
+- **An empty value means "unset".** `set_ui_pref` can only write — there is no
+  delete command — so blanking a key is how "Reset one-time notices" re-arms
+  `notice.closeToTray.seen`. Treating a present-but-empty key as *set* would
+  make that button silently do nothing.
+
 ### Two settings tables, on purpose
 
 `settings` is seeded and single-row because a missing retention policy would
