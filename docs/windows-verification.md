@@ -153,6 +153,29 @@ by a test.**
 - [ ] Measure idle RAM with the window closed vs hidden — the whole premise of
       "close-window" as the default is that hiding reclaims nothing.
 
+### 5.0.2 Notifications
+
+**None of this can be checked before installing.** The plugin only sets the
+`System.AppUserModel.ID` for a non-`target/debug|release` exe, and Windows
+resolves it through the Start-menu shortcut NSIS creates — so a dev run shows
+nothing and that is expected. The decision logic (which kinds are enabled, the
+one-time notice) is unit tested; presentation is not testable anywhere but here.
+
+- [ ] Closing the window the first time shows the "still running in the tray"
+      notice, and closing it again does **not**.
+- [ ] Settings → Notifications → Reset makes that notice appear once more.
+- [ ] Finishing a game shows "Recording saved" with the file name and marker
+      count.
+- [ ] Turning the master switch off silences everything, including the
+      one-time notice, and greys out the other three checkboxes.
+- [ ] A recording that fails to start (try filling the disk below 1 GiB) shows
+      the problem notification.
+- [ ] Toasts are **display-only** — clicking one is expected to do nothing.
+      Confirm it at least does not crash or mis-focus.
+- [ ] Both product names get their own Start-menu shortcut and therefore their
+      own AUMID; confirm `ninja-recorder` and `ninja-recorder-dev` do not
+      collide.
+
 ### 5.1 Capture-backend lifecycle
 
 New with `prepare`/`release`; none of it can be exercised off Windows.

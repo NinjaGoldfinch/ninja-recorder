@@ -627,6 +627,54 @@ from `run()`, which is dead code in a test build and gets stripped, keeping the
 Win32 GUI import stack out of the test binary. The one testable thing —
 `CloseAction` parsing — lives in `core`, which names no `tauri` type.
 
+### Notifications
+
+The window is closed most of the time, so a recording that saved — or failed —
+has nowhere to show up. Four kinds, in `settings_kv`, all defaulting sensibly
+so none needs a migration: **finished** and **failed** on, **started** off (the
+user is about to be in a game and does not want a popup over it), plus a
+one-time "still running in the tray" notice the first time the window is
+closed. A master switch silences everything including that notice, because off
+has to mean off.
+
+"Reset one-time notices" **blanks** the key rather than deleting it: `set_ui_pref`
+only writes, and adding a delete command would mean editing the dispatch table
+and the dev registry for one button. So an empty value counts as unseen. There
+is a test pinning that, because getting it backwards makes the reset button do
+nothing.
+
+The notice is marked seen *before* it is shown, not after — otherwise a broken
+notification backend would retry on every close forever.
+
+**Where this actually works.** The plugin sets the notification's
+`System.AppUserModel.ID` to the bundle identifier only for an installed build;
+it detects an exe under `target/debug` or `target/release` and skips it, so a
+Windows dev run may show nothing. Windows resolves that AUMID through the
+Start-menu shortcut NSIS creates, which is why real presentation can only be
+checked on an installed build. On macOS in dev the plugin attributes
+notifications to `com.apple.Terminal`, so the wiring is exercisable here even
+though the Windows presentation is not.
+
+**Display-only, deliberately.** A *clickable* toast on Windows needs a
+registered COM notification activator CLSID; the Start-menu shortcut buys
+presentation, not activation callbacks. Nothing promises that clicking a toast
+does anything — the tray icon is the way back in.
+
+Everything in `notify.rs` is best-effort: a notification that fails to show is
+a logged warning, never an error that propagates. It is feedback *about* a
+recording and must never be able to affect one. Like `tray.rs`, it carries no
+tests — the decisions live in `core::NotificationPrefs`, which is tested.
+
+### One notifier, one seam
+
+`Supervisor` now has a single `set_event_notifier` over a `SupervisorEvent`
+enum — `LibraryChanged`, `RecordingStarted`, `Finalized`, `RecordingFailed` —
+rather than a callback per signal. The finalize toast needed to know *what* was
+written, which a bare "something changed" callback cannot say, and adding a
+second one-off notifier would have meant a third later. When the recorder moves
+into its own process this seam becomes a socket write, and there should be
+exactly one place to change it.
+
 ### Still to build
 
 The socket itself, and with it: per-request ids, because a slow

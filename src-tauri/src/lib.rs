@@ -5,6 +5,7 @@ mod db;
 mod dev;
 mod fixtures;
 mod launch;
+mod notify;
 mod lcu;
 mod live_client;
 mod recorder;
@@ -184,6 +185,7 @@ pub fn run() {
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
             let backend: Box<dyn Recorder> = {
                 #[cfg(target_os = "windows")]
@@ -298,10 +300,57 @@ pub fn run() {
             // `Supervisor::on_library_changed` for what happens when it
             // isn't kept out.
             let notify_handle = app.handle().clone();
-            supervisor.set_library_changed_notifier(Box::new(move || {
-                use tauri::Emitter;
-                if let Err(e) = notify_handle.emit(LIBRARY_CHANGED_EVENT, ()) {
-                    eprintln!("[state_machine] failed to emit library-changed: {e}");
+            supervisor.set_event_notifier(Box::new(move |event| {
+                use state_machine::SupervisorEvent;
+                use tauri::{Emitter, Manager};
+
+                // Anything the frontend needs to react to still goes out as a
+                // Tauri event; the notifications are extra, and only reach the
+                // user when they have no window open to look at.
+                let notify_for = |kind: core::NotifyKind, title: &str, body: &str| {
+                    let ctx = notify_handle.state::<AppState>().clone_ctx();
+                    notify::notify(&notify_handle, &ctx, kind, title, body);
+                };
+
+                match event {
+                    SupervisorEvent::LibraryChanged => {
+                        if let Err(e) = notify_handle.emit(LIBRARY_CHANGED_EVENT, ()) {
+                            eprintln!("[state_machine] failed to emit library-changed: {e}");
+                        }
+                    }
+                    SupervisorEvent::RecordingStarted => notify_for(
+                        core::NotifyKind::RecordingStarted,
+                        "Recording started",
+                        "ninja-recorder is capturing this game.",
+                    ),
+                    SupervisorEvent::Finalized(finalized) => {
+                        if let Err(e) = notify_handle.emit(LIBRARY_CHANGED_EVENT, ()) {
+                            eprintln!("[state_machine] failed to emit library-changed: {e}");
+                        }
+                        let name = std::path::Path::new(&finalized.path)
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| finalized.path.clone());
+                        let markers = finalized.markers.len();
+                        // No champion or KDA here: those columns are still
+                        // NULL on real recordings (DEVELOPMENT.md §3.4), so
+                        // the toast says what is actually known.
+                        let body = if markers == 1 {
+                            format!("{name} — 1 marker")
+                        } else {
+                            format!("{name} — {markers} markers")
+                        };
+                        notify_for(
+                            core::NotifyKind::RecordingFinished,
+                            "Recording saved",
+                            &body,
+                        );
+                    }
+                    SupervisorEvent::RecordingFailed(message) => notify_for(
+                        core::NotifyKind::RecordingFailed,
+                        "Recording problem",
+                        &message,
+                    ),
                 }
             }));
             supervisor.start();
@@ -397,10 +446,15 @@ pub fn run() {
             return;
         }
 
-        let action = {
-            let ctx = window.state::<AppState>().clone_ctx();
-            core::close_action(&ctx)
-        };
+        let ctx = window.state::<AppState>().clone_ctx();
+        let action = core::close_action(&ctx);
+
+        // Both surviving actions leave the app running with no window, which
+        // is exactly when it looks like it has quit. Say so once.
+        if !matches!(action, core::CloseAction::Quit) {
+            notify::close_to_tray_notice(&window.app_handle().clone(), &ctx);
+        }
+
         match action {
             // Let the window be destroyed. The process survives because
             // `ExitRequested` is vetoed below, and destroying the webview is

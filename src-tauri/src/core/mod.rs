@@ -161,6 +161,121 @@ pub fn close_action(ctx: &Ctx) -> CloseAction {
     CloseAction::from_pref(prefs.get(CLOSE_ACTION_KEY).map(String::as_str))
 }
 
+/// `settings_kv` keys for the notification preferences. All default to
+/// something sensible when absent, so none of them needs a migration.
+pub const NOTIFY_MASTER_KEY: &str = "notifications";
+pub const NOTIFY_STARTED_KEY: &str = "notifyRecordingStarted";
+pub const NOTIFY_FINISHED_KEY: &str = "notifyRecordingFinished";
+pub const NOTIFY_FAILED_KEY: &str = "notifyRecordingFailed";
+/// Set once the "still running in the tray" notice has been shown.
+pub const NOTICE_CLOSE_TO_TRAY_KEY: &str = "notice.closeToTray.seen";
+
+/// What a notification is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotifyKind {
+    /// A recording began. Off by default — the header already shows it, and
+    /// the user is in-game and does not want a popup over it.
+    RecordingStarted,
+    /// A VOD was written. On by default: this is the one piece of feedback
+    /// worth having when the window is closed.
+    RecordingFinished,
+    /// Recording failed, or the disk is full. On by default, and the only
+    /// kind the user cannot find out about any other way while in a game.
+    RecordingFailed,
+    /// The one-time "we are still running in the tray" notice.
+    CloseToTray,
+}
+
+/// Which notifications the user wants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotificationPrefs {
+    master: bool,
+    started: bool,
+    finished: bool,
+    failed: bool,
+}
+
+impl Default for NotificationPrefs {
+    fn default() -> Self {
+        Self {
+            master: true,
+            started: false,
+            finished: true,
+            failed: true,
+        }
+    }
+}
+
+impl NotificationPrefs {
+    pub fn from_prefs(prefs: &HashMap<String, String>) -> Self {
+        let defaults = Self::default();
+        let read = |key: &str, default: bool| match prefs.get(key).map(String::as_str) {
+            Some("on") => true,
+            Some("off") => false,
+            // Unrecognised or absent: keep the default. Same reasoning as
+            // `CloseAction::from_pref` — this table is schemaless and shared
+            // across versions.
+            _ => default,
+        };
+        Self {
+            master: read(NOTIFY_MASTER_KEY, defaults.master),
+            started: read(NOTIFY_STARTED_KEY, defaults.started),
+            finished: read(NOTIFY_FINISHED_KEY, defaults.finished),
+            failed: read(NOTIFY_FAILED_KEY, defaults.failed),
+        }
+    }
+
+    /// The master switch gates everything, including the one-time notice —
+    /// turning notifications off has to mean off.
+    pub fn allows(&self, kind: NotifyKind) -> bool {
+        if !self.master {
+            return false;
+        }
+        match kind {
+            NotifyKind::RecordingStarted => self.started,
+            NotifyKind::RecordingFinished => self.finished,
+            NotifyKind::RecordingFailed => self.failed,
+            // Not separately configurable: it fires at most once, and a
+            // "reset one-time notices" action is what re-arms it.
+            NotifyKind::CloseToTray => true,
+        }
+    }
+}
+
+/// The user's notification preferences, or the defaults if unreadable.
+pub fn notification_prefs(ctx: &Ctx) -> NotificationPrefs {
+    match ctx.db.get_ui_prefs() {
+        Ok(prefs) => NotificationPrefs::from_prefs(&prefs),
+        Err(e) => {
+            eprintln!("[core] could not read notification prefs, using defaults: {e}");
+            NotificationPrefs::default()
+        }
+    }
+}
+
+/// Whether a one-time notice has already been shown.
+///
+/// An **empty value counts as unseen**, which is what makes "reset one-time
+/// notices" possible: `set_ui_pref` can only write, there is no delete
+/// command, and adding one would mean editing the dispatch table and the dev
+/// registry for a button. Blanking the key is the reset.
+///
+/// Errs on the side of "already shown" if the database can't be read — staying
+/// quiet beats nagging on every close.
+pub fn notice_seen(ctx: &Ctx, key: &str) -> bool {
+    match ctx.db.get_ui_prefs() {
+        Ok(prefs) => prefs.get(key).is_some_and(|value| !value.is_empty()),
+        Err(_) => true,
+    }
+}
+
+/// Records that a one-time notice has been shown.
+pub fn mark_notice_seen(ctx: &Ctx, key: &str) {
+    if let Err(e) = ctx.db.set_ui_pref(key, "1") {
+        eprintln!("[core] could not record notice {key} as seen: {e}");
+    }
+}
+
 #[derive(serde::Serialize)]
 pub struct DiskUsage {
     pub total_bytes: i64,

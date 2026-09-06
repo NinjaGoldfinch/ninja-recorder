@@ -6,6 +6,7 @@ import {
   getPrefs,
   savePref,
   type CloseActionPref,
+  type NotifyPrefKey,
   type SortKey,
   type ThemePref,
 } from "./prefs";
@@ -25,6 +26,11 @@ interface Els {
   back: HTMLButtonElement;
   themeToggle: HTMLElement;
   closeAction: HTMLSelectElement;
+  notifyMaster: HTMLInputElement;
+  notifyStarted: HTMLInputElement;
+  notifyFinished: HTMLInputElement;
+  notifyFailed: HTMLInputElement;
+  resetNotices: HTMLButtonElement;
   defaultSort: HTMLSelectElement;
   audioPreset: HTMLElement;
   audioMic: HTMLSelectElement;
@@ -50,6 +56,11 @@ export function initSettings() {
     back: el<HTMLButtonElement>("#back-to-library-from-settings-btn"),
     themeToggle: el("#theme-toggle"),
     closeAction: el<HTMLSelectElement>("#close-action-select"),
+    notifyMaster: el<HTMLInputElement>("#notify-master"),
+    notifyStarted: el<HTMLInputElement>("#notify-started"),
+    notifyFinished: el<HTMLInputElement>("#notify-finished"),
+    notifyFailed: el<HTMLInputElement>("#notify-failed"),
+    resetNotices: el<HTMLButtonElement>("#reset-notices-btn"),
     defaultSort: el<HTMLSelectElement>("#default-sort-select"),
     audioPreset: el("#audio-preset-toggle"),
     audioMic: el<HTMLSelectElement>("#audio-mic-select"),
@@ -75,6 +86,28 @@ export function initSettings() {
   // SQLite on every close, so a slow write can't desync anything.
   els.closeAction.addEventListener("change", () => {
     savePref("closeAction", els.closeAction.value as CloseActionPref);
+  });
+
+  // Rust reads these straight out of SQLite when it is about to notify, so
+  // there is nothing to keep in sync on this side beyond the checkbox state.
+  const notifyToggles: [HTMLInputElement, NotifyPrefKey][] = [
+    [els.notifyMaster, "notifications"],
+    [els.notifyStarted, "notifyRecordingStarted"],
+    [els.notifyFinished, "notifyRecordingFinished"],
+    [els.notifyFailed, "notifyRecordingFailed"],
+  ];
+  for (const [input, key] of notifyToggles) {
+    input.addEventListener("change", () => {
+      savePref(key, input.checked ? "on" : "off");
+      syncNotifyEnabled();
+    });
+  }
+
+  els.resetNotices.addEventListener("click", () => {
+    // Blanked rather than deleted: `set_ui_pref` only writes, and Rust treats
+    // an empty value as "not yet shown".
+    savePref("notice.closeToTray.seen", "");
+    toast("One-time notices will show again.");
   });
 
   els.themeToggle.addEventListener("click", (e) => {
@@ -128,6 +161,11 @@ export function syncSettingsFromPrefs() {
   const prefs = getPrefs();
   syncThemeToggle(prefs.theme);
   els.closeAction.value = prefs.closeAction;
+  els.notifyMaster.checked = prefs.notifications === "on";
+  els.notifyStarted.checked = prefs.notifyRecordingStarted === "on";
+  els.notifyFinished.checked = prefs.notifyRecordingFinished === "on";
+  els.notifyFailed.checked = prefs.notifyRecordingFailed === "on";
+  syncNotifyEnabled();
   els.defaultSort.value = prefs.defaultSort;
 }
 
@@ -348,5 +386,15 @@ async function saveRetentionPolicy(e: Event) {
     await Promise.all([refreshLibrary(), refreshDiskUsage()]);
   } catch (err) {
     els.status.textContent = `Failed to save: ${err}`;
+  }
+}
+
+
+// The master switch gates the rest in Rust, so the form should say so rather
+// than leaving three checkboxes that look live and do nothing.
+function syncNotifyEnabled() {
+  const on = els.notifyMaster.checked;
+  for (const input of [els.notifyStarted, els.notifyFinished, els.notifyFailed]) {
+    input.disabled = !on;
   }
 }

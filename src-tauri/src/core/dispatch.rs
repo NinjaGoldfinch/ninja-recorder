@@ -363,6 +363,79 @@ mod tests {
         assert_eq!(super::super::close_action(&ctx), super::super::CloseAction::Hide);
     }
 
+    #[test]
+    fn notification_defaults_are_quiet_where_it_matters() {
+        use super::super::{NotificationPrefs, NotifyKind};
+        let d = NotificationPrefs::default();
+        // Finishing and failing are the two the user cannot otherwise learn
+        // about with the window closed.
+        assert!(d.allows(NotifyKind::RecordingFinished));
+        assert!(d.allows(NotifyKind::RecordingFailed));
+        // Starting is not: the user is about to be in a game, and a popup
+        // over it is worse than useless.
+        assert!(!d.allows(NotifyKind::RecordingStarted));
+    }
+
+    #[test]
+    fn the_master_switch_silences_everything_including_the_one_time_notice() {
+        use super::super::{NotificationPrefs, NotifyKind, NOTIFY_MASTER_KEY};
+        let mut prefs = std::collections::HashMap::new();
+        prefs.insert(NOTIFY_MASTER_KEY.to_string(), "off".to_string());
+        let p = NotificationPrefs::from_prefs(&prefs);
+        for kind in [
+            NotifyKind::RecordingStarted,
+            NotifyKind::RecordingFinished,
+            NotifyKind::RecordingFailed,
+            NotifyKind::CloseToTray,
+        ] {
+            assert!(!p.allows(kind), "{kind:?} should be silenced");
+        }
+    }
+
+    #[test]
+    fn an_unrecognised_notification_value_keeps_the_default() {
+        use super::super::{NotificationPrefs, NotifyKind, NOTIFY_FINISHED_KEY};
+        let mut prefs = std::collections::HashMap::new();
+        prefs.insert(NOTIFY_FINISHED_KEY.to_string(), "maybe".to_string());
+        assert!(NotificationPrefs::from_prefs(&prefs).allows(NotifyKind::RecordingFinished));
+    }
+
+    #[test]
+    fn individual_kinds_can_be_turned_on_and_off() {
+        use super::super::{NotificationPrefs, NotifyKind, NOTIFY_FINISHED_KEY, NOTIFY_STARTED_KEY};
+        let mut prefs = std::collections::HashMap::new();
+        prefs.insert(NOTIFY_STARTED_KEY.to_string(), "on".to_string());
+        prefs.insert(NOTIFY_FINISHED_KEY.to_string(), "off".to_string());
+        let p = NotificationPrefs::from_prefs(&prefs);
+        assert!(p.allows(NotifyKind::RecordingStarted));
+        assert!(!p.allows(NotifyKind::RecordingFinished));
+    }
+
+    #[tokio::test]
+    async fn a_one_time_notice_fires_once_and_can_be_reset() {
+        use super::super::{mark_notice_seen, notice_seen, NOTICE_CLOSE_TO_TRAY_KEY};
+        let ctx = ctx();
+        assert!(!notice_seen(&ctx, NOTICE_CLOSE_TO_TRAY_KEY), "unseen to start");
+
+        mark_notice_seen(&ctx, NOTICE_CLOSE_TO_TRAY_KEY);
+        assert!(notice_seen(&ctx, NOTICE_CLOSE_TO_TRAY_KEY), "should not fire twice");
+
+        // "Reset one-time notices" blanks the key. There is no delete
+        // command and adding one would mean editing the dispatch table and
+        // the dev registry for a button, so an empty value means unseen.
+        dispatch(
+            &ctx,
+            "set_ui_pref",
+            json!({ "key": NOTICE_CLOSE_TO_TRAY_KEY, "value": "" }),
+        )
+        .await
+        .unwrap();
+        assert!(
+            !notice_seen(&ctx, NOTICE_CLOSE_TO_TRAY_KEY),
+            "blanking the key must re-arm the notice, or the reset button does nothing"
+        );
+    }
+
     #[tokio::test]
     async fn an_unknown_command_is_an_error_not_a_panic() {
         let ctx = ctx();
