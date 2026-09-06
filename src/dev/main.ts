@@ -21,6 +21,7 @@ import { simulatePanel } from "./panels/simulate";
 import { recorderPanel } from "./panels/recorder";
 import { retentionPanel } from "./panels/retention";
 import { fixturesPanel } from "./panels/fixtures";
+import { diagnosticsPanel } from "./panels/diagnostics";
 import { logPanel } from "./panels/log";
 
 export interface Panel {
@@ -55,6 +56,7 @@ const PANELS: Panel[] = [
   retentionPanel,
   fixturesPanel,
   commandsPanel,
+  diagnosticsPanel,
   logPanel,
 ];
 

@@ -260,7 +260,7 @@ Two official local HTTP APIs. Both use self-signed TLS on localhost — pin/acce
 - `https://127.0.0.1:2999/liveclientdata/allgamedata` — no auth, only up while a game is running. A 3-second request timeout: reqwest applies none by default, and a stalled request on a loopback endpoint that normally answers in ten milliseconds is a hang, not a slow reply — it silently stopped markers while the recording carried on, because no error was ever returned to declare the endpoint down.
 - **Failing to read a response is not the same as the game being gone**, and conflating the two cost a real game (#74). A payload we cannot parse proves the game is *running*; only a request that got no response at all means the process behind port 2999 has ended. The poller tolerates five consecutive transport failures before finalizing, and never finalizes on a parse failure. Events are parsed entry by entry so one unreadable event costs that event rather than the snapshot — the events array is the only part of the payload that both grows during a game and can fail to deserialize.
 - Poll ~1 Hz. Relevant pieces:
-  - `events.Events[]` — `ChampionKill`, `Multikill`, `TurretKilled`, `InhibKilled`, `DragonKill`, `BaronKill`, `HeraldKill`, `Ace`, `FirstBlood`, each with `EventTime` (seconds of game time). The neutral objectives also carry `Stolen`, which rides in the marker payload — and which is read leniently, because Riot has historically sent booleans in this API as the strings `"True"`/`"False"` and a bare `Option<bool>` rejected the whole snapshot over it.
+  - `events.Events[]` — `ChampionKill`, `Multikill`, `TurretKilled`, `InhibKilled`, `DragonKill`, `BaronKill`, `HeraldKill`, `Ace`, `FirstBlood`, each with `EventTime` (seconds of game time). The neutral objectives also carry `Stolen`, which rides in the marker payload — and which is read leniently, because Riot has historically sent booleans in this API as the strings `"True"`/`"False"` and a bare `Option<bool>` rejected the whole snapshot over it. **Whether that is what actually broke #74 is not worth establishing**: the lenient read makes either answer survivable, and the LCU's post-game data could supply steals instead if the live value ever proves unreliable. Which source a steal flag comes from does not change anything the review player does with it.
   - **Not every event becomes a marker.** See "only events the player is named in" below.
   - `activePlayer.summonerName` / `allPlayers` — identify which events involve *us* (our kills/deaths vs. someone else's).
   - `gameData.gameTime` — for aligning game time to recording time.
@@ -804,6 +804,49 @@ it might be recording.
 - **`debug!` is off by default**, and exists for the high-volume streams: the per-poll Live Client Data tracker (`live-poll`, shipped — see [docs/recording-pipeline.md §3](docs/recording-pipeline.md)) and libobs's own log (`libobs`, #69). Either at `info` would rotate a session's real errors out of the file within one game. `NINJA_RECORDER_LOG_LEVEL=debug` turns them on. The exception is a poll failure that ends a recording, which is a `warn` — see #74 for why that one has to be visible without asking.
 - **Rotation is 5 MiB × 3.** About two play sessions of history, which is the window a capture bug is diagnosed in.
 - **Nothing here may fail the app.** A read-only data dir, a locked file, a full disk: each degrades to "no file logging this session", never to an error a caller has to handle. `write` returns `()` and swallows I/O errors — recording a game matters more than recording *about* recording one. A failed write drops the sink for the rest of the session rather than retrying every line, because the usual causes do not fix themselves.
+
+### Reading it back
+
+Nothing in the shipped app reads the log — the viewers are behind `devtools`, so a release build carries the file and no UI (#72). The dev portal's Log panel reads it through `dev_read_log`, which filters **in Rust**: the file is capped at 5 MiB, which is far too much to hand a webview in one string.
+
+The *parsing* lives in `log.rs` beside the formatter that defines the format, not in `dev/`. A reader that re-describes the format somewhere else drifts from it the first time either changes; a round-trip test through the real `format_line` is what stops that.
+
+Levels include and tags exclude, which looks inconsistent and is not. Levels are four known values a panel can list up front, so ticking them is an inclusion. Tags are discovered *from the file*, so a panel cannot say "everything except the noisy ones" as an inclusion list until it has already read the file once — and the noisy ones (`live-poll`, `libobs`) are exactly what should be hidden on the very first render.
+
+### The libobs worker's log
+
+libobs does not run in this process. `libobs-recorder` spawns
+`extprocess_recorder.exe` and calls `obs_startup` **there**, so
+`base_set_log_handler` called from here would attach a handler to a libobs
+instance we never initialize — it would compile, run, and capture nothing.
+The symbol being present in `libobs-sys` is what makes that look like a
+local change; it is not one.
+
+What the worker does do is write to stderr, via libobs's default handler.
+The fork's `ipc-link` spawns it with stdin and stdout piped — those carry
+the JSON IPC protocol — and **stderr inherited**. So the messages already
+arrive at our stderr, which in a release build has no console behind it.
+
+So `recorder::libobs::worker_log` points this process's stderr at
+`logs/libobs.log` before the worker is spawned, and the child inherits it.
+No change to the fork, no IPC change, and — a file rather than a pipe — no
+way to block the worker by failing to drain it, which the piped version
+would risk. One previous session is kept as `libobs.1.log`: appending
+forever grows unbounded, and truncating outright loses the session that
+crashed, which is the one anybody is looking for.
+
+Only in builds with no console (`debug_assertions` is exactly the condition
+`main.rs` gates `windows_subsystem` on), because taking stderr away from a
+`tauri:dev` terminal would be a downgrade. `NINJA_RECORDER_LIBOBS_LOG=1`
+forces it on so the path is exercisable from a dev build.
+
+The costs, stated: the lines land in their own file rather than interleaved
+with ours, and they carry no level to filter on, because the formatting is
+libobs's and not ours. The dev portal lists the file alongside ours and its
+level filter deliberately lets level-less lines through, or selecting it
+would show an empty view. Both costs are what a handler *inside* the worker
+would fix, and that is a change to the fork — worth making once a real
+capture shows it is needed (#69).
 
 ### Why not `tracing`
 

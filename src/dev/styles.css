@@ -392,6 +392,29 @@
   background-color: var(--danger-soft);
 }
 
+/* Toggle buttons: the log panel's level and tag filters, and its source
+   switch. A chip is on or off and says so by filling in, because a filter
+   set you cannot read at a glance is one you stop trusting. */
+.dev-root button.chip {
+  padding: 0.15rem 0.55rem;
+  border-color: var(--border);
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.dev-root button.chip:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.dev-root button.chip.on {
+  border-color: transparent;
+  background-color: var(--accent-soft);
+  color: var(--text);
+}
+
 .mono { font-family: var(--mono); font-size: 0.78rem; }
 
 .num { font-variant-numeric: tabular-nums; }

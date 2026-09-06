@@ -421,6 +421,28 @@ export const COMMANDS: CommandSpec[] = [
     description: "Progress of the running replay.",
   },
   {
+    name: "dev_log_files",
+    group: "Dev · Tools",
+    dev: true,
+    description:
+      "The backend log files that exist, newest first, including the rotated ones. Reports the missing ones too — \"no log file\" and \"empty log file\" are different answers.",
+  },
+  {
+    name: "dev_read_log",
+    group: "Dev · Tools",
+    dev: true,
+    description:
+      "One filtered window of a log file, newest matching lines first. Filtering happens in Rust: the file is capped at 5 MiB, which is far too much to hand a webview whole.",
+    args: [
+      {
+        name: "query",
+        kind: "json",
+        default: { file: null, levels: [], hideTags: ["live-poll"], search: "", limit: 200 },
+        help: "levels includes; hideTags excludes. Empty levels means every level, not none.",
+      },
+    ],
+  },
+  {
     name: "dev_lcu_get",
     group: "Dev · Simulate",
     dev: true,

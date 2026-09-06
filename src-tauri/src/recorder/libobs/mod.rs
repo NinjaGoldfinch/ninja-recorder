@@ -17,8 +17,9 @@
 //! we expect on real NVENC/AMF/QSV hardware, does Vanguard tolerate it.
 
 mod window;
+mod worker_log;
 
-use crate::warn;
+use crate::{info, warn};
 use super::audio::{AudioLayout, AudioSourceKind};
 use super::{RecordConfig, Recorder, RecorderError, RecordingOutput};
 use libobs_recorder::settings::{
@@ -110,6 +111,13 @@ impl LibObsRecorder {
             // borrow of `self` across the assignments below. Once per cold
             // bring-up, next to spawning a process — not worth being clever.
             let worker = self.extprocess_recorder_path.clone();
+            // Before the spawn, not after: a child inherits the handles
+            // its parent held at `CreateProcess` time, and libobs writes
+            // its own diagnostics to stderr. Without this they go to a
+            // handle a release build has no console behind (#69).
+            if let Some(path) = worker_log::redirect_once() {
+                info!("recorder", "libobs output is going to {}", path.display());
+            }
             match LibObs::new_with_paths(Some(worker), None, None, None) {
                 Ok(obs) => {
                     self.last_error = None;

@@ -158,8 +158,10 @@ pub fn write(level: Level, tag: &str, message: &str) {
 /// One formatted line, without the trailing newline.
 ///
 /// Pure so the format is pinned by a test rather than by reading the file
-/// after the fact.
-fn format_line(now_ms: i64, level: Level, tag: &str, message: &str) -> String {
+/// after the fact. `pub(crate)` so the dev portal's reader can round-trip
+/// against the real formatter instead of re-describing the format and
+/// drifting from it.
+pub(crate) fn format_line(now_ms: i64, level: Level, tag: &str, message: &str) -> String {
     format!(
         "{} {} [{}] {}",
         timestamp(now_ms),
@@ -290,6 +292,140 @@ impl Sink {
             .ok();
         self.written = 0;
     }
+}
+
+// --- Reading it back --------------------------------------------------
+//
+// Only the dev portal reads the log (#72), so all of this is behind the
+// same feature its panels are. The *parsing* lives here rather than in
+// `dev/` deliberately: the format is defined by `format_line` above, and a
+// reader that re-describes it somewhere else drifts from it the first time
+// either changes. The round-trip test below pins them together.
+
+/// One line, taken apart. `level` and `tag` are empty for a line that does
+/// not fit the format — a panic backtrace, or anything a library wrote to
+/// the same file — which is kept rather than dropped, because an
+/// unparseable line in a diagnostic log is usually the interesting one.
+#[cfg(feature = "devtools")]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ParsedLine {
+    pub timestamp: String,
+    pub level: String,
+    pub tag: String,
+    pub message: String,
+}
+
+/// Splits `TIMESTAMP LEVEL [tag] message` back into its parts.
+#[cfg(feature = "devtools")]
+pub fn parse_line(line: &str) -> ParsedLine {
+    let unparsed = || ParsedLine {
+        timestamp: String::new(),
+        level: String::new(),
+        tag: String::new(),
+        message: line.to_string(),
+    };
+
+    // `TIMESTAMP LEVEL [tag] rest` — the timestamp is fixed-width and the
+    // level is padded to five, so this is positional rather than a regex.
+    let Some((timestamp, rest)) = line.split_once(' ') else {
+        return unparsed();
+    };
+    if !timestamp.ends_with('Z') {
+        return unparsed();
+    }
+    let rest = rest.trim_start();
+    let Some((level, rest)) = rest.split_once(' ') else {
+        return unparsed();
+    };
+    let rest = rest.trim_start();
+    let Some(rest) = rest.strip_prefix('[') else {
+        return unparsed();
+    };
+    let Some((tag, message)) = rest.split_once(']') else {
+        return unparsed();
+    };
+
+    ParsedLine {
+        timestamp: timestamp.to_string(),
+        level: level.trim().to_string(),
+        tag: tag.to_string(),
+        message: message.trim_start().to_string(),
+    }
+}
+
+/// Whether a line survives the portal's filters.
+///
+/// **Levels include, tags exclude**, and that asymmetry is deliberate:
+/// each matches the control it comes from. Levels are four known values
+/// the panel can list up front, so ticking them is an inclusion. Tags are
+/// discovered *from the file*, so the panel cannot express "everything
+/// except the noisy ones" as an inclusion list until it has already read
+/// the file once — and the noisy ones are exactly what should be hidden on
+/// the very first render.
+///
+/// Empty `levels` means every level, not none: an unticked filter set
+/// should show everything rather than nothing. Empty `hidden_tags` hides
+/// nothing.
+///
+/// `search` is case-insensitive and matches across the whole line, so a
+/// timestamp or a level is searchable too.
+#[cfg(feature = "devtools")]
+pub fn line_matches(
+    parsed: &ParsedLine,
+    levels: &[String],
+    hidden_tags: &[String],
+    search: &str,
+) -> bool {
+    // A line with no level is one that did not fit our format at all — a
+    // panic backtrace, or the libobs worker's own file, whose every line
+    // looks like this. Filtering those out by a level they do not have
+    // would empty the whole view, and they are usually the interesting
+    // ones.
+    if !parsed.level.is_empty()
+        && !levels.is_empty()
+        && !levels.iter().any(|l| l.eq_ignore_ascii_case(&parsed.level))
+    {
+        return false;
+    }
+    if hidden_tags.iter().any(|t| t.eq_ignore_ascii_case(&parsed.tag)) {
+        return false;
+    }
+    if !search.is_empty() {
+        let haystack = format!(
+            "{} {} {} {}",
+            parsed.timestamp, parsed.level, parsed.tag, parsed.message
+        )
+        .to_lowercase();
+        if !haystack.contains(&search.to_lowercase()) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Where the log is being written. `None` before `init`.
+///
+/// Two callers, which is why the gate is wider than the rest of this
+/// section: the dev portal lists the files here, and on Windows the
+/// libobs worker's stderr is pointed at this directory
+/// (`recorder::libobs::worker_log`) so its log lands beside ours.
+#[cfg(any(feature = "devtools", target_os = "windows"))]
+pub fn dir() -> Option<PathBuf> {
+    let sink = SINK.get()?;
+    let sink = match sink.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    Some(sink.dir.clone())
+}
+
+/// The log file names this module may have written, newest first. Names
+/// only — the caller joins them to `dir`.
+#[cfg(feature = "devtools")]
+pub fn file_names() -> Vec<String> {
+    let mut names = vec![format!("{FILE_STEM}.log")];
+    names.extend((1..=KEEP_ROTATED).map(|i| format!("{FILE_STEM}.{i}.log")));
+    names
 }
 
 /// Something went wrong and the user may notice.
@@ -552,5 +688,140 @@ mod tests {
         assert!(fs::read_to_string(&path).unwrap().contains("a very chatty line"));
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    // --- reading it back (devtools) ---------------------------------------
+
+    /// The reason the parser lives next to the formatter: this is the only
+    /// thing stopping the two descriptions of the format drifting apart.
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn a_formatted_line_parses_back_into_its_parts() {
+        let line = format_line(0, Level::Warn, "live-poll", "endpoint stopped responding: boom");
+        let parsed = parse_line(&line);
+        assert_eq!(
+            parsed,
+            ParsedLine {
+                timestamp: "1970-01-01T00:00:00.000Z".to_string(),
+                level: "WARN".to_string(),
+                tag: "live-poll".to_string(),
+                message: "endpoint stopped responding: boom".to_string(),
+            }
+        );
+    }
+
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn every_level_round_trips() {
+        for level in [Level::Error, Level::Warn, Level::Info, Level::Debug] {
+            let line = format_line(0, level, "t", "m");
+            assert_eq!(parse_line(&line).level, level.as_str().trim());
+        }
+    }
+
+    /// A message containing brackets, or a `]`, must not confuse the tag
+    /// split — the tag is the *first* bracketed run.
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn a_message_with_brackets_keeps_its_tag() {
+        let line = format_line(0, Level::Info, "db", "wrote [1, 2] rows");
+        let parsed = parse_line(&line);
+        assert_eq!(parsed.tag, "db");
+        assert_eq!(parsed.message, "wrote [1, 2] rows");
+    }
+
+    /// A panic backtrace, or anything a library wrote to the same file.
+    /// Kept rather than dropped: an unparseable line in a diagnostic log
+    /// is usually the interesting one.
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn a_line_that_is_not_ours_survives_as_a_message() {
+        let parsed = parse_line("thread 'main' panicked at src/lib.rs:1:1");
+        assert_eq!(parsed.level, "");
+        assert_eq!(parsed.tag, "");
+        assert_eq!(parsed.message, "thread 'main' panicked at src/lib.rs:1:1");
+    }
+
+    #[cfg(feature = "devtools")]
+    fn parsed(level: &str, tag: &str, message: &str) -> ParsedLine {
+        ParsedLine {
+            timestamp: "1970-01-01T00:00:00.000Z".to_string(),
+            level: level.to_string(),
+            tag: tag.to_string(),
+            message: message.to_string(),
+        }
+    }
+
+    /// No filter means everything, not nothing — an unticked filter set
+    /// showing an empty log would read as a broken panel.
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn empty_filters_match_everything() {
+        assert!(line_matches(&parsed("INFO", "db", "hello"), &[], &[], ""));
+    }
+
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn levels_include_and_tags_exclude() {
+        let line = parsed("WARN", "live-poll", "poll failed");
+        assert!(line_matches(&line, &["warn".into()], &[], ""));
+        assert!(!line_matches(&line, &["error".into()], &[], ""));
+        // Tags name what to *hide*, so listing this one removes it and
+        // listing a different one leaves it alone.
+        assert!(!line_matches(&line, &[], &["live-poll".into()], ""));
+        assert!(line_matches(&line, &[], &["libobs".into()], ""));
+        // Both filters apply, not either.
+        assert!(!line_matches(&line, &["error".into()], &[], ""));
+    }
+
+    /// The libobs worker's file is not written by us and none of its
+    /// lines carry a level. Hiding them because they do not match a level
+    /// they never had would empty the view entirely — which is what
+    /// selecting that file in the portal does.
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn a_line_with_no_level_survives_the_level_filter() {
+        let foreign = parse_line("info: [window-capture] using WGC");
+        assert_eq!(foreign.level, "");
+        assert!(line_matches(&foreign, &["ERROR".into()], &[], ""));
+        // Search still applies to it, so it is filterable by content.
+        assert!(line_matches(&foreign, &[], &[], "wgc"));
+        assert!(!line_matches(&foreign, &[], &[], "nvenc"));
+    }
+
+    /// The reason tags exclude rather than include: the panel has to hide
+    /// the noisy streams on its very first render, before it has read the
+    /// file and learned which tags exist. An inclusion list cannot say
+    /// "everything except these" without already knowing "everything".
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn hiding_a_tag_needs_no_knowledge_of_the_others() {
+        let noisy = parsed("DEBUG", "live-poll", "game=1.0");
+        let real = parsed("ERROR", "state_machine", "failed to stop recording");
+        let hidden = ["live-poll".to_string(), "libobs".to_string()];
+
+        assert!(!line_matches(&noisy, &[], &hidden, ""));
+        assert!(line_matches(&real, &[], &hidden, ""));
+    }
+
+    /// The high-volume tags are the ones a person filters out, so both
+    /// directions have to work on the same line.
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn search_is_case_insensitive_and_covers_the_whole_line() {
+        let line = parsed("WARN", "live-poll", "endpoint stopped responding");
+        assert!(line_matches(&line, &[], &[], "STOPPED"));
+        assert!(line_matches(&line, &[], &[], "live-poll"));
+        assert!(line_matches(&line, &[], &[], "warn"));
+        assert!(!line_matches(&line, &[], &[], "champion"));
+    }
+
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn the_rotated_files_are_listed_newest_first() {
+        let names = file_names();
+        assert_eq!(names[0], "ninja-recorder.log");
+        assert_eq!(names.len(), KEEP_ROTATED + 1);
+        assert!(names.contains(&"ninja-recorder.2.log".to_string()));
     }
 }
