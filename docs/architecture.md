@@ -175,6 +175,12 @@ The main window is built in `lib.rs`'s `setup` rather than declared in
 automatically before `setup`, and a `--hidden` start needs to create none at
 all ([DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave)).
 
+Neither child process the app spawns shows a window of its own: the fork
+builds `extprocess_recorder.exe` as a Windows-subsystem binary for release,
+and every launch of the bundled ffmpeg goes through `lib.rs`'s
+`ffmpeg_command`, which sets `CREATE_NO_WINDOW`
+([DEVELOPMENT.md §2.2](../DEVELOPMENT.md#22-the-recorder-trait)).
+
 Both windows talk to the same Rust state and the same database. The dev
 portal is a second Vite entry point gated on the `NINJA_DEVTOOLS` env var and
 a second command set gated on the `devtools` Cargo feature — a plain

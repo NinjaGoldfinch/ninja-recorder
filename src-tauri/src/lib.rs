@@ -89,6 +89,31 @@ fn which_ffmpeg() -> Option<std::path::PathBuf> {
         .find(|p| p.exists())
 }
 
+/// An ffmpeg invocation that does not flash a console window.
+///
+/// ffmpeg is a console-subsystem binary, so Windows hands it a brand new
+/// console whenever a GUI process spawns it — a black terminal window sitting
+/// over the game for the length of every faststart remux, and again for every
+/// stem extraction. Both callers pipe stdout and stderr, so that window never
+/// had anything to show in the first place. Every spawn of the bundled ffmpeg
+/// goes through here; there is no second way to launch it.
+pub(crate) fn ffmpeg_command(path: &std::path::Path) -> std::process::Command {
+    // The `mut` is only needed by the Windows branch below, and clippy runs
+    // with `-D warnings` on a Linux runner too.
+    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+    let mut command = std::process::Command::new(path);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // Spelled out rather than taken from the `windows` crate: it lives
+        // behind `Win32_System_Threading`, a feature this build does not
+        // otherwise need, and the value is fixed ABI.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
+
 /// The whole production command surface, as one command.
 ///
 /// `generate_handler!` takes a literal list and cannot host a `#[cfg]`, which

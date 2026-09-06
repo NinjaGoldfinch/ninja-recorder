@@ -26,7 +26,6 @@ use libobs_recorder::settings::{
 };
 use libobs_recorder::Recorder as LibObs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 use window::{WINDOW_CLASS, WINDOW_PROCESS, WINDOW_TITLE};
 
@@ -321,7 +320,7 @@ fn remux_faststart(
 ) -> Result<(), String> {
     let tmp_path = video_path.with_extension("faststart.tmp.mp4");
 
-    let mut command = Command::new(ffmpeg_path);
+    let mut command = crate::ffmpeg_command(ffmpeg_path);
     command
         .arg("-y") // overwrite tmp_path without prompting if it's left over from a previous crash
         .arg("-i")
