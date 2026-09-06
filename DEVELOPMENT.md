@@ -32,6 +32,15 @@ Targets (revisit once measured, but hold the line):
 
 This is why the stack is Tauri (OS WebView2, ~10 MB shell) and not Electron (~400 MB+, 300 MB RAM).
 
+The idle-CPU row is a target, not a freebie. `lcu::lockfile::watch` is the only
+unconditional background work — it runs from launch to exit whether or not
+League is even installed — so it is the floor under idle CPU, and it earns its
+2 s cadence only while the client is up. A sustained absence ramps it to 30 s
+(`lockfile::poll_delay`), with a short grace window first so a *client restart*
+is still noticed at full speed. It also caches the resolved Windows install
+directory rather than re-reading and re-parsing `RiotClientInstalls.json` on
+every single tick.
+
 ---
 
 ## 2. Capture design

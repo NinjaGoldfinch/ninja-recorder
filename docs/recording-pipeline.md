@@ -20,7 +20,7 @@ sequenceDiagram
     participant UI as Library UI
 
     U->>C: Launch League
-    Note over S: lockfile::watch polls every 2 s
+    Note over S: lockfile::watch polls every 2 s<br/>(backs off to 30 s while no client)
     C-->>S: lockfile appears (pid, port, password)
     S->>S: Idle → ClientRunning
     S->>C: gameflow::watch (WebSocket, polling fallback @ 1 s)
@@ -83,7 +83,7 @@ supervisor is the only thing that executes them, so "what should happen" and
 
 | Signal | Source | Cadence |
 |---|---|---|
-| `LockfileChanged` | `lcu::lockfile::watch` | poll every 2 s |
+| `LockfileChanged` | `lcu::lockfile::watch` | poll every 2 s, backing off to 30 s while absent |
 | `GameflowPhase` | `lcu::gameflow::watch` | LCU WebSocket, falling back to 1 s polling |
 | `LiveClientUp` / `LiveClientDown` | `live_client::poller::watch` | 1 Hz, exponential backoff to 10 s while down |
 | `FinalizeComplete` | the supervisor itself, after `stop()` and teardown | once per game |
