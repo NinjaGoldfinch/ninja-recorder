@@ -328,6 +328,46 @@ markers:     id, recording_id, game_time_s, video_time_s, kind, payload_json
 
 Implemented in `src-tauri/src/db/` (`Db` + `reconcile`), migrations via `rusqlite_migration`, `rusqlite`'s `bundled` feature so no system SQLite is required on a fresh machine. Reconciliation runs once at app startup and on demand (`rescan_recordings` command). The state machine's Finalizing step (§3.4) writes a `recordings` row + its `markers` on every stop. `duration_s` comes from the session clock, read *before* the recorder is stopped so the ffmpeg remux isn't counted as footage. `champion`/`kda_*`/`win`/`game_mode` come from Live Client Data and `game_id`/`queue` from the gameflow session, both captured during the game rather than fetched after it. `role` and `patch` arrive last, from `match_summary::patch` seconds to a minute after the finalize (§3.1). That patch is a plain `UPDATE` and never a re-`insert_recording`: the upsert takes `pinned`, `size_bytes`, `started_at` and `duration_s` from `excluded`, so re-upserting a summary would unpin the recording and zero its size. Every column it writes COALESCEs so a value the LCU could not establish never erases one the live client did — except `champion`, which COALESCEs the other way and may only be filled when NULL, because the live path writes a display name (`Wukong`) and a champion *id* resolves to an alias (`MonkeyKing`), and one champion under two spellings would split its games in two wherever the library sorts and filters.
 
+### 4.1 Decision: imported files get their duration from ffmpeg, not ffprobe
+
+`duration_s` comes from the session clock for recordings this app made. Rows
+`reconcile` imported have no session — it knows only the path, the size and
+the mtime — so their `LENGTH` stayed `—` forever and they kept counting toward
+the "N unknown" sub-label on the Recorded tile.
+
+The obvious tool is `ffprobe -show_format`, which answers this in clean JSON.
+**We don't ship it.** CI stages exactly one binary into the bundle,
+`ffmpeg.exe` (`.github/workflows/ci.yml`, "Stage ffmpeg for faststart remux"),
+and adding ffprobe would roughly double that download to obtain one number.
+
+So the probe runs `ffmpeg -hide_banner -i <file>` with no output file. ffmpeg
+prints the container header to **stderr**, then exits non-zero complaining
+that no output was specified — so the exit status is ignored and stderr is
+parsed for the `Duration: HH:MM:SS.ss` line.
+
+That is prose-scraping, which this project otherwise avoids and which is
+exactly the objection raised against reading capture health out of
+`logs/libobs.log` (#81). The difference is the blast radius. There, a misparse
+would put a wrong encoder name into a diagnostics report someone trusts; here
+every failure path returns `None` and the column stays NULL — "unknown", which
+is what it already said. A duration of zero is treated as unknown too, since a
+truncated or still-growing file would otherwise render as a confident `0:00`.
+
+The parse is a pure function (`probe::parse_duration_s`) with the spawn as a
+thin wrapper over it, so the fragile half is unit tested on a box that has no
+ffmpeg at all. The catch is that the same absence means the fixture it is
+tested against is **written from ffmpeg's documented format, not captured from
+a run** — so the tests pin the parser's behaviour, not the wording's accuracy.
+Confirming the real wording is a `docs/windows-verification.md` item.
+
+**Cost:** one subprocess per imported file, on the import branch only —
+`reconcile` skips paths that already have rows, so a settled folder spawns
+nothing on rescan. The case that costs is a first run against a large existing
+folder, and startup reconcile is inline in `lib.rs`'s `setup`, so that is
+startup latency. Header-only reads are milliseconds each; if it ever becomes a
+problem the fix is to move the import loop off the startup path, not to drop
+the probe.
+
 ---
 
 ## 5. Review player

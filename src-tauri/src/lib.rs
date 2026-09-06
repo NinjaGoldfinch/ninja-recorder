@@ -10,6 +10,7 @@ mod lcu;
 mod live_client;
 mod log;
 mod match_summary;
+mod probe;
 mod recorder;
 mod retention;
 mod state_machine;
@@ -366,7 +367,10 @@ pub fn run() {
                 }
             });
 
-            match db::reconcile::reconcile(&db, &dir) {
+            // Bound to a local rather than inlined: the probe borrows from
+            // it for the length of the call.
+            let reconcile_ffmpeg = ffmpeg_path(app.handle());
+            match db::reconcile::reconcile(&db, &dir, reconcile_ffmpeg.as_deref()) {
                 Ok(report) if report.orphans_removed > 0 || report.imported > 0 => {
                     info!(
                         "db",

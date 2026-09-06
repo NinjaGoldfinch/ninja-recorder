@@ -356,7 +356,8 @@ pub fn list_recordings(ctx: &Ctx) -> Result<Vec<db::RecordingRow>, String> {
 /// startup). DEVELOPMENT.md §4 — "the library must survive users touching
 /// the folder."
 pub fn rescan_recordings(ctx: &Ctx) -> Result<db::reconcile::ReconcileReport, String> {
-    db::reconcile::reconcile(&ctx.db, &ctx.recordings_dir).map_err(|e| e.to_string())
+    db::reconcile::reconcile(&ctx.db, &ctx.recordings_dir, ctx.ffmpeg.as_deref())
+        .map_err(|e| e.to_string())
 }
 
 /// Markers for the review timeline.
