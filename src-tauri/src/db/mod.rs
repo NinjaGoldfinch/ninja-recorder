@@ -159,6 +159,21 @@ static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
         -- rows long.
         ALTER TABLE recordings ADD COLUMN audio_tracks_json TEXT;
         ",
+    ), M::up(
+        "
+        -- The Live Client Data API's `gameData.gameMode` — \"CLASSIC\",
+        -- \"ARAM\", \"PRACTICETOOL\". Deliberately NOT folded into `queue`,
+        -- which is an INTEGER holding Riot's real queue id: the live API
+        -- never exposes a queue id, and the LCU never exposes a mode
+        -- string, so the two columns come from different sources and are
+        -- known at different times (mode during the game, queue only
+        -- post-game). Storing a made-up queue id for \"ARAM\" would put a
+        -- guess in a column the rest of the app treats as authoritative.
+        --
+        -- Nullable: rows predating this column, anything `reconcile`
+        -- imported, and any game where the poller never got a snapshot.
+        ALTER TABLE recordings ADD COLUMN game_mode TEXT;
+        ",
     )];
     let count = migrations.len() as i64;
     (Migrations::new(migrations), count)
@@ -184,6 +199,8 @@ pub struct NewRecording {
     /// unknown: the upsert COALESCEs rather than overwrites, so `reconcile`
     /// passing `None` here can't erase a layout the recorder already wrote.
     pub audio_tracks_json: Option<String>,
+    /// Live Client Data's `gameMode`. Not a queue id — see migration 6.
+    pub game_mode: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -229,6 +246,9 @@ pub struct RecordingRow {
     /// JSON `recorder::audio::AudioLayout`. `None` = unknown, which is the
     /// right answer for a file we did not record.
     pub audio_tracks_json: Option<String>,
+    /// Live Client Data's `gameMode`. The library card falls back to this
+    /// for its Queue label when `queue` is NULL — see migration 6.
+    pub game_mode: Option<String>,
 }
 
 /// Disk retention policy (DEVELOPMENT.md §6): `None` means that
@@ -284,6 +304,7 @@ fn row_to_recording(row: &rusqlite::Row) -> rusqlite::Result<RecordingRow> {
         pinned: row.get(13)?,
         size_bytes: row.get(14)?,
         audio_tracks_json: row.get(15)?,
+        game_mode: row.get(16)?,
     })
 }
 
@@ -359,8 +380,8 @@ impl Db {
             "INSERT INTO recordings
                 (path, started_at, duration_s, game_id, queue, champion, role,
                  win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
-                 audio_tracks_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                 audio_tracks_json, game_mode)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
              ON CONFLICT(path) DO UPDATE SET
                 started_at = excluded.started_at,
                 duration_s = excluded.duration_s,
@@ -377,10 +398,13 @@ impl Db {
                 size_bytes = excluded.size_bytes,
                 -- COALESCE, not a plain overwrite: `reconcile` upserts on
                 -- `path` with an all-default row, so a rescan landing after
-                -- a finalize would otherwise erase the track layout the
-                -- recorder just established. A NULL never wins here.
+                -- a finalize would otherwise erase the track layout and the
+                -- game mode the recorder just established. A NULL never
+                -- wins for either of these two.
                 audio_tracks_json =
-                    COALESCE(excluded.audio_tracks_json, recordings.audio_tracks_json)
+                    COALESCE(excluded.audio_tracks_json, recordings.audio_tracks_json),
+                game_mode =
+                    COALESCE(excluded.game_mode, recordings.game_mode)
              RETURNING id",
             params![
                 new.path,
@@ -398,6 +422,7 @@ impl Db {
                 new.pinned,
                 new.size_bytes,
                 new.audio_tracks_json,
+                new.game_mode,
             ],
             |row| row.get(0),
         )
@@ -489,7 +514,7 @@ impl Db {
         let mut stmt = conn.prepare(
             "SELECT id, path, started_at, duration_s, game_id, queue, champion, role,
                     win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
-                    audio_tracks_json
+                    audio_tracks_json, game_mode
              FROM recordings ORDER BY started_at DESC",
         )?;
         let rows = stmt.query_map([], row_to_recording)?;
@@ -584,7 +609,7 @@ impl Db {
         conn.query_row(
             "SELECT id, path, started_at, duration_s, game_id, queue, champion, role,
                     win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
-                    audio_tracks_json
+                    audio_tracks_json, game_mode
              FROM recordings WHERE id = ?1",
             [id],
             row_to_recording,
@@ -1012,6 +1037,33 @@ mod tests {
         let row = db.get_recording(id).unwrap().unwrap();
         assert_eq!(row.started_at, 2, "the rest of the row should still update");
         assert_eq!(row.audio_tracks_json.as_deref(), Some(json.as_str()));
+    }
+
+    /// Same COALESCE, same reason: the game mode is captured live and a
+    /// rescan knows nothing about it, so an overwriting upsert would blank
+    /// the Queue label on every card the moment someone pressed Rescan.
+    #[test]
+    fn a_rescan_upsert_cannot_erase_a_known_game_mode() {
+        let db = Db::open_in_memory().unwrap();
+
+        let id = db
+            .insert_recording(&NewRecording {
+                path: "/game.mp4".into(),
+                started_at: 1,
+                game_mode: Some("ARAM".into()),
+                ..Default::default()
+            })
+            .unwrap();
+
+        db.insert_recording(&NewRecording {
+            path: "/game.mp4".into(),
+            started_at: 2,
+            ..Default::default()
+        })
+        .unwrap();
+
+        let row = db.get_recording(id).unwrap().unwrap();
+        assert_eq!(row.game_mode.as_deref(), Some("ARAM"));
     }
 
     /// A row that predates migration 5, or any file `reconcile` imported,

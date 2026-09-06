@@ -95,7 +95,7 @@ const PRESETS: Preset[] = [
   {
     id: "messy",
     label: "Filter torture",
-    what: "Mixed champions, queues, unicode and over-long names, plus rows with NULL metadata — the state every row is actually in today, since fetch_match_summary is never called. Exercises filters, sort, and HTML escaping.",
+    what: "Mixed champions, queues and game modes, unicode and over-long names, rows with a mode but no queue id (the live-client-only case), plus rows with NULL metadata. Exercises filters, sort, the Queue fallback, and HTML escaping.",
     spec: { ...BASE, count: 24, messy: true, spread_days: 45, seed: 99 },
   },
 ];

@@ -51,6 +51,11 @@ pub struct PlayerEntry {
     pub summoner_name: String,
     #[serde(rename = "riotIdGameName", default)]
     pub riot_id_game_name: String,
+    /// The champion's display name, e.g. "Ahri". Taken straight from the
+    /// response rather than resolved from an id, which is why the live
+    /// path needs no id-to-name table at all (`lcu::match_data` does).
+    #[serde(rename = "championName", default)]
+    pub champion_name: String,
     /// "ORDER" (blue side) or "CHAOS" (red side).
     #[serde(default)]
     pub team: String,
@@ -86,14 +91,18 @@ pub struct PlayerItem {
     pub count: i64,
 }
 
-/// Only the two scores the advantage curve plots. `deaths`/`assists`/
-/// `wardScore` are in the real response too, but modelling fields nothing
-/// reads is what the original `allPlayers` comment was avoiding — add them
-/// alongside a feature that needs them.
+/// `kills` and `creep_score` feed the advantage curve; `deaths` and
+/// `assists` feed the library card's KDA (`self_summary`). `wardScore` is
+/// in the real response too and is still left out — modelling fields
+/// nothing reads is what the original `allPlayers` comment was avoiding.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct PlayerScores {
     #[serde(default)]
     pub kills: i64,
+    #[serde(default)]
+    pub deaths: i64,
+    #[serde(default)]
+    pub assists: i64,
     #[serde(rename = "creepScore", default)]
     pub creep_score: i64,
 }
@@ -148,12 +157,24 @@ pub struct GameEvent {
     pub dragon_type: Option<String>,
     #[serde(rename = "TurretKilled", default)]
     pub turret_killed: Option<String>,
+    /// Only ever set on the `GameEnd` event: "Win" or "Lose", from the
+    /// active player's point of view. This is the whole of the live path's
+    /// win/loss detection — see `outcome`.
+    #[serde(rename = "Result", default)]
+    pub result: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct GameData {
     #[serde(rename = "gameTime")]
     pub game_time: f64,
+    /// "CLASSIC", "ARAM", "PRACTICETOOL", … Not a queue id: the Live
+    /// Client Data API never exposes one, so this is the closest the live
+    /// path gets to naming the mode, and it lands in `recordings.game_mode`
+    /// rather than `recordings.queue` (which is an INTEGER holding Riot's
+    /// real queue id, and only the LCU can fill it).
+    #[serde(rename = "gameMode", default)]
+    pub game_mode: String,
 }
 
 // --- Team advantage -------------------------------------------------------
@@ -191,19 +212,11 @@ pub struct TeamDiff {
 ///
 /// This is the same name-matching failure mode that once silently dropped
 /// every kill/death marker (see `matches_our_kills_when_events_use_summoner_name_not_riot_id`),
-/// which is why it reuses `names_match` rather than comparing directly.
+/// which is why the lookup lives in `find_us` — shared with `self_summary`
+/// and built on `names_match` — rather than comparing names directly here.
 pub fn team_diff(snapshot: &AllGameData) -> Option<TeamDiff> {
     let active = snapshot.active_player.as_ref()?;
-    let our_names = active.candidate_names();
-
-    let our_team = snapshot
-        .all_players
-        .iter()
-        .find(|p| {
-            p.candidate_names()
-                .iter()
-                .any(|n| our_names.iter().any(|us| names_match(n, us)))
-        })
+    let our_team = find_us(snapshot)
         .map(|p| p.team.clone())
         .filter(|t| !t.is_empty())?;
 
@@ -229,6 +242,121 @@ pub fn team_diff(snapshot: &AllGameData) -> Option<TeamDiff> {
         kill_diff: our_kills - their_kills,
         cs_diff: our_cs - their_cs,
     })
+}
+
+/// The `allPlayers` entry for the player doing the recording, if we can
+/// identify one. Shared by `team_diff` and `self_summary` so there is
+/// exactly one answer in this module to "which of these ten players are
+/// we", and one place to fix when it turns out to be wrong.
+///
+/// `None` when `activePlayer` is absent or no entry matches. See
+/// `team_diff` for why that stays `None` instead of falling back.
+fn find_us(snapshot: &AllGameData) -> Option<&PlayerEntry> {
+    let our_names = snapshot.active_player.as_ref()?.candidate_names();
+    snapshot.all_players.iter().find(|p| {
+        p.candidate_names()
+            .iter()
+            .any(|n| our_names.iter().any(|us| names_match(n, us)))
+    })
+}
+
+/// Our own kill participation, exact, from `allPlayers[].scores`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+pub struct Kda {
+    pub kills: i64,
+    pub deaths: i64,
+    pub assists: i64,
+}
+
+/// What one Live Client Data snapshot says about the recording player's
+/// own game — everything the library card shows that doesn't need the
+/// LCU. Written to the `recordings` row at finalize.
+///
+/// Every field is optional because every field maps to a nullable column,
+/// and because each has its own way of being unknowable: `champion` and
+/// `kda` need us to be findable in `allPlayers`, `game_mode` doesn't, and
+/// `win` isn't knowable at all until the game actually ends.
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct LiveSummary {
+    pub champion: Option<String>,
+    pub kda: Option<Kda>,
+    pub game_mode: Option<String>,
+    /// `None` means "not decided yet", never "lost" — see `outcome`.
+    pub win: Option<bool>,
+}
+
+impl LiveSummary {
+    /// Folds a newer snapshot into this one. The newer values win, except
+    /// that a field we already know is never given back for a `None`.
+    ///
+    /// That asymmetry is the whole point. `GameEnd` shows up in the event
+    /// list on one poll, and the game process can exit before the next one
+    /// lands — so an outcome, once seen, has to survive however many empty
+    /// polls follow it. The same holds for a snapshot that briefly fails
+    /// to match us in `allPlayers`.
+    pub fn absorb(&mut self, newer: LiveSummary) {
+        if newer.champion.is_some() {
+            self.champion = newer.champion;
+        }
+        if newer.kda.is_some() {
+            self.kda = newer.kda;
+        }
+        if newer.game_mode.is_some() {
+            self.game_mode = newer.game_mode;
+        }
+        if newer.win.is_some() {
+            self.win = newer.win;
+        }
+    }
+}
+
+/// Extracts the recording player's own champion, KDA, game mode and (once
+/// the game has ended) result from one snapshot.
+///
+/// Deliberately infallible: `game_mode` is readable even when we can't
+/// work out which player we are, and dropping it just because the name
+/// match failed would lose the one label a Practice Tool recording can
+/// otherwise show.
+pub fn self_summary(snapshot: &AllGameData) -> LiveSummary {
+    let us = find_us(snapshot);
+
+    LiveSummary {
+        champion: us
+            .map(|p| p.champion_name.trim())
+            .filter(|c| !c.is_empty())
+            .map(str::to_string),
+        kda: us.map(|p| Kda {
+            kills: p.scores.kills,
+            deaths: p.scores.deaths,
+            assists: p.scores.assists,
+        }),
+        game_mode: Some(snapshot.game_data.game_mode.trim())
+            .filter(|m| !m.is_empty())
+            .map(str::to_string),
+        win: outcome(snapshot),
+    }
+}
+
+/// Win/loss from the `GameEnd` event's `Result` field, which is the only
+/// place the Live Client Data API states an outcome.
+///
+/// An unrecognised value yields `None` rather than `false`. A recording
+/// wrongly badged as a loss is worse than one badged as unknown: the card
+/// already renders unknown honestly, and the win-rate tile deliberately
+/// excludes it (`renderStats` in `src/library.ts`).
+fn outcome(snapshot: &AllGameData) -> Option<bool> {
+    let result = snapshot
+        .events
+        .events
+        .iter()
+        .find(|e| e.event_name == "GameEnd")
+        .and_then(|e| e.result.as_deref())?;
+
+    match result.trim().to_ascii_lowercase().as_str() {
+        "win" => Some(true),
+        "lose" => Some(false),
+        _ => None,
+    }
 }
 
 // --- Markers -------------------------------------------------------------
@@ -554,6 +682,104 @@ mod tests {
             "/../fixtures/live-client/sample-allgamedata.json"
         ));
         serde_json::from_str(json).unwrap()
+    }
+
+    fn won_fixture() -> AllGameData {
+        let json = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/live-client/game-end-win.json"
+        ));
+        serde_json::from_str(json).unwrap()
+    }
+
+    fn lost_fixture() -> AllGameData {
+        let json = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/live-client/game-end-lose.json"
+        ));
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn self_summary_reads_our_champion_and_full_kda_from_all_players() {
+        let summary = self_summary(&fixture());
+        assert_eq!(summary.champion.as_deref(), Some("Ahri"));
+        assert_eq!(
+            summary.kda,
+            Some(Kda {
+                kills: 3,
+                deaths: 1,
+                assists: 2
+            })
+        );
+        assert_eq!(summary.game_mode.as_deref(), Some("CLASSIC"));
+    }
+
+    #[test]
+    fn a_game_still_in_progress_has_no_outcome_rather_than_a_loss() {
+        // The sample fixture is a snapshot mid-game: no GameEnd event yet.
+        // `false` here would badge every in-flight recording as a defeat.
+        assert_eq!(self_summary(&fixture()).win, None);
+    }
+
+    #[test]
+    fn game_end_result_decides_the_outcome() {
+        assert_eq!(self_summary(&won_fixture()).win, Some(true));
+        assert_eq!(self_summary(&lost_fixture()).win, Some(false));
+    }
+
+    #[test]
+    fn an_unrecognized_result_is_unknown_not_a_loss() {
+        let mut snapshot = won_fixture();
+        for event in &mut snapshot.events.events {
+            if event.event_name == "GameEnd" {
+                event.result = Some("Surrendered".into());
+            }
+        }
+        assert_eq!(outcome(&snapshot), None);
+    }
+
+    #[test]
+    fn game_mode_survives_a_snapshot_we_cannot_place_ourselves_in() {
+        // A Practice Tool recording where the name match fails still has a
+        // mode worth showing on the card — losing it too would leave the
+        // row with nothing at all.
+        let mut snapshot = fixture();
+        snapshot.all_players.clear();
+
+        let summary = self_summary(&snapshot);
+        assert_eq!(summary.champion, None);
+        assert_eq!(summary.kda, None);
+        assert_eq!(summary.game_mode.as_deref(), Some("CLASSIC"));
+    }
+
+    #[test]
+    fn absorb_keeps_an_outcome_the_newer_poll_no_longer_reports() {
+        // GameEnd lands on one poll; the game process can exit before the
+        // next. The outcome has to outlive the polls that follow it.
+        let mut accumulated = self_summary(&won_fixture());
+        assert_eq!(accumulated.win, Some(true));
+
+        accumulated.absorb(self_summary(&fixture()));
+
+        assert_eq!(accumulated.win, Some(true), "the win must not be given back");
+        assert_eq!(
+            accumulated.champion.as_deref(),
+            Some("Ahri"),
+            "everything else still tracks the newest poll"
+        );
+    }
+
+    #[test]
+    fn absorb_takes_the_newer_kda_because_scores_only_ever_grow() {
+        let mut accumulated = LiveSummary::default();
+        accumulated.absorb(self_summary(&fixture()));
+
+        let mut later = fixture();
+        later.all_players[0].scores.kills = 9;
+        accumulated.absorb(self_summary(&later));
+
+        assert_eq!(accumulated.kda.unwrap().kills, 9);
     }
 
     /// Real capture (Practice Tool, 2026-09-01): `activePlayer` had both

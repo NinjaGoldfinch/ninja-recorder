@@ -23,6 +23,10 @@ export interface RecordingRow {
   /// every recording made before multi-track audio, and anything a rescan
   /// imported from a file we didn't record.
   audio_tracks_json: string | null;
+  /// Live Client Data's `gameData.gameMode` — "CLASSIC", "ARAM",
+  /// "PRACTICETOOL". Not a queue id: `queue` holds Riot's real one and
+  /// only the LCU can fill it, so a row can have either, both or neither.
+  game_mode: string | null;
 }
 
 /** One capturable audio source. Mirrors Rust's `AudioSourceKind`. */

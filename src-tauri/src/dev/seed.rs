@@ -134,6 +134,7 @@ pub fn dev_seed_library(
                 duration_s: Some(plan.duration_s),
                 game_id: Some(plan.game_id),
                 queue: plan.queue,
+                game_mode: plan.game_mode.clone(),
                 champion: plan.champion.clone(),
                 role: plan.role.clone(),
                 win: plan.win,
@@ -267,6 +268,7 @@ struct RecordingPlan {
     duration_s: f64,
     game_id: i64,
     queue: Option<i64>,
+    game_mode: Option<String>,
     champion: Option<String>,
     role: Option<String>,
     win: Option<bool>,
@@ -286,6 +288,16 @@ fn audio_layout_for(index: usize) -> crate::recorder::audio::AudioLayout {
     .layout()
 }
 
+/// The mode string Live Client Data would have reported for a game in
+/// this queue. Only the ids in `QUEUES` need covering — this exists to
+/// keep seeded rows self-consistent, not to be a general mapping.
+fn game_mode_for_queue(queue: i64) -> &'static str {
+    match queue {
+        450 => "ARAM",
+        _ => "CLASSIC",
+    }
+}
+
 fn plan_recording(spec: &SeedSpec, rng: &mut Rng, index: usize, now: i64) -> RecordingPlan {
     let duration_s = rng.range_f64(spec.duration_min_s, spec.duration_max_s.max(spec.duration_min_s));
     // Spread backwards from now, oldest last, so a max-age policy has a
@@ -298,18 +310,34 @@ fn plan_recording(spec: &SeedSpec, rng: &mut Rng, index: usize, now: i64) -> Rec
     };
     let started_at = now - age - rng.range_i64(0, 3_600_000);
 
-    // Every third recording in messy mode has unknown metadata — the NULL
-    // state a real row sits in until `fetch_match_summary` is wired up
-    // (DEVELOPMENT.md §3.4), which the library UI must render without
-    // falling apart.
+    // Every third recording in messy mode has unknown metadata — the state
+    // a row sits in when the Live Client Data poller never reached the game
+    // and the LCU summary never landed either (DEVELOPMENT.md §3.4), which
+    // the library UI must render without falling apart.
     let unknown = spec.messy && index % 3 == 2;
+
+    // `queue` comes from the LCU and `game_mode` from Live Client Data, so
+    // a real row can carry either, both or neither. The messy preset seeds
+    // the live-only case too, since that is what a Practice Tool game or
+    // any recording made with the client already closed looks like — and
+    // the card's Queue label has to fall back to the mode rather than
+    // going blank.
+    let queue = (!unknown).then(|| *rng.pick(QUEUES));
+    let live_only = spec.messy && index % 5 == 3;
 
     RecordingPlan {
         stamp: started_at,
         started_at,
         duration_s,
         game_id: 5_000_000_000 + index as i64,
-        queue: (!unknown).then(|| *rng.pick(QUEUES)),
+        queue: if live_only { None } else { queue },
+        game_mode: if unknown {
+            None
+        } else if live_only {
+            Some("PRACTICETOOL".to_string())
+        } else {
+            queue.map(game_mode_for_queue).map(str::to_string)
+        },
         champion: if unknown {
             None
         } else if spec.messy && index % 5 == 1 {
