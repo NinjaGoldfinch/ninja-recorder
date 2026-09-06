@@ -11,6 +11,23 @@
 //! Parsing lives here, away from `lib.rs`, so it can be unit tested without a
 //! Tauri runtime — and so it names no `tauri` type, for the reason
 //! `core`'s header gives.
+//!
+//! The contract is no longer hypothetical: `lib.rs` registers
+//! `tauri-plugin-autostart` with `HIDDEN_FLAG`, so on any machine where the
+//! user has turned start-on-login on, that exact string is sitting in the
+//! registry waiting to be handed back to a future build. The constants below
+//! are what both sides read, so the flag can't be changed on one side only.
+
+/// Start with no window, sitting in the tray.
+///
+/// This is the string autostart writes into `HKCU\...\Run`, which is why it
+/// is a constant rather than a literal in two places: the parser and the
+/// registration have to agree forever, including with builds that wrote the
+/// entry years earlier.
+pub const HIDDEN_FLAG: &str = "--hidden";
+
+/// Run headless. Reserved — see `Launch::Daemon`.
+pub const DAEMON_FLAG: &str = "--daemon";
 
 /// What this process should do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -49,8 +66,8 @@ impl Launch {
             match arg.as_ref() {
                 // `--daemon` wins: it is the stronger statement, and a
                 // daemon has no window to hide.
-                "--daemon" => return Launch::Daemon,
-                "--hidden" => mode = Launch::UiHidden,
+                DAEMON_FLAG => return Launch::Daemon,
+                HIDDEN_FLAG => mode = Launch::UiHidden,
                 _ => {}
             }
         }
@@ -70,8 +87,9 @@ impl Launch {
     /// The reason this mode can't run yet, if it can't.
     ///
     /// `Daemon` is parsed but unimplemented. Returning a message rather than
-    /// silently falling back to a normal window matters: autostart will one
-    /// day register `--daemon`, and a build that quietly ignored it would look
+    /// silently falling back to a normal window matters: autostart registers
+    /// `HIDDEN_FLAG` today and is the obvious caller to move onto `--daemon`
+    /// once it exists, and a build that quietly ignored the flag would look
     /// like it worked while recording nothing in the background.
     pub fn unsupported(self) -> Option<&'static str> {
         match self {
@@ -135,6 +153,17 @@ mod tests {
         assert!(Launch::Ui.creates_window());
         assert!(!Launch::UiHidden.creates_window());
         assert!(!Launch::Daemon.creates_window());
+    }
+
+    /// The registry holds the *string*, so renaming the constant is free and
+    /// changing its value is not: an installed `HKCU\...\Run` entry written
+    /// by an older build would stop meaning anything, and start-on-login would
+    /// silently open a window instead of going to the tray.
+    #[test]
+    fn the_autostart_flag_is_the_exact_string_already_in_the_registry() {
+        assert_eq!(HIDDEN_FLAG, "--hidden");
+        assert_eq!(DAEMON_FLAG, "--daemon");
+        assert_eq!(Launch::from_args([HIDDEN_FLAG]), Launch::UiHidden);
     }
 
     #[test]

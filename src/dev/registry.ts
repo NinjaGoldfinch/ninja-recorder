@@ -174,6 +174,22 @@ export const COMMANDS: CommandSpec[] = [
       { name: "value", kind: "string", default: "dark" },
     ],
   },
+  {
+    name: "get_autostart",
+    group: "Settings",
+    dev: false,
+    description:
+      "Whether the app is registered to start on login, read live from the platform (HKCU\\...\\Run on Windows) rather than from settings_kv. `supported: false` means this build has no autostart control.",
+  },
+  {
+    name: "set_autostart",
+    group: "Settings",
+    dev: false,
+    danger: true,
+    description:
+      "Adds or removes the login entry for this executable, then returns what the platform says afterwards \u2014 which is not always what was asked for. Writes outside the app's own data: enabling here really does register the running binary, dev build included.",
+    args: [{ name: "enabled", kind: "boolean", default: false }],
+  },
 
   // --- Audio -------------------------------------------------------
   {

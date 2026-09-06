@@ -59,6 +59,21 @@ export type AudioPreset =
 /** A preset the settings screen can offer as a single button. */
 export type AudioPresetKey = "game" | "game_mic" | "game_mic_discord" | "desktop";
 
+/**
+ * Start-on-login, as the platform reports it. Mirrors Rust's
+ * `core::AutostartStatus`.
+ *
+ * Deliberately not a `Prefs` entry: this one lives in the Windows registry,
+ * which the user can edit from Task Manager's Startup tab, so it is read from
+ * the backend every time the settings view loads rather than cached.
+ * `supported` is false in a build with no autostart control, where the row
+ * shows disabled instead of a checkbox that would lie.
+ */
+export interface AutostartStatus {
+  enabled: boolean;
+  supported: boolean;
+}
+
 export interface AudioInputDevice {
   id: string;
   name: string;

@@ -83,7 +83,7 @@ flowchart TB
 | `fixtures.rs` | Capturing live API responses to `fixtures/` | `enabled`, `record` |
 | `dev/` | Dev portal backend, compiled out without `--features devtools` | `dev_*` commands |
 | `core/mod.rs` | Every command's logic, with no `tauri` types in any signature | `Ctx`, the command free functions |
-| `launch.rs` | Which mode argv asked for (`--daemon`, `--hidden`) | `Launch::from_env` |
+| `launch.rs` | Which mode argv asked for (`--daemon`, `--hidden`), and the flag constants autostart registers | `Launch::from_env`, `HIDDEN_FLAG` |
 | `tray.rs` | The tray icon and its Open / Settings / Quit menu. No tests, deliberately | `build`, `request_quit` |
 | `notify.rs` | Desktop notifications, best-effort. No tests, deliberately | `notify`, `close_to_tray_notice` |
 | `lib.rs` | Tauri setup, app state, the `rpc` command, and main-window creation | `run` |
@@ -94,6 +94,13 @@ functions at all ([DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-rec
 `AppState` is a newtype that `Deref`s to `core::Ctx`. Two commands stay in
 `lib.rs` rather than moving down — `open_recordings_folder` and
 `dev_open_portal` — because they drive the desktop shell.
+
+Anything `core` needs that only an `AppHandle` can do crosses the same way: a
+trait object or a closure held by `Ctx` and installed from `lib.rs`'s `setup`.
+There are two — `set_library_changed_notifier` (emitting the Tauri event) and
+`set_autostart` (the `Autostart` trait over `tauri-plugin-autostart`). Both are
+`None` in a unit test, which for autostart is load-bearing: `cargo test` has no
+way to write a real login entry.
 
 The consistent shape across `state_machine`, `db::reconcile` and `retention`
 is **a pure decision function plus a thin I/O wrapper**. The decision is unit

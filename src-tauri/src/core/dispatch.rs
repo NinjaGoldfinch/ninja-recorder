@@ -171,6 +171,8 @@ dispatch_table! {
     ctx_plain   get_recordings_dir();
     ctx_result  get_ui_prefs();
     ctx_result  set_ui_pref(key: String, value: String);
+    ctx_result  get_autostart();
+    ctx_result  set_autostart(enabled: bool);
     ctx_result  get_audio_preset();
     ctx_result  set_audio_preset(preset: crate::recorder::audio::AudioPreset);
     bare_result list_audio_inputs();
@@ -215,6 +217,9 @@ mod tests {
                 "policy": { "max_total_bytes": null, "max_age_days": null }
             }),
             "set_ui_pref" => json!({ "key": "theme", "value": "dark" }),
+            // Safe to run for real: the test `Ctx` has no autostart control,
+            // so this is refused before it can reach a registry.
+            "set_autostart" => json!({ "enabled": true }),
             // Internally tagged on `preset`, so the value is an object.
             "set_audio_preset" => json!({ "preset": { "preset": "game" } }),
             "extract_audio_track" => json!({ "recordingPath": "/tmp/nope.mp4", "trackIndex": 1 }),
@@ -361,6 +366,110 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(super::super::close_action(&ctx), super::super::CloseAction::Hide);
+    }
+
+    /// Stands in for the registry. `sticky` models the case that actually
+    /// matters on Windows: a write that reports success and changes nothing,
+    /// because policy or permissions overruled it.
+    struct FakeAutostart {
+        enabled: Mutex<bool>,
+        sticky: bool,
+    }
+
+    impl FakeAutostart {
+        fn new(enabled: bool) -> Self {
+            Self {
+                enabled: Mutex::new(enabled),
+                sticky: false,
+            }
+        }
+
+        fn ignoring_writes() -> Self {
+            Self {
+                enabled: Mutex::new(false),
+                sticky: true,
+            }
+        }
+    }
+
+    impl super::super::Autostart for FakeAutostart {
+        fn is_enabled(&self) -> Result<bool, String> {
+            Ok(*self.enabled.lock().unwrap())
+        }
+
+        fn enable(&self) -> Result<(), String> {
+            if !self.sticky {
+                *self.enabled.lock().unwrap() = true;
+            }
+            Ok(())
+        }
+
+        fn disable(&self) -> Result<(), String> {
+            if !self.sticky {
+                *self.enabled.lock().unwrap() = false;
+            }
+            Ok(())
+        }
+    }
+
+    fn ctx_with_autostart(autostart: FakeAutostart) -> Ctx {
+        let mut ctx = ctx();
+        ctx.set_autostart(Box::new(autostart));
+        ctx
+    }
+
+    #[tokio::test]
+    async fn autostart_can_be_turned_on_and_off_and_reads_back() {
+        let ctx = ctx_with_autostart(FakeAutostart::new(false));
+
+        let status = dispatch(&ctx, "get_autostart", Value::Null).await.unwrap();
+        assert_eq!(status["enabled"], json!(false));
+        assert_eq!(status["supported"], json!(true));
+
+        let status = dispatch(&ctx, "set_autostart", json!({ "enabled": true }))
+            .await
+            .unwrap();
+        assert_eq!(status["enabled"], json!(true), "set should report the new state");
+        let status = dispatch(&ctx, "get_autostart", Value::Null).await.unwrap();
+        assert_eq!(status["enabled"], json!(true), "the change should persist");
+
+        dispatch(&ctx, "set_autostart", json!({ "enabled": false }))
+            .await
+            .unwrap();
+        let status = dispatch(&ctx, "get_autostart", Value::Null).await.unwrap();
+        assert_eq!(status["enabled"], json!(false));
+    }
+
+    /// The whole reason `set_autostart` re-reads instead of echoing its
+    /// argument: a `Run` entry write can be overruled, and a checkbox that
+    /// ticked anyway would promise a login start that never happens.
+    #[tokio::test]
+    async fn autostart_reports_the_platform_not_the_request() {
+        let ctx = ctx_with_autostart(FakeAutostart::ignoring_writes());
+        let status = dispatch(&ctx, "set_autostart", json!({ "enabled": true }))
+            .await
+            .unwrap();
+        assert_eq!(
+            status["enabled"],
+            json!(false),
+            "a write the platform ignored must not report itself as enabled"
+        );
+    }
+
+    /// `Ctx::new` leaves autostart unset, so nothing in `cargo test` — this
+    /// module's `every_command_round_trips` included — can write a real login
+    /// entry on the machine running the suite.
+    #[tokio::test]
+    async fn without_a_control_autostart_reports_unsupported_and_refuses_writes() {
+        let ctx = ctx();
+        let status = dispatch(&ctx, "get_autostart", Value::Null).await.unwrap();
+        assert_eq!(status["supported"], json!(false));
+        assert_eq!(status["enabled"], json!(false));
+
+        let err = dispatch(&ctx, "set_autostart", json!({ "enabled": true }))
+            .await
+            .expect_err("a Ctx with no autostart control must not silently succeed");
+        assert!(err.contains("not available"), "{err}");
     }
 
     #[test]
