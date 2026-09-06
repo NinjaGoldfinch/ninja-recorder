@@ -110,7 +110,7 @@ pub async fn watch<F>(
     F: FnMut(GameflowUpdate) + Send,
 {
     loop {
-        if let Err(e) = watch_via_websocket(lockfile, &mut on_update).await {
+        if let Err(e) = watch_via_websocket(lockfile, http, &mut on_update).await {
             warn!("lcu", "websocket unavailable ({e}), falling back to polling");
             watch_via_polling(http, poll_interval, &mut on_update).await;
         }
@@ -146,8 +146,20 @@ where
     }
 }
 
+/// Subscribes to phase-change events, **and reads the phase we are
+/// already in**.
+///
+/// The read is not optional. The socket only ever delivers *changes*, so a
+/// watch that starts mid-game learns nothing until the phase next moves —
+/// and the phase will never change *to* `InProgress` again this game. That
+/// made the state machine's own recovery path unreachable: after any
+/// mid-game restart of this watch, `ClientRunning` never advanced to
+/// `WaitingForGame`, so the rest of the game went unrecorded (#75). It
+/// also meant starting the app during a game recorded nothing until the
+/// next one.
 async fn watch_via_websocket<F>(
     lockfile: &LockfileInfo,
+    http: &LcuHttpClient,
     on_update: &mut F,
 ) -> Result<(), GameflowError>
 where
@@ -184,9 +196,39 @@ where
     .await
     .map_err(Box::new)?;
 
+    // Read the current phase *after* subscribing, never before: a change
+    // landing between the two would then be delivered by the socket rather
+    // than falling into the gap. The cost of that ordering is a possible
+    // duplicate, which `last` below absorbs.
+    let mut last: Option<GameflowPhase> = None;
+    match http
+        .get_json::<GameflowPhase>("/lol-gameflow/v1/gameflow-phase")
+        .await
+    {
+        Ok(phase) => {
+            last = Some(phase.clone());
+            // `Polling` because that is literally what this was — an HTTP
+            // read, not a socket frame.
+            on_update(GameflowUpdate {
+                phase,
+                source: GameflowSource::Polling,
+            });
+        }
+        // Not fatal: the socket is still live and will report the next
+        // change. This only costs the current phase.
+        Err(e) => warn!("lcu", "could not read the current gameflow phase: {e}"),
+    }
+
     while let Some(msg) = ws.next().await {
         if let Message::Text(text) = msg.map_err(Box::new)? {
             if let Some(update) = parse_gameflow_event(&text) {
+                // De-duplicated like the polling path already does, so the
+                // initial read and a change event carrying the same phase
+                // do not both dispatch.
+                if last.as_ref() == Some(&update.phase) {
+                    continue;
+                }
+                last = Some(update.phase.clone());
                 on_update(update);
             }
         }

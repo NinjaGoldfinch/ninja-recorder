@@ -302,6 +302,11 @@ here are silent, and the app's own UI will not show you most of them.
       an existing row without playing another game. Check the log for a
       disagreement warning: the LCU and Live Client Data must never report a
       different winner, and if they do, the wrong game was matched.
+- [ ] **Start the app during a game.** It should begin recording rather than
+      waiting for the next one — the gameflow watch now reads the current
+      phase on connect instead of only reacting to changes (#75). The same
+      path is what lets a recording resume after anything interrupts it
+      mid-game.
 - [ ] **A recording survives a brief Live Client Data outage.** #74 tolerates
       five consecutive transport failures; confirm a momentary blip no longer
       finalizes the VOD, and that a genuinely ended game still finalizes

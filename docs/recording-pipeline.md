@@ -84,7 +84,7 @@ supervisor is the only thing that executes them, so "what should happen" and
 | Signal | Source | Cadence |
 |---|---|---|
 | `LockfileChanged` | `lcu::lockfile::watch` | poll every 2 s, backing off to 30 s while absent |
-| `GameflowPhase` | `lcu::gameflow::watch` | LCU WebSocket, falling back to 1 s polling |
+| `GameflowPhase` | `lcu::gameflow::watch` | LCU WebSocket, falling back to 1 s polling. Both read the *current* phase on connect, not just changes to it |
 | `LiveClientUp` / `LiveClientDown` | `live_client::poller::watch` | 1 Hz. `Down` needs 5 consecutive *transport* failures, ~5 s; backoff to 10 s only once down |
 | `FinalizeComplete` | the supervisor itself, after `stop()` and teardown | once per game |
 
