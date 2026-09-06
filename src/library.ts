@@ -1,12 +1,14 @@
 import { call } from "./bridge";
 import { el, escapeAttr, escapeHtml } from "./dom";
 import {
-  basename,
   formatBytes,
   formatClock,
   formatDateTime,
+  formatKda,
   formatSpan,
-  queueLabel,
+  kdaRatio,
+  queueOrModeLabel,
+  vodTitle,
 } from "./format";
 import { getPrefs } from "./prefs";
 import { currentView, onViewChange } from "./router";
@@ -147,10 +149,7 @@ function visibleRows(): RecordingRow[] {
   const pinnedOnly = els.pinned.checked;
 
   const rows = allRecordings.filter((row) => {
-    if (
-      championFilter &&
-      !(row.champion ?? basename(row.path)).toLowerCase().includes(championFilter)
-    ) {
+    if (championFilter && !vodTitle(row).toLowerCase().includes(championFilter)) {
       return false;
     }
     if (outcome === "wins" && row.win !== true) return false;
@@ -236,14 +235,12 @@ function outcomeAttr(win: boolean | null): string {
 }
 
 function card(row: RecordingRow): string {
-  // Falls back to the filename, which is user-controlled: reconcile imports
-  // whatever video files it finds. Hence escapeAttr on every attribute.
-  const title = row.champion ?? basename(row.path);
-  const kda =
-    row.kda_k === null || row.kda_d === null || row.kda_a === null
-      ? null
-      : `${row.kda_k} / ${row.kda_d} / ${row.kda_a}`;
-  const queue = queueLabel(row.queue);
+  // `vodTitle` can fall back to the filename, which is user-controlled:
+  // reconcile imports whatever video files it finds. Hence escapeAttr on
+  // every attribute and escapeHtml on every text node below.
+  const title = vodTitle(row);
+  const kda = formatKda(row.kda_k, row.kda_d, row.kda_a);
+  const queue = queueOrModeLabel(row);
   const length = row.duration_s === null ? null : formatClock(row.duration_s);
 
   const badge =
@@ -253,8 +250,12 @@ function card(row: RecordingRow): string {
           row.win ? "Win" : "Loss"
         }</span>`;
 
-  const stat = (label: string, value: string | null) =>
-    `<div><dt>${label}</dt><dd>${value === null ? "—" : escapeHtml(value)}</dd></div>`;
+  // `title` is optional and only ever a hover hint — never the only place
+  // a value appears, since touch and keyboard users never see it.
+  const stat = (label: string, value: string | null, title?: string | null) =>
+    `<div><dt>${label}</dt><dd${
+      title ? ` title="${escapeAttr(title)}"` : ""
+    }>${value === null ? "—" : escapeHtml(value)}</dd></div>`;
 
   return `
     <article class="vod-card" role="listitem" tabindex="0"
@@ -264,7 +265,7 @@ function card(row: RecordingRow): string {
         ${badge}
       </header>
       <dl class="vod-stats">
-        ${stat("KDA", kda)}
+        ${stat("KDA", kda, kdaRatio(row.kda_k, row.kda_d, row.kda_a))}
         ${stat("Length", length)}
         ${stat("Queue", queue)}
       </dl>
@@ -356,7 +357,7 @@ async function deleteRecording(id: number) {
   const row = findRow(id);
   try {
     await call("delete_recording", { recordingId: id });
-    toast(`Deleted ${row?.champion ?? basename(row?.path ?? "recording")}.`);
+    toast(`Deleted ${row ? vodTitle(row) : "recording"}.`);
     await Promise.all([refreshLibrary(), refreshDiskUsage()]);
   } catch (err) {
     toast(`Failed to delete: ${err}`, "error");

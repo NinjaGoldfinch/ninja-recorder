@@ -1,6 +1,6 @@
 import { assetUrl, call } from "./bridge";
 import { escapeHtml } from "./dom";
-import { formatTime } from "./format";
+import { formatTime, vodTitle } from "./format";
 import { currentView, showView } from "./router";
 import { toast } from "./toast";
 import type { AudioLayout, MarkerRow, RecordingRow, SampleRow } from "./types";
@@ -1102,7 +1102,7 @@ export async function openReview(row: RecordingRow) {
   if (!video) return;
 
   currentRecordingPath = row.path;
-  if (reviewTitle) reviewTitle.textContent = row.champion ?? `Recording #${row.id}`;
+  if (reviewTitle) reviewTitle.textContent = vodTitle(row);
   if (videoError) videoError.hidden = true;
   if (videoErrorText) videoErrorText.textContent = "";
   if (videoErrorDetail) videoErrorDetail.textContent = "";

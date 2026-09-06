@@ -23,7 +23,7 @@ flowchart TB
     TOAST["toast.ts<br/><small>owns: the transient message</small>"]
     BRIDGE["bridge.ts<br/><small>invoke + asset URLs</small>"]
     DOM["dom.ts<br/><small>el, escapeHtml, escapeAttr</small>"]
-    FMT["format.ts<br/><small>pure formatters</small>"]
+    FMT["format.ts<br/><small>pure formatters + label fallbacks</small>"]
     TYPES["types.ts<br/><small>mirrors the Rust serde structs</small>"]
 
     MAIN --> ROUTER
@@ -49,12 +49,31 @@ flowchart TB
     LIB --> DOM
     REVIEW --> DOM
     BRIDGE --> TYPES
+    FMT -.->|"type-only"| TYPES
     style MAIN fill:#ede7f6,stroke:#5e35b1
     style BRIDGE fill:#e3f2fd,stroke:#1565c0
 ```
 
 `types.ts` sits apart deliberately: putting each shape beside its first
 consumer would make `bridge` → `review` → `bridge` a cycle.
+
+### What a card says when the data is missing
+
+Match metadata arrives from two independent sources — Live Client Data
+during the game, the LCU after it (see
+[recording-pipeline.md](recording-pipeline.md) §4) — so a row can carry
+either, both or neither. `format.ts` owns the fallback chains rather than
+scattering `??` through the card template:
+
+| Slot | Chain | Why it stops there |
+|---|---|---|
+| Title (`vodTitle`) | `champion` → game mode → filename | Never empty. The filename is untrusted input, so the caller still escapes it |
+| Queue (`queueOrModeLabel`) | `queue` id → `game_mode` | `CLASSIC` renders as "Summoner's Rift", the *map*: the mode string cannot tell blind from draft from ranked, and naming one would be a guess in a slot read as fact |
+| KDA (`formatKda`) | all three or nothing | A partial KDA reads as a real one. The ratio (`kdaRatio`) is a hover hint, not a fourth number in a column three numbers wide |
+| Outcome | badge only when `win` is non-null | Undecided rows are excluded from the win-rate tile too, so an unknown never reads as a loss |
+
+An unrecognised queue id shows as `Queue 1234` and an unrecognised mode
+shows as itself. Both are honest; neither invents a name.
 
 ## Views
 
