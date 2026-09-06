@@ -133,13 +133,15 @@ flowchart TB
     SNAP --> EV["the events list"]
     ID --> CL
     EV --> DEDUP["Drop events already seen<br/><small>matched on EventID — the endpoint<br/>returns the whole list every poll</small>"]
-    DEDUP --> CL["classify_event<br/><small>is this about us?</small>"]
-    CL --> K["kill · death · assist"]
-    CL --> O["dragon · baron · herald · turret"]
-    CL --> M["ace · first_blood"]
+    DEDUP --> CL{"classify_event<br/><small>are we named in it?</small>"}
+    CL -->|"no"| DROP["dropped<br/><small>never becomes a marker</small>"]
+    CL -->|"killer / victim / assister"| K["kill · death · assist"]
+    CL -->|"killer / assister"| O["dragon · baron · herald<br/>turret · inhibitor"]
+    CL -->|"acer / recipient"| M["ace · multikill · first_blood"]
     K --> AL
     O --> AL
     M --> AL
+    style DROP fill:#eceff1,stroke:#90a4ae
     AL["TimeAlignment::video_time_s<br/><small>game time → video time</small>"] --> MK["Marker rows"]
     ID --> TD["team_diff<br/><small>gold estimate, kills, CS</small>"]
     SNAP --> TD
@@ -163,8 +165,33 @@ result of most games. A value once known is therefore never overwritten
 with `None`.
 
 **Marker kinds** (`MarkerKind::as_str`, matching `markers.kind` in SQLite):
-`kill`, `death`, `assist`, `dragon`, `baron`, `herald`, `turret`, `ace`,
-`first_blood`. `custom` exists in the schema for hand-added markers.
+`kill`, `death`, `assist`, `dragon`, `baron`, `herald`, `turret`,
+`inhibitor`, `ace`, `multikill`, `first_blood`. `custom` exists in the
+schema for hand-added markers.
+
+### A marker is a seek target, so it has to be about the player
+
+Every kind above is gated on the recording player appearing in the event —
+as killer, victim, assister, acer or recipient. An event nobody asked us
+about is dropped at classification and never reaches the database.
+
+This is not a size optimisation. Markers drive the review timeline and the
+`[`/`]` navigation, so an objective taken while the player was on the other
+side of the map is a stop that shows them something they had no part in.
+Being on the team that took it is not taking part in it: the filter reads
+the event's own name fields, not team membership.
+
+The cost is that it is **irreversible per recording**. Live Client Data is
+gone once the game ends, so a marker not captured cannot be recovered for
+that VOD — an enemy Baron taken in our absence is dropped along with our
+own team's uncontested turrets, and "why did we lose that Baron" is not a
+question this VOD can answer afterwards. That trade was made deliberately;
+[DEVELOPMENT.md §3.2](../DEVELOPMENT.md#32-live-client-data-api-in-game)
+records why.
+
+`Stolen` rides in the payload of the neutral objectives rather than
+becoming a kind of its own — a stolen Baron is still a Baron, and the
+review list renders the flag as a suffix.
 
 ### Timestamp alignment
 

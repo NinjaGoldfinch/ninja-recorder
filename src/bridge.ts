@@ -157,8 +157,9 @@ const FIXTURE_ROWS: RecordingRow[] = [
 
 const FIXTURE_MARKERS: MarkerRow[] = [
   ["first_blood", 132], ["kill", 240], ["death", 415], ["dragon", 602],
-  ["assist", 745], ["kill", 760], ["turret", 900], ["death", 1105],
-  ["herald", 1180], ["baron", 1420], ["ace", 1444], ["kill", 1460],
+  ["assist", 745], ["kill", 760], ["multikill", 762], ["turret", 900],
+  ["death", 1105], ["herald", 1180], ["baron", 1420], ["ace", 1444],
+  ["kill", 1460], ["inhibitor", 1600],
 ].map(([kind, t], i) => ({
   id: i + 1,
   recording_id: 1,
