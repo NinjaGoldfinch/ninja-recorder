@@ -14,7 +14,6 @@
 //! library as a phantom VOD.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// Subdirectory of the recordings folder holding extracted stems. Also
 /// listed in `tauri.conf.json`'s `assetProtocol.scope` — the webview can't
@@ -58,7 +57,7 @@ pub fn extract(
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
-    let output = Command::new(ffmpeg_path)
+    let output = crate::ffmpeg_command(ffmpeg_path)
         .arg("-y")
         .arg("-i")
         .arg(recording_path)
