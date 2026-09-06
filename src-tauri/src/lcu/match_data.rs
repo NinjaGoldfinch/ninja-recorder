@@ -6,10 +6,21 @@
 //! `fetch_match_summary` still isn't called anywhere — the state machine's
 //! Finalizing step stops short of fetching it, since reliably resolving
 //! *which* gameId just finished needs LCU endpoint research this machine
-//! can't verify live (no League client installed), which is why every
-//! recording's `champion`/`win`/`kda_*` is NULL in practice. Wire it in
-//! once that's confirmed. The extraction logic itself (`extract_summary`)
-//! is unit-tested against fixture JSON below.
+//! can't verify live (no League client installed). Wire it in once that's
+//! confirmed. The extraction logic itself (`extract_summary`) is
+//! unit-tested against fixture JSON below.
+//!
+//! **Identifying ourselves in the response is the fragile part.** The
+//! participant list and the identity list are joined by `participantId`,
+//! and the identity has to be matched back to us by *some* account key —
+//! but which keys the endpoint actually sends has changed over time, and
+//! a fixture written by hand proves nothing about the wire. The LCU's own
+//! OpenAPI spec has no `puuid` on a match-history participant identity at
+//! all (only `accountId`, `summonerId`, `summonerName`), even though 74
+//! other schemas in that spec do carry one. So every key is optional here
+//! and `CurrentSummoner::is_me` tries each in turn — a client that sends
+//! `puuid` and one that doesn't both work, without needing to know which
+//! this one is.
 #![allow(dead_code)]
 
 use super::client::{LcuClientError, LcuHttpClient};
@@ -19,9 +30,18 @@ use serde::{Deserialize, Serialize};
 /// an empty string ever since Riot IDs replaced summoner names, so the
 /// name now lives in `gameName` + `tagLine`; every field is optional so an
 /// older (or newer) client shape still parses.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct CurrentSummoner {
-    pub puuid: String,
+    /// Optional for the same reason every other field here is: this is the
+    /// shape of a client we have never met. It is also one of the three
+    /// keys `is_me` joins on, so it earns its place even on a client that
+    /// stops sending it.
+    #[serde(default)]
+    pub puuid: Option<String>,
+    #[serde(rename = "summonerId", default)]
+    pub summoner_id: Option<i64>,
+    #[serde(rename = "accountId", default)]
+    pub account_id: Option<i64>,
     #[serde(rename = "displayName", default)]
     pub display_name: Option<String>,
     #[serde(rename = "gameName", default)]
@@ -43,8 +63,44 @@ impl CurrentSummoner {
     }
 }
 
+impl CurrentSummoner {
+    /// Whether `identity` is us.
+    ///
+    /// Tries `puuid`, then `summonerId`, then `accountId`, and a key only
+    /// counts when **both sides carry it**. Two absent fields are not a
+    /// match: the LCU sends `summonerId: 0` for participants whose
+    /// identity is hidden, and treating that as equal to a missing value
+    /// would attach whichever anonymous player came first in the list.
+    ///
+    /// Returns false rather than guessing when nothing lines up. The
+    /// caller turns that into `ParticipantNotFound`, which leaves the
+    /// recording's metadata NULL — the correct outcome, since a VOD
+    /// labelled with a stranger's game is worse than one labelled with
+    /// nothing.
+    fn is_me(&self, identity: &PlayerIdentity) -> bool {
+        if let (Some(mine), Some(theirs)) = (non_empty(&self.puuid), non_empty(&identity.puuid)) {
+            return mine == theirs;
+        }
+        if let (Some(mine), Some(theirs)) = (real_id(self.summoner_id), real_id(identity.summoner_id))
+        {
+            return mine == theirs;
+        }
+        match (real_id(self.account_id), real_id(identity.account_id)) {
+            (Some(mine), Some(theirs)) => mine == theirs,
+            _ => false,
+        }
+    }
+}
+
 fn non_empty(field: &Option<String>) -> Option<&str> {
     field.as_deref().map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// Riot's numeric account ids are always positive. Zero is what the LCU
+/// puts in the slot when it will not say, so it must never join to
+/// anything — including another zero.
+fn real_id(field: Option<i64>) -> Option<i64> {
+    field.filter(|id| *id > 0)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -71,9 +127,19 @@ struct ParticipantIdentity {
     player: PlayerIdentity,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+/// The account keys a match-history identity can carry. All optional and
+/// none guaranteed — see this module's header. `summonerName` is
+/// deliberately *not* among them: display names are not unique, they
+/// change, and matching on one would eventually attach a stranger's KDA
+/// to somebody's VOD.
+#[derive(Debug, Clone, Default, Deserialize)]
 struct PlayerIdentity {
-    puuid: String,
+    #[serde(default)]
+    puuid: Option<String>,
+    #[serde(rename = "summonerId", default)]
+    summoner_id: Option<i64>,
+    #[serde(rename = "accountId", default)]
+    account_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -124,7 +190,7 @@ fn extract_summary(me: &CurrentSummoner, game: &GameDto) -> Result<MatchSummary,
     let my_participant_id = game
         .participant_identities
         .iter()
-        .find(|id| id.player.puuid == me.puuid)
+        .find(|id| me.is_me(&id.player))
         .map(|id| id.participant_id)
         .ok_or(MatchDataError::ParticipantNotFound(game.game_id))?;
 
@@ -213,6 +279,98 @@ mod tests {
                 assists: 5,
             }
         );
+    }
+
+    /// The shape the LCU's own OpenAPI spec describes: identities carry
+    /// `accountId`/`summonerId`/`summonerName` and no `puuid` at all. This
+    /// used to fail at *deserialize*, not at the match — `puuid` was a
+    /// required `String` — so `fetch_match_summary` would have returned a
+    /// parse error for every game ever played.
+    #[test]
+    fn matches_on_summoner_id_when_the_response_carries_no_puuid() {
+        let me: CurrentSummoner = serde_json::from_str(
+            r#"{"summonerId": 42, "accountId": 7, "gameName": "ninja", "tagLine": "NA1"}"#,
+        )
+        .unwrap();
+        let game = fixture_game(
+            r#"{
+                "gameId": 555,
+                "queueId": 420,
+                "participants": [
+                    {"championId": 1, "participantId": 1, "stats": {"kills": 1, "deaths": 9, "assists": 0, "win": false}},
+                    {"championId": 99, "participantId": 2, "stats": {"kills": 7, "deaths": 2, "assists": 5, "win": true}}
+                ],
+                "participantIdentities": [
+                    {"participantId": 1, "player": {"summonerId": 11, "accountId": 12, "summonerName": "Someone"}},
+                    {"participantId": 2, "player": {"summonerId": 42, "accountId": 7, "summonerName": "Ninja"}}
+                ]
+            }"#,
+        );
+
+        let summary = extract_summary(&me, &game).unwrap();
+        assert_eq!(summary.champion_id, 99);
+        assert!(summary.win);
+    }
+
+    /// Third key down. A client that sends neither of the first two still
+    /// resolves rather than silently losing every game's metadata.
+    #[test]
+    fn falls_all_the_way_through_to_account_id() {
+        let me: CurrentSummoner = serde_json::from_str(r#"{"accountId": 7}"#).unwrap();
+        let game = fixture_game(
+            r#"{
+                "gameId": 555,
+                "queueId": 420,
+                "participants": [
+                    {"championId": 99, "participantId": 2, "stats": {"kills": 7, "deaths": 2, "assists": 5, "win": true}}
+                ],
+                "participantIdentities": [
+                    {"participantId": 2, "player": {"accountId": 7}}
+                ]
+            }"#,
+        );
+
+        assert_eq!(extract_summary(&me, &game).unwrap().champion_id, 99);
+    }
+
+    /// The LCU writes `summonerId: 0` for a participant it will not name.
+    /// If zero joined to zero, the first anonymous player in the list
+    /// would become "us" and their KDA would land on our VOD.
+    #[test]
+    fn a_zeroed_out_identity_never_matches_even_another_zero() {
+        let me: CurrentSummoner =
+            serde_json::from_str(r#"{"summonerId": 0, "accountId": 0}"#).unwrap();
+        let game = fixture_game(
+            r#"{
+                "gameId": 555,
+                "queueId": 420,
+                "participants": [
+                    {"championId": 99, "participantId": 2, "stats": {"kills": 7, "deaths": 2, "assists": 5, "win": true}}
+                ],
+                "participantIdentities": [
+                    {"participantId": 2, "player": {"summonerId": 0, "accountId": 0}}
+                ]
+            }"#,
+        );
+
+        assert!(matches!(
+            extract_summary(&me, &game),
+            Err(MatchDataError::ParticipantNotFound(555))
+        ));
+    }
+
+    /// Two people who both have a puuid and whose puuids differ are two
+    /// different people, full stop. Falling through to the next key on a
+    /// mismatch would let a stale or shared account id override the most
+    /// authoritative identifier in the response.
+    #[test]
+    fn a_puuid_mismatch_does_not_fall_through_to_the_weaker_keys() {
+        let me: CurrentSummoner =
+            serde_json::from_str(r#"{"puuid": "mine", "summonerId": 42}"#).unwrap();
+        let identity: PlayerIdentity =
+            serde_json::from_str(r#"{"puuid": "theirs", "summonerId": 42}"#).unwrap();
+
+        assert!(!me.is_me(&identity));
     }
 
     #[test]

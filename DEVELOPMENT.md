@@ -246,8 +246,10 @@ Two official local HTTP APIs. Both use self-signed TLS on localhost — pin/acce
 - **Auth:** HTTP Basic, user `riot`, password from the lockfile.
 - **Key endpoints:**
   - `GET /lol-gameflow/v1/gameflow-phase` — `None / Lobby / ChampSelect / InProgress / EndOfGame / ...`. Our record trigger. Also subscribable via the LCU WebSocket (`/lol-gameflow_v1_gameflow-phase` event) — prefer the WebSocket over polling.
-  - `GET /lol-match-history/...` (post-game) — champion, KDA, win/loss, queue type for VOD metadata.
+  - `GET /lol-match-history/v1/games/{gameId}` (post-game) — champion, KDA, win/loss, queue type for VOD metadata.
   - `GET /lol-replays/v1/rofls/{gameId}/download` — native replay download (§8).
+- **Identifying ourselves in a match-history response is the fragile part**, and it is not a matter of picking the "right" field. The response splits players across `participants[]` (stats, joined by `participantId`) and `participantIdentities[]` (accounts), so the identity has to be matched back to `/lol-summoner/v1/current-summoner` by an account key — and which keys the endpoint sends has moved over time. The LCU's own OpenAPI spec carries no `puuid` on a match-history participant identity at all, only `accountId`/`summonerId`/`summonerName`, while 74 other schemas in the same spec do have one. `match_data.rs` therefore treats every key as optional and tries `puuid`, then `summonerId`, then `accountId`, requiring the key to be present on *both* sides. A client that sends `puuid` and one that does not both work without the code needing to know which it is talking to.
+- **Never match on `summonerName`, and never join on a zero id.** Display names are not unique and they change. `summonerId: 0` is what the LCU puts in the slot for a participant whose identity is hidden, so joining zero to zero would attach the first anonymous player in the list to the recording. Both would mislabel a VOD with a stranger's game, which is worse than leaving the metadata NULL.
 
 ### 3.2 Live Client Data API (in-game)
 
