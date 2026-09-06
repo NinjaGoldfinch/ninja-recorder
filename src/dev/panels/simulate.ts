@@ -228,8 +228,17 @@ function draw() {
         <label class="field field-inline"><span>Game id</span>
           <input type="number" id="game-id" style="width:11rem" /></label>
         <button type="button" data-match-summary>fetch_match_summary</button>
-        <span class="hint">Implemented and tested, but called from nowhere in the app — which is
-          why every recording's champion, win, and KDA are NULL.</span>
+        <span class="hint">One shot at the end-of-game block, then match history. No retries —
+          use the patch below for what a real finalize does.</span>
+      </div>
+      <div class="row" style="margin-top:.5rem">
+        <label class="field field-inline"><span>Recording id</span>
+          <input type="number" id="patch-recording-id" style="width:11rem" /></label>
+        <label class="field field-inline"><span>Custom game</span>
+          <input type="checkbox" id="patch-is-custom" /></label>
+        <button type="button" data-patch-summary>patch_match_summary</button>
+        <span class="hint">Runs the whole deferred patch against the game id above and writes the
+          result to that row. Blocks for up to a minute — that is the real retry schedule.</span>
       </div>
       <div id="probe-out"></div>`,
     );
@@ -440,6 +449,31 @@ export const simulatePanel: Panel = {
         const result = await tryCall<unknown>("dev_fetch_match_summary", { gameId });
         const out = root?.querySelector<HTMLElement>("#probe-out");
         if (out) out.innerHTML = output(result.ok ? result.value : result.error, !result.ok);
+        return;
+      }
+
+      if (target.closest("[data-patch-summary]")) {
+        const gameId = Number(root?.querySelector<HTMLInputElement>("#game-id")?.value);
+        const recordingId = Number(
+          root?.querySelector<HTMLInputElement>("#patch-recording-id")?.value,
+        );
+        if (Number.isNaN(gameId) || Number.isNaN(recordingId)) {
+          toast("Enter both a game id and a recording id", "err");
+          return;
+        }
+        const isCustom =
+          root?.querySelector<HTMLInputElement>("#patch-is-custom")?.checked ?? false;
+        toast("Patching — this can take a minute");
+        const result = await tryCall<unknown>("dev_patch_match_summary", {
+          recordingId,
+          gameId,
+          isCustom,
+        });
+        const out = root?.querySelector<HTMLElement>("#probe-out");
+        if (out) out.innerHTML = output(result.ok ? result.value : result.error, !result.ok);
+        // `false` is a real answer, not a failure: the client had no stats,
+        // the row is gone, or the schedule ran out. The logs say which.
+        if (result.ok) toast(result.value === true ? "Row patched" : "Nothing patched");
       }
     });
   },

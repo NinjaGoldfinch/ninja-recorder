@@ -17,3 +17,8 @@ pub use events::{
 pub use client::LiveClientError;
 #[allow(unused_imports)]
 pub use events::MarkerKind;
+// `LiveSummary`'s own field type, so it belongs on the public surface even
+// though the only thing naming it directly today is a test — and clippy
+// runs without `--all-targets`, so a test-only use reads as unused.
+#[allow(unused_imports)]
+pub use events::Kda;

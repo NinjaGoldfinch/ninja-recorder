@@ -8,6 +8,7 @@ mod launch;
 mod notify;
 mod lcu;
 mod live_client;
+mod match_summary;
 mod recorder;
 mod retention;
 mod state_machine;
@@ -416,6 +417,29 @@ pub fn run() {
                     ),
                 }
             }));
+            // The other half of the finalize: `stop_recording` writes the
+            // row from what Live Client Data established, then hands the
+            // game's identifiers here so the LCU's post-game columns can
+            // be filled in once the client actually has them. Installed
+            // from `run()` for the same reason the notifier above is —
+            // this is where the async runtime is allowed to be reachable
+            // from.
+            let summary_db = Arc::clone(&db);
+            let summary_handle = app.handle().clone();
+            supervisor.set_summary_fetcher(Box::new(move |request| {
+                let db = Arc::clone(&summary_db);
+                let handle = summary_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    use tauri::Emitter;
+                    if match_summary::patch(&db, &request).await {
+                        // Nothing else will tell the frontend: the row
+                        // changed minutes after the library last refreshed.
+                        if let Err(e) = handle.emit(LIBRARY_CHANGED_EVENT, ()) {
+                            eprintln!("[match-summary] failed to emit library-changed: {e}");
+                        }
+                    }
+                });
+            }));
             supervisor.start();
 
             // `ffmpeg` and `recordings_dir` are resolved once here rather
@@ -495,6 +519,7 @@ pub fn run() {
         dev::dev_replay_status,
         dev::dev_lcu_get,
         dev::dev_fetch_match_summary,
+        dev::dev_patch_match_summary,
         dev::dev_live_client_probe,
         dev::dev_fixtures_state,
         dev::dev_fixture_read,

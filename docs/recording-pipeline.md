@@ -284,6 +284,8 @@ flowchart TB
     G --> H["last_finalized = {path, markers}"]
     H --> I["retention::enforce_now"]
     I --> J["emit library-changed"]
+    J --> K["request_summary(recording_id, game_id)"]
+    K -.->|"only if both are known"| L["deferred LCU patch<br/><small>off this path — see below</small>"]
     style Z fill:#ffebee,stroke:#c62828
     style E fill:#fff3e0,stroke:#ef6c00
 ```
@@ -335,11 +337,87 @@ Tool and customs too.
 
 `game_id` and `queue` come from the gameflow session read above.
 
-**Known gap:** `role` and `patch` are still `NULL` on rows written by a real
-game. They have no Live Client Data equivalent, and `lcu::fetch_match_summary`
-— which does carry them — is implemented and unit-tested but is not called
-from finalize. The dev portal can invoke the fetch by hand
-(`dev_fetch_match_summary`). Tracked in #53.
+`game_id` and `queue` come from the gameflow session read above — the second
+time, because the finalize writes them and then the patch below confirms
+them.
+
+### The deferred LCU patch
+
+`role` and `patch` have no Live Client Data equivalent, and only the LCU can
+answer for them. But at the instant `Recording → Finalizing` fires the
+client is still in `WaitingForStats`: match history 404s, and the same
+transition emits `StopGameflowWatch`, tearing down the task that owned the
+LCU connection. Fetching inline would block the finalize behind a request
+that is *expected* to fail.
+
+So the row is written from the live values exactly as before, and
+`match_summary::patch` fills the rest in afterwards.
+
+```mermaid
+sequenceDiagram
+    participant SUP as Supervisor
+    participant MS as match_summary::patch
+    participant EOG as /lol-end-of-game/v1/eog-stats-block
+    participant MH as /lol-match-history/v1/games/{id}
+    participant DB as recordings row
+    participant UI as frontend
+
+    SUP->>MS: SummaryRequest {recording_id, game_id, is_custom, live}
+    Note over SUP: finalize returns; nothing waits
+    loop 2s · 4s · 8s · 15s · 15s · 15s, then give up
+        MS->>EOG: GET (our own block — no participant join)
+        EOG-->>MS: win · championId · KDA
+        MS->>MH: GET (skipped for a custom game)
+        MH-->>MS: queueId · role · gameVersion
+    end
+    MS->>DB: update_match_metadata
+    MS->>UI: library-changed
+```
+
+**The eog block is tried first, not second.** It is *our own* stats block,
+so `teams[].isPlayerTeam` + `isWinningTeam` gives the outcome with no
+participant matching at all — which removes the most fragile step in the
+whole path (see #59, where a join key that did not exist made every fetch
+fail). It is also populated during `EndOfGame`, so it usually answers on the
+first attempt. Match history is authoritative but arrives late, and is the
+only source for `role` and `patch`; it fills the gaps the block left.
+
+Where both answer, the block wins, because it cannot have matched the wrong
+player. Where they *disagree*, that is logged loudly — the two are views of
+one game, so a contradiction almost certainly means the wrong `gameId` was
+matched, and that is worth knowing before it mislabels a library.
+
+The retry schedule is a pure function (`match_summary::next_delay`) with a
+roughly 60-second ceiling. Past it, the patch gives up **silently**: the row
+already carries champion, KDA and outcome from the live path, and a missing
+queue id is not worth interrupting the next game over. A 404 or a 5xx is
+"not ready yet" and is waited out; an auth failure or no response at all is
+"will never work" and stops immediately.
+
+Two skips, both normal and neither logged: no `recording_id` (the row write
+itself failed) and no `game_id` (the gameflow read lost its race, or there
+was no client — which is simply what Practice Tool looks like).
+
+**What the patch will not touch.** It is a plain `UPDATE` of the post-game
+columns, never a re-`insert_recording` — that method's `ON CONFLICT(path)`
+takes `pinned`, `size_bytes`, `started_at` and `duration_s` from `excluded`,
+so re-upserting a summary would unpin the recording and zero its size. Zero
+rows changed is a no-op, not an error: retention runs during the same
+finalize, and the user can delete a card at any time.
+
+`champion` is the one column the patch leaves alone when it is already set.
+The LCU answers with a champion *id*, and the display name the live path
+writes (`Wukong`) is not the alias an id resolves to (`MonkeyKing`) — one
+champion under two spellings would split its games in two everywhere the
+library sorts and filters. Resolving ids to display names is #54.
+
+**Known gap:** neither endpoint's shape has been seen off a real client —
+both are modelled from the LCU's own OpenAPI spec, so every field is
+optional and an unrecognised response degrades to "this source knew less"
+rather than failing. `dev_patch_match_summary` drives the whole path against
+a live client without playing a game.
+
+Rows that predate all of this keep their NULLs; sweeping them up is #56.
 
 ## 5. Where recording can refuse to start
 

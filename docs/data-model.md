@@ -107,6 +107,41 @@ the VOD would silently lose its stem picker. A NULL never wins.
 while the game is running, so a rescan has nothing to say about it and must
 not be allowed to say NULL.
 
+### Who writes the match-metadata columns, and when
+
+Three sources fill them, at three different times, and no two of them can
+answer for the same thing. A row can legitimately have any subset.
+
+| Column | Source | When |
+|---|---|---|
+| `duration_s`, `size_bytes`, `path`, `started_at` | The recorder session | At finalize |
+| `champion`, `kda_*`, `win`, `game_mode` | Live Client Data, folded in over the game | At finalize |
+| `game_id`, `queue` | The gameflow session, read once at `InProgress` | At finalize |
+| `role`, `patch` — and `queue`/`win`/`kda_*` confirmed | The LCU's post-game endpoints | Seconds to a minute *after* finalize |
+
+That last row is `match_summary::patch`, and it is a plain `UPDATE`, never a
+re-`insert_recording`: the upsert above takes `pinned`, `size_bytes`,
+`started_at` and `duration_s` from `excluded`, so re-upserting a summary
+would unpin the recording and zero its size. Every column it writes
+COALESCEs so a value the LCU could not establish never erases one the live
+client did.
+
+`champion` COALESCEs the other way round — the existing value wins:
+
+```sql
+champion = COALESCE(champion, ?)
+```
+
+The live path writes a display name (`Wukong`); resolving a champion *id*
+gives the internal alias (`MonkeyKing`). `champion` is sorted on, filtered
+on and used as the card title, so one champion under two spellings would
+split its games in two everywhere in the UI. The patch may only fill the
+column when nothing else has.
+
+Zero rows changed is a no-op, not an error: retention runs during the same
+finalize, and the user can delete a card at any point, so the row can
+legitimately be gone by the time the patch lands.
+
 ### What lives in `settings_kv`
 
 Every key, and which side owns the default. There is no schema and no

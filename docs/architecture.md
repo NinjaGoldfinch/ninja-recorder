@@ -67,7 +67,7 @@ flowchart TB
 |---|---|---|
 | `lcu/lockfile.rs` | Finding the running client and its credentials | `discover`, `watch` |
 | `lcu/gameflow.rs` | Phase changes (WebSocket, polling fallback), and which game is running | `watch`, `fetch_session` |
-| `lcu/match_data.rs` | Post-game summary (champion, KDA, win) | `fetch_match_summary` |
+| `lcu/match_data.rs` | Post-game summary from the end-of-game block, then match history (win, KDA, champion id, queue, role, patch) | `fetch_match_summary` |
 | `lcu/client.rs` | HTTPS + Basic auth against the client's self-signed cert | `LcuHttpClient` |
 | `live_client/client.rs` | Port 2999 HTTPS client | `fetch_all_game_data` |
 | `live_client/poller.rs` | 1 Hz poll loop with exponential backoff (cap 10 s) | `watch` |
@@ -79,6 +79,7 @@ flowchart TB
 | `recorder/stub.rs` | Dev/macOS backend that copies a fixture MP4 | `StubRecorder` |
 | `db/mod.rs` | Schema, migrations, every query | `Db` |
 | `db/reconcile.rs` | Reconciling DB rows against files on disk | `reconcile` |
+| `match_summary.rs` | Waiting out the LCU after a finalize, then patching the row with what it eventually says | `patch`, `next_delay` |
 | `retention.rs` | Deletion policy and free-space preflight | `select_for_deletion`, `enforce_now`, `has_room_to_record` |
 | `fixtures.rs` | Capturing live API responses to `fixtures/` | `enabled`, `record` |
 | `dev/` | Dev portal backend, compiled out without `--features devtools` | `dev_*` commands |
