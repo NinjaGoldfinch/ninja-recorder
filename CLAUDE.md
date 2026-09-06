@@ -94,12 +94,19 @@ client. See [docs/dev-portal.md](docs/dev-portal.md).
 ```bash
 cd src-tauri && cargo test
 cd src-tauri && cargo test --features devtools
-cd src-tauri && cargo clippy --all-targets -- -D warnings
+cd src-tauri && cargo clippy --no-deps -- -D warnings
+cd src-tauri && cargo clippy --features devtools --no-deps -- -D warnings
 ```
 
-CI runs the Rust tests and clippy **both with and without** `--features
-devtools`, and clippy with `-D warnings`. A change that only compiles one way
-fails.
+CI runs exactly these four — the Rust tests and clippy **both with and
+without** `--features devtools`, and clippy with `-D warnings`. A change that
+only compiles one way fails.
+
+**Clippy runs without `--all-targets`**, so it never compiles the test targets.
+A method only the tests call is dead code there, and `-D warnings` fails the
+build over it — either drop the method or mark it `#[cfg(test)]`. Running
+clippy with `--all-targets` locally compiles the tests, marks the method used,
+and hides that failure until CI.
 
 ### Frontend checks
 

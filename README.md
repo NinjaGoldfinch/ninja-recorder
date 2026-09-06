@@ -9,12 +9,15 @@ No OBS to install. No scenes to configure. No injection into the game, ever.
 
 > **Status: pre-1.0, usable on Windows.** Recording, event markers, the VOD
 > library, the review player and disk retention are all built and running, and
-> installers ship from the [Releases](../../releases) page. Two caveats before
-> you install: builds are **unsigned**, so SmartScreen warns on first run, and
-> the libobs capture backend **has not yet been verified against a real
-> Vanguard-protected game** — see
+> installers ship from the [Releases](../../releases) page. Three caveats
+> before you install: builds are **unsigned**, so SmartScreen warns on first
+> run; the libobs capture backend **has not yet been verified against a real
+> Vanguard-protected game**; and multi-track audio is newer still — the
+> per-application capture behind every preset that records "game audio" has
+> never run against a Vanguard-protected process, so if your game track comes
+> out silent, switch the preset to Desktop, which uses ordinary loopback. See
 > [docs/windows-verification.md](docs/windows-verification.md) for exactly
-> what that check involves.
+> what those checks involve.
 
 ---
 
@@ -143,12 +146,19 @@ the retention policy and runs raw SQL. Most of the backend can only be
 exercised through it. See [docs/dev-portal.md](docs/dev-portal.md).
 
 **The Rust project lives at `src-tauri/`, not the repo root.** Bare `cargo`
-commands must be run from there:
+commands must be run from there. These four are exactly what CI gates on:
 
 ```bash
 cd src-tauri && cargo test
-cd src-tauri && cargo clippy --all-targets -- -D warnings
+cd src-tauri && cargo test --features devtools
+cd src-tauri && cargo clippy --no-deps -- -D warnings
+cd src-tauri && cargo clippy --features devtools --no-deps -- -D warnings
 ```
+
+Note the absent `--all-targets`: CI does not pass it, so clippy never compiles
+the test targets, and a method only the tests call counts as **dead code** that
+`-D warnings` fails the build over. Adding `--all-targets` locally compiles the
+tests, marks that method used, and hides the failure until CI.
 
 `npm run tauri:dev` handles that for you from the repo root.
 
