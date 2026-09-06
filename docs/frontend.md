@@ -113,10 +113,19 @@ seconds and fight scroll and focus.
 
 ### Command surface
 
-The names and arguments below are the IPC contract and are unchanged by the
-`core` extraction — each `#[tauri::command]` in `lib.rs` is now a thin wrapper
-over a `core` free function, so the frontend sees exactly the same surface
+The names and arguments below are the IPC contract and have not changed, but
+how they reach Rust has. `bridge.ts` sends all but three of them through a
+single `rpc` command — `invoke("rpc", { command, args })` — which `core`'s
+dispatch table routes by name
 ([DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave)).
+Callers are unaffected: `call()` takes the same name and the same args object,
+and forwards the args untouched.
+
+The exceptions are in `DIRECT_COMMANDS` in `bridge.ts`:
+`open_recordings_folder` and `dev_open_portal` drive the desktop shell, so they
+stay in the UI process; `dev_registered_commands` must stay direct because
+`devportal.ts` detects the portal's existence by watching that call *reject* in
+a shipped build.
 
 | Command | Returns | Used by |
 |---|---|---|

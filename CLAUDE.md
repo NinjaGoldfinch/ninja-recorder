@@ -127,10 +127,19 @@ npx tsc --noEmit
 - **`escapeAttr` for attribute values, `escapeHtml` for text nodes.**
   `reconcile` imports any video file the user drops in the folder, so
   displayed recording names are not trusted input.
-- **Two command lists in `lib.rs`.** `generate_handler!` can't host a
-  `#[cfg]`, so the production list is spelled out twice. Adding a command
-  means editing both, plus `src/dev/registry.ts` — the Commands panel's drift
-  banner catches a mismatch, but only once someone opens it.
+- **Adding a command means two edits, not four.** Production commands live in
+  `core/dispatch.rs`'s `dispatch_table!` and are reached through the single
+  `rpc` command, so add a row there and an entry in `src/dev/registry.ts`
+  (which carries help text and arg specs a macro can't generate). The Rust
+  name list is derived from the same macro, so it can't drift; the Commands
+  panel's banner now only catches TS drift, and still only once someone opens
+  it. `generate_handler!` still can't host a `#[cfg]`, so the two lists in
+  `lib.rs` remain — but they're `rpc` + `open_recordings_folder`, plus the
+  `dev_*` commands under `devtools`.
+- **The `rpc` passthrough owns argument parsing.** `#[tauri::command]` used to
+  generate camelCase→snake_case mapping; now `dispatch_table!` does. A wrong
+  name or type fails at *runtime*, so every command is exercised by
+  `every_command_round_trips` in `core/dispatch.rs` — keep it that way.
 - **Don't remove `theme.ts`'s matchMedia `change` listener.** It is the only
   thing making the "System" theme follow the OS, and no test covers it.
 - **Don't attach the devtools build to a release.** It carries raw SQL,

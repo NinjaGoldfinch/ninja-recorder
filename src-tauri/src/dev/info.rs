@@ -123,37 +123,22 @@ pub fn dev_health(
     })
 }
 
-/// Every command name registered in `lib.rs`'s production handler list.
-/// The portal diffs this against its own TS registry and shows a banner on
-/// mismatch — the closest thing to a drift check available while the TS
-/// types are hand-mirrored rather than generated.
+/// Every command name the production surface answers to. The portal diffs
+/// this against its own TS registry and shows a banner on mismatch.
+///
+/// Derived from `core::command_names()` rather than hand-written, so the Rust
+/// half can no longer drift: those names and the dispatch `match` arms come
+/// out of the same macro invocation. `open_recordings_folder` is appended
+/// because it is a real Tauri command rather than a dispatch-table entry — it
+/// drives the desktop shell (DEVELOPMENT.md §12). `src/dev/registry.ts` stays
+/// hand-maintained; it carries help text and argument specs no macro can
+/// produce, and catching *its* drift is the point of the banner.
 #[tauri::command]
 pub fn dev_registered_commands() -> Vec<&'static str> {
-    vec![
-        "start_recording",
-        "stop_recording",
-        "is_recording",
-        "list_recordings",
-        "rescan_recordings",
-        "get_recording_markers",
-        "get_recording_samples",
-        "get_disk_usage",
-        "get_retention_policy",
-        "set_retention_policy",
-        "set_pinned",
-        "preview_retention_policy",
-        "delete_recording",
-        "get_recordings_dir",
-        "open_recordings_folder",
-        "get_ui_prefs",
-        "set_ui_pref",
-        "get_audio_preset",
-        "set_audio_preset",
-        "list_audio_inputs",
-        "extract_audio_track",
-        "lcu_status",
-        "game_state_status",
-    ]
+    let mut names = crate::core::command_names().to_vec();
+    names.push("open_recordings_folder");
+    names.sort_unstable();
+    names
 }
 
 /// Reveals one of the app's directories in the OS file manager.

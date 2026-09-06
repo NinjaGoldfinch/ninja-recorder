@@ -31,11 +31,39 @@ export function assetUrl(path: string): string {
   return path;
 }
 
+// Commands that are *not* in the Rust dispatch table and so must be invoked
+// directly. Everything else goes through the `rpc` passthrough, which is what
+// lets the backend register one command instead of twenty-three and generate
+// its name list instead of hand-writing it (DEVELOPMENT.md §12).
+//
+// Two reasons a command is on this list:
+//   - it drives the desktop shell, so it belongs to the UI process and not
+//     the recorder — `open_recordings_folder`, `dev_open_portal`;
+//   - it is a `dev_*` command, which stays individually registered behind the
+//     `devtools` Cargo feature. `dev_registered_commands` in particular *must*
+//     stay direct: `devportal.ts` detects whether the portal exists by seeing
+//     that call reject in a shipped build, and routing it through `rpc` would
+//     make it reject with "unknown command" in *every* build — permanently
+//     hiding the button.
+//
+// The portal's own panels use a separate invoke layer (`src/dev/ipc.ts`) and
+// are unaffected.
+const DIRECT_COMMANDS = new Set([
+  "open_recordings_folder",
+  "dev_open_portal",
+  "dev_registered_commands",
+]);
+
 export async function call<T>(
   command: string,
   args?: Record<string, unknown>,
 ): Promise<T> {
-  if (IN_TAURI) return invoke<T>(command, args);
+  if (IN_TAURI) {
+    if (DIRECT_COMMANDS.has(command)) return invoke<T>(command, args);
+    // `args` is forwarded untouched, so the wire shape is unchanged: the
+    // camelCase the callers below already send is what Rust now maps itself.
+    return invoke<T>("rpc", { command, args: args ?? {} });
+  }
   if (import.meta.env.DEV) return mock<T>(command, args);
   throw new Error(`invoke("${command}") outside Tauri`);
 }
