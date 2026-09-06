@@ -118,14 +118,40 @@ process is what needs confirming.
 
 - [ ] A normal start still opens the window at 1160x800 with an 880x600
       minimum, titled `ninja-recorder`.
-- [ ] `ninja-recorder.exe --hidden` starts with **no** window, no taskbar
-      button, and keeps running. Until the tray exists the only way to stop it
-      is Task Manager — expected, not a bug.
+- [ ] `ninja-recorder.exe --hidden` starts with **no** window and no taskbar
+      button, and is reachable from the tray icon.
 - [ ] `ninja-recorder.exe --daemon` prints its message and exits 2. Note
       `windows_subsystem = "windows"` means release builds have no console, so
       the message goes nowhere visible; confirm the **exit code**, not the text.
 - [ ] Unknown arguments (a shell verb, a file path from "Open with") do not
       prevent startup.
+
+### 5.0.1 Tray and the close button
+
+Verified on macOS only as far as a script can go: the tray builds without
+error, a default start creates a webview and `--hidden` creates none (0 WebKit
+handles vs 4). **Everything below needs a real click and none of it is covered
+by a test.**
+
+- [ ] The tray icon appears, with a tooltip, and its menu has exactly three
+      items: Open ninja-recorder / Settings / Quit.
+- [ ] Left-click opens the window; right-click opens the menu.
+- [ ] "Settings" opens the window **on the settings view** — both when a window
+      already exists (a `navigate` event) and when one does not (the
+      `index.html#settings` fragment). These are different code paths.
+- [ ] With Close = "Close the window" (the default), the X destroys the window
+      and the process keeps running in the tray. Reopening from the tray works,
+      and does so repeatedly.
+- [ ] With Close = "Hide the window", the X hides it and reopening is instant.
+- [ ] With Close = "Quit", the X quits.
+- [ ] **Quit mid-recording finalizes rather than dropping the game**: start a
+      recording, Quit from the tray, relaunch, and confirm the VOD is in the
+      library with its markers — not adopted as an untracked file by
+      `reconcile`.
+- [ ] The tray icon survives an `explorer.exe` restart (kill it from Task
+      Manager and confirm the icon comes back).
+- [ ] Measure idle RAM with the window closed vs hidden — the whole premise of
+      "close-window" as the default is that hiding reclaims nothing.
 
 ### 5.1 Capture-backend lifecycle
 

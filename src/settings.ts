@@ -2,7 +2,13 @@ import { call } from "./bridge";
 import { el, escapeAttr, escapeHtml } from "./dom";
 import { BYTES_PER_GB, formatBytes } from "./format";
 import { refreshDiskUsage, refreshLibrary } from "./library";
-import { getPrefs, savePref, type SortKey, type ThemePref } from "./prefs";
+import {
+  getPrefs,
+  savePref,
+  type CloseActionPref,
+  type SortKey,
+  type ThemePref,
+} from "./prefs";
 import { showView } from "./router";
 import { setThemePref } from "./theme";
 import { toast } from "./toast";
@@ -18,6 +24,7 @@ interface Els {
   open: HTMLButtonElement;
   back: HTMLButtonElement;
   themeToggle: HTMLElement;
+  closeAction: HTMLSelectElement;
   defaultSort: HTMLSelectElement;
   audioPreset: HTMLElement;
   audioMic: HTMLSelectElement;
@@ -42,6 +49,7 @@ export function initSettings() {
     open: el<HTMLButtonElement>("#open-settings-btn"),
     back: el<HTMLButtonElement>("#back-to-library-from-settings-btn"),
     themeToggle: el("#theme-toggle"),
+    closeAction: el<HTMLSelectElement>("#close-action-select"),
     defaultSort: el<HTMLSelectElement>("#default-sort-select"),
     audioPreset: el("#audio-preset-toggle"),
     audioMic: el<HTMLSelectElement>("#audio-mic-select"),
@@ -61,6 +69,13 @@ export function initSettings() {
 
   els.open.addEventListener("click", () => showView("settings"));
   els.back.addEventListener("click", () => showView("library"));
+
+  // Fire-and-forget like the theme rather than awaited like the audio preset:
+  // this only decides what the close button does, and Rust re-reads it from
+  // SQLite on every close, so a slow write can't desync anything.
+  els.closeAction.addEventListener("change", () => {
+    savePref("closeAction", els.closeAction.value as CloseActionPref);
+  });
 
   els.themeToggle.addEventListener("click", (e) => {
     const button = (e.target as HTMLElement).closest<HTMLElement>(
@@ -112,6 +127,7 @@ export function initSettings() {
 export function syncSettingsFromPrefs() {
   const prefs = getPrefs();
   syncThemeToggle(prefs.theme);
+  els.closeAction.value = prefs.closeAction;
   els.defaultSort.value = prefs.defaultSort;
 }
 

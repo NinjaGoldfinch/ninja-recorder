@@ -84,6 +84,7 @@ flowchart TB
 | `dev/` | Dev portal backend, compiled out without `--features devtools` | `dev_*` commands |
 | `core/mod.rs` | Every command's logic, with no `tauri` types in any signature | `Ctx`, the command free functions |
 | `launch.rs` | Which mode argv asked for (`--daemon`, `--hidden`) | `Launch::from_env` |
+| `tray.rs` | The tray icon and its Open / Settings / Quit menu. No tests, deliberately | `build`, `request_quit` |
 | `lib.rs` | Tauri setup, app state, the `rpc` command, and main-window creation | `run` |
 
 `core` exists because Tauri v2 cannot invoke a registered command by name from

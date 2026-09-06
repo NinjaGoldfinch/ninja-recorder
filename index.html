@@ -321,6 +321,26 @@
         </section>
 
         <section class="settings-group">
+          <h3>Background &amp; tray</h3>
+          <div class="setting-row">
+            <div class="setting-copy">
+              <span class="setting-label">Close button</span>
+              <p class="setting-hint">
+                ninja-recorder keeps recording in the tray either way &#8212;
+                only quitting stops it. &#8220;Close the window&#8221; frees
+                its memory; &#8220;Hide&#8221; keeps it loaded so reopening is
+                instant.
+              </p>
+            </div>
+            <select id="close-action-select" aria-label="Close button">
+              <option value="close-window">Close the window</option>
+              <option value="hide">Hide the window</option>
+              <option value="quit">Quit ninja-recorder</option>
+            </select>
+          </div>
+        </section>
+
+        <section class="settings-group">
           <h3>Audio</h3>
           <div class="setting-row">
             <div class="setting-copy">

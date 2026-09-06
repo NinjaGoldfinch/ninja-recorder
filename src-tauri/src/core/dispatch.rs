@@ -316,6 +316,53 @@ mod tests {
         );
     }
 
+    #[test]
+    fn close_action_round_trips_through_its_pref_string() {
+        for action in [
+            super::super::CloseAction::CloseWindow,
+            super::super::CloseAction::Hide,
+            super::super::CloseAction::Quit,
+        ] {
+            assert_eq!(
+                super::super::CloseAction::from_pref(Some(action.as_pref())),
+                action
+            );
+        }
+    }
+
+    #[test]
+    fn an_unset_or_unrecognised_close_action_falls_back_to_the_default() {
+        use super::super::CloseAction;
+        assert_eq!(CloseAction::from_pref(None), CloseAction::default());
+        assert_eq!(CloseAction::from_pref(Some("")), CloseAction::default());
+        // A value written by a *newer* build. `settings_kv` is schemaless and
+        // shared across versions, so a downgrade must not brick the close
+        // button.
+        assert_eq!(CloseAction::from_pref(Some("exit-ui")), CloseAction::default());
+    }
+
+    #[test]
+    fn the_default_close_action_keeps_the_process_alive() {
+        // The window closing must not stop a recording; that is the whole
+        // premise of the tray. If this default ever becomes `Quit`, closing
+        // the window mid-game would silently end the recording.
+        assert_ne!(super::super::CloseAction::default(), super::super::CloseAction::Quit);
+    }
+
+    #[tokio::test]
+    async fn close_action_reads_back_what_set_ui_pref_wrote() {
+        let ctx = ctx();
+        assert_eq!(super::super::close_action(&ctx), super::super::CloseAction::default());
+        dispatch(
+            &ctx,
+            "set_ui_pref",
+            json!({ "key": super::super::CLOSE_ACTION_KEY, "value": "hide" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(super::super::close_action(&ctx), super::super::CloseAction::Hide);
+    }
+
     #[tokio::test]
     async fn an_unknown_command_is_an_error_not_a_panic() {
         let ctx = ctx();
