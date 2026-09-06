@@ -66,12 +66,47 @@ trait Recorder {
     fn start(&mut self, config: RecordConfig) -> Result<()>;
     fn stop(&mut self) -> Result<PathBuf>;   // finalized MP4
     fn is_recording(&self) -> bool;
+    fn prepare(&mut self) -> Result<()>;     // warm up; default no-op
+    fn release(&mut self);                   // go cold; default no-op
 }
 ```
 
 Backends:
 - `LibObsRecorder` — Windows, the real one.
 - `StubRecorder` — dev/macOS: sleeps, copies a fixture MP4 into place. Keeps the entire app layer developable and testable without Windows.
+
+**Decision: the backend is warm only while the League client is.** Bringing
+`LibObs` up spawns the out-of-process worker *and* sends it `Init`, which runs
+`obs_startup` and loads every plugin — so a live backend is a D3D11 device and
+the whole libobs plugin set resident in another process, not a dormant handle.
+It used to be constructed in `lib.rs`'s `setup` and held until exit, which put
+the single largest item on the idle-RAM budget (§1.2) on a machine that might
+never open League.
+
+`prepare`/`release` move that to the state machine's `ClientRunning` window:
+warm when the client appears, cold when it goes away. Two alternatives were
+rejected. Staying warm forever is the old behaviour and the thing being fixed.
+Going lazy on the first `start` instead would put libobs init *inside* the
+record path, where it lands on top of the existing bounded window-size wait and
+risks losing the opening seconds of a game — whereas the client being open is a
+reliable minutes-ahead signal that a game is plausible.
+
+`prepare` is therefore a pre-warm and nothing depends on it: `start` calls the
+same idempotent `ensure_up`, so the two racing (a client that goes straight into
+a game) is harmless. `release` refuses to run while a recording is in flight.
+The supervisor drives both from the resulting *state*, not from `Action`s — a
+client restart emits a gameflow stop and start while staying in `ClientRunning`,
+and acting on those would tear the backend down and rebuild it for nothing.
+
+The cost is that init failure is no longer a startup event, so it can't swap in
+a `FailedRecorder` any more. `LibObsRecorder::new` is now infallible (only the
+worker-binary path lookup can fail that way) and `backend_name` carries the
+diagnostic instead: `libobs (idle)`, `libobs (ready)`, or
+`libobs (unavailable: …)`. There is also a **first-recording-of-a-session risk
+that only real hardware can settle**: whether a backend brought up minutes
+before `start` is still healthy, and whether repeated bring-up/tear-down across
+several games in a session leaks anything on the libobs side
+([docs/windows-verification.md](docs/windows-verification.md)).
 
 Rules:
 - No libobs types leak above the trait.
@@ -303,6 +338,15 @@ one reason — the inline boot script in `index.html` has to pick a theme
 *synchronously*, before first paint, and IPC resolves too late. SQLite
 stays the source of truth and wins any disagreement.
 
+**Idle while hidden.** Both of the frontend's continuous costs are now tied to
+window visibility: an open VOD is paused (and with it the rAF playhead loop and
+the stem `<audio>`), and the 60 s library safety refresh is skipped. Neither is
+free to leave running behind a minimised window, and the second rebuilds the
+whole grid with `innerHTML`. Note this leans on `document.hidden`, which is
+reliable for a minimised window but **not guaranteed** for a window hidden via
+`window.hide()` — when the tray work lands, visibility has to be pushed from
+Rust instead.
+
 **Status polling.** There are no Tauri events anywhere in this app; every
 backend→frontend signal is pull-only. The header's live state therefore
 comes from a `setTimeout` chain (not `setInterval` — `lcu_status` reads a
@@ -415,3 +459,73 @@ Two changes leaked usefully out of the portal into the app proper. `Supervisor` 
 | YouTube quota audit friction | Ship upload as "bring your own consent" early; apply for quota increase well before it matters |
 | Disk-full during recording | Preflight free-space check at record start; stop gracefully + notify rather than corrupt |
 | Window mode edge cases (exclusive fullscreen) | WGC needs a composited surface. Detect and nudge user toward borderless (the League default) |
+
+---
+
+## 12. Process model: a recorder daemon and a UI that can leave
+
+The app records unattended, so its natural resting state is running with no
+window. That is at odds with a single process whose command surface only
+exists inside a webview.
+
+**Decision: one binary, two modes.** `ninja-recorder --daemon` owns the
+`Supervisor`, the database, the `Recorder` and the tray icon, with no windows
+at all. `ninja-recorder` with no arguments is the UI: a window that attaches to
+the daemon over a local socket and can exit without stopping a recording. One
+binary rather than two because CI's build matrix bundles a single artifact per
+entry — a second `[[bin]]` would need an `externalBin` entry and its own NSIS
+story, and a flag needs neither.
+
+**Be honest about what this buys.** Not much memory. A *hidden* window keeps
+WebView2 fully resident, so "minimise to tray" reclaims nothing on its own, and
+simply destroying the window in a single process would capture most of the
+remaining win. While the UI is open, two processes cost *more* — a second host
+process. What the split actually buys is **crash isolation**: today a WebView2
+crash, or the WebView2 Runtime auto-updating underneath us, takes down an
+in-progress recording. It also lets the UI be genuinely absent rather than
+merely invisible. The idle-RAM win that matters came from §2.2's capture-backend
+lifecycle, not from here.
+
+### The `core` module is the precondition
+
+Tauri v2 has no way to invoke a registered command by name from Rust —
+`generate_handler!` only dispatches from a webview's IPC. A daemon therefore
+cannot reuse `#[tauri::command]` functions at all.
+
+So the logic moved into `src-tauri/src/core/`, as free functions over a plain
+`Ctx { recorder, supervisor, db, recordings_dir, ffmpeg }`, and `lib.rs` keeps
+only thin wrappers. Three commands used to take an `AppHandle` purely to
+re-derive `recordings_dir` / `ffmpeg_path` on every call; both are now resolved
+once at startup into `Ctx`.
+
+**`core` must never name a `tauri` type.** Same rule, and the same reason, as
+`Supervisor::on_library_changed` (§3.4): this module is unit-testable, and
+making Wry reachable from a module with tests drags the Win32 GUI stack into the
+`cargo test` binary, which carries no application manifest, so `comctl32`
+resolves to v5 and the binary dies at load with `STATUS_ENTRYPOINT_NOT_FOUND`.
+The one command that emits a Tauri event does it through a type-erased closure
+handed in at startup.
+
+`AppState` is consequently a newtype that `Deref`s to `Ctx`, which is what keeps
+the dev portal's many `state.db` / `state.supervisor` field reads compiling
+unchanged.
+
+**Two commands deliberately did not move**: `open_recordings_folder` and
+`dev_open_portal`. Both drive the desktop shell — an opener call and a window —
+and an Explorer window launched from a background daemon can open behind the
+foreground app. They stay in the UI process, which only needs `recordings_dir`
+to do its job.
+
+### Still to build
+
+The socket itself, and with it: a generic `Rpc::Invoke { command, args }`
+passthrough so the UI registers one command instead of 51 (which also removes
+`generate_handler!`'s inability to host a `#[cfg]`, and lets
+`dev_registered_commands` derive its list instead of hand-mirroring it);
+per-request ids, because a slow `extract_audio_track` must not head-of-line
+block a status poll; and a socket name scoped by build identity, because
+`tauri.devtools.conf.json` overrides `productName` but **not** `identifier` — so
+a dev build and an installed release already share `app_data_dir()`, the
+database and the recordings folder. For the same reason a version-mismatched
+handshake must refuse to attach and say so, never tell the other daemon to quit:
+it might be recording.

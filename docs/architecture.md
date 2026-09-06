@@ -82,7 +82,15 @@ flowchart TB
 | `retention.rs` | Deletion policy and free-space preflight | `select_for_deletion`, `enforce_now`, `has_room_to_record` |
 | `fixtures.rs` | Capturing live API responses to `fixtures/` | `enabled`, `record` |
 | `dev/` | Dev portal backend, compiled out without `--features devtools` | `dev_*` commands |
-| `lib.rs` | Tauri setup, app state, the command surface | `run` |
+| `core/mod.rs` | Every command's logic, with no `tauri` types in any signature | `Ctx`, the command free functions |
+| `lib.rs` | Tauri setup, app state, and thin command wrappers over `core` | `run` |
+
+`core` exists because Tauri v2 cannot invoke a registered command by name from
+Rust, so a windowless recorder daemon could not reuse `#[tauri::command]`
+functions at all ([DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave)).
+`AppState` is a newtype that `Deref`s to `core::Ctx`. Two commands stay in
+`lib.rs` rather than moving down — `open_recordings_folder` and
+`dev_open_portal` — because they drive the desktop shell.
 
 The consistent shape across `state_machine`, `db::reconcile` and `retention`
 is **a pure decision function plus a thin I/O wrapper**. The decision is unit
@@ -105,7 +113,7 @@ behind a three-method trait and nothing above it knows libobs exists.
 
 ```mermaid
 flowchart TB
-    SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording"}
+    SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release"}
     T -->|"#[cfg(windows)]"| L["LibObsRecorder<br/><small>WGC window capture,<br/>NVENC/AMF/QSV H.264,<br/>one AAC track per audio source,<br/>fragmented MP4 + faststart remux</small>"]
     T -->|"everything else"| S["StubRecorder<br/><small>copies fixtures/sample.mp4</small>"]
     style T fill:#ede7f6,stroke:#5e35b1
@@ -115,6 +123,14 @@ The stub is not a mock — it writes a real, playable file into the real
 recordings directory and takes a real amount of time to do it. That is what
 keeps the library, retention, review player and the whole state machine
 developable on macOS with no Windows box in the loop.
+
+`prepare`/`release` exist because the Windows backend is expensive to hold:
+bringing it up spawns the out-of-process worker *and* initializes libobs, so a
+warm backend is a GPU device and every plugin resident in another process. The
+supervisor warms it when the League client appears and drops it when the client
+goes away, off the resulting state rather than off individual actions
+([DEVELOPMENT.md §2.2](../DEVELOPMENT.md#22-the-recorder-trait)). Both default
+to no-ops, so `StubRecorder` ignores them entirely.
 
 `start` takes the user's audio preset and `stop` reports the track layout it
 actually wrote — reported, not assumed, because a microphone can be unplugged

@@ -95,7 +95,16 @@ flowchart LR
 **Pull for live state.** The header's summoner/phase/recording readout comes
 from a `setTimeout` chain, not `setInterval` — `lcu_status` reads a lockfile
 and makes two HTTPS round trips, and a slow tick under `setInterval` would
-stack calls on top of each other. The interval scales with game state.
+stack calls on top of each other. The interval scales with game state, and
+stretches to 10 s while the window is hidden.
+
+Because that delay is only chosen when the *next* timer is armed, a
+`visibilitychange` listener re-polls immediately when the window comes back —
+otherwise the header could show up to 10 s of stale state while the in-flight
+timer ran out. The 60 s safety refresh is skipped entirely while hidden: it
+rebuilds the whole grid with `innerHTML`, and `library-changed` already covers
+real changes. Skipping it leaves its timestamp stale on purpose, so the first
+poll after the window returns catches up at once.
 
 **Push for the library.** `library-changed` is the one backend→frontend event:
 the supervisor emits it after a finalize, and `set_retention_policy` after a
@@ -103,6 +112,11 @@ deletion. Polling `list_recordings` instead would rebuild the grid every few
 seconds and fight scroll and focus.
 
 ### Command surface
+
+The names and arguments below are the IPC contract and are unchanged by the
+`core` extraction — each `#[tauri::command]` in `lib.rs` is now a thin wrapper
+over a `core` free function, so the frontend sees exactly the same surface
+([DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave)).
 
 | Command | Returns | Used by |
 |---|---|---|
@@ -177,6 +191,15 @@ truth and wins any disagreement.
   muted whenever a stem is playing, and controls that read `video.muted` would
   render a muted player over audible sound. The `volumechange` listener was
   removed for the same reason — it would re-enter on the programmatic mute.
+
+- **Playback stops while the window is hidden.** An open VOD otherwise keeps
+  decoding video and playing its stem `<audio>` behind a minimised window,
+  which is the largest thing the app can burn while it is out of the way.
+  A `visibilitychange` listener pauses it and resumes only what it paused
+  (`pausedByHide`), so a video the user had already paused stays paused.
+  Pausing cascades through the existing `play`/`pause` handlers, so the rAF
+  playhead loop stops with it — and `resumeStem` hard-resyncs the stem on the
+  way back, so it cannot return drifted.
 
 The library grid's filters, sort and stats bar all operate client-side over
 the already-fetched row set. That is fine at solo-user library sizes and would

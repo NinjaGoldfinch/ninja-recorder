@@ -49,7 +49,22 @@ fn is_acceptable_encoder(encoder: &Encoder) -> bool {
 }
 
 pub struct LibObsRecorder {
-    inner: LibObs,
+    /// `None` while the backend is cold. Bringing `LibObs` up spawns the
+    /// out-of-process worker *and* sends it `Init`, which runs
+    /// `obs_startup` and loads every plugin — so a live `Some` here is a
+    /// D3D11 device and the whole libobs plugin set resident in another
+    /// process, not a dormant handle. Holding that from launch to exit put
+    /// the largest single item on the idle-RAM budget (DEVELOPMENT.md
+    /// §1.2) for a machine that might never open League, so it is now tied
+    /// to the state machine's `ClientRunning` window instead. See
+    /// `prepare`/`release`.
+    inner: Option<LibObs>,
+    /// Kept so `ensure_up` can rebuild `inner` after a `release`.
+    extprocess_recorder_path: PathBuf,
+    /// Why the last bring-up failed, for `backend_name`. Init failure used
+    /// to happen once at startup and swap in a `FailedRecorder`; now it can
+    /// happen at any `prepare`, so the diagnostic has to live here.
+    last_error: Option<String>,
     active_path: Option<PathBuf>,
     /// The layout `start` actually configured, held so `stop` can report it
     /// without re-deriving it from a preference that may have changed
@@ -72,15 +87,59 @@ impl LibObsRecorder {
     /// resolver (`BaseDirectory::Resource`) since dev and installed-app
     /// layouts differ; see the `build.rs`/`tauri.conf.json` comments for
     /// how it gets bundled next to the binary.
-    pub fn new(extprocess_recorder_path: PathBuf, ffmpeg_path: Option<PathBuf>) -> Result<Self, RecorderError> {
-        let inner = LibObs::new_with_paths(Some(extprocess_recorder_path), None, None, None)
-            .map_err(|e| RecorderError::Backend(e.to_string()))?;
-        Ok(Self {
-            inner,
+    /// Cheap and infallible — it only records paths. The backend itself
+    /// comes up on the first `prepare` or `start`, so construction no
+    /// longer decides whether recording works; `backend_name` reports that.
+    pub fn new(extprocess_recorder_path: PathBuf, ffmpeg_path: Option<PathBuf>) -> Self {
+        Self {
+            inner: None,
+            extprocess_recorder_path,
+            last_error: None,
             active_path: None,
             active_audio: None,
             ffmpeg_path,
-        })
+        }
+    }
+
+    /// Brings the backend up if it is cold, and hands back a live handle.
+    /// Idempotent, so `start` can call it unconditionally without caring
+    /// whether `prepare` already ran or succeeded.
+    fn ensure_up(&mut self) -> Result<&mut LibObs, RecorderError> {
+        if self.inner.is_none() {
+            // Cloned rather than borrowed so the call can't hold a shared
+            // borrow of `self` across the assignments below. Once per cold
+            // bring-up, next to spawning a process — not worth being clever.
+            let worker = self.extprocess_recorder_path.clone();
+            match LibObs::new_with_paths(Some(worker), None, None, None) {
+                Ok(obs) => {
+                    self.last_error = None;
+                    self.inner = Some(obs);
+                }
+                Err(e) => {
+                    let message = e.to_string();
+                    self.last_error = Some(message.clone());
+                    return Err(RecorderError::Backend(message));
+                }
+            }
+        }
+        Ok(self
+            .inner
+            .as_mut()
+            .expect("inner was just initialized or already Some"))
+    }
+
+    /// Shuts the worker down and goes cold. Dropping `LibObs` would also
+    /// terminate the child (its IPC link kills it on drop), but `shutdown`
+    /// asks politely first so libobs gets to release the GPU device.
+    fn tear_down(&mut self) {
+        let Some(obs) = self.inner.take() else {
+            return;
+        };
+        if let Err(e) = obs.shutdown() {
+            // Nothing to do about it — the link's `Drop` kills the child
+            // regardless, and we are on our way to idle either way.
+            eprintln!("[recorder] libobs shutdown failed, dropping anyway: {e}");
+        }
     }
 }
 
@@ -128,8 +187,8 @@ impl Recorder for LibObsRecorder {
         }
         settings.set_audio_tracks(to_obs_tracks(&audio));
 
-        let encoder = self
-            .inner
+        let obs = self.ensure_up()?;
+        let encoder = obs
             .available_encoders()
             .map_err(|e| RecorderError::Backend(e.to_string()))?
             .into_iter()
@@ -143,11 +202,9 @@ impl Recorder for LibObsRecorder {
             })?;
         settings.set_encoder(encoder);
 
-        self.inner
-            .configure(&settings)
+        obs.configure(&settings)
             .map_err(|e| RecorderError::Backend(e.to_string()))?;
-        self.inner
-            .start_recording()
+        obs.start_recording()
             .map_err(|e| RecorderError::Backend(e.to_string()))?;
 
         self.active_path = Some(output_path);
@@ -164,6 +221,12 @@ impl Recorder for LibObsRecorder {
             AudioLayout { sources: Vec::new(), tracks: Vec::new() }
         });
         self.inner
+            .as_mut()
+            // `active_path` was Some, so `start` succeeded and brought the
+            // backend up. Anything else is a bug, not a user-facing state.
+            .ok_or_else(|| {
+                RecorderError::Backend("capture backend went away mid-recording".into())
+            })?
             .stop_recording()
             .map_err(|e| RecorderError::Backend(e.to_string()))?;
 
@@ -191,7 +254,24 @@ impl Recorder for LibObsRecorder {
     }
 
     fn backend_name(&self) -> String {
-        "libobs".to_string()
+        match (&self.inner, &self.last_error) {
+            (Some(_), _) => "libobs (ready)".to_string(),
+            (None, Some(e)) => format!("libobs (unavailable: {e})"),
+            (None, None) => "libobs (idle)".to_string(),
+        }
+    }
+
+    fn prepare(&mut self) -> Result<(), RecorderError> {
+        self.ensure_up().map(|_| ())
+    }
+
+    fn release(&mut self) {
+        if self.is_recording() {
+            // The state machine shouldn't ask for this mid-recording, but
+            // tearing libobs down under a live encoder would lose the game.
+            return;
+        }
+        self.tear_down();
     }
 }
 
