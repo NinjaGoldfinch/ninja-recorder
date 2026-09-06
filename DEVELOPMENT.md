@@ -338,6 +338,15 @@ one reason — the inline boot script in `index.html` has to pick a theme
 *synchronously*, before first paint, and IPC resolves too late. SQLite
 stays the source of truth and wins any disagreement.
 
+**Idle while hidden.** Both of the frontend's continuous costs are now tied to
+window visibility: an open VOD is paused (and with it the rAF playhead loop and
+the stem `<audio>`), and the 60 s library safety refresh is skipped. Neither is
+free to leave running behind a minimised window, and the second rebuilds the
+whole grid with `innerHTML`. Note this leans on `document.hidden`, which is
+reliable for a minimised window but **not guaranteed** for a window hidden via
+`window.hide()` — when the tray work lands, visibility has to be pushed from
+Rust instead.
+
 **Status polling.** There are no Tauri events anywhere in this app; every
 backend→frontend signal is pull-only. The header's live state therefore
 comes from a `setTimeout` chain (not `setInterval` — `lcu_status` reads a

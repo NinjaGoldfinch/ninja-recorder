@@ -100,6 +100,7 @@ let rafHandle: number | null = null;
 let isScrubbing = false;
 
 export function initReview() {
+  document.addEventListener("visibilitychange", onVisibilityChange);
   backBtn = document.querySelector("#back-to-library-btn");
   reviewTitle = document.querySelector("#review-title");
   video = document.querySelector("#review-video");
@@ -681,6 +682,34 @@ function updatePlayhead() {
   }
 }
 
+// Set when *we* paused playback because the window went away, so that
+// becoming visible again only resumes a video the user had actually left
+// playing. A hidden window still decodes video and still plays the detached
+// stem <audio>, which is the single largest thing this app can burn while
+// minimised to the tray.
+let pausedByHide = false;
+
+/// Pauses an open, playing VOD while the window is hidden and resumes it
+/// after. Pausing cascades through the existing `pause`/`play` handlers, so
+/// the rAF playhead loop stops and the stem pauses with it — and `resumeStem`
+/// hard-resyncs on the way back, so the stem can't come back drifted.
+function onVisibilityChange() {
+  if (!video || !currentRecordingPath) return;
+  if (document.hidden) {
+    if (!video.paused) {
+      pausedByHide = true;
+      video.pause();
+    }
+    return;
+  }
+  if (pausedByHide) {
+    pausedByHide = false;
+    void video.play().catch(() => {
+      // Nothing to recover: the user can press play. Resuming is a courtesy.
+    });
+  }
+}
+
 function startPlayheadLoop() {
   stopPlayheadLoop();
   const tick = () => {
@@ -1000,6 +1029,7 @@ export async function openReview(row: RecordingRow) {
 
 function closeReview() {
   if (!video) return;
+  pausedByHide = false;
   stopPlayheadLoop();
   hideClusterTooltip();
   detachStem();

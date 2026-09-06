@@ -51,7 +51,19 @@ let prevFinalizedPath: string | null = null;
 let recordingElapsed: number | null = null;
 let lastSafetyRefresh = 0;
 
+/// `document.hidden` is only read when the *next* delay is chosen, so without
+/// this the header keeps its old cadence until the in-flight timer fires: up to
+/// 10s of staleness on the way back, and one more full-rate poll on the way
+/// out. Re-polling immediately on becoming visible fixes the first; the second
+/// costs one tick and isn't worth cancelling a timer over.
+function onVisibilityChange() {
+  if (stopped || document.hidden) return;
+  window.clearTimeout(timer);
+  void tick();
+}
+
 export function initStatus() {
+  document.addEventListener("visibilitychange", onVisibilityChange);
   els = {
     lcuPill: el("#status-lcu"),
     lcuText: el("#status-lcu-text"),
@@ -68,6 +80,7 @@ export function initStatus() {
 export function stopStatusPolling() {
   stopped = true;
   window.clearTimeout(timer);
+  document.removeEventListener("visibilitychange", onVisibilityChange);
 }
 
 async function tick() {
@@ -111,7 +124,14 @@ async function pollOnce(): Promise<GameState> {
   prevFinalizedPath = finalizedPath;
 
   const now = performance.now();
-  if (justFinished || newRecording || now - lastSafetyRefresh > SAFETY_REFRESH_MS) {
+  // The safety sweep rebuilds the whole grid (`innerHTML`), so it is pure
+  // waste against a window nobody can see. Skipping it while hidden also
+  // leaves `lastSafetyRefresh` stale, which makes the first poll after the
+  // window comes back catch up immediately. The two edges below still fire
+  // while hidden — they are once-a-game, and they keep `library-changed`
+  // honest if the event is ever missed.
+  const safetyDue = !document.hidden && now - lastSafetyRefresh > SAFETY_REFRESH_MS;
+  if (justFinished || newRecording || safetyDue) {
     lastSafetyRefresh = now;
     void refreshLibrary();
     void refreshDiskUsage();
