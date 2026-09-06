@@ -243,13 +243,20 @@ shipping. The frontend was also restructured during that pass from
 widget-shaped files into state-ownership-shaped ones
 ([frontend.md](frontend.md)).
 
-### Three design details flipped under contact
+### Four design details flipped under contact
 
 | Planned | Shipped | Why |
 |---|---|---|
 | Record MKV, remux to MP4 on stop | Fragmented MP4, then a faststart remux on clean stop | Fragmented MP4 survives a crash with no finalization step — but no player can seek it, including the review player itself, so a lossless stream-copy remux was added on top |
 | Pull-only; no backend→frontend events | One event, `library-changed` | Polling `list_recordings` to notice a finished game rebuilt the grid every few seconds and fought scroll and focus |
 | Match metadata written at finalize | Metadata columns stay `NULL` | `fetch_match_summary` is implemented and unit-tested but still unwired: resolving *which* `gameId` just ended needs LCU behaviour that no one has been able to check against a live client |
+| Frame-by-frame stepping in the review player | Dropped | It was a ±1/30 s time nudge, not a frame seek — no per-recording frame rate is probed anywhere — so it offered precision it did not have. It was removed when the player controls moved inside the video frame, where bar width is scarce |
+
+**Player controls moved inside the video frame.** The review player was built
+with its controls in a bar beneath the video, which reads fine embedded and is
+broken in fullscreen: `requestFullscreen` renders only the fullscreened
+element's subtree, so every control outside it disappeared. That is a layout
+decision that turned out to be a functional one.
 
 ### Audio was treated as a backend default, and it is a product decision
 
