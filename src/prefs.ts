@@ -2,15 +2,22 @@ import { call } from "./bridge";
 
 export type ThemePref = "system" | "light" | "dark";
 export type SortKey = "newest" | "oldest" | "longest" | "champion";
+// What the window's close button does. Mirrors Rust's `core::CloseAction`,
+// which is the side that actually acts on it — this type only has to describe
+// the values. "close-window" is the default because a *hidden* window keeps
+// the webview fully resident and reclaims nothing.
+export type CloseActionPref = "close-window" | "hide" | "quit";
 
 export interface Prefs {
   theme: ThemePref;
   defaultSort: SortKey;
+  closeAction: CloseActionPref;
 }
 
 export const DEFAULT_PREFS: Prefs = {
   theme: "system",
   defaultSort: "newest",
+  closeAction: "close-window",
 };
 
 // localStorage is a cache, not the store. Its one job is to be readable
@@ -24,6 +31,10 @@ let prefs: Prefs = { ...DEFAULT_PREFS };
 
 export function getPrefs(): Prefs {
   return prefs;
+}
+
+function isCloseAction(value: unknown): value is CloseActionPref {
+  return value === "close-window" || value === "hide" || value === "quit";
 }
 
 function isTheme(value: unknown): value is ThemePref {
@@ -59,12 +70,16 @@ export async function loadPrefs(): Promise<Prefs> {
   prefs = {
     theme: cachedTheme(),
     defaultSort: readCache("defaultSort", isSort, DEFAULT_PREFS.defaultSort),
+    // Not read from the cache: nothing needs it before first paint, and Rust
+    // reads the value straight out of SQLite anyway.
+    closeAction: DEFAULT_PREFS.closeAction,
   };
 
   try {
     const stored = await call<Record<string, string>>("get_ui_prefs");
     if (isTheme(stored.theme)) prefs.theme = stored.theme;
     if (isSort(stored.defaultSort)) prefs.defaultSort = stored.defaultSort;
+    if (isCloseAction(stored.closeAction)) prefs.closeAction = stored.closeAction;
   } catch (err) {
     console.error("Failed to load preferences", err);
   }

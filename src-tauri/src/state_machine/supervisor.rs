@@ -161,6 +161,25 @@ impl Supervisor {
     /// Starts the always-on lockfile watch. Everything else (gameflow
     /// watch, Live Client Data polling, recording) is started/stopped by
     /// state transitions from here on. Runs for the app's lifetime.
+    /// Finalizes an in-flight recording so the process can exit without
+    /// losing the game, returning whether there was one.
+    ///
+    /// The tray's Quit needs this: quitting mid-match would otherwise leave a
+    /// fragmented MP4 on disk with no `recordings` row, recoverable only by
+    /// the next startup's `reconcile` and stripped of its markers.
+    ///
+    /// **Blocking.** This is the same finalize the state machine runs — the
+    /// recorder stop, the ffmpeg remux, the DB write and a retention sweep —
+    /// so it must not be called from the main thread, which on the tray path
+    /// would freeze the menu and the whole event loop for seconds.
+    pub fn finalize_for_shutdown(&self) -> bool {
+        if self.session.lock().unwrap().is_none() {
+            return false;
+        }
+        self.stop_recording();
+        true
+    }
+
     pub fn start(self: &Arc<Self>) {
         let sup = Arc::clone(self);
         tauri::async_runtime::spawn(async move {
@@ -759,6 +778,33 @@ mod tests {
             "session should be cleared after stop"
         );
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn finalize_for_shutdown_is_a_no_op_with_nothing_recording() {
+        let (sup, _dir) = test_supervisor();
+        assert!(
+            !sup.finalize_for_shutdown(),
+            "nothing was recording, so there was nothing to finalize"
+        );
+        assert!(sup.status().last_finalized.is_none());
+    }
+
+    #[test]
+    fn finalize_for_shutdown_writes_the_recording_so_quitting_cannot_lose_it() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+        assert!(sup.session.lock().unwrap().is_some());
+
+        assert!(sup.finalize_for_shutdown(), "a recording was in flight");
+
+        let finalized = sup
+            .status()
+            .last_finalized
+            .expect("quitting mid-recording must still write the row");
+        assert!(finalized.recording_id.is_some(), "DB write should have succeeded");
+        assert!(sup.session.lock().unwrap().is_none(), "session should be cleared");
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -579,6 +579,54 @@ unknown arguments are ignored rather than fatal (both OSes hand launched apps
 arguments we never asked for). The windowless run also confirms Tauri's event
 loop survives with no windows, which is the daemon's prerequisite.
 
+### The tray, and what the close button does
+
+The tray is the app's resting state: three items — Open ninja-recorder,
+Settings, Quit. A "Start/Stop recording" item was considered and rejected,
+because `start_recording` races the state machine, which doesn't know about the
+call (`Supervisor::start_recording` spells out the divergence); promoting a
+known-broken dev affordance into the product is not a feature.
+
+**Close is a preference, defaulting to "close the window".** The three values
+are `close-window`, `hide` and `quit`, in `settings_kv` under `closeAction`,
+parsed by `core::CloseAction` — which falls back to the default on anything it
+doesn't recognise, because that table is schemaless and shared across versions,
+so a downgrade will one day read a value written by a newer build.
+
+The default is `close-window`, not `hide`, and the difference is the whole
+point: a *hidden* window keeps WebView2 fully resident and reclaims nothing.
+Destroying the webview while the process lives on is what actually gets the
+footprint down, and the recording is unaffected either way. `hide` stays
+available for instant reopening. Measured on macOS: a window costs 4 WebKit
+handles, `--hidden` costs 0.
+
+Keeping the process alive after its last window closes is
+`RunEvent::ExitRequested`. The discriminator is the exit code: `None` means
+user interaction — here, the last window closing — and gets vetoed with
+`api.prevent_exit()`; `Some(_)` means a programmatic `AppHandle::exit`, which
+is how the tray's Quit gets out. No "am I quitting?" flag is needed.
+
+**Quit finalizes first.** `Supervisor::finalize_for_shutdown` runs the same
+finalize the state machine does, so quitting mid-match writes the row and its
+markers instead of leaving a fragmented MP4 for the next startup's `reconcile`
+to adopt without them. It runs on a blocking thread, never the main one: tray
+menu handlers run on the main thread, and that finalize includes an ffmpeg
+remux and a retention sweep — inline it would freeze the tray and every window
+for seconds.
+
+**The tray's "Settings" has two paths** because the window may not exist. A
+live window gets a `navigate` event; a cold one is created at
+`index.html#settings`, since a frontend that hasn't loaded cannot be listening
+for an event yet. `router.ts`'s `initRouting` handles both, and deliberately
+ignores a `#review` fragment — the review view with no recording loaded is not
+a state worth restoring into.
+
+`tray.rs` has **no tests and must not grow any**, for the reason
+`state_machine::supervisor::on_library_changed` documents: it is reachable only
+from `run()`, which is dead code in a test build and gets stripped, keeping the
+Win32 GUI import stack out of the test binary. The one testable thing —
+`CloseAction` parsing — lives in `core`, which names no `tauri` type.
+
 ### Still to build
 
 The socket itself, and with it: per-request ids, because a slow

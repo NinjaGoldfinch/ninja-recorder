@@ -90,6 +90,77 @@ impl Ctx {
     }
 }
 
+/// `settings_kv` key holding the `CloseAction`. A missing key means "use the
+/// default", which is how every pref in that table works — adding one needs no
+/// migration (DEVELOPMENT.md §5.1).
+pub const CLOSE_ACTION_KEY: &str = "closeAction";
+
+/// What the main window's close button does.
+///
+/// The default is `CloseWindow` rather than `Hide` because a *hidden* window
+/// keeps WebView2 fully resident and reclaims nothing; destroying it while the
+/// process lives on is what actually gets the idle footprint down, and the
+/// recording is unaffected either way (DEVELOPMENT.md §12).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CloseAction {
+    /// Destroy the webview, keep the process and the recording running.
+    #[default]
+    CloseWindow,
+    /// Keep the webview resident so reopening is instant. Costs its full
+    /// memory the whole time.
+    Hide,
+    /// Quit everything, finalizing an in-flight recording first.
+    Quit,
+}
+
+impl CloseAction {
+    /// Parses the stored preference.
+    ///
+    /// Anything unrecognised falls back to the default rather than erroring.
+    /// `settings_kv` is schemaless and shared across versions, so a build that
+    /// is *older* than the one that wrote the value will read a variant it has
+    /// never heard of — a downgrade must not brick the close button.
+    pub fn from_pref(value: Option<&str>) -> Self {
+        match value {
+            Some("hide") => CloseAction::Hide,
+            Some("quit") => CloseAction::Quit,
+            Some("close-window") => CloseAction::CloseWindow,
+            _ => CloseAction::default(),
+        }
+    }
+
+    /// The string written back to `settings_kv`; round-trips `from_pref`.
+    ///
+    /// Test-only: the settings *form* writes these values, from TypeScript,
+    /// so nothing in Rust ever needs them at runtime. Kept because it is
+    /// what pins `from_pref` to the exact strings the frontend sends, and
+    /// clippy runs without `--all-targets`, so an unused non-test method
+    /// would fail `-D warnings`.
+    #[cfg(test)]
+    pub fn as_pref(self) -> &'static str {
+        match self {
+            CloseAction::CloseWindow => "close-window",
+            CloseAction::Hide => "hide",
+            CloseAction::Quit => "quit",
+        }
+    }
+}
+
+/// The user's close-button preference, or the default if unset or unreadable.
+///
+/// A database error is treated as "unset": this is read on the window-close
+/// path, where failing would leave the user unable to close the window at all.
+pub fn close_action(ctx: &Ctx) -> CloseAction {
+    let prefs = match ctx.db.get_ui_prefs() {
+        Ok(prefs) => prefs,
+        Err(e) => {
+            eprintln!("[core] could not read {CLOSE_ACTION_KEY}, using the default: {e}");
+            return CloseAction::default();
+        }
+    };
+    CloseAction::from_pref(prefs.get(CLOSE_ACTION_KEY).map(String::as_str))
+}
+
 #[derive(serde::Serialize)]
 pub struct DiskUsage {
     pub total_bytes: i64,

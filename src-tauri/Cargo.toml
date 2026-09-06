@@ -37,7 +37,10 @@ devtools = ["tauri/devtools"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset"] }
+# `tray-icon` is what makes `TrayIconBuilder` exist; it is off by default.
+# No `image-*` feature is needed because the tray reuses the already-decoded
+# `default_window_icon()` from the bundle rather than decoding a file.
+tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

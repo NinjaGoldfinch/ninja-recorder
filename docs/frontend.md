@@ -147,6 +147,14 @@ a shipped build.
 | `game_state_status` | `SupervisorStatus` | header strip, About block |
 | `start_recording` / `stop_recording` / `is_recording` | — | registered but unreferenced by the main UI; the dev portal's Recorder panel drives them |
 
+## Routing and the tray
+
+`router.ts` owns which view is showing. `initRouting` adds two entry points the
+tray needs: a `#settings` URL fragment read once at startup, for a window the
+tray has just created, and a `navigate` event for a window that already exists.
+A `#review` fragment is ignored — the review view with no recording loaded is
+not a state worth restoring into.
+
 ## Theming
 
 `data-theme` on `<html>` is written by JS and only ever holds `"light"` or

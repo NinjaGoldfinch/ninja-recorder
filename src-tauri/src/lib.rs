@@ -10,6 +10,7 @@ mod live_client;
 mod recorder;
 mod retention;
 mod state_machine;
+mod tray;
 
 #[cfg(not(target_os = "windows"))]
 use recorder::stub::StubRecorder;
@@ -141,7 +142,7 @@ fn open_recordings_folder(state: tauri::State<AppState>) -> Result<(), String> {
 /// The main window's label. Matches `capabilities/default.json`'s
 /// `"windows": ["main"]`, which is what Tauri would have used implicitly when
 /// the window came from `tauri.conf.json`.
-const MAIN_WINDOW_LABEL: &str = "main";
+pub(crate) const MAIN_WINDOW_LABEL: &str = "main";
 
 /// Builds the main window.
 ///
@@ -155,16 +156,21 @@ const MAIN_WINDOW_LABEL: &str = "main";
 /// must be `async`: that hazard is building a window re-entrantly from inside
 /// a WebView2 IPC callback, and `setup` is not one. Any window created later
 /// from a tray click or an IPC notification does have to worry about it.
-fn create_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
-    tauri::WebviewWindowBuilder::new(
-        app,
-        MAIN_WINDOW_LABEL,
-        tauri::WebviewUrl::App("index.html".into()),
-    )
-    .title("ninja-recorder")
-    .inner_size(1160.0, 800.0)
-    .min_inner_size(880.0, 600.0)
-    .build()?;
+///
+/// `view` asks the frontend to open on a particular view. It rides in on the
+/// URL fragment rather than an event because a window that has only just been
+/// created is not listening yet — the tray's "Settings" item opens a cold
+/// window and still has to land on the settings page.
+pub(crate) fn create_main_window(app: &tauri::AppHandle, view: Option<&str>) -> tauri::Result<()> {
+    let url = match view {
+        Some(view) => format!("index.html#{view}"),
+        None => "index.html".to_string(),
+    };
+    tauri::WebviewWindowBuilder::new(app, MAIN_WINDOW_LABEL, tauri::WebviewUrl::App(url.into()))
+        .title("ninja-recorder")
+        .inner_size(1160.0, 800.0)
+        .min_inner_size(880.0, 600.0)
+        .build()?;
     Ok(())
 }
 
@@ -323,15 +329,19 @@ pub fn run() {
             #[cfg(feature = "devtools")]
             app.manage(dev::DevState::default());
 
+            // Before the window: the tray is what makes a `--hidden` start
+            // reachable at all, so it must exist even if window creation
+            // fails.
+            if let Err(e) = tray::build(app.handle()) {
+                eprintln!("[tray] could not create the tray icon: {e}");
+            }
+
             // Last, so the window never renders against half-built state:
             // the frontend starts polling as soon as it loads.
             if mode.creates_window() {
-                create_main_window(app.handle())?;
+                create_main_window(app.handle(), None)?;
             } else {
-                println!(
-                    "[launch] started without a window; there is no tray yet, so quit the \
-                     process to stop it"
-                );
+                println!("[launch] started in the tray with no window");
             }
             Ok(())
         });
@@ -379,7 +389,47 @@ pub fn run() {
         dev::dev_set_fixture_recording,
     ]);
 
-builder
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+    let builder = builder.on_window_event(|window, event| {
+        let tauri::WindowEvent::CloseRequested { api, .. } = event else {
+            return;
+        };
+        if window.label() != MAIN_WINDOW_LABEL {
+            return;
+        }
+
+        let action = {
+            let ctx = window.state::<AppState>().clone_ctx();
+            core::close_action(&ctx)
+        };
+        match action {
+            // Let the window be destroyed. The process survives because
+            // `ExitRequested` is vetoed below, and destroying the webview is
+            // what actually reclaims its memory — hiding reclaims nothing.
+            core::CloseAction::CloseWindow => {}
+            core::CloseAction::Hide => {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+            // Route through the tray's own quit so an in-flight recording is
+            // finalized rather than dropped.
+            core::CloseAction::Quit => {
+                api.prevent_close();
+                tray::request_quit(&window.app_handle().clone());
+            }
+        }
+    });
+
+    builder
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            // `code: None` means the exit came from user interaction — here,
+            // the last window closing. That must not end the process: the
+            // recorder keeps running in the tray, which is the entire point.
+            // An explicit `AppHandle::exit` arrives as `Some(_)` and is
+            // allowed through, which is how the tray's Quit gets out.
+            if let tauri::RunEvent::ExitRequested { code: None, api, .. } = event {
+                api.prevent_exit();
+            }
+        });
 }

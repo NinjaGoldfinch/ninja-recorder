@@ -4,7 +4,7 @@ import { el } from "./dom";
 import { initDevPortal } from "./devportal";
 import { applyDefaultSort, initLibrary, refreshDiskUsage, refreshLibrary } from "./library";
 import { loadPrefs } from "./prefs";
-import { registerView } from "./router";
+import { initRouting, registerView } from "./router";
 import { initReview } from "./review";
 import { initSettings, syncSettingsFromPrefs } from "./settings";
 import { initStatus } from "./status";
@@ -26,6 +26,10 @@ window.addEventListener("DOMContentLoaded", () => {
   initSettings();
   initStatus();
   initDevPortal();
+
+  // After the views are registered, so a `#settings` start or a tray
+  // "Settings" click has something to switch to.
+  initRouting();
 
   // The backend pushes this after a finalize, after a retention deletion,
   // and after any dev-portal write. Before it existed, a recording the
