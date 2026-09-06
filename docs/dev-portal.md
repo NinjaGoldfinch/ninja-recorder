@@ -62,7 +62,7 @@ expires on its own and cannot be published by accident.
 | **Database** | Schema browse, paged table reads, row insert/update/delete, raw SQL, full reset |
 | **Commands** | Every registered command, invocable by hand, with a drift banner (below) |
 | **Recorder** | `start_recording` / `stop_recording` / `is_recording` directly, without a game |
-| **Fixtures** | Read/write `fixtures/`, toggle live capture at runtime — the replay mode the fixture strategy always called for |
+| **Fixtures** | Read/write `fixtures/`, toggle live capture at runtime — the replay mode the fixture strategy always called for. Capture is **on by default until v1.0** (DEVELOPMENT.md §3.3), so this panel is now mostly for turning it *off* |
 | **Log** | Portal-side action log |
 
 ## What the portal drove back into the app
