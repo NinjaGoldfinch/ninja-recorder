@@ -326,6 +326,72 @@ impl LiveSummary {
 /// work out which player we are, and dropping it just because the name
 /// match failed would lose the one label a Practice Tool recording can
 /// otherwise show.
+/// One line describing what a poll actually showed, for the diagnostic log
+/// (DEVELOPMENT.md §13).
+///
+/// **Distilled, not raw.** A real `allgamedata` response is tens of
+/// kilobytes and arrives at 1 Hz, so keeping every payload would cost
+/// hundreds of megabytes for a single game. This is about 120 bytes, or
+/// roughly 200 KB across a game — enough to answer "what was the app
+/// seeing when this went wrong" without that bill. When the raw stream is
+/// genuinely needed, fixture capture (DEVELOPMENT.md §3.3) is where it
+/// lives.
+///
+/// Fixed key order and fixed key set, including when a value is unknown:
+/// a line whose shape changes with its content is one nothing can grep or
+/// parse. Unknown reads as `-`.
+///
+/// `matched` is the one that earns its place twice over — the Practice
+/// Tool name ambiguity documented on `find_us` means "we could not tell
+/// which player is us" is a real, recurring state, and it silently empties
+/// champion, KDA and the advantage curve.
+pub fn poll_trace(
+    snapshot: &AllGameData,
+    elapsed_s: f64,
+    alignment: Option<TimeAlignment>,
+    new_markers: usize,
+) -> String {
+    let us = find_us(snapshot);
+    let offset = match alignment {
+        Some(a) => format!("{:.2}", a.offset_s()),
+        // The clock has not been seen to advance yet — a loading screen, a
+        // pause, or a game that ended before it ever ticked.
+        None => "-".to_string(),
+    };
+    let (champion, kda) = match us {
+        Some(p) => (
+            if p.champion_name.trim().is_empty() {
+                "-".to_string()
+            } else {
+                p.champion_name.trim().to_string()
+            },
+            format!("{}/{}/{}", p.scores.kills, p.scores.deaths, p.scores.assists),
+        ),
+        None => ("-".to_string(), "-".to_string()),
+    };
+    // Gold and level come off `activePlayer`, not the `allPlayers` entry —
+    // the API only exposes them for us, and it can answer for them even on
+    // a poll where the name match failed.
+    let (gold, level) = match snapshot.active_player.as_ref() {
+        Some(a) => (format!("{:.0}", a.current_gold), a.level.to_string()),
+        None => ("-".to_string(), "-".to_string()),
+    };
+
+    format!(
+        "game={:.1} cap={:.1} off={} matched={} champ={} kda={} gold={} lvl={} events={} new={}",
+        snapshot.game_data.game_time,
+        elapsed_s,
+        offset,
+        if us.is_some() { "yes" } else { "no" },
+        champion,
+        kda,
+        gold,
+        level,
+        snapshot.events.events.len(),
+        new_markers,
+    )
+}
+
 pub fn self_summary(snapshot: &AllGameData) -> LiveSummary {
     let us = find_us(snapshot);
 
@@ -615,17 +681,15 @@ impl TimeAlignment {
         (game_time_s + self.offset_s).max(0.0)
     }
 
-    /// The raw offset, for assertions. Negative means recording started
-    /// *after* game time 0 (a reconnect); positive is the normal
-    /// loading-screen case.
+    /// The raw offset. Negative means recording started *after* game time
+    /// 0 (a reconnect); positive is the normal loading-screen case.
     ///
-    /// `#[cfg(test)]` because nothing in production reads the offset on its
-    /// own — callers map through `video_time_s`, and the dev portal reads
-    /// `AlignmentTracker::current_offset_s`. CI's clippy runs without
-    /// `--all-targets`, so an ungated method only the tests call is dead
-    /// code there and `-D warnings` fails the build (CLAUDE.md).
-    #[cfg(test)]
-    fn offset_s(&self) -> f64 {
+    /// This used to be `#[cfg(test)]`, because nothing in production read
+    /// the offset on its own — callers map through `video_time_s`. The
+    /// poll trace does read it: a wrong offset is the difference between a
+    /// marker that seeks to the right moment and one that misses by
+    /// twenty seconds, so it belongs in the log.
+    pub fn offset_s(&self) -> f64 {
         self.offset_s
     }
 }
@@ -1255,4 +1319,79 @@ mod tests {
         assert!(team_diff(&snapshot).is_none());
     }
 
+
+    // --- poll_trace -------------------------------------------------------
+
+    #[test]
+    fn a_poll_trace_reports_what_the_poll_showed() {
+        let alignment = TimeAlignment::new(1512.3, 1530.0);
+        assert_eq!(
+            poll_trace(&fixture(), 1530.0, Some(alignment), 2),
+            "game=1512.3 cap=1530.0 off=17.70 matched=yes champ=Ahri kda=3/1/2 \
+             gold=450 lvl=11 events=12 new=2"
+        );
+    }
+
+    /// The Practice Tool ambiguity `find_us` documents is a real recurring
+    /// state, and it silently empties champion, KDA and the advantage
+    /// curve — so the line has to say so rather than just going quiet.
+    #[test]
+    fn a_poll_we_cannot_place_ourselves_in_says_so() {
+        let mut snapshot = fixture();
+        snapshot.active_player = None;
+        snapshot.all_players.clear();
+
+        let line = poll_trace(&snapshot, 1530.0, None, 0);
+        assert!(line.contains("matched=no"), "{line}");
+        assert!(line.contains("champ=- kda=-"), "{line}");
+        assert!(line.contains("gold=- lvl=-"), "{line}");
+        // The game clock and the event count do not depend on finding us,
+        // so they are still there — which is what makes the line useful in
+        // exactly the case something has gone wrong.
+        assert!(line.contains("game=1512.3"), "{line}");
+        assert!(line.contains("events=12"), "{line}");
+    }
+
+    /// Before the clock has been seen to advance there is no proven
+    /// offset, and reporting `0.00` would read as "aligned" rather than
+    /// "not yet known".
+    #[test]
+    fn an_unproven_alignment_reads_as_unknown_not_as_zero() {
+        let line = poll_trace(&fixture(), 4.0, None, 0);
+        assert!(line.contains("off=-"), "{line}");
+        assert!(!line.contains("off=0"), "{line}");
+    }
+
+    /// The greppability contract: same keys, same order, every time. A
+    /// line whose shape changes with its content is one nothing can parse.
+    #[test]
+    fn the_key_set_is_identical_whatever_the_poll_contained() {
+        let keys = |line: &str| -> Vec<String> {
+            line.split_whitespace()
+                .filter_map(|pair| pair.split('=').next().map(str::to_string))
+                .collect()
+        };
+
+        let full = poll_trace(&fixture(), 1530.0, Some(TimeAlignment::new(1512.3, 1530.0)), 2);
+        let mut empty_snapshot = fixture();
+        empty_snapshot.active_player = None;
+        empty_snapshot.all_players.clear();
+        empty_snapshot.events.events.clear();
+        let empty = poll_trace(&empty_snapshot, 0.0, None, 0);
+
+        assert_eq!(keys(&full), keys(&empty));
+        assert_eq!(
+            keys(&full),
+            vec!["game", "cap", "off", "matched", "champ", "kda", "gold", "lvl", "events", "new"]
+        );
+    }
+
+    /// The whole point of distilling rather than keeping the payload: at
+    /// 1 Hz, size is the difference between a diagnostic and a disk
+    /// problem. The trimmed sample fixture is already 4.5 KB.
+    #[test]
+    fn a_trace_line_stays_small_enough_to_write_every_second() {
+        let line = poll_trace(&fixture(), 1530.0, Some(TimeAlignment::new(1512.3, 1530.0)), 2);
+        assert!(line.len() < 160, "{} bytes: {line}", line.len());
+    }
 }
