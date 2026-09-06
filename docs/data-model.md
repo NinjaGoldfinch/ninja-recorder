@@ -35,6 +35,7 @@ erDiagram
         INTEGER size_bytes
         TEXT    audio_tracks_json "nullable, JSON AudioLayout"
         TEXT    game_mode "nullable, CLASSIC/ARAM/PRACTICETOOL"
+        TEXT    diagnostics_json "nullable, JSON RecordingDiagnostics"
     }
     markers {
         INTEGER id PK
@@ -83,6 +84,7 @@ included).
 | 4 | `settings_kv` (unseeded) | UI preferences. A missing key means "use the frontend default", which makes adding a preference a zero-migration change |
 | 5 | `recordings.audio_tracks_json` (nullable) | Which audio source landed on which MP4 track. Nullable because NULL is the honest answer twice over: every row predating multi-track audio, and anything `reconcile` imported from a file we didn't record. The review player renders NULL as no stem picker rather than as a guess |
 | 6 | `recordings.game_mode` (nullable) | Live Client Data's `gameData.gameMode`. Kept out of `queue`, which holds Riot's real *queue id* as an INTEGER: the live API never exposes a queue id and the LCU never exposes a mode string, so the two arrive from different sources at different times (mode during the game, queue only post-game). A row can carry either, both or neither, and the card's Queue label falls back from one to the other |
+| 7 | `recordings.diagnostics_json` (nullable) | What the app *observed* while making the recording, as against what the recording contains: how many Live Client Data polls landed, whether we were ever found in `allPlayers`, the alignment the markers were mapped through, which capture backend was live. None of it is derivable afterwards — the live API is gone the moment the game ends. JSON rather than a child table for the same reasons as `audio_tracks_json`, plus one more: a column is disposed of with its row, so retention and `delete_recording` need no cascade to get wrong |
 
 ### The audio layout is JSON, not a child table
 
@@ -106,6 +108,41 @@ the VOD would silently lose its stem picker. A NULL never wins.
 `game_mode` gets the same treatment for the same reason: it is only knowable
 while the game is running, so a rescan has nothing to say about it and must
 not be allowed to say NULL.
+
+### What `diagnostics_json` is for, and what it is not
+
+The other columns describe the recording. This one describes **making** it.
+
+A card whose champion is NULL, whose markers sit twenty seconds off, or
+whose recording stopped early is a question the row cannot answer, because
+everything that would answer it — the Live Client Data payloads, the poll
+cadence, the alignment as it was derived — is gone the moment the game
+ends. `DevSessionView` carries some of the same numbers in memory and does
+not survive a restart.
+
+So a finalize records:
+
+| Field | Answers |
+|---|---|
+| `game_id`, `queue_id`, `is_custom` | Whether the client ever told us which game this was. `game_id: null` *is* the reason `queue` is NULL |
+| `polls`, `first_game_time_s`, `last_game_time_s` | How much of the game the poller actually saw. Fewer `polls` than `samples` means the clock was frozen; far fewer than the duration means it was failing |
+| `ever_matched` | Whether we were ever found in `allPlayers`. `false` is the entire explanation for a NULL champion, a NULL KDA and an empty advantage curve |
+| `alignment_offset_s` | The offset markers were mapped through, or `null` if the clock never advanced. A marker that seeks to the wrong moment is this number being wrong |
+| `backend` | Which capture backend was live — on Windows possibly `FailedRecorder` carrying its init error |
+| `markers`, `samples` | What the finalize wrote. Disagreeing with the tables means an insert failed |
+
+**Deliberately not a copy of the row.** Everything here is something the
+columns cannot say. Duration, size, path and the audio layout are already
+columns and are not repeated.
+
+It is written in release builds — the failures happen there — and nothing
+in the main UI reads it. The dev portal does (#72).
+
+**Still missing:** the encoder actually selected, the negotiated resolution
+and frame rate, and dropped-frame counts. Those live inside libobs, which
+runs in a separate worker process (#69), so `RecordingOutput` cannot report
+them yet. The LCU summary patch's outcome is also absent, because it lands
+seconds to minutes *after* this record is written.
 
 ### Who writes the match-metadata columns, and when
 

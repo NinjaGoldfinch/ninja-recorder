@@ -328,7 +328,8 @@ flowchart TB
     A --> B{"ok?"}
     B -->|"no"| Z["log; keep last_finalized empty"]
     B -->|"yes"| C["stat file for size_bytes<br/><small>+ serialize the reported audio layout</small>"]
-    C --> D["db.insert_recording"]
+    C --> D2["assemble RecordingDiagnostics<br/><small>polls, ever_matched, offset, backend</small>"]
+    D2 --> D["db.insert_recording"]
     D -->|"err"| E["log; recording_id = None<br/><small>UI shows DB WRITE FAILED</small>"]
     D -->|"ok"| F["insert_markers"]
     F --> G["insert_samples"]

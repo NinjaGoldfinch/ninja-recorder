@@ -126,6 +126,10 @@ pub fn dev_seed_library(
             .map_err(|e| format!("{}: {e}", path.display()))?;
         report.bytes_written += written;
 
+        // Planned before the row is written, so the seeded diagnostics can
+        // report the real marker count rather than a guess.
+        let markers = plan_markers(&spec, &mut rng, plan.duration_s);
+
         let id = state
             .db
             .insert_recording(&db::NewRecording {
@@ -153,10 +157,28 @@ pub fn dev_seed_library(
                 // selecting a stem still fails; this exercises the UI, not
                 // playback. See docs/dev-portal.md's known limits.
                 audio_tracks_json: serde_json::to_string(&audio_layout_for(i)).ok(),
+                // Seeded rows carry a plausible record too, so the panel
+                // that reads it (#72) has something to render without
+                // anyone having to play a game first. Consistent with the
+                // row: a seeded game we have no champion for is one we
+                // were never matched in.
+                diagnostics_json: serde_json::to_string(&serde_json::json!({
+                    "game_id": plan.game_id,
+                    "queue_id": plan.queue,
+                    "is_custom": plan.queue == Some(0),
+                    "polls": plan.duration_s as i64,
+                    "first_game_time_s": 0.0,
+                    "last_game_time_s": plan.duration_s,
+                    "ever_matched": plan.champion.is_some(),
+                    "alignment_offset_s": 18.6,
+                    "backend": "seed",
+                    "markers": markers.len(),
+                    "samples": plan.duration_s as i64,
+                }))
+                .ok(),
             })
             .map_err(|e| e.to_string())?;
 
-        let markers = plan_markers(&spec, &mut rng, plan.duration_s);
         state
             .db
             .insert_markers(id, &markers)
