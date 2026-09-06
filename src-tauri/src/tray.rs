@@ -17,6 +17,7 @@
 //! `Supervisor::start_recording` spells out the divergence), so promoting it
 //! from a dev affordance to a shipped one would ship a known bug.
 
+use crate::{error, info, warn};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager};
@@ -76,7 +77,7 @@ pub(crate) fn build(app: &AppHandle) -> tauri::Result<()> {
         tray = tray.icon(icon);
         tray.build(app)?;
     } else {
-        eprintln!("[tray] no bundled window icon, skipping the tray icon");
+        warn!("tray", "no bundled window icon, skipping the tray icon");
     }
     Ok(())
 }
@@ -109,7 +110,7 @@ fn show_window(app: &AppHandle, view: Option<&str>) {
     // re-entrantly from a callback does — a window with no webview attached.
     tauri::async_runtime::spawn(async move {
         if let Err(e) = crate::create_main_window(&app, view.as_deref()) {
-            eprintln!("[tray] could not open the window: {e}");
+            error!("tray", "could not open the window: {e}");
         }
     });
 }
@@ -128,7 +129,7 @@ pub(crate) fn request_quit(app: &AppHandle) {
             std::sync::Arc::clone(&state.supervisor)
         };
         if supervisor.finalize_for_shutdown() {
-            println!("[tray] finalized an in-flight recording before quitting");
+            info!("tray", "finalized an in-flight recording before quitting");
         }
         // `exit` rather than letting the last window close: this is the
         // programmatic path, which `RunEvent::ExitRequested` sees as

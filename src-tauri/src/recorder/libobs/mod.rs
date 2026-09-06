@@ -18,6 +18,7 @@
 
 mod window;
 
+use crate::warn;
 use super::audio::{AudioLayout, AudioSourceKind};
 use super::{RecordConfig, Recorder, RecorderError, RecordingOutput};
 use libobs_recorder::settings::{
@@ -137,7 +138,7 @@ impl LibObsRecorder {
         if let Err(e) = obs.shutdown() {
             // Nothing to do about it — the link's `Drop` kills the child
             // regardless, and we are on our way to idle either way.
-            eprintln!("[recorder] libobs shutdown failed, dropping anyway: {e}");
+            warn!("recorder", "libobs shutdown failed, dropping anyway: {e}");
         }
     }
 }
@@ -239,8 +240,7 @@ impl Recorder for LibObsRecorder {
         // fast and lossless, just rewriting the container's index.
         if let Some(ffmpeg_path) = &self.ffmpeg_path {
             if let Err(e) = remux_faststart(ffmpeg_path, &path, audio.tracks.len()) {
-                eprintln!(
-                    "[recorder] faststart remux failed, keeping original (unseekable) file: {e}"
+                warn!("recorder", "faststart remux failed, keeping original (unseekable) file: {e}"
                 );
             }
         }
