@@ -543,6 +543,8 @@ pub fn run() {
         dev::dev_health,
         dev::dev_registered_commands,
         dev::dev_open_data_dir,
+        dev::dev_log_files,
+        dev::dev_read_log,
         dev::dev_schema,
         dev::dev_table_page,
         dev::dev_sql_query,

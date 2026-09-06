@@ -195,4 +195,56 @@ export interface RecordingRow {
   patch: string | null;
   pinned: boolean;
   size_bytes: number;
+  /** JSON `RecordingDiagnostics` — see `RecordingDiagnostics` below. */
+  diagnostics_json: string | null;
+}
+
+/** Mirrors Rust's `log::ParsedLine`. `level`/`tag` are empty for a line
+ *  that does not fit the format — a panic backtrace, say — which is kept
+ *  rather than dropped. */
+export interface LogLine {
+  timestamp: string;
+  level: string;
+  tag: string;
+  message: string;
+}
+
+/** Mirrors Rust's `dev::log_api::LogPage`. */
+export interface LogPage {
+  file: string;
+  dir: string | null;
+  /** Lines in the file, before filtering. */
+  total: number;
+  /** Lines that survived the filters, which may exceed those returned. */
+  matched: number;
+  truncated: boolean;
+  /** Oldest first, so the newest reads at the bottom. */
+  lines: LogLine[];
+  tags_present: string[];
+}
+
+/** Mirrors Rust's `dev::log_api::LogFileInfo`. */
+export interface LogFileInfo {
+  name: string;
+  bytes: number;
+  modified_millis: number | null;
+  active: boolean;
+  exists: boolean;
+}
+
+/** Mirrors Rust's `state_machine::supervisor::RecordingDiagnostics` —
+ *  what the app observed while making a recording, as against what the
+ *  recording contains. Parsed out of `RecordingRow.diagnostics_json`. */
+export interface RecordingDiagnostics {
+  game_id: number | null;
+  queue_id: number | null;
+  is_custom: boolean;
+  polls: number;
+  first_game_time_s: number | null;
+  last_game_time_s: number | null;
+  ever_matched: boolean;
+  alignment_offset_s: number | null;
+  backend: string;
+  markers: number;
+  samples: number;
 }

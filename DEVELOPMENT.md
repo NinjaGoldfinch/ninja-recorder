@@ -805,6 +805,14 @@ it might be recording.
 - **Rotation is 5 MiB × 3.** About two play sessions of history, which is the window a capture bug is diagnosed in.
 - **Nothing here may fail the app.** A read-only data dir, a locked file, a full disk: each degrades to "no file logging this session", never to an error a caller has to handle. `write` returns `()` and swallows I/O errors — recording a game matters more than recording *about* recording one. A failed write drops the sink for the rest of the session rather than retrying every line, because the usual causes do not fix themselves.
 
+### Reading it back
+
+Nothing in the shipped app reads the log — the viewers are behind `devtools`, so a release build carries the file and no UI (#72). The dev portal's Log panel reads it through `dev_read_log`, which filters **in Rust**: the file is capped at 5 MiB, which is far too much to hand a webview in one string.
+
+The *parsing* lives in `log.rs` beside the formatter that defines the format, not in `dev/`. A reader that re-describes the format somewhere else drifts from it the first time either changes; a round-trip test through the real `format_line` is what stops that.
+
+Levels include and tags exclude, which looks inconsistent and is not. Levels are four known values a panel can list up front, so ticking them is an inclusion. Tags are discovered *from the file*, so a panel cannot say "everything except the noisy ones" as an inclusion list until it has already read the file once — and the noisy ones (`live-poll`, `libobs`) are exactly what should be hidden on the very first render.
+
 ### Why not `tracing`
 
 `tracing`, and `log` + `fern`, both do this and more. What was needed was a timestamp, a level, a tag and a file that rotates; `tracing`'s value is spans and structured fields, and nothing in this app has asked for either. This project has kept its dependency tree deliberately small (§1.2), and a date crate would have been a second dependency purely to format a timestamp — so `log.rs` hand-rolls Howard Hinnant's `civil_from_days`, which is the same closed form a date crate would run, and pins it with tests for the leap-year and century rules. Revisit when something genuinely wants spans.
