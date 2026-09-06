@@ -15,7 +15,10 @@ mod retention;
 mod state_machine;
 mod tray;
 
-use crate::{error, info, warn};
+// No `use crate::{error, warn, info}` here, unlike every other module:
+// this file *is* the crate root, and `#[macro_export]` already puts the
+// macros in its macro namespace. Importing them would collide with the
+// definitions themselves (E0255).
 #[cfg(not(target_os = "windows"))]
 use recorder::stub::StubRecorder;
 use recorder::Recorder;
