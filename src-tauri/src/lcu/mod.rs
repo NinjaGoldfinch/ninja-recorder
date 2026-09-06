@@ -11,7 +11,7 @@ pub mod lockfile;
 pub mod match_data;
 
 pub use client::LcuHttpClient;
-pub use gameflow::GameflowPhase;
+pub use gameflow::{fetch_session, GameflowPhase, GameIdentity};
 
 #[allow(unused_imports)]
 pub use client::LcuClientError;

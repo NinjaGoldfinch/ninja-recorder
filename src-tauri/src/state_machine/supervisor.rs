@@ -235,6 +235,22 @@ pub struct Supervisor {
     gameflow_task: Mutex<Option<JoinHandle<()>>>,
     live_client_task: Mutex<Option<JoinHandle<()>>>,
     session: Mutex<Option<RecordingSession>>,
+    /// The lockfile behind the gameflow watch currently running, so an LCU
+    /// request can be made from outside that watcher's task. Stashed when
+    /// the watch starts rather than rediscovered on demand: the client can
+    /// restart mid-session and `discover` would then answer about a
+    /// different process than the one we are tracking.
+    lockfile: Mutex<Option<lcu::LockfileInfo>>,
+    /// Which game the client says is running, read once per game from
+    /// `/lol-gameflow/v1/session`.
+    ///
+    /// Deliberately on the supervisor rather than on `RecordingSession`:
+    /// the read happens when gameflow reaches `InProgress`, and recording
+    /// does not begin until Live Client Data answers a loading screen
+    /// later, so there is no session to put it in yet. Reading it at
+    /// finalize also sidesteps the race entirely — by then the request has
+    /// long since resolved either way.
+    pending_game: Mutex<lcu::GameIdentity>,
     last_finalized: Mutex<Option<FinalizedRecording>>,
     /// Set once at startup via `set_event_notifier`, rather
     /// than taken in `new`, so the unit tests below can still build a
@@ -271,6 +287,8 @@ impl Supervisor {
             gameflow_task: Mutex::new(None),
             live_client_task: Mutex::new(None),
             session: Mutex::new(None),
+            lockfile: Mutex::new(None),
+            pending_game: Mutex::new(lcu::GameIdentity::default()),
             last_finalized: Mutex::new(None),
             on_event: Mutex::new(None),
         })
@@ -370,6 +388,13 @@ impl Supervisor {
         for action in actions {
             self.execute(action);
         }
+        // Idle means the client is gone, so the stashed lockfile now
+        // describes a dead process and any request through it would be
+        // refused. Dropping it makes "is there a client" answerable
+        // without making one.
+        if matches!(state, GameState::Idle) {
+            *self.lockfile.lock().unwrap() = None;
+        }
         self.sync_capture_backend(&state);
     }
 
@@ -413,6 +438,7 @@ impl Supervisor {
     }
 
     fn start_gameflow_watch(self: &Arc<Self>, lockfile: lcu::LockfileInfo) {
+        *self.lockfile.lock().unwrap() = Some(lockfile.clone());
         let sup = Arc::clone(self);
         let handle = tauri::async_runtime::spawn(async move {
             let client = match lcu::LcuHttpClient::new(&lockfile) {
@@ -435,11 +461,59 @@ impl Supervisor {
         if let Some(handle) = self.gameflow_task.lock().unwrap().take() {
             handle.abort();
         }
+        // The lockfile is deliberately *not* cleared here. Finalize stops
+        // the watch before the recording row is written, and the client is
+        // usually still running — dropping it would take the LCU out of
+        // reach exactly when the post-game summary needs it.
+    }
+
+    /// Asks the client which game is starting and remembers the answer for
+    /// the finalize.
+    ///
+    /// Best-effort by design: a game we cannot identify still records, it
+    /// just lands without a `game_id` or `queue`. Failing here must never
+    /// stop a recording — losing the footage over a missing queue label
+    /// would be an absurd trade.
+    async fn fetch_game_identity(&self) {
+        let lockfile = { self.lockfile.lock().unwrap().clone() };
+        let Some(lockfile) = lockfile else {
+            // No gameflow watch is running, so nothing told us a game
+            // started — the dev portal's manual start does this.
+            return;
+        };
+
+        let client = match lcu::LcuHttpClient::new(&lockfile) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[state_machine] could not build an LCU client to identify the game: {e}");
+                return;
+            }
+        };
+
+        match lcu::fetch_session(&client).await {
+            Ok(identity) => {
+                // Logged rather than silent: this is the one line that
+                // tells a Windows tester the id resolution works, and
+                // `is_custom` is why a later summary fetch may find
+                // nothing (custom games never reach match history).
+                println!(
+                    "[state_machine] game identified: id={:?} queue={:?} custom={}",
+                    identity.game_id, identity.queue_id, identity.is_custom
+                );
+                *self.pending_game.lock().unwrap() = identity;
+            }
+            Err(e) => eprintln!("[state_machine] could not identify the game: {e}"),
+        }
     }
 
     fn start_live_client_poll(self: &Arc<Self>) {
         let sup = Arc::clone(self);
         let handle = tauri::async_runtime::spawn(async move {
+            // A new game starts here, so whatever the last one resolved to
+            // must not leak into this recording's row.
+            *sup.pending_game.lock().unwrap() = lcu::GameIdentity::default();
+            sup.fetch_game_identity().await;
+
             let client = match live_client::LiveClientDataClient::new() {
                 Ok(c) => c,
                 Err(e) => {
@@ -581,6 +655,10 @@ impl Supervisor {
                 // ended before the poller ever came up still writes a row —
                 // just an emptier one, exactly as it does today.
                 let live = session.as_ref().map(|s| s.live.clone()).unwrap_or_default();
+                // Read from the supervisor, not the session: the identity
+                // is resolved when gameflow reaches InProgress, which is
+                // before this recording's session existed.
+                let game = *self.pending_game.lock().unwrap();
                 let path_str = path.display().to_string();
                 let size_bytes = std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0);
 
@@ -598,6 +676,8 @@ impl Supervisor {
                     path: path_str.clone(),
                     started_at,
                     duration_s,
+                    game_id: game.game_id,
+                    queue: game.queue_id,
                     champion: live.champion,
                     win: live.win,
                     kda_k: live.kda.map(|k| k.kills),
@@ -1184,6 +1264,48 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// The identity is resolved when gameflow reaches `InProgress`, long
+    /// before this recording's session exists, so it lives on the
+    /// supervisor and is read at finalize. Set here directly because the
+    /// fetch itself needs a live client.
+    #[test]
+    fn the_identified_game_lands_on_the_finalized_row() {
+        let (sup, dir) = test_supervisor();
+        *sup.pending_game.lock().unwrap() = lcu::GameIdentity {
+            game_id: Some(5147823901),
+            queue_id: Some(420),
+            is_custom: false,
+        };
+
+        sup.start_recording();
+        sup.stop_recording();
+
+        let rows = sup.db.list_recordings().unwrap();
+        assert_eq!(rows[0].game_id, Some(5147823901));
+        assert_eq!(rows[0].queue, Some(420));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Queue 0 is a custom game, and the library labels it "Custom". If
+    /// this were treated as absent the whole row would lose its queue.
+    #[test]
+    fn a_custom_games_queue_id_of_zero_survives_to_the_row() {
+        let (sup, dir) = test_supervisor();
+        *sup.pending_game.lock().unwrap() = lcu::GameIdentity {
+            game_id: Some(7),
+            queue_id: Some(0),
+            is_custom: true,
+        };
+
+        sup.start_recording();
+        sup.stop_recording();
+
+        assert_eq!(sup.db.list_recordings().unwrap()[0].queue, Some(0));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// A game the poller never reached — it crashed on the loading screen,
     /// or port 2999 never came up. The footage still has to land in the
     /// library; it just lands without metadata, as it always has.
@@ -1198,6 +1320,8 @@ mod tests {
         assert_eq!(rows[0].champion, None);
         assert_eq!(rows[0].win, None);
         assert_eq!(rows[0].game_mode, None);
+        assert_eq!(rows[0].game_id, None, "no LCU, so no game id");
+        assert_eq!(rows[0].queue, None);
         assert!(
             rows[0].duration_s.is_some(),
             "the session clock does not depend on the live client"

@@ -88,6 +88,11 @@ supervisor is the only thing that executes them, so "what should happen" and
 | `LiveClientUp` / `LiveClientDown` | `live_client::poller::watch` | 1 Hz, exponential backoff to 10 s while down |
 | `FinalizeComplete` | the supervisor itself, after `stop()` and teardown | once per game |
 
+Alongside those, one request that drives no transition: entering
+`WaitingForGame` also fires a single `GET /lol-gameflow/v1/session` to learn
+*which* game is starting — `gameId`, the real `queueId`, and whether it is a
+custom. See "Identifying the game" below.
+
 ### The capture backend's warm window
 
 Orthogonal to the transitions above, and driven off the resulting state rather
@@ -283,18 +288,58 @@ flowchart TB
     style E fill:#fff3e0,stroke:#ef6c00
 ```
 
+### Identifying the game
+
+Working out which `gameId` just ended is what kept `lcu::match_data` unwired
+for months. The client will simply tell you while the game is still running,
+so the answer is read once per game rather than deduced afterwards.
+
+```mermaid
+sequenceDiagram
+    participant GF as gameflow watch
+    participant SUP as Supervisor
+    participant LCU as /lol-gameflow/v1/session
+    participant DB as recordings row
+
+    GF->>SUP: phase InProgress
+    Note over SUP: StartLiveClientPoll
+    SUP->>SUP: clear pending_game
+    SUP->>LCU: GET session
+    LCU-->>SUP: gameId · queue.id · isCustomGame
+    Note over SUP: loading screen…
+    SUP->>SUP: StartRecording (session created)
+    Note over SUP: game…
+    SUP->>DB: finalize reads pending_game
+```
+
+`pending_game` lives on the supervisor, not on `RecordingSession`. The read
+happens when gameflow reaches `InProgress`, and recording does not begin
+until Live Client Data answers a loading screen later, so there is no
+session to put it in yet. Reading it back at finalize also removes the race:
+by then the request has resolved either way.
+
+It is **best-effort**. A game that cannot be identified still records, it
+just lands without a `game_id` or `queue`. Losing footage over a missing
+queue label would be an absurd trade.
+
+`queue` id `0` is kept, because it is the real id for a custom game and the
+library labels it "Custom"; only negatives mean "no queue". A `gameId` of
+`0` is discarded, because the session exists in the lobby too and zero
+means "no game" rather than game number zero.
+
 **Where the row's metadata comes from.** `champion`, `kda_*`, `win` and
 `game_mode` are captured *during* the game from Live Client Data, folded
 into the session on every poll by `events::self_summary` and written at
 finalize. Nothing about that path needs the LCU, so it works in Practice
 Tool and customs too.
 
-**Known gap:** `queue`, `game_id`, `role` and `patch` are still `NULL` on
-rows written by a real game — they have no Live Client Data equivalent, and
-`lcu::fetch_match_summary` is implemented and unit-tested but is not called
-from finalize. Resolving *which* `gameId` just ended needs LCU behaviour
-that has not been checked against a live client. The dev portal can invoke
-the fetch by hand (`dev_fetch_match_summary`). Tracked in #52 and #53.
+`game_id` and `queue` come from the gameflow session read above.
+
+**Known gap:** `role` and `patch` are still `NULL` on rows written by a real
+game. They have no Live Client Data equivalent, and `lcu::fetch_match_summary`
+— which does carry them — is implemented and unit-tested but is not called
+from finalize. The dev portal can invoke the fetch by hand
+(`dev_fetch_match_summary`). Tracked in #53.
 
 ## 5. Where recording can refuse to start
 

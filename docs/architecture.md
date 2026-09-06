@@ -66,7 +66,7 @@ flowchart TB
 | Module | Owns | Key entry points |
 |---|---|---|
 | `lcu/lockfile.rs` | Finding the running client and its credentials | `discover`, `watch` |
-| `lcu/gameflow.rs` | Phase changes (WebSocket, polling fallback) | `watch` |
+| `lcu/gameflow.rs` | Phase changes (WebSocket, polling fallback), and which game is running | `watch`, `fetch_session` |
 | `lcu/match_data.rs` | Post-game summary (champion, KDA, win) | `fetch_match_summary` |
 | `lcu/client.rs` | HTTPS + Basic auth against the client's self-signed cert | `LcuHttpClient` |
 | `live_client/client.rs` | Port 2999 HTTPS client | `fetch_all_game_data` |
