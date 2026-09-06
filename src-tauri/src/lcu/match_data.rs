@@ -393,16 +393,13 @@ pub async fn fetch_match_summary(
     game_id: i64,
     skip_match_history: bool,
 ) -> Result<MatchSummary, MatchDataError> {
-    let mut summary = match fetch_eog(http, game_id).await {
-        Ok(eog) => eog,
-        Err(e) => {
-            // Not fatal on its own: the block is transient (the client
-            // clears it when the player leaves the post-game screen) and
-            // match history outlives it.
-            eprintln!("[lcu] end-of-game stats unavailable for game {game_id}: {e}");
-            MatchSummary::default()
-        }
-    };
+    // Not logged per attempt, deliberately. The caller retries this whole
+    // function every few seconds, so "the block isn't ready yet" — the
+    // normal answer for the first few of those — would print half a dozen
+    // identical lines per game. When both sources fail, the match-history
+    // error propagates below and says so once; `dev_fetch_match_summary`
+    // makes a single un-retried attempt when the reason matters.
+    let mut summary = fetch_eog(http, game_id).await.unwrap_or_default();
 
     if !skip_match_history {
         match fetch_history(http, game_id).await {
