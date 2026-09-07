@@ -217,13 +217,21 @@ function render() {
  * and every row is already correct without it.
  */
 async function fillInArt(rows: RecordingRow[]) {
-  if (!(await loadIcons(rows))) return;
+  // Paint what is already cached before awaiting anything. `render` rebuilds
+  // the list with `innerHTML`, which throws away every image painted into
+  // it, and that happens on every filter change, sort, refresh and
+  // `library-changed`. Skipping this when the cache was warm — which is
+  // what returning early on "nothing new to fetch" did — left the rows
+  // blank from the second render onwards.
+  paintAll(rows);
+  if (await loadIcons(rows)) paintAll(rows);
+}
 
+function paintAll(rows: RecordingRow[]) {
   for (const row of rows) {
     // The list may have been re-rendered while the requests were in flight.
     const el = els.grid.querySelector<HTMLElement>(`.vod-row[data-id="${row.id}"]`);
-    if (!el) continue;
-    paintArt(el, row);
+    if (el) paintArt(el, row);
   }
 }
 
