@@ -174,16 +174,26 @@ pub struct PlayerScores {
 
 impl ActivePlayer {
     /// Every name this player might be referred to by in event
-    /// Killer/Victim/Assister fields. Confirmed via a live capture
-    /// (Practice Tool, 2026-09-01) that those fields use `summonerName`
-    /// even when `riotIdGameName` is populated too — a Practice Tool
-    /// summoner name happened to be the champion name ("Ahri"), and the
-    /// real ChampionKill events used exactly that, not the Riot ID game
-    /// name ("NinjaGoldfinch"). Matching against every non-empty
-    /// candidate rather than picking one is the robust fix: a real
-    /// (non-Practice-Tool) game hasn't been confirmed to behave the same
-    /// way, and this way it doesn't matter which one the client actually
-    /// uses in any given match type.
+    /// Killer/Victim/Assister fields.
+    ///
+    /// **The event fields use `summonerName`, and `summonerName` is the
+    /// champion name.** A Practice Tool capture (2026-09-01) suggested
+    /// this and was written off as coincidence — that summoner name
+    /// happened to be "Ahri". A real Ranked Solo capture (2026-09-07)
+    /// settles it: `summonerName` was "Shyvana" while `riotIdGameName`
+    /// was "NinjaGoldfinch" and `riotId` was "NinjaGoldfinch#OCENZ", and
+    /// every event named "Shyvana".
+    ///
+    /// The same capture shows the API **anonymises everyone but us**: all
+    /// nine other players came back with `riotId` "#" and an empty
+    /// `riotIdGameName`, leaving the champion name as the only thing they
+    /// can be identified by. So the champion name is not merely what these
+    /// fields happen to use — for nine of the ten players it is the only
+    /// name the payload contains at all.
+    ///
+    /// Matching against every non-empty candidate rather than picking one
+    /// stays the right shape regardless: it costs nothing, and it means a
+    /// mode that does populate Riot IDs cannot break marker attribution.
     pub fn candidate_names(&self) -> Vec<&str> {
         [self.summoner_name.as_str(), self.riot_id_game_name.as_str()]
             .into_iter()

@@ -266,7 +266,7 @@ Two official local HTTP APIs. Both use self-signed TLS on localhost — pin/acce
 - Poll ~1 Hz. Relevant pieces:
   - `events.Events[]` — `ChampionKill`, `Multikill`, `TurretKilled`, `InhibKilled`, `DragonKill`, `BaronKill`, `HeraldKill`, `Ace`, `FirstBlood`, each with `EventTime` (seconds of game time). The neutral objectives also carry `Stolen`, which rides in the marker payload — and which is read leniently, because Riot has historically sent booleans in this API as the strings `"True"`/`"False"` and a bare `Option<bool>` rejected the whole snapshot over it. **Whether that is what actually broke #74 is not worth establishing**: the lenient read makes either answer survivable, and the LCU's post-game data could supply steals instead if the live value ever proves unreliable. Which source a steal flag comes from does not change anything the review player does with it.
   - **Not every event becomes a marker.** See "only events the player is named in" below.
-  - `activePlayer.summonerName` / `allPlayers` — identify which events involve *us* (our kills/deaths vs. someone else's).
+  - `activePlayer.summonerName` / `allPlayers` — identify which events involve *us* (our kills/deaths vs. someone else's). **`summonerName` is the champion name**, and the event name fields use it: a Ranked Solo capture (2026-09-07) had `summonerName` "Shyvana" against a `riotIdGameName` of "NinjaGoldfinch", and every event named "Shyvana". The same capture shows the API anonymises the other nine players outright — `riotId` "#", empty `riotIdGameName` — so the champion name is the only identifier the payload carries for them.
   - `gameData.gameTime` — for aligning game time to recording time.
   - `allPlayers[].championName` / `.scores` and `gameData.gameMode` — the library card's champion, KDA and mode. Taken here rather than from the LCU because the live API states the champion as a *name*, so nothing has to resolve a champion id, and because it works in Practice Tool and customs where match history does not.
   - The `GameEnd` event's `Result` (`Win`/`Lose`) — the only place this API states an outcome, and the whole of win/loss detection until `fetch_match_summary` is wired in.
@@ -638,16 +638,25 @@ picture there is. The id map is keyed on **every** variant's id but stores the
 name's chosen key, so a scoreboard rebuilt from match history carrying 74 or
 712 draws the standard art too.
 
-**Smite is renamed in place mid-game.** The jungle item upgrades it, and from
-that point the live client reports `Primal Smite` or `Unleashed Smite` where it
-reported `Smite` at the start. Data Dragon has an entry for none of those
-names, so a jungle recording drew an empty circle where its Smite should be.
-`canonical_spell_name` folds anything ending in "Smite" onto plain `Smite` —
-one button, one picture — which also covers the names Riot used before
-(`Chilling Smite`, `Challenging Smite`) and whatever it renames them to next.
-Because the fold happens at lookup rather than at capture, recordings already
-in the library get the right icon too; their hover text still says what the
-client said at the time.
+**A spell is renamed in place when it is upgraded, and Data Dragon has an
+entry for none of the upgraded names.** The jungle item turns `Smite` into
+`Primal Smite`; the 14-minute upgrade turns `Teleport` into `Unleashed
+Teleport`. A single Ranked Solo capture (2026-09-07) carried both — two
+players on Primal Smite, four on Unleashed Teleport — so six of the ten
+scoreboard rows drew an empty circle for one of their two spells.
+
+`art_key_for` tries the full name first and falls back to its **last word**,
+which is the base spell in every one of these (`Smite`, `Teleport`). Listing
+the upgrade names instead would need editing every time Riot renames one, and
+it has already shipped `Chilling Smite` and `Challenging Smite` under the same
+scheme. Trying the full name first is what keeps the multi-word spells that
+are spells in their own right — `Poro Toss`, `To the King!` — off the fallback
+path, and a last word that resolves to nothing still yields no icon rather
+than the wrong one.
+
+Because the fallback happens at lookup rather than at capture, recordings
+already in the library get the right icon too; their hover text still says
+what the client said at the time.
 
 Both maps come from one parse, and name and id resolve through the same
 `spell_art_file`, so the cache holds one `SummonerFlash.png` rather than a copy

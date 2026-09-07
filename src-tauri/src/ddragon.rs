@@ -348,23 +348,32 @@ fn is_variant(art_key: &str) -> bool {
     art_key.contains('_')
 }
 
-/// The name to look art up under.
+/// The art key for a spell display name, falling back to the name's last
+/// word when the game has upgraded the spell.
 ///
-/// The jungle item upgrades Smite in place, and the live client reports the
-/// upgraded name — `Primal Smite`, `Unleashed Smite` — from that point on,
-/// where it reported `Smite` at the start of the game. Data Dragon has an
-/// entry for none of them, so a jungle recording drew an empty circle where
-/// its Smite should be. They are one button with one picture, so every one
-/// of them resolves to plain `Smite`; that also covers the names Riot has
-/// used for this before (`Chilling Smite`, `Challenging Smite`) and
-/// whatever it renames them to next.
-fn canonical_spell_name(spell: &str) -> &str {
+/// **The game renames a spell in place when it is upgraded, and Data Dragon
+/// has an entry for none of the upgraded names.** A real ranked capture
+/// carried two of them at once: `Primal Smite` on both junglers, and
+/// `Unleashed Teleport` on four other players. Every one of those drew an
+/// empty circle.
+///
+/// Each is the base spell with a word in front of it, so the last word is
+/// the base name — `Smite`, `Teleport` — and the base art is what the game
+/// draws in both states anyway. Doing it this way rather than listing the
+/// upgrade names means the next rename costs nothing: Riot has already
+/// shipped `Chilling Smite` and `Challenging Smite` under this scheme.
+///
+/// The full name is tried **first**, so the multi-word names that are
+/// spells in their own right (`Poro Toss`, `To the King!`) are untouched,
+/// and a last word that resolves to nothing still yields `None` rather than
+/// the wrong picture.
+fn art_key_for(by_name: &HashMap<String, String>, spell: &str) -> Option<String> {
     let spell = spell.trim();
-    if spell.to_ascii_lowercase().ends_with("smite") {
-        "Smite"
-    } else {
-        spell
+    if let Some(key) = by_name.get(spell) {
+        return Some(key.clone());
     }
+    let (_, base) = spell.rsplit_once(' ')?;
+    by_name.get(base).cloned()
 }
 
 /// Rune id → icon path, flattened out of the tree document.
@@ -458,11 +467,7 @@ pub async fn item_icon(dir: &Path, item_id: i64) -> Option<PathBuf> {
 /// The cached icon for a summoner spell's display name.
 pub async fn spell_icon(dir: &Path, spell: &str) -> Option<PathBuf> {
     let version = version(dir).await?;
-    let key = spell_art(dir, &version)
-        .await?
-        .by_name
-        .get(canonical_spell_name(spell))?
-        .clone();
+    let key = art_key_for(&spell_art(dir, &version).await?.by_name, spell)?;
     spell_art_file(dir, &version, &key).await
 }
 
@@ -805,30 +810,61 @@ mod tests {
         assert_eq!(art.by_name.get("Barrier").map(String::as_str), Some("SummonerBarrier"));
     }
 
-    /// The jungle item renames Smite in place mid-game and Data Dragon has
-    /// no entry under any of those names, so an un-normalised lookup drew
-    /// an empty circle for the rest of the game.
+    /// The names in this test are the ones a real ranked capture actually
+    /// carried: both junglers on `Primal Smite`, four other players on
+    /// `Unleashed Teleport`. Data Dragon has an entry for neither, so
+    /// before the fallback every one of those slots drew an empty circle.
     #[test]
-    fn every_smite_upgrade_is_still_smite() {
-        for name in [
-            "Primal Smite",
-            "Unleashed Smite",
-            "Chilling Smite",
-            "Challenging Smite",
-            "  primal smite  ",
-            "Smite",
-        ] {
-            assert_eq!(canonical_spell_name(name), "Smite", "{name} did not normalise");
+    fn an_upgraded_spell_falls_back_to_the_base_art() {
+        let art = spell_art_map(spells(
+            r#"{
+                "SummonerSmite":{"id":"SummonerSmite","key":"11","name":"Smite"},
+                "SummonerTeleport":{"id":"SummonerTeleport","key":"12","name":"Teleport"}
+            }"#,
+        ));
+        for name in ["Primal Smite", "Unleashed Smite", "Chilling Smite", "Smite"] {
+            assert_eq!(
+                art_key_for(&art.by_name, name).as_deref(),
+                Some("SummonerSmite"),
+                "{name} did not fall back"
+            );
+        }
+        for name in ["Unleashed Teleport", "Teleport", "  Unleashed Teleport  "] {
+            assert_eq!(
+                art_key_for(&art.by_name, name).as_deref(),
+                Some("SummonerTeleport"),
+                "{name} did not fall back"
+            );
         }
     }
 
-    /// And nothing else is touched — a rule that reached further would
-    /// quietly redraw spells that are fine.
+    /// The full name wins over the fallback, so a multi-word spell that is
+    /// a spell in its own right is never reduced to its last word.
     #[test]
-    fn a_spell_that_is_not_a_smite_is_left_alone() {
-        assert_eq!(canonical_spell_name("Flash"), "Flash");
-        assert_eq!(canonical_spell_name(" Teleport "), "Teleport");
-        assert_eq!(canonical_spell_name(""), "");
+    fn a_multi_word_spell_is_not_reduced_to_its_last_word() {
+        let art = spell_art_map(spells(
+            r#"{
+                "SummonerPoroThrow":{"id":"SummonerPoroThrow","key":"31","name":"Poro Toss"},
+                "SummonerSnowball":{"id":"SummonerSnowball","key":"32","name":"Toss"}
+            }"#,
+        ));
+        assert_eq!(
+            art_key_for(&art.by_name, "Poro Toss").as_deref(),
+            Some("SummonerPoroThrow")
+        );
+    }
+
+    /// A name whose last word resolves to nothing stays unresolved. The
+    /// row falls back to its text, which is the contract everywhere here —
+    /// drawing *some* spell would be worse than drawing none.
+    #[test]
+    fn an_unknown_spell_stays_unknown() {
+        let art = spell_art_map(spells(
+            r#"{"SummonerFlash":{"id":"SummonerFlash","key":"4","name":"Flash"}}"#,
+        ));
+        assert_eq!(art_key_for(&art.by_name, "Arcane Doohickey"), None);
+        assert_eq!(art_key_for(&art.by_name, ""), None);
+        assert_eq!(art_key_for(&art.by_name, "Flash").as_deref(), Some("SummonerFlash"));
     }
 
     /// The concurrency bound is the whole point of `resolve_each`, and it
