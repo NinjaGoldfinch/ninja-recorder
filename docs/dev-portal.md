@@ -51,6 +51,24 @@ one forgotten click from shipping all of that, so the asset is now simply
 never there. CI uploads it as a workflow artifact instead, which
 expires on its own and cannot be published by accident.
 
+## How a panel is mounted
+
+A panel is a plain object with `mount(root, ctx)` and an optional `unmount`.
+`mount` is called again on every navigation and on every `ctx.refresh()` — the
+`r` key, a `library-changed` event, and several panels' own buttons — so it has
+to be safe to run repeatedly.
+
+**Each mount gets a fresh `#dev-main`.** Panels bind delegated handlers to the
+element they are handed and have no way to unbind them; `unmount` is not given
+a reference to it. Mounting onto the same element every time therefore stacked
+one handler per mount, and two live handlers turn a single click into two
+toggles — a no-op that renders once on the way through, which is what made the
+Log panel's tag chips light up and revert within a frame. Handlers left behind
+by *other* panels are the worse half: `[data-reload]` and `[data-copy]` are not
+unique across the panel set. `mountPanel` replaces the element with a shallow
+clone of itself, which carries the id, class and tabindex and no listeners, so
+no panel has to know any of this.
+
 ## Panels and what each one exists to solve
 
 | Panel | Exists because |
