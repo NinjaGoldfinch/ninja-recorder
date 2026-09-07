@@ -1190,31 +1190,59 @@ function markerLabel(m: MarkerRow): string {
   const str = (key: string) => (typeof payload[key] === "string" ? (payload[key] as string) : "?");
 
   switch (m.kind) {
+    // The three that name somebody: who you killed, who killed you, and
+    // whose kill you helped with. That name is the whole content of the
+    // marker and it is never yours, so it stays.
     case "kill":
       return `Killed ${str("victim")}`;
     case "death":
       return `Killed by ${str("killer")}`;
     case "assist":
       return `${str("killer")} killed ${str("victim")}`;
+
+    // The objectives name nobody. `classify_event` only writes one of
+    // these when you took part — `took_part()` gates every branch — so the
+    // killer is you or an ally you assisted, and printing it told you
+    // either your own champion's name or a detail you were not scrubbing
+    // for. Same for the elemental type: it says which drake, not which
+    // moment, and "Fire Dragon — Shyvana" is four words to say "Dragon".
     case "dragon":
-      return `${str("dragon_type")} Dragon${stolen(payload)} — ${str("killer")}`;
+      return `${isElder(payload) ? "Elder Dragon" : "Dragon"}${stolen(payload)}`;
     case "baron":
-      return `Baron${stolen(payload)} — ${str("killer")}`;
+      return `Baron${stolen(payload)}`;
     case "herald":
-      return `Herald${stolen(payload)} — ${str("killer")}`;
+      return `Herald${stolen(payload)}`;
     case "turret":
-      return `Turret destroyed — ${str("killer")}`;
+      return "Turret";
     case "inhibitor":
-      return `Inhibitor destroyed — ${str("killer")}`;
+      return "Inhibitor";
+
+    // `Ace` is only recorded when you landed the closing kill, so the
+    // acing team was always yours; `FirstBlood` only when you got it.
+    // Both suffixes were constants dressed as data.
     case "ace":
-      return `Ace (${str("acing_team")})`;
+      return "Ace";
+    case "first_blood":
+      return "First Blood";
+
     case "multikill":
       return multikillLabel(payload.kill_streak);
-    case "first_blood":
-      return `First Blood — ${str("recipient")}`;
     default:
       return m.kind;
   }
+}
+
+/**
+ * Elder is the one dragon type worth keeping.
+ *
+ * The elemental drakes are interchangeable to somebody scrubbing a VOD —
+ * the moment is "we took a dragon", and which one it was does not change
+ * what is on screen. Elder is a different objective: it usually decides
+ * the game, and it is a thing you would go looking for by name.
+ */
+function isElder(payload: Record<string, unknown>): boolean {
+  const type = payload.dragon_type;
+  return typeof type === "string" && type.trim().toLowerCase() === "elder";
 }
 
 function renderMarkerList() {

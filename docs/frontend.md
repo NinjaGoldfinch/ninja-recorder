@@ -190,6 +190,29 @@ recording with no samples has no alignment, so its window is the whole file.
 
 See [DEVELOPMENT.md §5.4](../DEVELOPMENT.md) for why the file is not cut.
 
+### What a marker says
+
+Two shapes, and the split is about who the marker is *about*.
+
+**Kills name people**: `Killed Nautilus`, `Killed by Akali`, `Blitzcrank killed
+Jarvan IV`. The name is the whole content — it is never yours, and it is what
+you would scrub for.
+
+**Objectives name nobody**: `Dragon`, `Baron`, `Herald`, `Turret`,
+`Inhibitor`, `Ace`, `First Blood`. `classify_event` only writes one of these
+when you took part — every objective branch is gated on `took_part()`, and
+`Ace` and `FirstBlood` on it being *you* — so the killer was always you or an
+ally you assisted. Printing it told you your own champion's name, which is the
+one thing you already know.
+
+The elemental dragon type went the same way. It says which drake, not which
+moment; `Fire Dragon — Shyvana` was four words to say `Dragon`. **Elder is the
+exception** and stays `Elder Dragon`: it is a different objective rather than a
+flavour of the same one, and it is a thing you would go looking for by name.
+
+`(stolen)` survives on the three it can apply to, because a stolen Baron is the
+moment, not a detail.
+
 ## Backend communication
 
 Two directions, deliberately asymmetric.
