@@ -1314,9 +1314,14 @@ button.armed {
  * place, because a build with four items is a different thing from a game
  * that has no scoreboard at all, and a row that shrank to fit would say
  * neither. */
+/* Fills **down** each column, not across each row: spells in the left
+ * column, runes in the right, which is how every scoreboard in the game
+ * arranges them. Row-major filling put the second spell where the keystone
+ * belongs, so the four read as one undifferentiated block. */
 .vod-perks {
   display: grid;
-  grid-template-columns: repeat(2, 18px);
+  grid-template-rows: repeat(2, 18px);
+  grid-auto-flow: column;
   gap: 2px;
 }
 

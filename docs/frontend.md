@@ -211,6 +211,11 @@ Empty slots hold their place rather than collapsing. A build with four items is
 a different thing from a game with no scoreboard, and a strip that shrank to fit
 would say neither.
 
+The spell-and-rune block fills **down each column** rather than across each row:
+spells on the left, runes on the right, which is how every scoreboard in the
+game arranges them. The markup order is therefore load-bearing — spell 1, spell
+2, keystone, secondary tree.
+
 ### What a marker says
 
 Two shapes, and the split is about who the marker is *about*.
