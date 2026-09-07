@@ -91,20 +91,40 @@ surface: log output and query results are there to be selected and copied, and
 The reasoning behind all of it is in
 [DEVELOPMENT.md §5.1](../DEVELOPMENT.md).
 
-### What a card says when the data is missing
+### The library is a list, not a grid
+
+One row per game. A library is scanned rather than browsed — the question is
+almost always "which game was that", answered by champion, result and roughly
+when — and a card grid answers that in two dimensions when one would do. Rows
+also leave somewhere for the scoreboard, items and team compositions to go
+without a second redesign (#85).
+
+The columns are fixed widths rather than content-sized, so values line up down
+the list and a column can be read vertically without the eye re-finding it on
+each row. The champion cell is the only flexible one, and it ellipsizes rather
+than widening the row.
+
+**A row never hides an empty slot.** A missing value renders as `—` in the
+place it would have occupied, because a row that collapses its gaps is a
+different shape per recording, which is precisely what stops a list being
+scannable. That matters more now than it did with cards, and more again until
+#56's backfill has been run against an old library.
+
+### What a row says when the data is missing
 
 Match metadata arrives from two independent sources — Live Client Data
 during the game, the LCU after it (see
 [recording-pipeline.md](recording-pipeline.md) §4) — so a row can carry
 either, both or neither. `format.ts` owns the fallback chains rather than
-scattering `??` through the card template:
+scattering `??` through the row template:
 
 | Slot | Chain | Why it stops there |
 |---|---|---|
 | Title (`vodTitle`) | `champion` → game mode → filename | Never empty. The filename is untrusted input, so the caller still escapes it |
 | Queue (`queueOrModeLabel`) | `queue` id → `game_mode` | `CLASSIC` renders as "Summoner's Rift", the *map*: the mode string cannot tell blind from draft from ranked, and naming one would be a guess in a slot read as fact |
 | KDA (`formatKda`) | all three or nothing | A partial KDA reads as a real one. The ratio (`kdaRatio`) is a hover hint, not a fourth number in a column three numbers wide |
-| Outcome | badge only when `win` is non-null | Undecided rows are excluded from the win-rate tile too, so an unknown never reads as a loss |
+| Outcome | badge only when `win` is non-null | Undecided rows are excluded from the win-rate tile too, so an unknown never reads as a loss. The badge slot still renders, greyed, so the column holds its place |
+| When (`formatRelative`) | relative inside a week → absolute date | "6 weeks ago" is worse than a date at that distance: nobody counts weeks, and the date is what a person searches their memory by. The absolute form is on the `title` either way |
 
 An unrecognised queue id shows as `Queue 1234` and an unrecognised mode
 shows as itself. Both are honest; neither invents a name.
