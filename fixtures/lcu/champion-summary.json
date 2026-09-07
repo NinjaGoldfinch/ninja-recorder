@@ -1,30 +1,92 @@
 [
   {
+    "alias": "None",
+    "contentId": "",
+    "description": "",
     "id": -1,
     "name": "None",
-    "alias": "NoChampion",
-    "squarePortraitPath": "/lol-game-data/assets/v1/champion-icons/-1.png",
-    "roles": []
+    "roles": [],
+    "squarePortraitPath": "/lol-game-data/assets/v1/champion-icons/-1.png"
   },
   {
+    "alias": "Leblanc",
+    "contentId": "ec0af028-71d5-461b-953b-7cb63ee73215",
+    "description": "the Deceiver",
+    "id": 7,
+    "name": "LeBlanc",
+    "roles": ["assassin", "mage"],
+    "squarePortraitPath": "/lol-game-data/assets/v1/champion-icons/7.png"
+  },
+  {
+    "alias": "Nunu",
+    "contentId": "2cc3fe64-8edb-41c2-a6cd-f9cd6d93dde6",
+    "description": "the Boy and His Yeti",
+    "id": 20,
+    "name": "Nunu & Willump",
+    "roles": ["tank", "mage"],
+    "squarePortraitPath": "/lol-game-data/assets/v1/champion-icons/20.png"
+  },
+  {
+    "alias": "Chogath",
+    "contentId": "f225e3e3-e08a-4583-a54a-734d9f4a8b1e",
+    "description": "the Terror of the Void",
+    "id": 31,
+    "name": "Cho'Gath",
+    "roles": ["tank", "mage"],
+    "squarePortraitPath": "/lol-game-data/assets/v1/champion-icons/31.png"
+  },
+  {
+    "alias": "MonkeyKing",
+    "contentId": "fdb8b34a-6480-4af7-b81d-300fc22131ea",
+    "description": "the Monkey King",
     "id": 62,
     "name": "Wukong",
-    "alias": "MonkeyKing",
-    "squarePortraitPath": "/lol-game-data/assets/v1/champion-icons/62.png",
-    "roles": ["fighter", "tank"]
+    "roles": ["fighter", "tank"],
+    "squarePortraitPath": "/lol-game-data/assets/v1/champion-icons/62.png"
   },
   {
+    "alias": "Ahri",
+    "contentId": "9bb28454-55ae-4cbe-9adb-c0fcd878680d",
+    "description": "the Nine-Tailed Fox",
     "id": 103,
     "name": "Ahri",
-    "alias": "Ahri",
-    "squarePortraitPath": "/lol-game-data/assets/v1/champion-icons/103.png",
-    "roles": ["mage", "assassin"]
+    "roles": ["mage", "assassin"],
+    "squarePortraitPath": "/lol-game-data/assets/v1/champion-icons/103.png"
   },
   {
+    "alias": "Kaisa",
+    "contentId": "ae541f5f-864a-4593-ac6b-1523e75d0ef7",
+    "description": "Daughter of the Void",
     "id": 145,
     "name": "Kai'Sa",
-    "alias": "Kaisa",
-    "squarePortraitPath": "/lol-game-data/assets/v1/champion-icons/145.png",
-    "roles": ["marksman"]
+    "roles": ["marksman", "mage"],
+    "squarePortraitPath": "/lol-game-data/assets/v1/champion-icons/145.png"
+  },
+  {
+    "alias": "Renata",
+    "contentId": "919dc3cc-e9af-49fc-a683-191e5474db68",
+    "description": "the Chem-Baroness",
+    "id": 888,
+    "name": "Renata Glasc",
+    "roles": ["support", "mage"],
+    "squarePortraitPath": "/lol-game-data/assets/v1/champion-icons/888.png"
+  },
+  {
+    "alias": "Jade_Wukong",
+    "contentId": "4f72ba89-339b-421b-8d15-5ae5f6658fb7",
+    "description": "The Monkey King",
+    "id": 60062,
+    "name": "Wukong",
+    "roles": ["fighter", "tank"],
+    "squarePortraitPath": "/lol-game-data/assets/v1/champion-icons/60062.png"
+  },
+  {
+    "alias": "Jade_Ahri",
+    "contentId": "d11565bc-1245-442a-b93b-fac2bb557599",
+    "description": "The Nine-Tailed Fox",
+    "id": 60103,
+    "name": "Ahri",
+    "roles": ["mage", "assassin"],
+    "squarePortraitPath": "/lol-game-data/assets/v1/champion-icons/60103.png"
   }
 ]

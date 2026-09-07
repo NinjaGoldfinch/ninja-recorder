@@ -499,7 +499,9 @@ name by asking the client's own asset store
 session and cached against its lockfile). It reads that entry's `name`, never
 its `alias`, because `alias` is where the legacy internal spellings live —
 `MonkeyKing` beside `Wukong` — and one champion under two spellings would
-split its games in two everywhere the library sorts and filters. Filling only
+split its games in two everywhere the library sorts and filters. The store
+also repeats display names across ids (a `Jade_*` block in the 60000s), which
+id → name does not mind and a name → id map could not survive. Filling only
 when the column is NULL is the second half of the same guarantee: the two
 writers can disagree without the column ever holding both.
 

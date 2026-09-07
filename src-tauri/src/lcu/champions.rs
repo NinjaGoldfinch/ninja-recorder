@@ -30,15 +30,26 @@
 //! punctuation-stripped `Kaisa` / `Chogath` / `Nunu`. `name` is the
 //! display name and is the only field read here.
 //!
-//! ## Unverified
+//! ## Confirmed against a real client, 2026-09-07
 //!
-//! The shape below is modelled from the LCU's OpenAPI spec, not captured
-//! off a real client — same standing as `match_data`'s two endpoints.
-//! Every field is optional and an unrecognised response degrades to "no
-//! name", never to a wrong one. `fixtures/lcu/champion-summary.json` is
-//! hand-written to that spec; `dev_lcu_get` against a live client is what
-//! replaces it (a capture lands under the sanitised endpoint name, so it
-//! has to be trimmed into that file by hand).
+//! `fixtures/lcu/champion-summary.json` is trimmed from an actual
+//! response, not written to the spec. The three things that mattered all
+//! hold: the fields are `id` / `name` / `alias`, `name` is the display
+//! name (id 62 is `Wukong`, with `MonkeyKing` sitting beside it in
+//! `alias`), and the `id: -1` "None" sentinel is really there. The
+//! capture also carries `contentId` and `description`, which nothing here
+//! reads.
+//!
+//! **One display name can have several ids.** The real store carries a
+//! parallel block of `Jade_*` entries in the 60000s — `Jade_Wukong` is id
+//! 60062 and its `name` is also `Wukong`. Keying by id is unaffected:
+//! both ids answer `Wukong`, which is the right answer for either. It is
+//! the *reverse* direction this rules out, and champion art is keyed that
+//! way — see #85.
+//!
+//! Every field stays optional regardless. A client on another version is
+//! still free to answer with a shape this has not seen, and the cost of
+//! that has to be "no name" rather than a wrong one.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -199,6 +210,32 @@ mod tests {
         let names = build_map(fixture());
         assert_eq!(resolve(&names, -1), None);
         assert!(!names.values().any(|name| name == "None"));
+    }
+
+    /// The real store carries a parallel `Jade_*` block in the 60000s
+    /// whose entries repeat display names already in use. Keying by id
+    /// does not mind — both ids are `Wukong`, and either is the right
+    /// answer to "what was I playing?" — but it is worth pinning, because
+    /// it is exactly what a name→id map could not survive.
+    #[test]
+    fn two_ids_may_share_one_display_name() {
+        let names = build_map(fixture());
+        assert_eq!(resolve(&names, 62), Some("Wukong".to_string()));
+        assert_eq!(resolve(&names, 60062), Some("Wukong".to_string()));
+        assert_eq!(resolve(&names, 103), Some("Ahri".to_string()));
+        assert_eq!(resolve(&names, 60103), Some("Ahri".to_string()));
+    }
+
+    /// The punctuation cases, where a parse that reached for `alias` would
+    /// look almost right and be wrong in the library's sort order.
+    #[test]
+    fn punctuated_display_names_survive_intact() {
+        let names = build_map(fixture());
+        assert_eq!(resolve(&names, 145), Some("Kai'Sa".to_string()));
+        assert_eq!(resolve(&names, 20), Some("Nunu & Willump".to_string()));
+        assert_eq!(resolve(&names, 31), Some("Cho'Gath".to_string()));
+        // Same letters as its alias, different capital.
+        assert_eq!(resolve(&names, 7), Some("LeBlanc".to_string()));
     }
 
     #[test]
