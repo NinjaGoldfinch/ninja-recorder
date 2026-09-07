@@ -1,4 +1,5 @@
 mod audio_tracks;
+mod backfill;
 mod core;
 mod db;
 #[cfg(feature = "devtools")]
@@ -141,11 +142,11 @@ async fn rpc(
 ) -> Result<serde_json::Value, String> {
     let ctx = state.clone_ctx();
 
-    // Only `lcu_status` awaits anything; every other command is blocking work
-    // — SQLite, a directory scan, ffmpeg — and running it on an async worker
-    // would occupy that worker for the duration. Tauri used to make this
-    // choice per command by whether it was declared `async`; now the dispatch
-    // table carries it.
+    // Only `lcu_status` and `backfill_match_metadata` await anything; every
+    // other command is blocking work — SQLite, a directory scan, ffmpeg — and
+    // running it on an async worker would occupy that worker for the duration.
+    // Tauri used to make this choice per command by whether it was declared
+    // `async`; now the dispatch table carries it.
     if core::is_async_command(&command) {
         return core::dispatch(&ctx, &command, args).await;
     }

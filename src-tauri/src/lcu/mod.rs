@@ -25,5 +25,5 @@ pub use gameflow::{GameflowSource, GameflowUpdate};
 #[allow(unused_imports)]
 pub use lockfile::{LockfileError, LockfileInfo, LockfileState};
 #[allow(unused_imports)]
-pub use match_data::{fetch_match_summary, MatchDataError, MatchSummary};
+pub use match_data::{fetch_match_summary, fetch_recent_games, MatchDataError, MatchSummary, PlayedGame};
 pub use champions::champion_name;
