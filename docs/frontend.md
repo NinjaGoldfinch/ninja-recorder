@@ -217,6 +217,11 @@ So `icons.ts` collects what the visible rows want, asks once (`resolve_icons`),
 and caches the answer for the session. Misses are cached too: a champion Data
 Dragon has never heard of must not be asked about again on every render.
 
+`fillInArt` walks the rows eight at a time and paints each chunk as it lands,
+so the top of the list fills in while the bottom is still resolving. The
+backend fans out within a chunk as well, six icons at a time — see
+[DEVELOPMENT.md §5.3](../DEVELOPMENT.md).
+
 **The row is correct before any of it arrives.** Slots render empty and are
 filled in afterwards, which is also exactly what an offline session gets
 forever — the row still says the champion, the KDA, the CS and the result in
