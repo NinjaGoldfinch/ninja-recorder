@@ -559,6 +559,44 @@ game ends. A recording with no samples gets no gold: there is no alignment to
 place frames through, and a guessed one would draw the right curve at the wrong
 times.
 
+### 5.3 Decision: art comes from a CDN, names do not
+
+§3.1 refuses Data Dragon for champion *names*, and this uses it for champion
+*art*. That is not an inconsistency; the two are different problems.
+
+A name is a value the library sorts on, filters on and titles cards with, so
+it has to be byte-identical to what Live Client Data writes — and the client
+is up by definition when the code that needs it runs, so a remote dependency
+buys nothing. **Art is the opposite on every count.** Nothing sorts on a
+picture, the client is usually *not* running while somebody browses their
+library, and Riot publishes the images on a CDN precisely so applications do
+not ship them.
+
+**Nothing is bundled.** Files are fetched the first time a champion appears
+and cached under `<app data>/ddragon/<version>/`, so the installer grows by
+zero bytes and the disk cost is only what the user actually played — a
+champion square is about 7 KB, so a library touching sixty of them stays under
+half a megabyte. `tauri.conf.json`'s asset-protocol scope covers that
+directory, so the webview loads them as local files rather than reaching the
+network itself.
+
+**Offline is the normal case here, not the edge case.** This is a local VOD
+library; people open it with League closed and sometimes with nothing
+connected. Every failure returns `None` and the card renders the text it
+always did. A missing icon is never an error, never a toast and never a broken
+image — which is also why the portraits are filled in *after* the grid paints
+rather than being awaited before it.
+
+The version is resolved at most once a day and written beside the cache, so a
+session with no network reuses the last known one instead of failing. Art is
+**not** pinned to each recording's own patch: a game played on 15.16 drawn with
+15.17 icons is not a problem worth a cache generation per patch.
+
+**Art is filed under the champion's key, not its name** — `MonkeyKing.png` is
+Wukong's portrait — so `champion.json` is fetched as a display-name → key map.
+That is the mirror of what §3.1 does and the reason this cannot be a URL the
+frontend builds out of the `champion` column on its own.
+
 ---
 
 ## 6. Disk management (launch feature, not a later one)

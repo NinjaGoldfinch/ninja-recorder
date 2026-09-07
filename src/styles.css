@@ -1274,6 +1274,25 @@ button.armed {
   min-width: 0;
 }
 
+/* Holds its space before the portrait arrives, so a card does not reflow
+ * when the icon lands a moment after the grid. Empty until then, and empty
+ * forever for a champion the CDN never answered for — the name beside it
+ * has always been the real label. */
+.vod-portrait {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-sm);
+  background-color: var(--bg-inset);
+  overflow: hidden;
+}
+
+.vod-portrait img {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
 .vod-champ {
   flex: 1 1 auto;
   min-width: 0;

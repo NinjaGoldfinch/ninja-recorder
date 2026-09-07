@@ -1,4 +1,4 @@
-import { call } from "./bridge";
+import { assetUrl, call } from "./bridge";
 import { el, escapeAttr, escapeHtml } from "./dom";
 import {
   formatBytes,
@@ -193,6 +193,50 @@ function render() {
   els.empty.hidden = true;
   els.grid.hidden = false;
   els.grid.innerHTML = rows.map(card).join("");
+  void fillInPortraits(rows);
+}
+
+/**
+ * Champion portraits, resolved after the grid is already on screen.
+ *
+ * Deliberately a second pass rather than part of `card`. The first one is a
+ * cache miss per champion and each miss is a CDN round trip, so blocking the
+ * grid on it would trade a library that renders instantly for one that
+ * renders once the network says so — and the whole thing has to work with no
+ * network at all, where the answer is "no icon" and the card is already
+ * correct without one.
+ *
+ * Cached per champion for the session, `null` included: a champion the CDN
+ * has never heard of must not be asked about once per card, per render.
+ */
+const portraits = new Map<string, string | null>();
+
+async function fillInPortraits(rows: RecordingRow[]) {
+  const wanted = [...new Set(rows.map((r) => r.champion).filter((c): c is string => !!c))];
+  const unknown = wanted.filter((c) => !portraits.has(c));
+
+  await Promise.all(
+    unknown.map(async (champion) => {
+      try {
+        const path = await call<string | null>("champion_icon", { champion });
+        portraits.set(champion, path ? assetUrl(path) : null);
+      } catch {
+        // Offline, or the command is unavailable. Same outcome as an
+        // unknown champion, and just as unremarkable.
+        portraits.set(champion, null);
+      }
+    }),
+  );
+
+  for (const row of rows) {
+    const src = row.champion ? portraits.get(row.champion) : null;
+    if (!src) continue;
+    // The grid may have been re-rendered while the requests were in flight.
+    const slot = els.grid.querySelector<HTMLElement>(
+      `.vod-card[data-id="${row.id}"] .vod-portrait`,
+    );
+    if (slot) slot.innerHTML = `<img src="${escapeAttr(src)}" alt="" loading="lazy" />`;
+  }
 }
 
 // Stats are computed over the *filtered* rows so they track the filters,
@@ -261,6 +305,7 @@ function card(row: RecordingRow): string {
     <article class="vod-card" role="listitem" tabindex="0"
              data-id="${row.id}" data-outcome="${outcomeAttr(row.win)}">
       <header class="vod-card-head">
+        <span class="vod-portrait" aria-hidden="true"></span>
         <span class="vod-champ" title="${escapeAttr(title)}">${escapeHtml(title)}</span>
         ${badge}
       </header>

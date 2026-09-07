@@ -186,6 +186,7 @@ a shipped build.
 | `list_recordings` | `Vec<RecordingRow>` | library grid |
 | `rescan_recordings` | `ReconcileReport` | library toolbar → rescan |
 | `backfill_match_metadata` | `BackfillReport` | settings → storage → fill in |
+| `champion_icon` | `string \| null` | library card portraits, after the grid paints |
 | `get_recording_markers` | `Vec<MarkerRow>` | review timeline |
 | `get_recording_samples` | `Vec<SampleRow>` | advantage curve |
 | `get_disk_usage` | `DiskUsage` | library stats bar |

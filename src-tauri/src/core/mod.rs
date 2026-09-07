@@ -49,6 +49,10 @@ pub struct Ctx {
     pub supervisor: Arc<state_machine::Supervisor>,
     pub db: Arc<db::Db>,
     pub recordings_dir: PathBuf,
+    /// Where Data Dragon art is cached. Nothing is bundled and nothing is
+    /// pre-fetched: files land here the first time a champion is asked for
+    /// (`crate::ddragon`).
+    pub assets_dir: PathBuf,
     /// The bundled (or locally installed) ffmpeg, if there is one. Optional
     /// by design — a failed CI download degrades stem extraction and the
     /// faststart remux rather than breaking recording.
@@ -75,6 +79,7 @@ impl Ctx {
         supervisor: Arc<state_machine::Supervisor>,
         db: Arc<db::Db>,
         recordings_dir: PathBuf,
+        assets_dir: PathBuf,
         ffmpeg: Option<PathBuf>,
     ) -> Self {
         Self {
@@ -82,6 +87,7 @@ impl Ctx {
             supervisor,
             db,
             recordings_dir,
+            assets_dir,
             ffmpeg,
             on_library_changed: None,
             autostart: None,
@@ -377,6 +383,25 @@ pub fn rescan_recordings(ctx: &Ctx) -> Result<db::reconcile::ReconcileReport, St
 /// job with progress would be the fix if it ever walks thousands of rows.
 pub async fn backfill_match_metadata(ctx: &Ctx) -> Result<crate::backfill::BackfillReport, String> {
     crate::backfill::run(&ctx.db).await
+}
+
+/// The cached square portrait for a champion, fetched on first use.
+///
+/// Returns a path for the frontend to hand to `convertFileSrc`, or `None`
+/// for every way this can fail to produce one — offline, an unknown
+/// champion, an unwritable cache. None of those is an error: the card
+/// renders the text it always did, which is why this cannot fail loudly.
+pub async fn champion_icon(ctx: &Ctx, champion: String) -> Result<Option<String>, String> {
+    // A blank name is what a NULL `champion` column looks like by the time
+    // it reaches here. There is nothing to ask a CDN about, and answering
+    // without a request also keeps the dispatch round-trip test — which
+    // really invokes every command — off the network.
+    if champion.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(crate::ddragon::champion_icon(&ctx.assets_dir, &champion)
+        .await
+        .map(|path| path.to_string_lossy().into_owned()))
 }
 
 /// Markers for the review timeline.

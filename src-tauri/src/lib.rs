@@ -2,6 +2,7 @@ mod audio_tracks;
 mod backfill;
 mod core;
 mod db;
+mod ddragon;
 #[cfg(feature = "devtools")]
 mod dev;
 mod fixtures;
@@ -142,9 +143,10 @@ async fn rpc(
 ) -> Result<serde_json::Value, String> {
     let ctx = state.clone_ctx();
 
-    // Only `lcu_status` and `backfill_match_metadata` await anything; every
-    // other command is blocking work — SQLite, a directory scan, ffmpeg — and
-    // running it on an async worker would occupy that worker for the duration.
+    // Only `lcu_status`, `backfill_match_metadata` and `champion_icon` await
+    // anything; every other command is blocking work — SQLite, a directory
+    // scan, ffmpeg — and running it on an async worker would occupy that
+    // worker for the duration.
     // Tauri used to make this choice per command by whether it was declared
     // `async`; now the dispatch table carries it.
     if core::is_async_command(&command) {
@@ -507,6 +509,7 @@ pub fn run() {
                 supervisor,
                 db,
                 dir,
+                app.path().app_data_dir()?.join("ddragon"),
                 ffmpeg_path(app.handle()),
             );
             ctx.set_autostart(Box::new(PluginAutostart(app.handle().clone())));

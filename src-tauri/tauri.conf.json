@@ -18,7 +18,8 @@
         "enable": true,
         "scope": [
           "$APPDATA/recordings/*",
-          "$APPDATA/recordings/audio-tracks/*"
+          "$APPDATA/recordings/audio-tracks/*",
+          "$APPDATA/ddragon/**"
         ]
       }
     }

@@ -23,7 +23,7 @@ use serde_json::Value;
 ///
 /// The leading token picks the shape, because the commands are not uniform:
 /// most take `&Ctx` and return `Result`, two return a plain value, two take
-/// no context at all, and two are async — one of those with a context and
+/// no context at all, and three are async — two of those with a context and
 /// one without.
 macro_rules! invoke_one {
     (ctx_result $name:ident, $ctx:expr, $a:expr, $($arg:ident,)*) => {
@@ -58,9 +58,14 @@ macro_rules! invoke_one_blocking {
     (bare_async $name:ident, $ctx:expr, $a:expr,) => {
         Err(format!("{} is async and must go through dispatch()", stringify!($name)))
     };
-    (ctx_async $name:ident, $ctx:expr, $a:expr, $($arg:ident,)*) => {
+    // Reads the parsed arguments before refusing. This arm does not invoke
+    // anything, and the first async command to take an argument made the
+    // generated `Args` field dead code here — which `-D warnings` fails on,
+    // from inside a macro, pointing at the table rather than the command.
+    (ctx_async $name:ident, $ctx:expr, $a:expr, $($arg:ident,)*) => {{
+        $( let _ = &$a.$arg; )*
         Err(format!("{} is async and must go through dispatch()", stringify!($name)))
-    };
+    }};
 }
 
 macro_rules! is_async_arm {
@@ -100,7 +105,7 @@ macro_rules! dispatch_table {
         /// Runs one command by name. `args` is the frontend's argument object;
         /// `null` and `{}` are both accepted for a command that takes none.
         ///
-        /// Async because two commands are. Everything else here is *blocking*
+        /// Async because three commands are. Everything else here is *blocking*
         /// work — SQLite, a directory scan, ffmpeg — so a caller that awaits
         /// this on an async worker is occupying that worker for the duration.
         /// Prefer `dispatch_blocking` on a blocking thread for anything
@@ -187,6 +192,7 @@ dispatch_table! {
     ctx_result  extract_audio_track(recording_path: String, track_index: usize);
     bare_async  lcu_status();
     ctx_async   backfill_match_metadata();
+    ctx_async   champion_icon(champion: String);
     ctx_plain   game_state_status();
 }
 
@@ -210,7 +216,7 @@ mod tests {
         ));
         let supervisor =
             state_machine::Supervisor::new(Arc::clone(&recorder), dir.clone(), Arc::clone(&db));
-        Ctx::new(recorder, supervisor, db, dir, None)
+        Ctx::new(recorder, supervisor, db, dir.clone(), dir.join("ddragon"), None)
     }
 
     /// A representative argument payload per command, in the **camelCase the
@@ -232,6 +238,10 @@ mod tests {
             // Internally tagged on `preset`, so the value is an object.
             "set_audio_preset" => json!({ "preset": { "preset": "game" } }),
             "extract_audio_track" => json!({ "recordingPath": "/tmp/nope.mp4", "trackIndex": 1 }),
+            // Blank on purpose: `champion_icon` answers a blank name
+            // without a request, so this exercises the argument mapping
+            // without the suite reaching a CDN.
+            "champion_icon" => json!({ "champion": "" }),
             _ => json!({}),
         }
     }
