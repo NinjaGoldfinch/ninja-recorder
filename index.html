@@ -492,6 +492,22 @@
             <button id="open-folder-btn" type="button">Open folder</button>
           </div>
 
+          <div class="setting-row">
+            <div class="setting-copy">
+              <span class="setting-label">Fill in missing match data</span>
+              <p class="setting-hint">
+                Recordings made before ninja-recorder could read match data
+                &#8212; and anything imported by a rescan &#8212; show
+                &#8220;&#8212;&#8221; for champion and result. This matches
+                them against your League client&#8217;s match history by
+                when they were played. Needs the client running, and only
+                reaches back as far as its history does.
+              </p>
+            </div>
+            <button id="backfill-btn" type="button">Fill in</button>
+          </div>
+          <p id="backfill-report" class="callout" hidden></p>
+
           <div class="setting-block">
             <span class="setting-label">Retention policy</span>
             <p class="setting-hint">

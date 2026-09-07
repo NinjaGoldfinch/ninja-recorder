@@ -197,6 +197,14 @@ struct GameDto {
     /// of a hotfix, and a display that wants the short form can cut it.
     #[serde(rename = "gameVersion", default)]
     game_version: Option<String>,
+    /// Epoch milliseconds. Only the backfill reads it — a patch already
+    /// knows which game it asked about, but a backfill is trying to work
+    /// out *which* game a file holds and has nothing but the clock.
+    #[serde(rename = "gameCreation", default)]
+    game_creation: Option<i64>,
+    /// Seconds. Same caller, same reason.
+    #[serde(rename = "gameDuration", default)]
+    game_duration: Option<i64>,
     participants: Vec<GameParticipant>,
     #[serde(rename = "participantIdentities")]
     participant_identities: Vec<ParticipantIdentity>,
@@ -438,6 +446,82 @@ async fn fetch_eog(http: &LcuHttpClient, game_id: i64) -> Result<MatchSummary, M
         return Err(MatchDataError::NotReady(game_id));
     }
     Ok(summary)
+}
+
+// --- `/lol-match-history/v1/products/lol/current-summoner/matches` -----
+
+/// One game from the current summoner's match history, reduced to what a
+/// backfill needs: when it was played, how long it ran, and what it says
+/// about us.
+///
+/// The summary is extracted here rather than re-fetched per game. The list
+/// response carries whole game documents, so a library with forty
+/// unlabelled recordings costs two requests rather than forty-two.
+#[derive(Debug, Clone)]
+pub struct PlayedGame {
+    pub game_id: i64,
+    /// Epoch milliseconds, or `None` on a client that did not say.
+    pub started_at: Option<i64>,
+    /// Seconds.
+    pub duration_s: Option<i64>,
+    pub summary: MatchSummary,
+}
+
+#[derive(Debug, Deserialize)]
+struct MatchHistoryResponse {
+    #[serde(default)]
+    games: MatchHistoryGames,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct MatchHistoryGames {
+    /// Deliberately not `Vec<GameDto>`. This shape has never been seen off
+    /// a real client, and a single game the parse cannot read — one odd
+    /// queue, one field a newer client dropped — would otherwise cost the
+    /// entire page and with it the whole backfill. Each entry is converted
+    /// on its own below and a bad one is skipped.
+    #[serde(default)]
+    games: Vec<serde_json::Value>,
+}
+
+/// The current summoner's most recent `count` games, newest first.
+///
+/// Games we cannot find ourselves in are dropped rather than returned
+/// half-filled: the backfill matches on time and would otherwise be
+/// offered a candidate it could never label.
+pub async fn fetch_recent_games(
+    http: &LcuHttpClient,
+    count: u32,
+) -> Result<Vec<PlayedGame>, MatchDataError> {
+    let me: CurrentSummoner = http.get_json("/lol-summoner/v1/current-summoner").await?;
+    let response: MatchHistoryResponse = http
+        .get_json(&format!(
+            "/lol-match-history/v1/products/lol/current-summoner/matches?begIndex=0&endIndex={}",
+            count
+        ))
+        .await?;
+
+    Ok(response
+        .games
+        .games
+        .into_iter()
+        .filter_map(|raw| match serde_json::from_value::<GameDto>(raw) {
+            Ok(game) => Some(game),
+            Err(e) => {
+                warn!("lcu", "skipping an unreadable match-history entry: {e}");
+                None
+            }
+        })
+        .filter_map(|game| {
+            let summary = extract_summary(&me, &game).ok()?;
+            Some(PlayedGame {
+                game_id: game.game_id,
+                started_at: game.game_creation.filter(|ms| *ms > 0),
+                duration_s: game.game_duration.filter(|s| *s > 0),
+                summary,
+            })
+        })
+        .collect())
 }
 
 async fn fetch_history(http: &LcuHttpClient, game_id: i64) -> Result<MatchSummary, MatchDataError> {

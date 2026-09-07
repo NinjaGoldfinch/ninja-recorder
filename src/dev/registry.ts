@@ -443,6 +443,14 @@ export const COMMANDS: CommandSpec[] = [
     ],
   },
   {
+    name: "backfill_match_metadata",
+    group: "Library",
+    dev: false,
+    description:
+      "Matches every recording with no champion or result against the client's match history, by when it was played. Refuses a recording that overlaps more than one game rather than guessing. Needs the League Client running.",
+    args: [],
+  },
+  {
     name: "champion_icon",
     group: "Library",
     dev: false,

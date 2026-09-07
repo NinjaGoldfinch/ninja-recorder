@@ -23,7 +23,7 @@ use serde_json::Value;
 ///
 /// The leading token picks the shape, because the commands are not uniform:
 /// most take `&Ctx` and return `Result`, two return a plain value, two take
-/// no context at all, and two are async — one of those with a context and
+/// no context at all, and three are async — two of those with a context and
 /// one without.
 macro_rules! invoke_one {
     (ctx_result $name:ident, $ctx:expr, $a:expr, $($arg:ident,)*) => {
@@ -105,7 +105,7 @@ macro_rules! dispatch_table {
         /// Runs one command by name. `args` is the frontend's argument object;
         /// `null` and `{}` are both accepted for a command that takes none.
         ///
-        /// Async because `lcu_status` is. Everything else here is *blocking*
+        /// Async because three commands are. Everything else here is *blocking*
         /// work — SQLite, a directory scan, ffmpeg — so a caller that awaits
         /// this on an async worker is occupying that worker for the duration.
         /// Prefer `dispatch_blocking` on a blocking thread for anything
@@ -128,8 +128,8 @@ macro_rules! dispatch_table {
         }
 
         /// The synchronous half, for running on a thread that is allowed to
-        /// block. Identical to `dispatch` except that the one async command
-        /// refuses rather than pretending.
+        /// block. Identical to `dispatch` except that the async commands
+        /// refuse rather than pretending.
         pub fn dispatch_blocking(ctx: &Ctx, command: &str, args: Value) -> Result<Value, String> {
             let args = normalize(args);
             match command {
@@ -191,6 +191,7 @@ dispatch_table! {
     bare_result list_audio_inputs();
     ctx_result  extract_audio_track(recording_path: String, track_index: usize);
     bare_async  lcu_status();
+    ctx_async   backfill_match_metadata();
     ctx_async   champion_icon(champion: String);
     ctx_plain   game_state_status();
 }
