@@ -609,8 +609,19 @@ Wukong's portrait — so `champion.json` is fetched as a display-name → key ma
 That is the mirror of what §3.1 does and the reason this cannot be a URL the
 frontend builds out of the `champion` column on its own.
 
-Summoner spells have the same problem (`Flash` → `SummonerFlash`) and get the
-same answer from `summoner.json`. **Runes are the odd one out twice over**: the
+**Summoner spell art does not come from Data Dragon at all.** Its
+`img/spell/` set is the pre-refresh icons and has been for years, so a Flash
+drawn from it does not match the one in the game, and there is no newer path on
+that CDN. The art comes from the running client's own asset store
+(`/lol-game-data/assets/v1/summoner-spells/{id}.png`) — by definition the art
+the game is using, on a host already authenticated against — and falls back to
+Community Dragon, which mirrors the same game data publicly, for the usual case
+where the library is browsed with League closed. Whichever answers is cached,
+so one session with the client open fixes every spell permanently.
+
+`summoner.json` is still read, but only to get from a name to an id: Data
+Dragon's *data* is current even where its art is not, and a live-captured
+scoreboard says `Flash` where a rebuilt one says `4`. **Runes are the odd one out twice over**: the
 icon is a path rather than a filename, and it is served from an *unversioned*
 part of the CDN. `runesReforged.json` is trees of slots of runes, and a row
 wants both the keystone and a tree crest, so all of it flattens into one id →

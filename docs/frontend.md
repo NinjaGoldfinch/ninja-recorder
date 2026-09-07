@@ -191,6 +191,21 @@ recording with no samples has no alignment, so its window is the whole file.
 
 See [DEVELOPMENT.md §5.4](../DEVELOPMENT.md) for why the file is not cut.
 
+### Where each kind of art comes from
+
+| Kind | Source | Keyed by |
+|---|---|---|
+| Champion | Data Dragon | display name → key (`Wukong` → `MonkeyKing`) |
+| Item | Data Dragon | the numeric id the game reports |
+| Rune | Data Dragon | rune or tree id → an icon *path*, from an unversioned part of the CDN |
+| Summoner spell | the running client, else Community Dragon | the numeric id |
+
+Spells are the odd one out because Data Dragon's spell art is the pre-refresh
+set and there is no newer path on that CDN. The client's own asset store is by
+definition current; Community Dragon covers the usual case of browsing with
+League closed. Either way it is cached, so one session with the client open
+fixes every spell permanently.
+
 ### Art is asked for once per page, not once per icon
 
 A row carries a champion portrait, two summoner spells, two rune icons and
