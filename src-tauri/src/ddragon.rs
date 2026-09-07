@@ -39,16 +39,14 @@ use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
-use crate::lcu::{LcuHttpClient, LockfileInfo};
 use crate::warn;
 
+/// The only place art comes from. Spells briefly took a detour through the
+/// running client and Community Dragon, on the theory that Data Dragon's
+/// `img/spell/` set was too old to match the game; the art was never the
+/// problem (see `spell_art_map`), and three sources meant three ways for a
+/// row to draw the wrong picture.
 const CDN: &str = "https://ddragon.leagueoflegends.com";
-
-/// Community Dragon, which mirrors the game's *current* art rather than
-/// Data Dragon's frozen set. Only summoner spells come from here, and only
-/// when the League client is not running to serve them itself.
-const COMMUNITY_CDN: &str =
-    "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default";
 
 /// How long a resolved version is trusted before asking again. Riot ships a
 /// patch every couple of weeks; a day is far inside that and keeps the
@@ -86,16 +84,18 @@ type ArtKeys = HashMap<String, String>;
 /// Rune (or rune tree) id → the icon path Data Dragon serves it under.
 type RuneIcons = HashMap<i64, String>;
 
-/// Spell display name → its numeric id. The live client reports `Flash`
-/// and match history reports `4`; the art is fetched by id either way, so
-/// this is only ever used to get from one to the other.
-type SpellNameIds = HashMap<String, i64>;
-
-/// Spell id → the asset's path **as the client writes it**, e.g.
-/// `/lol-game-data/assets/DATA/Spells/Icons2D/Summoner_flash.png`. Kept in
-/// that form because it is both a live LCU route and, once rewritten, a
-/// Community Dragon one — `community_url` does the rewriting.
-type SpellAssets = HashMap<i64, String>;
+/// Both ways into summoner spell art, built from one parse of
+/// `summoner.json`. A live-captured scoreboard has the display name
+/// (`Flash`), one rebuilt from match history has the numeric id (`4`), and
+/// both have to land on the same picture.
+#[derive(Debug)]
+struct SpellArt {
+    /// Display name → the key art is filed under (`SummonerFlash`).
+    by_name: HashMap<String, String>,
+    /// Numeric id → the same key. Keyed on *every* variant's id, so 74 and
+    /// 2202 resolve to `SummonerFlash` alongside 4.
+    by_id: HashMap<i64, String>,
+}
 
 /// Data Dragon's `summoner.json`, reduced the same way `champion.json` is.
 #[derive(Debug, Deserialize)]
@@ -158,8 +158,7 @@ type Cached<T> = Option<(String, Arc<T>)>;
 /// holding a lock across an await.
 static CHAMPION_KEYS: Mutex<Cached<ArtKeys>> = Mutex::new(None);
 static RUNE_ICONS: Mutex<Cached<RuneIcons>> = Mutex::new(None);
-static SPELL_NAME_IDS: Mutex<Cached<SpellNameIds>> = Mutex::new(None);
-static SPELL_ASSETS: Mutex<Cached<SpellAssets>> = Mutex::new(None);
+static SPELL_ART: Mutex<Cached<SpellArt>> = Mutex::new(None);
 
 /// Reads a cached map if it belongs to `version`.
 fn cached_map<T>(cache: &Mutex<Cached<T>>, version: &str) -> Option<Arc<T>> {
@@ -274,12 +273,10 @@ async fn art_keys(dir: &Path, version: &str) -> Option<Arc<ArtKeys>> {
     Some(keys)
 }
 
-/// Spell display name → numeric id, out of `summoner.json`. Data Dragon's
-/// *data* is current even where its spell art is not, so this stays the
-/// map even though the art comes from elsewhere.
-async fn spell_name_ids(dir: &Path, version: &str) -> Option<Arc<SpellNameIds>> {
-    if let Some(ids) = cached_map(&SPELL_NAME_IDS, version) {
-        return Some(ids);
+/// Spell art keys, out of `summoner.json`.
+async fn spell_art(dir: &Path, version: &str) -> Option<Arc<SpellArt>> {
+    if let Some(art) = cached_map(&SPELL_ART, version) {
+        return Some(art);
     }
     let body = cached_json(
         dir,
@@ -293,82 +290,81 @@ async fn spell_name_ids(dir: &Path, version: &str) -> Option<Arc<SpellNameIds>> 
         .map_err(|e| warn!("ddragon", "summoner.json did not parse: {e}"))
         .ok()?;
 
-    let ids = Arc::new(name_to_id(parsed.data));
-    *SPELL_NAME_IDS.lock().unwrap() = Some((version.to_string(), Arc::clone(&ids)));
-    Some(ids)
+    let art = Arc::new(spell_art_map(parsed.data));
+    *SPELL_ART.lock().unwrap() = Some((version.to_string(), Arc::clone(&art)));
+    Some(art)
 }
 
-/// Data Dragon writes the numeric id as a string. An entry whose `key` is
-/// not a number is dropped rather than guessed at.
-fn name_to_id(entries: HashMap<String, ChampionEntry>) -> SpellNameIds {
-    entries
+/// Picks one art key per spell, collapsing every game-mode variant onto
+/// the standard version.
+///
+/// **`summoner.json` has one entry per variant, not per spell.** `Flash` is
+/// three of them — `SummonerFlash` (4), `SummonerFlash_Jade` (74) and
+/// `SummonerCherryFlash` (2202) — and nine other names collide the same
+/// way. Collecting them straight into a map keyed by name therefore let
+/// whichever entry `HashMap` iteration happened to reach last win, so the
+/// Flash on a row was the Arena set's armoured figure on one run and the
+/// right picture on the next. That non-determinism, not stale Data Dragon
+/// art, is what made spells look broken.
+///
+/// The pick is deliberate instead: prefer an art key with **no underscore**
+/// — which is what separates `SummonerFlash` from `SummonerFlash_Jade` —
+/// and then the **lowest id**, which separates it from
+/// `SummonerCherryFlash`. A preference and not a filter, so a name that
+/// exists *only* as a variant (`Fortify`, `Revive`, the rest of the retired
+/// set) still resolves to something rather than to nothing.
+fn spell_art_map(entries: HashMap<String, ChampionEntry>) -> SpellArt {
+    // (id, art key, display name). An entry missing any of the three is
+    // dropped rather than guessed at — Data Dragon writes the id as a
+    // string, so a `key` that is not a number is as unusable as a missing
+    // one.
+    let mut spells: Vec<(i64, String, String)> = entries
         .into_values()
-        .filter_map(|entry| Some((entry.name?, entry.key?.parse().ok()?)))
-        .collect()
-}
+        .filter_map(|entry| Some((entry.key?.parse().ok()?, entry.id?, entry.name?)))
+        .collect();
 
-/// One entry of Community Dragon's `summoner-spells.json`.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CommunitySpell {
-    id: i64,
-    icon_path: String,
-}
+    // Best first, so the first entry seen for a name is the one to keep.
+    spells.sort_by(|a, b| is_variant(&a.1).cmp(&is_variant(&b.1)).then(a.0.cmp(&b.0)));
 
-/// Spell id → Community Dragon asset path.
-///
-/// There is no `summoner-spells/{id}.png` on that CDN — the first version
-/// of this assumed there was and every spell silently resolved to nothing.
-/// What it publishes is the client's own asset *manifest*, and each entry
-/// carries the path the art really lives at.
-async fn spell_assets(dir: &Path, version: &str) -> Option<Arc<SpellAssets>> {
-    if let Some(assets) = cached_map(&SPELL_ASSETS, version) {
-        return Some(assets);
+    let mut by_name: HashMap<String, String> = HashMap::new();
+    for (_, art_key, name) in &spells {
+        by_name.entry(name.clone()).or_insert_with(|| art_key.clone());
     }
-    // Cached under the Data Dragon version even though the document is
-    // unversioned: a patch is exactly when the art can change, and it
-    // keeps the cache one directory per version with nothing outside it.
-    let body = cached_json(
-        dir,
-        version,
-        "summoner-spells.json",
-        format!("{COMMUNITY_CDN}/v1/summoner-spells.json"),
-    )
-    .await?;
+    // Every variant id points at the name's chosen key, not at its own, so
+    // a match-history scoreboard carrying 74 draws the standard Flash.
+    let by_id = spells
+        .iter()
+        .filter_map(|(id, _, name)| Some((*id, by_name.get(name)?.clone())))
+        .collect();
 
-    let parsed: Vec<CommunitySpell> = serde_json::from_str(&body)
-        .map_err(|e| warn!("ddragon", "summoner-spells.json did not parse: {e}"))
-        .ok()?;
-
-    let assets = Arc::new(spell_asset_map(parsed));
-    *SPELL_ASSETS.lock().unwrap() = Some((version.to_string(), Arc::clone(&assets)));
-    Some(assets)
+    SpellArt { by_name, by_id }
 }
 
-fn spell_asset_map(entries: Vec<CommunitySpell>) -> SpellAssets {
-    entries
-        .into_iter()
-        .filter(|entry| entry.icon_path.starts_with(CLIENT_ASSET_ROOT))
-        .map(|entry| (entry.id, entry.icon_path))
-        .collect()
+/// Whether an art key names an alternate-mode version of a spell rather
+/// than the spell. Riot files every one of those sets with a suffix —
+/// `SummonerFlash_Jade`, `Summoner_UltBookPlaceholder` — so the underscore
+/// is the whole test.
+fn is_variant(art_key: &str) -> bool {
+    art_key.contains('_')
 }
 
-/// The prefix the client puts in front of every asset path it publishes.
-/// It is a route on the client's own HTTP server, and the part after it is
-/// what Community Dragon mirrors.
-const CLIENT_ASSET_ROOT: &str = "/lol-game-data/assets";
-
-/// Rewrites a client asset path into the Community Dragon URL for it.
+/// The name to look art up under.
 ///
-/// The rule is the CDN's own: drop the `/lol-game-data/assets` prefix and
-/// lowercase the rest. `Summoner_flash.png` under `DATA/Spells/Icons2D`
-/// becomes `/data/spells/icons2d/summoner_flash.png`, and the same rule
-/// carries the odd ones — `Summoner_Teleport_New.png`, which has mixed
-/// case in the filename and not just the directories, and the Jade spells
-/// filed under `ASSETS/UX` rather than `DATA/Spells`.
-fn community_url(icon_path: &str) -> Option<String> {
-    let path = icon_path.strip_prefix(CLIENT_ASSET_ROOT)?;
-    Some(format!("{COMMUNITY_CDN}{}", path.to_lowercase()))
+/// The jungle item upgrades Smite in place, and the live client reports the
+/// upgraded name — `Primal Smite`, `Unleashed Smite` — from that point on,
+/// where it reported `Smite` at the start of the game. Data Dragon has an
+/// entry for none of them, so a jungle recording drew an empty circle where
+/// its Smite should be. They are one button with one picture, so every one
+/// of them resolves to plain `Smite`; that also covers the names Riot has
+/// used for this before (`Chilling Smite`, `Challenging Smite`) and
+/// whatever it renames them to next.
+fn canonical_spell_name(spell: &str) -> &str {
+    let spell = spell.trim();
+    if spell.to_ascii_lowercase().ends_with("smite") {
+        "Smite"
+    } else {
+        spell
+    }
 }
 
 /// Rune id → icon path, flattened out of the tree document.
@@ -460,92 +456,32 @@ pub async fn item_icon(dir: &Path, item_id: i64) -> Option<PathBuf> {
 }
 
 /// The cached icon for a summoner spell's display name.
-///
-/// Resolves the name to the numeric id and hands over, so a live-captured
-/// scoreboard and a rebuilt one draw the same art from the same place.
-/// `summoner.json` is still what maps between them — Data Dragon's *data*
-/// is current even where its spell art is not.
-pub async fn spell_icon(dir: &Path, lockfile: Option<&LockfileInfo>, spell: &str) -> Option<PathBuf> {
+pub async fn spell_icon(dir: &Path, spell: &str) -> Option<PathBuf> {
     let version = version(dir).await?;
-    let id = *spell_name_ids(dir, &version).await?.get(spell)?;
-    spell_icon_by_id(dir, lockfile, id).await
+    let key = spell_art(dir, &version)
+        .await?
+        .by_name
+        .get(canonical_spell_name(spell))?
+        .clone();
+    spell_art_file(dir, &version, &key).await
 }
 
-/// The cached icon for a summoner spell's numeric id.
-///
-/// **Not from Data Dragon.** Its `img/spell/` set is the pre-refresh art
-/// and has been for years, so a Flash drawn from it does not match the one
-/// in the game. There is no newer path on that CDN, so the art comes from
-/// somewhere else entirely:
-///
-/// 1. **The running client's own asset store**, which is by definition the
-///    art the game is using. It costs nothing new — the same host, the same
-///    credentials, already reached for champion names.
-/// 2. **Community Dragon**, when the client is not running, which is most
-///    of the time a library is browsed. It mirrors the same game data from
-///    a public CDN.
-///
-/// Whichever answers first is cached on disk, so one session with League
-/// open is enough to fix every spell permanently.
-pub async fn spell_icon_by_id(
-    dir: &Path,
-    lockfile: Option<&LockfileInfo>,
-    spell_id: i64,
-) -> Option<PathBuf> {
+/// The cached icon for a summoner spell's numeric id, which is what a
+/// scoreboard rebuilt from match history carries.
+pub async fn spell_icon_by_id(dir: &Path, spell_id: i64) -> Option<PathBuf> {
     if spell_id <= 0 {
         return None;
     }
     let version = version(dir).await?;
-
-    // Client art and fallback art are cached under *different* names, and
-    // the client's is checked first. Sharing one name made the fallback
-    // permanent: whichever source answered on the cold cache won forever,
-    // so a library first opened with League closed would never take the
-    // client's art no matter how many sessions ran with it open — which is
-    // the opposite of what this function is documented to do.
-    let from_client = dir.join(&version).join("spell").join(format!("{spell_id}.client.png"));
-    if from_client.is_file() {
-        return Some(from_client);
-    }
-
-    let icon_path = spell_assets(dir, &version).await?.get(&spell_id)?.clone();
-
-    if lockfile.is_some() {
-        if let Some(bytes) = spell_from_client(lockfile, &icon_path).await {
-            return write_asset(&from_client, &bytes);
-        }
-    }
-    cached_file(
-        dir,
-        &version,
-        "spell",
-        &format!("{spell_id}.png"),
-        community_url(&icon_path)?,
-    )
-    .await
+    let key = spell_art(dir, &version).await?.by_id.get(&spell_id)?.clone();
+    spell_art_file(dir, &version, &key).await
 }
 
-/// The client's own icon for a spell, if a client is running.
-///
-/// `icon_path` is already a route on the client's HTTP server — that is
-/// what the manifest publishes — so it is asked for verbatim. The first
-/// version of this built `v1/summoner-spells/{id}.png` by analogy instead,
-/// which no client has ever served.
-async fn spell_from_client(lockfile: Option<&LockfileInfo>, icon_path: &str) -> Option<Vec<u8>> {
-    let client = LcuHttpClient::new(lockfile?).ok()?;
-    client
-        .get_bytes(icon_path)
-        .await
-        .ok()
-        .filter(|bytes| !bytes.is_empty())
-}
-
-fn write_asset(path: &Path, bytes: &[u8]) -> Option<PathBuf> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok()?;
-    }
-    std::fs::write(path, bytes).ok()?;
-    Some(path.to_path_buf())
+/// Both paths above end here, so a name and an id that mean the same spell
+/// share one cache file instead of two copies under different names.
+async fn spell_art_file(dir: &Path, version: &str, art_key: &str) -> Option<PathBuf> {
+    let url = format!("{CDN}/cdn/{version}/img/spell/{art_key}.png");
+    cached_file(dir, version, "spell", &format!("{art_key}.png"), url).await
 }
 
 /// The cached icon for a rune or rune tree id.
@@ -613,11 +549,6 @@ const CONCURRENCY: usize = 6;
 
 /// Resolves a page's worth of art, fetching whatever is not cached yet.
 pub async fn resolve_icons(dir: &Path, request: &IconRequest) -> IconSet {
-    // Once per call, not once per spell: it is a file read, and whether a
-    // client is running does not change halfway through a page.
-    let lockfile = crate::lcu::lockfile::discover().ok().flatten();
-    let lockfile = lockfile.as_ref();
-
     // The shared documents are warmed first, in series. Six tasks each
     // finding an empty map would each fetch `champion.json` — the
     // duplicate-request problem the cache exists to avoid, multiplied by
@@ -626,11 +557,8 @@ pub async fn resolve_icons(dir: &Path, request: &IconRequest) -> IconSet {
         if !request.champions.is_empty() {
             let _ = art_keys(dir, &version).await;
         }
-        if !request.spells.is_empty() {
-            let _ = spell_name_ids(dir, &version).await;
-        }
         if !request.spells.is_empty() || !request.spell_ids.is_empty() {
-            let _ = spell_assets(dir, &version).await;
+            let _ = spell_art(dir, &version).await;
         }
         if !request.runes.is_empty() {
             let _ = rune_icons(dir, &version).await;
@@ -647,11 +575,11 @@ pub async fn resolve_icons(dir: &Path, request: &IconRequest) -> IconSet {
         })
         .await,
         spells: resolve_each(dedup(&request.spells), |name: String| async move {
-            spell_icon(dir, lockfile, &name).await
+            spell_icon(dir, &name).await
         })
         .await,
         spell_ids: resolve_each(dedup(&request.spell_ids), |id: i64| async move {
-            spell_icon_by_id(dir, lockfile, id).await
+            spell_icon_by_id(dir, id).await
         })
         .await,
         runes: resolve_each(dedup(&request.runes), |id: i64| async move {
@@ -797,38 +725,110 @@ mod tests {
         assert_eq!(rune_icon_map(trees).len(), 1);
     }
 
+    /// `summoner.json`'s `data` object, which is all these tests vary.
+    fn spells(data: &str) -> HashMap<String, ChampionEntry> {
+        serde_json::from_str::<SpellData>(&format!(r#"{{"data":{data}}}"#))
+            .unwrap()
+            .data
+    }
+
     /// A live-captured scoreboard has `Flash`; a rebuilt one has `4`. Both
-    /// have to end up fetching the same picture, so the name resolves to
-    /// the id and the id is what the art is keyed on.
+    /// have to end up drawing the same picture, so both maps carry the same
+    /// art key.
     #[test]
-    fn spell_names_resolve_to_the_id_the_art_is_fetched_by() {
-        let parsed: SpellData = serde_json::from_str(
-            r#"{"data":{
+    fn a_spell_resolves_to_the_same_art_by_name_and_by_id() {
+        let art = spell_art_map(spells(
+            r#"{
                 "SummonerFlash":{"id":"SummonerFlash","key":"4","name":"Flash"},
                 "SummonerSmite":{"id":"SummonerSmite","key":"11","name":"Smite"}
-            }}"#,
-        )
-        .unwrap();
-        let ids = name_to_id(parsed.data);
-        assert_eq!(ids.get("Flash"), Some(&4));
-        assert_eq!(ids.get("Smite"), Some(&11));
+            }"#,
+        ));
+        assert_eq!(art.by_name.get("Flash").map(String::as_str), Some("SummonerFlash"));
+        assert_eq!(art.by_id.get(&4).map(String::as_str), Some("SummonerFlash"));
+        assert_eq!(art.by_name.get("Smite").map(String::as_str), Some("SummonerSmite"));
+        assert_eq!(art.by_id.get(&11).map(String::as_str), Some("SummonerSmite"));
+    }
+
+    /// The bug this map exists for. `Flash` names three entries in the real
+    /// document, and building the map by `collect` let `HashMap` iteration
+    /// order decide which one a row drew — so the Arena set's armoured
+    /// figure turned up at random. The standard spell has to win every
+    /// time, by name *and* by any of the variants' ids.
+    #[test]
+    fn every_variant_of_a_spell_resolves_to_the_standard_art() {
+        let art = spell_art_map(spells(
+            r#"{
+                "SummonerFlash_Jade":{"id":"SummonerFlash_Jade","key":"74","name":"Flash"},
+                "SummonerCherryFlash":{"id":"SummonerCherryFlash","key":"2202","name":"Flash"},
+                "SummonerFlash":{"id":"SummonerFlash","key":"4","name":"Flash"}
+            }"#,
+        ));
+        assert_eq!(art.by_name.get("Flash").map(String::as_str), Some("SummonerFlash"));
+        for id in [4, 74, 2202] {
+            assert_eq!(
+                art.by_id.get(&id).map(String::as_str),
+                Some("SummonerFlash"),
+                "id {id} drew the wrong Flash"
+            );
+        }
+    }
+
+    /// The underscore rule is a *preference*, not a filter. Several retired
+    /// spells exist only as a Jade entry, and dropping them outright would
+    /// resolve them to nothing instead of to the one picture there is.
+    #[test]
+    fn a_spell_that_only_exists_as_a_variant_still_resolves() {
+        let art = spell_art_map(spells(
+            r#"{"SummonerFortify_Jade":{"id":"SummonerFortify_Jade","key":"705","name":"Fortify"}}"#,
+        ));
+        assert_eq!(
+            art.by_name.get("Fortify").map(String::as_str),
+            Some("SummonerFortify_Jade")
+        );
     }
 
     /// Data Dragon writes the id as a string. Anything that is not a
-    /// number is dropped rather than guessed at.
+    /// number is dropped rather than guessed at, as is an entry missing a
+    /// name or the key its art is filed under.
     #[test]
-    fn a_spell_with_an_unparseable_key_is_dropped() {
-        let parsed: SpellData = serde_json::from_str(
-            r#"{"data":{
-                "Good":{"id":"Good","key":"21","name":"Barrier"},
+    fn a_spell_missing_a_usable_key_is_dropped() {
+        let art = spell_art_map(spells(
+            r#"{
+                "Good":{"id":"SummonerBarrier","key":"21","name":"Barrier"},
                 "Bad":{"id":"Bad","key":"not a number","name":"Nonsense"},
-                "None":{"id":"None","name":"Keyless"}
-            }}"#,
-        )
-        .unwrap();
-        let ids = name_to_id(parsed.data);
-        assert_eq!(ids.len(), 1);
-        assert_eq!(ids.get("Barrier"), Some(&21));
+                "Keyless":{"id":"Keyless","name":"Keyless"},
+                "Nameless":{"id":"Nameless","key":"99"}
+            }"#,
+        ));
+        assert_eq!(art.by_name.len(), 1);
+        assert_eq!(art.by_id.len(), 1);
+        assert_eq!(art.by_name.get("Barrier").map(String::as_str), Some("SummonerBarrier"));
+    }
+
+    /// The jungle item renames Smite in place mid-game and Data Dragon has
+    /// no entry under any of those names, so an un-normalised lookup drew
+    /// an empty circle for the rest of the game.
+    #[test]
+    fn every_smite_upgrade_is_still_smite() {
+        for name in [
+            "Primal Smite",
+            "Unleashed Smite",
+            "Chilling Smite",
+            "Challenging Smite",
+            "  primal smite  ",
+            "Smite",
+        ] {
+            assert_eq!(canonical_spell_name(name), "Smite", "{name} did not normalise");
+        }
+    }
+
+    /// And nothing else is touched — a rule that reached further would
+    /// quietly redraw spells that are fine.
+    #[test]
+    fn a_spell_that_is_not_a_smite_is_left_alone() {
+        assert_eq!(canonical_spell_name("Flash"), "Flash");
+        assert_eq!(canonical_spell_name(" Teleport "), "Teleport");
+        assert_eq!(canonical_spell_name(""), "");
     }
 
     /// The concurrency bound is the whole point of `resolve_each`, and it
@@ -898,57 +898,6 @@ mod tests {
 
         assert!(resolved.is_empty());
         assert_eq!(calls.load(Ordering::SeqCst), 0);
-    }
-
-    /// The rewrite is the whole fallback. The first attempt guessed at a
-    /// `summoner-spells/{id}.png` route that does not exist, which fails
-    /// *silently* — a 404 is indistinguishable from "no art" downstream —
-    /// so the real document's shape is pinned here.
-    #[test]
-    fn client_asset_paths_become_community_dragon_ones() {
-        let parsed: Vec<CommunitySpell> = serde_json::from_str(
-            r#"[
-                {"id":4,"name":"Flash","iconPath":"/lol-game-data/assets/DATA/Spells/Icons2D/Summoner_flash.png"},
-                {"id":12,"name":"Teleport","iconPath":"/lol-game-data/assets/DATA/Spells/Icons2D/Summoner_Teleport_New.png"},
-                {"id":74,"name":"Flash","iconPath":"/lol-game-data/assets/ASSETS/UX/Jade/S3Icons/SameSized/S3_Summoner_flash.project_jade.png"}
-            ]"#,
-        )
-        .unwrap();
-        let assets = spell_asset_map(parsed);
-
-        // The map keeps the client's own path, because that is also a live
-        // route on the client's HTTP server.
-        assert_eq!(
-            assets.get(&4).map(String::as_str),
-            Some("/lol-game-data/assets/DATA/Spells/Icons2D/Summoner_flash.png")
-        );
-
-        assert_eq!(
-            community_url(&assets[&4]).unwrap(),
-            format!("{COMMUNITY_CDN}/data/spells/icons2d/summoner_flash.png")
-        );
-        // Mixed case in the filename is lowercased too, not just the dirs.
-        assert_eq!(
-            community_url(&assets[&12]).unwrap(),
-            format!("{COMMUNITY_CDN}/data/spells/icons2d/summoner_teleport_new.png")
-        );
-        // Not every spell lives under DATA/Spells — the Jade set does not.
-        assert_eq!(
-            community_url(&assets[&74]).unwrap(),
-            format!("{COMMUNITY_CDN}/assets/ux/jade/s3icons/samesized/s3_summoner_flash.project_jade.png")
-        );
-    }
-
-    /// An entry whose path is not under the prefix the rule strips is
-    /// dropped rather than turned into a URL that 404s.
-    #[test]
-    fn spell_entries_outside_the_asset_root_are_dropped() {
-        let parsed: Vec<CommunitySpell> = serde_json::from_str(
-            r#"[{"id":9001,"iconPath":"https://example.invalid/elsewhere.png"}]"#,
-        )
-        .unwrap();
-        assert!(spell_asset_map(parsed).is_empty());
-        assert_eq!(community_url("https://example.invalid/elsewhere.png"), None);
     }
 
     /// Ten rows sharing a champion must cost one lookup, not ten.

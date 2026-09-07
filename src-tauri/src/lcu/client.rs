@@ -59,24 +59,6 @@ impl LcuHttpClient {
 
         Ok(serde_json::from_str(&text)?)
     }
-
-    /// GETs `path` and hands back the raw body.
-    ///
-    /// For assets rather than data — the client's own art store serves
-    /// PNGs, and there is nothing to parse or to record as a fixture.
-    pub async fn get_bytes(&self, path: &str) -> Result<Vec<u8>, LcuClientError> {
-        let url = format!("{}{}", self.base_url, path);
-        let bytes = self
-            .client
-            .get(url)
-            .basic_auth("riot", Some(&self.password))
-            .send()
-            .await?
-            .error_for_status()?
-            .bytes()
-            .await?;
-        Ok(bytes.to_vec())
-    }
 }
 
 /// `Authorization: Basic ...` header value for the given lockfile password.

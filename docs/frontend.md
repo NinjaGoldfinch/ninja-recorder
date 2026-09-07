@@ -198,13 +198,16 @@ See [DEVELOPMENT.md §5.4](../DEVELOPMENT.md) for why the file is not cut.
 | Champion | Data Dragon | display name → key (`Wukong` → `MonkeyKing`) |
 | Item | Data Dragon | the numeric id the game reports |
 | Rune | Data Dragon | rune or tree id → an icon *path*, from an unversioned part of the CDN |
-| Summoner spell | the running client, else Community Dragon | the numeric id |
+| Summoner spell | Data Dragon | display name *and* numeric id → art key (`Flash`, `4`, `74`, `2202` → `SummonerFlash`) |
 
-Spells are the odd one out because Data Dragon's spell art is the pre-refresh
-set and there is no newer path on that CDN. The client's own asset store is by
-definition current; Community Dragon covers the usual case of browsing with
-League closed. Either way it is cached, so one session with the client open
-fixes every spell permanently.
+Spells are the odd one out because `summoner.json` lists one entry per
+game-mode *variant* rather than one per spell: `Flash` is `SummonerFlash`,
+`SummonerFlash_Jade` and `SummonerCherryFlash`. `spell_art_map` collapses each
+name onto the standard version, and maps every variant's id onto it as well, so
+a live-captured scoreboard and one rebuilt from match history draw the same
+picture from one cache file. Smite is folded the same way — the jungle item
+renames it `Primal Smite` mid-game and Data Dragon has no such entry. See
+[DEVELOPMENT.md §5.3](../DEVELOPMENT.md).
 
 ### Art is asked for once per page, not once per icon
 
