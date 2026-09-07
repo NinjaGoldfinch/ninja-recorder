@@ -181,7 +181,7 @@ pub fn dev_seed_library(
                 // render before anyone has played a game. Ten champions,
                 // our own marked, with the seeded champion in our slot so
                 // the row and the scoreboard agree.
-                scoreboard_json: serde_json::to_string(&seeded_scoreboard(plan)).ok(),
+                scoreboard_json: serde_json::to_string(&seeded_scoreboard(&plan)).ok(),
                 cs: Some(plan.duration_s as i64 / 4),
             })
             .map_err(|e| e.to_string())?;
