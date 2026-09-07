@@ -336,6 +336,8 @@ function loadout(row: RecordingRow): string {
   while (items.length < 7) items.push(empty);
 
   return `
+      <!-- Order is load-bearing: the grid fills by column, so these four
+           land as spell 1, spell 2 | keystone, secondary tree. -->
       <span class="vod-perks" aria-hidden="true">${spells.join("")}${perks.join("")}</span>
       <span class="vod-items" aria-hidden="true">${items.join("")}</span>`;
 }
