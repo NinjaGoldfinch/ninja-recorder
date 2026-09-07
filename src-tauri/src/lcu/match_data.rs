@@ -34,14 +34,20 @@
 //! **Identifying ourselves in the match-history response is the fragile
 //! part.** The participant list and the identity list are joined by
 //! `participantId`, and the identity has to be matched back to us by
-//! *some* account key — but which keys the endpoint actually sends has
-//! changed over time, and a fixture written by hand proves nothing about
-//! the wire. The LCU's own OpenAPI spec has no `puuid` on a match-history
-//! participant identity at all (only `accountId`, `summonerId`,
-//! `summonerName`), even though 74 other schemas in that spec do carry
-//! one. So every key is optional here and `CurrentSummoner::is_me` tries
-//! each in turn — a client that sends `puuid` and one that doesn't both
-//! work, without needing to know which this one is.
+//! *some* account key.
+//!
+//! A real document (2026-09-07, `fixtures/lcu/match-history-game.json`)
+//! settles what the LCU's own OpenAPI spec got wrong in both directions.
+//! It **does** send a `puuid`, which that spec says match-history
+//! identities do not carry. And it sends `accountId: 0` and
+//! `currentAccountId: 0` for every player — so joining on account id would
+//! match everyone to everyone, which is exactly what `real_id`'s
+//! "zero never joins" rule exists to stop. `summonerName` is empty on
+//! every identity too; the name lives in `gameName` + `tagLine`.
+//!
+//! Every key stays optional and `CurrentSummoner::is_me` tries each in
+//! turn, because one capture from one client on one patch is not a
+//! promise about the next.
 //!
 //! **None of these shapes has been seen off a real client.** Both are
 //! modelled from that same spec, so every field is optional and an
@@ -143,6 +149,14 @@ struct GameParticipant {
     /// curve and nothing else.
     #[serde(rename = "teamId", default)]
     team_id: Option<i64>,
+    /// The summoner spells, which sit **beside** `stats` rather than
+    /// inside it — confirmed against a real document. Everything else a
+    /// scoreboard needs is one level deeper, which is exactly why this was
+    /// modelled in the wrong place first.
+    #[serde(rename = "spell1Id", default)]
+    spell1_id: Option<i64>,
+    #[serde(rename = "spell2Id", default)]
+    spell2_id: Option<i64>,
     stats: ParticipantStats,
     /// Where `role` comes from. Optional because it is the one part of the
     /// participant this module treats as a nice-to-have — a response
@@ -172,10 +186,6 @@ struct ParticipantStats {
     /// almost no farm.
     #[serde(rename = "neutralMinionsKilled", default)]
     neutral_minions: Option<i64>,
-    #[serde(rename = "spell1Id", default)]
-    spell1_id: Option<i64>,
-    #[serde(rename = "spell2Id", default)]
-    spell2_id: Option<i64>,
     /// The keystone.
     #[serde(default)]
     perk0: Option<i64>,
@@ -215,13 +225,6 @@ impl ParticipantStats {
         .collect()
     }
 
-    fn spell_ids(&self) -> Vec<i64> {
-        [self.spell1_id, self.spell2_id]
-            .into_iter()
-            .flatten()
-            .filter(|id| *id > 0)
-            .collect()
-    }
 
     /// Lane minions plus jungle camps, which is what a scoreboard means by
     /// CS. `None` when the response said nothing about either.
@@ -730,7 +733,11 @@ fn participants(me: &CurrentSummoner, game: &GameDto) -> Vec<ParticipantSummary>
             assists: p.stats.assists,
             cs: p.stats.cs(),
             items: p.stats.items(),
-            spell_ids: p.stats.spell_ids(),
+            spell_ids: [p.spell1_id, p.spell2_id]
+                .into_iter()
+                .flatten()
+                .filter(|id| *id > 0)
+                .collect(),
             keystone_id: p.stats.perk0.filter(|id| *id > 0),
             primary_tree_id: p.stats.perk_primary_style.filter(|id| *id > 0),
             secondary_tree_id: p.stats.perk_sub_style.filter(|id| *id > 0),
@@ -776,6 +783,91 @@ fn extract_summary(me: &CurrentSummoner, game: &GameDto) -> Result<MatchSummary,
 
 #[cfg(test)]
 mod tests {
+
+    /// A real `/lol-match-history/v1/games/{id}` response, trimmed and with
+    /// the ten players' identifiers replaced. Everything structural is as
+    /// the client sent it.
+    fn real_game() -> GameDto {
+        let json = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/lcu/match-history-game.json"
+        ));
+        serde_json::from_str(json).unwrap()
+    }
+
+    fn real_me() -> CurrentSummoner {
+        CurrentSummoner {
+            puuid: Some("00000000-0000-5000-8000-000000000002".into()),
+            summoner_id: Some(22222222),
+            ..Default::default()
+        }
+    }
+
+    /// The whole document, read the way the app reads it. This is the test
+    /// that would have caught `spell1Id` being modelled inside `stats`
+    /// instead of beside it.
+    #[test]
+    fn a_real_document_yields_our_summary() {
+        let summary = extract_summary(&real_me(), &real_game()).unwrap();
+        assert_eq!(summary.champion_id, Some(102));
+        assert_eq!(summary.queue_id, Some(420));
+        assert_eq!(summary.win, Some(true));
+        assert_eq!((summary.kills, summary.deaths, summary.assists), (Some(15), Some(3), Some(5)));
+        assert_eq!(summary.patch.as_deref(), Some("16.17.810.4348"));
+        // JUNGLE + NONE, which the LCU's own pair maps to Jungle.
+        assert_eq!(summary.role.as_deref(), Some("Jungle"));
+    }
+
+    #[test]
+    fn a_real_document_yields_a_scoreboard() {
+        let players = participants(&real_me(), &real_game());
+        assert_eq!(players.len(), 3);
+
+        let us = players.iter().find(|p| p.is_us).expect("we are in this game");
+        assert_eq!(us.champion_id, 102);
+        assert_eq!(us.team.as_deref(), Some("ORDER"));
+        assert_eq!(us.level, 18);
+        // Spells sit beside `stats`, not inside it. Smite and Flash.
+        assert_eq!(us.spell_ids, vec![11, 4]);
+        assert_eq!(us.items, vec![3111, 3078, 3161, 1082, 4633, 6665, 3364]);
+        assert_eq!(us.keystone_id, Some(8005));
+        assert_eq!(us.primary_tree_id, Some(8000));
+        assert_eq!(us.secondary_tree_id, Some(8300));
+    }
+
+    /// A jungler's farm is almost all camps: 23 lane minions and 239
+    /// neutral. Counting only `totalMinionsKilled` would report 23 for a
+    /// game the scoreboard says was 262.
+    #[test]
+    fn cs_is_lane_minions_plus_jungle_camps() {
+        let players = participants(&real_me(), &real_game());
+        let us = players.iter().find(|p| p.is_us).unwrap();
+        assert_eq!(us.cs, Some(262));
+    }
+
+    /// Every identity in a real document carries `accountId: 0`, so an
+    /// account-id join would match the first player in the list to us.
+    /// `real_id` is what stops that, and this is the document that proves
+    /// it is not hypothetical.
+    #[test]
+    fn a_zero_account_id_never_identifies_anyone() {
+        let by_account_only = CurrentSummoner {
+            account_id: Some(0),
+            ..Default::default()
+        };
+        assert!(participants(&by_account_only, &real_game()).is_empty());
+        assert!(extract_summary(&by_account_only, &real_game()).is_err());
+    }
+
+    /// Empty item slots come back as `0`, which is not an item id.
+    #[test]
+    fn empty_item_slots_are_dropped_rather_than_asked_for() {
+        let players = participants(&real_me(), &real_game());
+        let enemy = players.iter().find(|p| p.champion_id == 84).unwrap();
+        assert!(!enemy.items.contains(&0));
+        assert_eq!(enemy.items.len(), 6, "one of the seven slots was empty");
+    }
+
     use super::*;
 
     fn fixture_me() -> CurrentSummoner {
