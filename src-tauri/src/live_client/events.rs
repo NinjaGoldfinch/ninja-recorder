@@ -1387,6 +1387,103 @@ mod tests {
         assert!(MarkerTracker::new().ingest(&snapshot).is_empty());
     }
 
+    /// The whole real payload, verbatim, from a live client
+    /// (`fixtures/live-client/captured-allgamedata.json`).
+    ///
+    /// Every other live-client fixture in this repo was written by hand
+    /// from Riot's docs, and that has cost real bugs: an unparseable
+    /// payload ended a recording nine minutes in (#74), and `HordeKill`,
+    /// `Primal Smite` and `Unleashed Teleport` were all shipped-and-broken
+    /// because nothing here had seen a real one. Do not "tidy" this file to
+    /// match a shape we invented — it is the shape the client sends.
+    fn captured() -> AllGameData {
+        let json = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/live-client/captured-allgamedata.json"
+        ));
+        serde_json::from_str(json).expect("the real payload must deserialize")
+    }
+
+    /// The #74 guard. A payload the parser cannot read ends a recording, so
+    /// the one payload known to have come off a real client has to parse —
+    /// and every event in it has to survive `lenient_events`, since an
+    /// event silently dropped there is a marker silently lost.
+    #[test]
+    fn the_real_payload_parses_whole() {
+        let snapshot = captured();
+        assert_eq!(snapshot.all_players.len(), 10);
+        assert_eq!(snapshot.events.events.len(), 67, "an event was dropped as unreadable");
+        assert_eq!(snapshot.game_data.game_mode, "CLASSIC");
+    }
+
+    /// `summonerName` is the champion name and the event fields use it,
+    /// while `riotIdGameName` is the account name and they do not — and
+    /// the other nine players are anonymised outright. This is the payload
+    /// that established all of that, so it is pinned here.
+    #[test]
+    fn only_the_active_player_is_named_in_the_real_payload() {
+        let snapshot = captured();
+        let active = snapshot.active_player.as_ref().unwrap();
+        assert_eq!(active.summoner_name, "Shyvana");
+        assert_eq!(active.riot_id_game_name, "NinjaGoldfinch");
+
+        let named = snapshot
+            .all_players
+            .iter()
+            .filter(|p| !p.riot_id_game_name.is_empty())
+            .count();
+        assert_eq!(named, 1, "everyone but us should be anonymised");
+        assert!(snapshot.all_players.iter().all(|p| !p.summoner_name.is_empty()));
+    }
+
+    /// Marker extraction over a real game, cross-checked against a number
+    /// the payload states independently: the scoreboard's own KDA. If the
+    /// gate or the name matching were wrong, these would disagree.
+    #[test]
+    fn the_real_payload_yields_markers_matching_its_own_kda() {
+        let snapshot = captured();
+        let mut counts: std::collections::BTreeMap<&str, usize> = Default::default();
+        for marker in MarkerTracker::new().ingest(&snapshot) {
+            *counts.entry(marker.kind.as_str()).or_default() += 1;
+        }
+
+        let us = snapshot
+            .all_players
+            .iter()
+            .find(|p| p.champion_name == "Shyvana")
+            .unwrap();
+        assert_eq!(counts.get("kill").copied().unwrap_or(0), us.scores.kills as usize);
+        assert_eq!(counts.get("death").copied().unwrap_or(0), us.scores.deaths as usize);
+        assert_eq!(counts.get("assist").copied().unwrap_or(0), us.scores.assists as usize);
+
+        // Three grubs, all ours — the event name that had no arm at all
+        // until this change.
+        assert_eq!(counts.get("voidgrubs").copied().unwrap_or(0), 3);
+
+        // Objectives we took or helped take, and nothing else. The enemy
+        // jungler's dragon (EventID 9) and the four turrets we were absent
+        // for are gated out, as is a `FirstBlood` whose Recipient is a
+        // teammate.
+        assert_eq!(counts.get("dragon").copied().unwrap_or(0), 1);
+        assert_eq!(counts.get("herald").copied().unwrap_or(0), 1);
+        assert_eq!(counts.get("turret").copied().unwrap_or(0), 4);
+        assert_eq!(counts.get("inhibitor").copied().unwrap_or(0), 1);
+        assert_eq!(counts.get("multikill").copied().unwrap_or(0), 1);
+        assert_eq!(counts.get("first_blood").copied().unwrap_or(0), 0);
+    }
+
+    /// `self_summary` against the same real payload.
+    #[test]
+    fn the_real_payload_summarises() {
+        let summary = self_summary(&captured());
+        assert_eq!(summary.champion.as_deref(), Some("Shyvana"));
+        assert_eq!(summary.game_mode.as_deref(), Some("CLASSIC"));
+        let kda = summary.kda.unwrap();
+        assert_eq!((kda.kills, kda.deaths, kda.assists), (8, 1, 4));
+        // Mid-game capture: no GameEnd, so no outcome yet.
+        assert_eq!(summary.win, None);
+    }
+
     /// The Voidgrubs, straight off a real ranked capture: the API files
     /// them under `HordeKill`, with `Stolen` as the string `"False"`.
     /// Nothing handled the name, so a cleared camp produced no markers at
