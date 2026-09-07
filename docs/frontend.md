@@ -99,10 +99,39 @@ when — and a card grid answers that in two dimensions when one would do. Rows
 also leave somewhere for the scoreboard, items and team compositions to go
 without a second redesign (#85).
 
-The columns are fixed widths rather than content-sized, so values line up down
-the list and a column can be read vertically without the eye re-finding it on
-each row. The champion cell is the only flexible one, and it ellipsizes rather
-than widening the row.
+**A stacked block on the left sets the row's height**: what the game was, when
+it was, which patch, how long it ran, and how it went. Four short lines rather
+than four columns, because none of them is a number worth comparing down the
+list — together they answer "is this the game I mean", which is read once per
+row and then never again.
+
+What *is* worth comparing gets a column: the champion, and the KDA. Deaths are
+coloured and the slashes are not, so the eye lands on the middle number without
+having to read the other two.
+
+Every column is *capped*, so values line up down the list and a column can be
+read vertically without the eye re-finding it on each row. Cells ellipsize
+rather than widening the row.
+
+**The leftover width collects in one place, before the actions.** A single
+column at `1fr` stretched the champion cell across half the window and threw
+everything else at the right edge, so the row read as two unrelated clusters
+with a hole between them. With every data column capped they stay one group at
+the left, the actions stay pinned right, and the slack between them is where
+the scoreboard, items and team compositions land next — the row is already the
+shape it is growing into.
+
+**The outcome is carried twice, in one place each.** The leading edge is the
+colour, with a wash of it fading out across the first few centimetres so the
+edge reads as the row's state rather than as decoration beside it. The word
+sits on the last line of the left block — `31m 42s · Win` — where it costs no
+column, and is tinted to match, so colour and text each carry it once.
+
+Both channels matter. A badge in its own column repeated the edge and was
+dropped; the word was not, because green and red are exactly the pair a
+red-green deficiency cannot separate, and an accent alone would leave those
+users with no result at all. On an undecided row the word is simply absent,
+which is unambiguous rather than a gap: every decided row has one.
 
 **A row never hides an empty slot.** A missing value renders as `—` in the
 place it would have occupied, because a row that collapses its gaps is a
@@ -123,7 +152,7 @@ scattering `??` through the row template:
 | Title (`vodTitle`) | `champion` → game mode → filename | Never empty. The filename is untrusted input, so the caller still escapes it |
 | Queue (`queueOrModeLabel`) | `queue` id → `game_mode` | `CLASSIC` renders as "Summoner's Rift", the *map*: the mode string cannot tell blind from draft from ranked, and naming one would be a guess in a slot read as fact |
 | KDA (`formatKda`) | all three or nothing | A partial KDA reads as a real one. The ratio (`kdaRatio`) is a hover hint, not a fourth number in a column three numbers wide |
-| Outcome | badge only when `win` is non-null | Undecided rows are excluded from the win-rate tile too, so an unknown never reads as a loss. The badge slot still renders, greyed, so the column holds its place |
+| Outcome | the leading accent, plus the word on the left block's last line | Undecided rows are excluded from the win-rate tile too, so an unknown never reads as a loss — it gets the neutral edge, no wash and no word. A Win/Loss badge used to sit in its own column and was dropped as redundant with the edge; the word moved into the sub-line rather than being dropped with it, because the accent alone is colour only |
 | When (`formatRelative`) | relative inside a week → absolute date | "6 weeks ago" is worse than a date at that distance: nobody counts weeks, and the date is what a person searches their memory by. The absolute form is on the `title` either way |
 
 An unrecognised queue id shows as `Queue 1234` and an unrecognised mode

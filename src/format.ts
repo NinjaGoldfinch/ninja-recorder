@@ -148,6 +148,21 @@ export function queueOrModeLabel(row: RecordingRow): string | null {
 //
 // The filename is user-controlled (`reconcile` imports whatever video
 // files it finds), so callers still have to escape the result.
+/**
+ * `"15.3.412.9873"` → `"15.3"`.
+ *
+ * The whole string is what the column stores, because the build number is
+ * what distinguishes two recordings made either side of a hotfix. It is
+ * not what anyone calls a patch, though, so a row shows the two-part form
+ * and keeps the rest for the hover.
+ */
+export function patchLabel(patch: string | null): string | null {
+  if (patch === null) return null;
+  const parts = patch.split(".");
+  if (parts.length < 2) return patch;
+  return `${parts[0]}.${parts[1]}`;
+}
+
 export function vodTitle(row: RecordingRow): string {
   return row.champion ?? gameModeLabel(row.game_mode) ?? basename(row.path);
 }
