@@ -1247,16 +1247,16 @@ button.armed {
 .vod-row {
   display: grid;
   grid-template-columns:
+    minmax(8.5rem, 11rem) /* queue / when / patch / length · result */
     auto                  /* portrait */
-    minmax(7rem, 16rem)   /* champion + queue · role */
-    minmax(5.5rem, 7rem)  /* KDA + ratio */
-    minmax(4.5rem, 6rem)  /* length + patch */
-    minmax(7rem, 10rem)   /* when + size */
+    minmax(6rem, 12rem)   /* champion + role */
+    minmax(6rem, 9rem)    /* KDA + ratio */
     minmax(0, 1fr)        /* slack — see above */
+    auto                  /* size */
     auto;                 /* actions */
   align-items: center;
   gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-4);
+  padding: var(--sp-2) var(--sp-4);
   border: 1px solid var(--border);
   border-left: 4px solid var(--border-strong);
   border-radius: var(--r-md);
@@ -1318,15 +1318,31 @@ button.armed {
   color: var(--loss-fg);
 }
 
-/* Two lines in one grid cell: the value, and the thing that qualifies it.
- * `min-width: 0` because a grid item defaults to `auto`, which refuses to
- * shrink below its content and would let one long champion name widen the
- * column past its own maximum. */
-.vod-cell {
+/* Stacked lines in one grid cell: the value, and the things that qualify
+ * it. `min-width: 0` because a grid item defaults to `auto`, which refuses
+ * to shrink below its content and would let one long champion name widen
+ * the column past its own maximum. */
+.vod-cell,
+.vod-meta {
   display: flex;
   flex-direction: column;
   min-width: 0;
   gap: 0.1rem;
+}
+
+/* The block that sets the row's height: what the game was, when, on which
+ * patch, how long, and how it went. Four short lines rather than four
+ * columns, because none of them is a number worth comparing down the list
+ * — they answer "is this the game I mean", which is read once per row. */
+.vod-meta {
+  gap: 0.05rem;
+}
+
+.vod-queue {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .vod-sub {
@@ -1342,8 +1358,8 @@ button.armed {
  * forever for a champion the CDN never answered for — the name beside it
  * has always been the real label. */
 .vod-portrait {
-  width: 40px;
-  height: 40px;
+  width: 46px;
+  height: 46px;
   border-radius: var(--r-sm);
   border: 1px solid var(--border);
   background-color: var(--bg-inset);
@@ -1361,6 +1377,25 @@ button.armed {
   letter-spacing: -0.01em;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Deaths in their own colour and the slashes in none: the eye goes to the
+ * middle number, which is the one people look for first, and the
+ * separators stop competing with the digits for it. */
+.vod-kda {
+  font-size: var(--fs-md);
+}
+
+.vod-deaths {
+  color: var(--loss-fg);
+}
+
+.vod-slash {
+  color: var(--text-subtle);
+}
+
+.vod-size {
   white-space: nowrap;
 }
 
