@@ -17,6 +17,7 @@ mod recorder;
 mod retention;
 mod state_machine;
 mod tray;
+mod trim;
 
 // No `use crate::{error, warn, info}` here, unlike every other module:
 // this file *is* the crate root, and `#[macro_export]` already puts the
@@ -512,6 +513,7 @@ pub fn run() {
                 app.path().app_data_dir()?.join("ddragon"),
                 ffmpeg_path(app.handle()),
             );
+            ctx.supervisor.set_ffmpeg(ctx.ffmpeg.clone());
             ctx.set_autostart(Box::new(PluginAutostart(app.handle().clone())));
             let notify_handle = app.handle().clone();
             ctx.set_library_changed_notifier(Box::new(move || {
@@ -587,6 +589,7 @@ pub fn run() {
         dev::dev_fixture_read,
         dev::dev_fixture_write,
         dev::dev_set_fixture_recording,
+        dev::dev_trim_lead_in,
     ]);
 
     let builder = builder.on_window_event(|window, event| {

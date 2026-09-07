@@ -459,6 +459,21 @@ export const COMMANDS: CommandSpec[] = [
     args: [{ name: "champion", kind: "string", default: "Wukong" }],
   },
   {
+    name: "dev_trim_lead_in",
+    group: "Dev · Tools",
+    dev: true,
+    danger: true,
+    description:
+      "Cuts the loading screen off a recording's file and rebases its markers and samples onto what is left. Finalize already does this; the command is for recordings made before it did, or one it skipped. A no-op on anything already trimmed.",
+    args: [
+      {
+        name: "recordingId",
+        kind: "number",
+        help: "The row to cut. It needs samples: the loading screen's length is measured from them.",
+      },
+    ],
+  },
+  {
     name: "dev_lcu_get",
     group: "Dev · Simulate",
     dev: true,

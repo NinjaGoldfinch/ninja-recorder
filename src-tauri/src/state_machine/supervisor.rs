@@ -357,6 +357,14 @@ pub struct Supervisor {
     /// is never revisited — which is what every unit test below wants, and
     /// what a build with no League client running gets anyway.
     summary_fetcher: Mutex<Option<SummaryFetcher>>,
+    /// The bundled ffmpeg, if this build has one, for cutting the loading
+    /// screen off a finished recording (`crate::trim`).
+    ///
+    /// Injected the same way and for the same reason as `summary_fetcher`:
+    /// left `None`, a finalize spawns no process and rewrites no file, which
+    /// is what every unit test below wants. A test that started running
+    /// ffmpeg over a fixture MP4 would be testing ffmpeg.
+    ffmpeg: Mutex<Option<PathBuf>>,
 }
 
 impl Supervisor {
@@ -378,6 +386,7 @@ impl Supervisor {
             last_finalized: Mutex::new(None),
             on_event: Mutex::new(None),
             summary_fetcher: Mutex::new(None),
+            ffmpeg: Mutex::new(None),
         })
     }
 
@@ -401,6 +410,43 @@ impl Supervisor {
     /// real one spawns a task and returns; see `crate::match_summary`.
     pub fn set_summary_fetcher(&self, fetch: SummaryFetcher) {
         *self.summary_fetcher.lock().unwrap() = Some(fetch);
+    }
+
+    /// Gives the supervisor the ffmpeg it needs to cut the loading screen
+    /// off a finished recording. Called once from `lib.rs`'s `setup`.
+    ///
+    /// Optional in exactly the way `Ctx::ffmpeg` is: a build without it
+    /// keeps the whole file, which is what every recording did before this
+    /// existed.
+    pub fn set_ffmpeg(&self, ffmpeg: Option<PathBuf>) {
+        *self.ffmpeg.lock().unwrap() = ffmpeg;
+    }
+
+    /// Cuts the loading screen off the recording just written, if there is
+    /// one to cut and this build can cut it.
+    ///
+    /// Runs *after* the markers and samples are in, not before, because the
+    /// trim is expressed as a rebase of exactly those rows — the same path
+    /// `dev_trim_lead_in` takes for a recording made before this existed.
+    ///
+    /// Entirely best effort. Every failure inside leaves the recording as it
+    /// was, and none of them is worth failing a finalize over: a VOD with
+    /// twenty seconds of loading screen is a working VOD, and the player
+    /// skips it either way.
+    fn trim_lead_in(&self, recording_id: i64) {
+        let Some(ffmpeg) = self.ffmpeg.lock().unwrap().clone() else {
+            return;
+        };
+        match crate::trim::trim_recording(&self.db, &ffmpeg, recording_id) {
+            Ok(report) => info!(
+                "state_machine",
+                "trimmed {:.1}s of loading screen off recording {recording_id}",
+                report.removed_s
+            ),
+            // Includes the ordinary "there was nothing to cut", which is
+            // what a reconnect and a late-reporting client both look like.
+            Err(e) => debug!("state_machine", "no trim for recording {recording_id}: {e}"),
+        }
     }
 
     fn emit(&self, event: SupervisorEvent) {
@@ -868,6 +914,7 @@ impl Supervisor {
                                 "failed to insert samples for recording {id}: {e}"
                             );
                         }
+                        self.trim_lead_in(id);
                         Some(id)
                     }
                     Err(e) => {

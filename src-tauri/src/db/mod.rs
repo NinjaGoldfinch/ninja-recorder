@@ -800,6 +800,42 @@ impl Db {
         Ok(())
     }
 
+    /// Rebases a recording's markers and samples after `removed_s` has been
+    /// cut off the front of its file, and records the new length.
+    ///
+    /// **One transaction, because a partial apply is the worst outcome
+    /// available here.** Markers shifted with samples left alone would put
+    /// every seek target out by the length of a loading screen, and it
+    /// would look exactly like a working recording — the failure this
+    /// codebase keeps refusing elsewhere.
+    ///
+    /// Clamped at zero: a marker for an event backdated to before the cut
+    /// belongs at the start of what is left, not at a negative time.
+    pub fn apply_trim(
+        &self,
+        recording_id: i64,
+        removed_s: f64,
+        new_duration_s: f64,
+    ) -> Result<(), DbError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        for table in ["markers", "samples"] {
+            tx.execute(
+                &format!(
+                    "UPDATE {table} SET video_time_s = MAX(video_time_s - ?2, 0)
+                     WHERE recording_id = ?1"
+                ),
+                params![recording_id, removed_s],
+            )?;
+        }
+        tx.execute(
+            "UPDATE recordings SET duration_s = ?2 WHERE id = ?1",
+            params![recording_id, new_duration_s],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// The game-time to video-time offset this recording's samples were
     /// written with, if it has any.
     ///

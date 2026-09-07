@@ -18,6 +18,7 @@ mod retention_api;
 mod seed;
 mod simulate;
 mod sql;
+mod trim;
 
 // Glob re-exports, not a named list: `#[tauri::command]` expands to the
 // function *plus* hidden `__cmd__*` / `__tauri_command_name_*` items that
@@ -30,6 +31,7 @@ pub use retention_api::*;
 pub use seed::*;
 pub use simulate::*;
 pub use sql::*;
+pub use trim::*;
 
 use std::sync::Mutex;
 
