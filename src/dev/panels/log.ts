@@ -40,7 +40,16 @@ let backendSearch = "";
 let page: LogPage | null = null;
 let files: LogFileInfo[] = [];
 
+/** Which query the newest render belongs to. Two filter clicks in quick
+ *  succession are two reads of a file that can be five megabytes, and
+ *  nothing makes them come back in order — the slower first one would
+ *  otherwise repaint the list with results for a filter that is no longer
+ *  set. The chips are drawn from module state either way, so only the
+ *  lines could ever disagree with them. */
+let backendRequest = 0;
+
 async function loadBackend() {
+  const mine = ++backendRequest;
   const [filesResult, pageResult] = await Promise.all([
     tryCall<LogFileInfo[]>("dev_log_files"),
     tryCall<LogPage>("dev_read_log", {
@@ -56,6 +65,8 @@ async function loadBackend() {
       },
     }),
   ]);
+  if (mine !== backendRequest) return;
+
   if (filesResult.ok) files = filesResult.value;
   if (pageResult.ok) {
     page = pageResult.value;
