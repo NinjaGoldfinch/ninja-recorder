@@ -708,7 +708,7 @@ pub struct ParticipantSummary {
 /// before the live capture existed, or one whose poller never came up.
 /// Empty when we cannot find ourselves, because a scoreboard that cannot
 /// say which half is ours is not one worth storing.
-pub fn participants(me: &CurrentSummoner, game: &GameDto) -> Vec<ParticipantSummary> {
+fn participants(me: &CurrentSummoner, game: &GameDto) -> Vec<ParticipantSummary> {
     let Some(our_id) = game
         .participant_identities
         .iter()
