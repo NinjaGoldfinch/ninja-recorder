@@ -349,6 +349,10 @@ fn seeded_scoreboard(plan: &RecordingPlan) -> crate::live_client::Scoreboard {
                 cs: 120 + (i as i64 * 17),
                 items: ITEMS[..(4 + i % 3)].to_vec(),
                 spells: SPELLS.iter().map(|s| (*s).to_string()).collect(),
+                // Names, matching a live capture. The match-history rebuild
+                // is the half that carries ids, and a seeded row is
+                // standing in for a recording the app made itself.
+                spell_ids: Vec::new(),
             }
         })
         .collect();
