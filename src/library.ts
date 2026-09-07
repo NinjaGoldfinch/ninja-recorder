@@ -6,6 +6,7 @@ import {
   formatDateTime,
   formatKda,
   formatRelative,
+  patchLabel,
   formatSpan,
   kdaRatio,
   queueOrModeLabel,
@@ -288,48 +289,69 @@ function card(row: RecordingRow): string {
   const queue = queueOrModeLabel(row);
   const length = row.duration_s === null ? null : formatClock(row.duration_s);
 
-  const badge =
-    row.win === null
-      ? ""
-      : `<span class="badge badge-${row.win ? "win" : "loss"}">${
-          row.win ? "Win" : "Loss"
-        }</span>`;
-
   const ratio = kdaRatio(row.kda_k, row.kda_d, row.kda_a);
-  const role = row.role;
+  const patch = patchLabel(row.patch);
+
+  // Said once, in the left block, and shown once, as the leading accent.
+  // The word is what makes the row readable without colour — green and red
+  // are exactly the pair a red-green deficiency cannot separate — and it
+  // costs no column because that block is already a run of lines.
+  //
+  // Absent when the result is unknown, which is unambiguous rather than a
+  // gap: a word is on every decided row, so no word means undecided.
+  const outcomeWord = row.win === null ? null : row.win ? "Win" : "Loss";
+  const outcome = outcomeWord ?? "Result unknown";
 
   // Every one of these can be absent, and a row that hides the slot when
   // it is reads as a different shape per recording — which is exactly what
-  // makes a list scannable or not. `—` keeps the columns where they are and
+  // makes a list scannable or not. `—` keeps the lines where they are and
   // says so out loud.
   const cell = (value: string | null, title?: string | null) =>
     value === null
       ? `<span class="vod-missing">—</span>`
       : `<span${title ? ` title="${escapeAttr(title)}"` : ""}>${escapeHtml(value)}</span>`;
 
+  // Deaths in their own colour, which is the one number on a row people
+  // look for first. Built from the three integers rather than by splitting
+  // `formatKda`'s string, so nothing here has to parse its own output —
+  // but `formatKda` still owns the all-three-or-nothing rule.
+  const kdaMarkup =
+    kda === null
+      ? `<span class="vod-missing">—</span>`
+      : `${row.kda_k} <span class="vod-slash">/</span>` +
+        ` <span class="vod-deaths">${row.kda_d}</span>` +
+        ` <span class="vod-slash">/</span> ${row.kda_a}`;
+
   return `
     <article class="vod-row" role="listitem" tabindex="0"
-             data-id="${row.id}" data-outcome="${outcomeAttr(row.win)}">
-      <span class="vod-portrait" aria-hidden="true"></span>
-
-      <span class="vod-identity">
-        <span class="vod-champ" title="${escapeAttr(title)}">${escapeHtml(title)}</span>
-        <span class="vod-sub">${cell(queue)}${role ? ` · ${escapeHtml(role)}` : ""}</span>
+             data-id="${row.id}" data-outcome="${outcomeAttr(row.win)}"
+             aria-label="${escapeAttr(`${title} — ${outcome}`)}">
+      <span class="vod-meta">
+        <span class="vod-queue">${cell(queue)}</span>
+        <time datetime="${new Date(row.started_at).toISOString()}"
+              class="vod-sub" title="${escapeAttr(formatDateTime(row.started_at))}"
+        >${escapeHtml(formatRelative(row.started_at))}</time>
+        <span class="vod-sub">${patch === null ? "&nbsp;" : `Patch ${escapeHtml(patch)}`}</span>
+        <span class="vod-sub">${cell(length)}${
+          outcomeWord ? ` · <span class="vod-outcome">${outcomeWord}</span>` : ""
+        }</span>
       </span>
 
-      <span class="vod-score">
-        <span class="vod-kda">${cell(kda)}</span>
+      <span class="vod-portrait" aria-hidden="true"></span>
+
+      <span class="vod-cell">
+        <span class="vod-champ" title="${escapeAttr(title)}">${escapeHtml(title)}</span>
+        <span class="vod-sub">${row.role === null ? "&nbsp;" : escapeHtml(row.role)}</span>
+      </span>
+
+      <span class="vod-cell">
+        <span class="vod-value vod-kda">${kdaMarkup}</span>
         <span class="vod-sub">${ratio ? escapeHtml(ratio) : "&nbsp;"}</span>
       </span>
 
-      <span class="vod-when">
-        <time datetime="${new Date(row.started_at).toISOString()}"
-              title="${escapeAttr(formatDateTime(row.started_at))}"
-        >${escapeHtml(formatRelative(row.started_at))}</time>
-        <span class="vod-sub">${cell(length)} · ${formatBytes(row.size_bytes)}</span>
-      </span>
+      <span class="vod-slack" aria-hidden="true"></span>
 
-      ${badge || `<span class="badge badge-unknown">—</span>`}
+      <span class="vod-sub vod-size">${formatBytes(row.size_bytes)}</span>
 
       <span class="vod-actions">
         <button class="icon-btn pin-btn${row.pinned ? " pinned" : ""}"

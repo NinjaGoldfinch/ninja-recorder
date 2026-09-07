@@ -1233,24 +1233,32 @@ button.armed {
   gap: var(--sp-2);
 }
 
-/* The columns are fixed rather than content-sized on purpose: values line
- * up down the list, so a column can be read vertically without the eye
- * re-finding it on every row. `minmax(0, …)` on the flexible one is what
- * lets a long champion name ellipsize instead of widening the row. */
+/* Columns are capped rather than content-sized or free-growing: values
+ * line up down the list, so a column can be read vertically without the
+ * eye re-finding it on every row.
+ *
+ * **The slack sits before the actions, not inside the data.** One column
+ * at `1fr` stretched the champion cell across half the window and threw
+ * everything else at the right edge, which read as two unrelated clusters
+ * with a hole between them. Every data column now has a maximum, so they
+ * stay a group at the left and the leftover width collects in one place —
+ * which is also where the scoreboard, items and team compositions land
+ * next (#85), so the row is already the shape it is growing into. */
 .vod-row {
   display: grid;
   grid-template-columns:
-    auto                /* portrait */
-    minmax(0, 1fr)      /* champion + queue */
-    minmax(6.5rem, auto)/* KDA */
-    minmax(9rem, auto)  /* when + length */
-    4.5rem              /* result */
-    auto;               /* actions */
+    minmax(8.5rem, 11rem) /* queue / when / patch / length · result */
+    auto                  /* portrait */
+    minmax(6rem, 12rem)   /* champion + role */
+    minmax(6rem, 9rem)    /* KDA + ratio */
+    minmax(0, 1fr)        /* slack — see above */
+    auto                  /* size */
+    auto;                 /* actions */
   align-items: center;
   gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-4);
+  padding: var(--sp-2) var(--sp-4);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--border-strong);
+  border-left: 4px solid var(--border-strong);
   border-radius: var(--r-md);
   background-color: var(--bg-surface);
   cursor: pointer;
@@ -1264,25 +1272,77 @@ button.armed {
   border-color: var(--border-strong);
 }
 
-/* Outcome on the leading edge. It reads down a list at a glance without
- * colouring the whole row, which at forty rows would be a wall of red and
- * green rather than a signal. */
+/* Outcome on the leading edge, and a wash of the same colour that fades
+ * out across the first few centimetres of the row.
+ *
+ * There was a Win/Loss badge here too and it was redundant: the edge
+ * already said it, in the same place on every row, and the badge cost a
+ * whole column to repeat it. The wash is the compensation for dropping it
+ * — it makes the edge read as the row's state rather than as a decoration
+ * beside it, without tinting forty rows into a wall of red and green.
+ *
+ * The *word* did not go with the badge. It moved into the queue sub-line
+ * (`.vod-outcome`), where it costs no column, so the result is still
+ * legible to someone who cannot separate green from red — which is exactly
+ * the pair this encodes. Colour and text, one place each. */
 .vod-row[data-outcome="win"] {
   border-left-color: var(--win-fg);
+  background-image: linear-gradient(
+    to right,
+    var(--win-bg),
+    transparent 18rem
+  );
 }
 
 .vod-row[data-outcome="loss"] {
   border-left-color: var(--loss-fg);
+  background-image: linear-gradient(
+    to right,
+    var(--loss-bg),
+    transparent 18rem
+  );
 }
 
-/* Two lines in one grid cell: the value, and the thing that qualifies it. */
-.vod-identity,
-.vod-score,
-.vod-when {
+/* The result as a word, inside the sub-line rather than in a column of its
+ * own. Coloured as well as written, so it carries both channels at once
+ * for anyone who can use either. */
+.vod-outcome {
+  font-weight: 600;
+}
+
+.vod-row[data-outcome="win"] .vod-outcome {
+  color: var(--win-fg);
+}
+
+.vod-row[data-outcome="loss"] .vod-outcome {
+  color: var(--loss-fg);
+}
+
+/* Stacked lines in one grid cell: the value, and the things that qualify
+ * it. `min-width: 0` because a grid item defaults to `auto`, which refuses
+ * to shrink below its content and would let one long champion name widen
+ * the column past its own maximum. */
+.vod-cell,
+.vod-meta {
   display: flex;
   flex-direction: column;
   min-width: 0;
   gap: 0.1rem;
+}
+
+/* The block that sets the row's height: what the game was, when, on which
+ * patch, how long, and how it went. Four short lines rather than four
+ * columns, because none of them is a number worth comparing down the list
+ * — they answer "is this the game I mean", which is read once per row. */
+.vod-meta {
+  gap: 0.05rem;
+}
+
+.vod-queue {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .vod-sub {
@@ -1298,9 +1358,10 @@ button.armed {
  * forever for a champion the CDN never answered for — the name beside it
  * has always been the real label. */
 .vod-portrait {
-  width: 34px;
-  height: 34px;
+  width: 46px;
+  height: 46px;
   border-radius: var(--r-sm);
+  border: 1px solid var(--border);
   background-color: var(--bg-inset);
   overflow: hidden;
 }
@@ -1319,25 +1380,41 @@ button.armed {
   white-space: nowrap;
 }
 
+/* Deaths in their own colour and the slashes in none: the eye goes to the
+ * middle number, which is the one people look for first, and the
+ * separators stop competing with the digits for it. */
 .vod-kda {
-  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-md);
+}
+
+.vod-deaths {
+  color: var(--loss-fg);
+}
+
+.vod-slash {
+  color: var(--text-subtle);
+}
+
+.vod-size {
   white-space: nowrap;
 }
 
-.vod-when time {
+/* Tabular figures so the digits sit in the same columns from row to row —
+ * the point of a list is that a number can be compared down it without
+ * being read. */
+.vod-value {
   font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+
 
 /* A value the app does not have, said out loud rather than by leaving a
  * gap. A row that hides its empty slots is a different shape per
  * recording, which is exactly what stops a list being scannable. */
 .vod-missing {
-  color: var(--text-subtle);
-}
-
-.badge-unknown {
-  background-color: var(--bg-inset);
   color: var(--text-subtle);
 }
 
