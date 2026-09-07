@@ -510,7 +510,7 @@ fn plan_samples(rng: &mut Rng, duration_s: f64, markers: &[db::NewMarker]) -> Ve
             game_time_s,
             video_time_s: game_time_s + 12.0,
             our_team: Some("ORDER".to_string()),
-            gold_diff_est: Some(gold),
+            gold_diff: Some(gold),
             kill_diff: Some(kills),
             cs_diff: Some(cs),
             our_gold: Some(rng.range_f64(0.0, 2500.0)),

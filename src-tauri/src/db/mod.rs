@@ -198,6 +198,28 @@ static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
         -- `reconcile` imported, and any finalize where serializing failed.
         ALTER TABLE recordings ADD COLUMN diagnostics_json TEXT;
         ",
+    ), M::up(
+        "
+        -- The gold series is Riot's own accounting now, not ours, so the
+        -- column stops claiming to be an estimate.
+        --
+        -- What it held was the summed price of the items each team was
+        -- carrying plus our own unspent gold, and that is not a gold
+        -- difference by any coefficient: the enemy's unspent gold is
+        -- invisible while ours is not, sold and consumed items subtract
+        -- from it but not from gold earned, and wards and trinkets price at
+        -- zero. See DEVELOPMENT.md 5 and `lcu::timeline`.
+        --
+        -- The existing values are cleared rather than carried across. Every
+        -- one of them is that estimate, and leaving them under a column now
+        -- named `gold_diff` would relabel a known-wrong number as Riot's.
+        -- NULL renders as 'no gold data for this recording', which is true;
+        -- a flat line near zero reads as 'you were even', which was the
+        -- bug. Nothing is lost that was worth keeping, and the backfill can
+        -- recover the real series for any game still in match history.
+        ALTER TABLE samples RENAME COLUMN gold_diff_est TO gold_diff;
+        UPDATE samples SET gold_diff = NULL;
+        ",
     )];
     let count = migrations.len() as i64;
     (Migrations::new(migrations), count)
@@ -248,7 +270,7 @@ pub struct NewSample {
     pub game_time_s: f64,
     pub video_time_s: f64,
     pub our_team: Option<String>,
-    pub gold_diff_est: Option<f64>,
+    pub gold_diff: Option<f64>,
     pub kill_diff: Option<i64>,
     pub cs_diff: Option<i64>,
     pub our_gold: Option<f64>,
@@ -337,7 +359,7 @@ pub struct SampleRow {
     pub game_time_s: f64,
     pub video_time_s: f64,
     pub our_team: Option<String>,
-    pub gold_diff_est: Option<f64>,
+    pub gold_diff: Option<f64>,
     pub kill_diff: Option<i64>,
     pub cs_diff: Option<i64>,
     pub our_gold: Option<f64>,
@@ -581,7 +603,7 @@ impl Db {
             let mut stmt = tx.prepare(
                 "INSERT INTO samples
                     (recording_id, game_time_s, video_time_s, our_team,
-                     gold_diff_est, kill_diff, cs_diff, our_gold, our_level)
+                     gold_diff, kill_diff, cs_diff, our_gold, our_level)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             )?;
             for s in samples {
@@ -590,7 +612,7 @@ impl Db {
                     s.game_time_s,
                     s.video_time_s,
                     s.our_team,
-                    s.gold_diff_est,
+                    s.gold_diff,
                     s.kill_diff,
                     s.cs_diff,
                     s.our_gold,
@@ -608,7 +630,7 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, recording_id, game_time_s, video_time_s, our_team,
-                    gold_diff_est, kill_diff, cs_diff, our_gold, our_level
+                    gold_diff, kill_diff, cs_diff, our_gold, our_level
              FROM samples WHERE recording_id = ?1 ORDER BY video_time_s ASC",
         )?;
         let rows = stmt.query_map([recording_id], |row| {
@@ -618,7 +640,7 @@ impl Db {
                 game_time_s: row.get(2)?,
                 video_time_s: row.get(3)?,
                 our_team: row.get(4)?,
-                gold_diff_est: row.get(5)?,
+                gold_diff: row.get(5)?,
                 kill_diff: row.get(6)?,
                 cs_diff: row.get(7)?,
                 our_gold: row.get(8)?,
@@ -723,6 +745,88 @@ impl Db {
     /// One recording by id. `find_by_path`'s counterpart — used by the
     /// user-initiated delete, which needs the row's `path` and `size_bytes`
     /// before it can remove the file.
+    /// Replaces this recording's gold-only samples with `samples`.
+    ///
+    /// The gold series arrives after the finalize has already written the
+    /// 1 Hz rows, at its own sparser cadence — one frame a minute against
+    /// one sample a second — so it comes in as rows of its own rather than
+    /// being interpolated onto the existing ones. The frontend builds each
+    /// metric's series by dropping the rows that are NULL for it, so the
+    /// two densities coexist without either knowing about the other.
+    ///
+    /// Deleting first makes the write idempotent: the patch can be run
+    /// again (`dev_patch_match_summary` does exactly that) and a second run
+    /// must replace the curve, not draw it twice. "Gold-only" is the
+    /// predicate because it is precisely the shape this method writes — the
+    /// live path never sets `gold_diff` and always sets the diffs when it
+    /// knows a side.
+    pub fn replace_gold_samples(
+        &self,
+        recording_id: i64,
+        samples: &[NewSample],
+    ) -> Result<(), DbError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM samples
+             WHERE recording_id = ?1
+               AND gold_diff IS NOT NULL
+               AND kill_diff IS NULL
+               AND cs_diff IS NULL",
+            [recording_id],
+        )?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO samples
+                    (recording_id, game_time_s, video_time_s, our_team,
+                     gold_diff, kill_diff, cs_diff, our_gold, our_level)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            )?;
+            for s in samples {
+                stmt.execute(params![
+                    recording_id,
+                    s.game_time_s,
+                    s.video_time_s,
+                    s.our_team,
+                    s.gold_diff,
+                    s.kill_diff,
+                    s.cs_diff,
+                    s.our_gold,
+                    s.our_level,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The game-time to video-time offset this recording's samples were
+    /// written with, if it has any.
+    ///
+    /// Recovered from a sample rather than recomputed. The timeline's
+    /// frames carry a game clock and have to land on the same video
+    /// positions the 1 Hz samples did, but the alignment that produced
+    /// those is gone by the time the timeline arrives — the API it came
+    /// from stops answering the moment the game ends. Reading it back off a
+    /// row that already went through it is that same alignment, not a
+    /// second one.
+    ///
+    /// `None` when the recording has no samples at all, which is what a
+    /// game whose live poller never came up looks like. The caller writes
+    /// no gold in that case: frames placed through a guessed offset would
+    /// draw the right curve at the wrong times.
+    pub fn sample_alignment_offset(&self, recording_id: i64) -> Result<Option<f64>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT video_time_s - game_time_s FROM samples
+             WHERE recording_id = ?1 ORDER BY game_time_s LIMIT 1",
+            [recording_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(DbError::from)
+    }
+
     /// Recordings with nothing the LCU could have told us, newest first.
     ///
     /// `win IS NULL OR champion IS NULL` rather than a single column: a row
@@ -1445,12 +1549,44 @@ mod tests {
             game_time_s: video_time_s - 5.0,
             video_time_s,
             our_team: Some("ORDER".into()),
-            gold_diff_est: Some(gold),
+            gold_diff: Some(gold),
             kill_diff: Some(kills),
             cs_diff: Some(0),
             our_gold: Some(450.0),
             our_level: Some(11),
         }
+    }
+
+    fn gold_sample(game_time_s: f64, gold: f64) -> NewSample {
+        NewSample {
+            game_time_s,
+            video_time_s: game_time_s + 5.0,
+            our_team: Some("ORDER".into()),
+            gold_diff: Some(gold),
+            ..Default::default()
+        }
+    }
+
+    /// The patch can be run again — `dev_patch_match_summary` exists to do
+    /// exactly that — so a second run has to replace the curve rather than
+    /// draw a second one on top of it.
+    #[test]
+    fn replacing_the_gold_series_is_idempotent() {
+        let db = Db::open_in_memory().unwrap();
+        let id = recording_with_samples(&db, &[sample(10.0, 100.0, 1), sample(20.0, 200.0, 2)]);
+
+        for gold in [500.0, 900.0] {
+            db.replace_gold_samples(id, &[gold_sample(0.0, gold), gold_sample(60.0, gold)])
+                .unwrap();
+        }
+
+        let rows = db.get_samples(id).unwrap();
+        let gold_only: Vec<_> = rows.iter().filter(|r| r.kill_diff.is_none()).collect();
+        assert_eq!(gold_only.len(), 2, "the second run replaced the first");
+        assert!(gold_only.iter().all(|r| r.gold_diff == Some(900.0)));
+
+        // And the live 1 Hz rows are untouched by any of it.
+        assert_eq!(rows.iter().filter(|r| r.kill_diff.is_some()).count(), 2);
     }
 
     fn recording_with_samples(db: &Db, samples: &[NewSample]) -> i64 {
@@ -1489,7 +1625,7 @@ mod tests {
         let id = recording_with_samples(&db, &[sample(10.0, -2750.5, -3)]);
 
         let row = &db.get_samples(id).unwrap()[0];
-        assert_eq!(row.gold_diff_est, Some(-2750.5));
+        assert_eq!(row.gold_diff, Some(-2750.5));
         assert_eq!(row.kill_diff, Some(-3));
         assert_eq!(row.our_team, Some("ORDER".to_string()));
         assert_eq!(row.our_gold, Some(450.0));
@@ -1511,7 +1647,7 @@ mod tests {
 
         let row = &db.get_samples(id).unwrap()[0];
         assert_eq!(row.our_team, None);
-        assert_eq!(row.gold_diff_est, None);
+        assert_eq!(row.gold_diff, None);
         assert_eq!(row.kill_diff, None);
     }
 

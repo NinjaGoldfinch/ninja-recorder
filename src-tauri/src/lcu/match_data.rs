@@ -137,6 +137,12 @@ struct GameParticipant {
     champion_id: i64,
     #[serde(rename = "participantId")]
     participant_id: i64,
+    /// Riot's side id: 100 is blue, 200 is red. Only the gold series reads
+    /// it, to know which participant frames to add up. Optional because
+    /// everything on this shape is — a response without it costs the gold
+    /// curve and nothing else.
+    #[serde(rename = "teamId", default)]
+    team_id: Option<i64>,
     stats: ParticipantStats,
     /// Where `role` comes from. Optional because it is the one part of the
     /// participant this module treats as a nice-to-have — a response
@@ -531,6 +537,73 @@ async fn fetch_history(http: &LcuHttpClient, game_id: i64) -> Result<MatchSummar
         .await?;
 
     extract_summary(&me, &game)
+}
+
+/// Which participants were on our side of one game, and which were not.
+///
+/// The match timeline says what every participant had at each frame but
+/// never whose side they were on, so it cannot be read without this. It
+/// lives here rather than in `timeline` because working out which of ten
+/// players is us is this module's job, and must keep having exactly one
+/// answer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sides {
+    pub our_participant_id: i64,
+    /// `"ORDER"` or `"CHAOS"` — Live Client Data's wording, not Riot's
+    /// numeric one, because that is what `samples.our_team` already holds
+    /// and one column must not carry two vocabularies.
+    pub our_team: Option<String>,
+    pub ours: Vec<i64>,
+    pub theirs: Vec<i64>,
+}
+
+/// Riot's side ids in the wording the rest of the app uses. 100 is blue
+/// side, which Live Client Data calls `ORDER`; 200 is red, which it calls
+/// `CHAOS`. Anything else is not a side we can name, and `None` is the
+/// only safe answer — naming it wrong inverts the sign of a whole curve.
+fn team_name(team_id: i64) -> Option<String> {
+    match team_id {
+        100 => Some("ORDER".to_string()),
+        200 => Some("CHAOS".to_string()),
+        _ => None,
+    }
+}
+
+fn split_sides(me: &CurrentSummoner, game: &GameDto) -> Result<Sides, MatchDataError> {
+    let our_participant_id = game
+        .participant_identities
+        .iter()
+        .find(|id| me.is_me(&id.player))
+        .map(|id| id.participant_id)
+        .ok_or(MatchDataError::ParticipantNotFound(game.game_id))?;
+
+    let our_team_id = game
+        .participants
+        .iter()
+        .find(|p| p.participant_id == our_participant_id)
+        .and_then(|p| p.team_id)
+        .ok_or(MatchDataError::ParticipantNotFound(game.game_id))?;
+
+    let (ours, theirs): (Vec<_>, Vec<_>) = game
+        .participants
+        .iter()
+        .partition(|p| p.team_id == Some(our_team_id));
+
+    Ok(Sides {
+        our_participant_id,
+        our_team: team_name(our_team_id),
+        ours: ours.iter().map(|p| p.participant_id).collect(),
+        theirs: theirs.iter().map(|p| p.participant_id).collect(),
+    })
+}
+
+/// Who was on our side in `game_id`, from the match-history document.
+pub async fn fetch_sides(http: &LcuHttpClient, game_id: i64) -> Result<Sides, MatchDataError> {
+    let me: CurrentSummoner = http.get_json("/lol-summoner/v1/current-summoner").await?;
+    let game: GameDto = http
+        .get_json(&format!("/lol-match-history/v1/games/{}", game_id))
+        .await?;
+    split_sides(&me, &game)
 }
 
 fn extract_summary(me: &CurrentSummoner, game: &GameDto) -> Result<MatchSummary, MatchDataError> {
