@@ -383,6 +383,7 @@ pub fn rescan_recordings(ctx: &Ctx) -> Result<db::reconcile::ReconcileReport, St
 /// job with progress would be the fix if it ever walks thousands of rows.
 pub async fn backfill_match_metadata(ctx: &Ctx) -> Result<crate::backfill::BackfillReport, String> {
     crate::backfill::run(&ctx.db).await
+}
 
 /// The cached square portrait for a champion, fetched on first use.
 ///
