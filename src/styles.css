@@ -1220,68 +1220,86 @@ button.armed {
 
 /* --- VOD cards --------------------------------------------------- */
 
-.card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(272px, 1fr));
-  gap: var(--sp-4);
-}
-
-.vod-card {
-  position: relative;
+/* One row per game, not a grid of cards.
+ *
+ * A library is scanned, not browsed: the question is almost always "which
+ * game was that", answered by champion, result and roughly when — and a
+ * card grid answers it in two dimensions when one would do. Rows also give
+ * the scoreboard, items and team compositions somewhere to go without a
+ * redesign (#85), which a fixed-width card does not. */
+.vod-list {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
-  padding: var(--sp-4);
-  padding-top: calc(var(--sp-4) + 3px);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  background-color: var(--bg-surface);
-  box-shadow: var(--shadow-1);
-  cursor: pointer;
-  overflow: hidden;
-  transition: transform var(--dur) var(--ease),
-    box-shadow var(--dur) var(--ease), border-color var(--dur) var(--ease);
-}
-
-.vod-card:hover {
-  transform: translateY(-2px);
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-2);
-}
-
-/* Outcome as a top edge rather than a coloured card: it reads at a glance
- * down a grid without turning the whole page into a traffic light. */
-.vod-card::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 3px;
-  background-color: var(--border-strong);
-}
-
-.vod-card[data-outcome="win"]::before {
-  background-color: var(--win-fg);
-}
-
-.vod-card[data-outcome="loss"]::before {
-  background-color: var(--loss-fg);
-}
-
-.vod-card-head {
-  display: flex;
-  align-items: center;
   gap: var(--sp-2);
-  min-width: 0;
 }
 
-/* Holds its space before the portrait arrives, so a card does not reflow
- * when the icon lands a moment after the grid. Empty until then, and empty
+/* The columns are fixed rather than content-sized on purpose: values line
+ * up down the list, so a column can be read vertically without the eye
+ * re-finding it on every row. `minmax(0, …)` on the flexible one is what
+ * lets a long champion name ellipsize instead of widening the row. */
+.vod-row {
+  display: grid;
+  grid-template-columns:
+    auto                /* portrait */
+    minmax(0, 1fr)      /* champion + queue */
+    minmax(6.5rem, auto)/* KDA */
+    minmax(9rem, auto)  /* when + length */
+    4.5rem              /* result */
+    auto;               /* actions */
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background-color: var(--bg-surface);
+  cursor: pointer;
+  transition:
+    background-color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease);
+}
+
+.vod-row:hover {
+  background-color: var(--bg-surface-hover);
+  border-color: var(--border-strong);
+}
+
+/* Outcome on the leading edge. It reads down a list at a glance without
+ * colouring the whole row, which at forty rows would be a wall of red and
+ * green rather than a signal. */
+.vod-row[data-outcome="win"] {
+  border-left-color: var(--win-fg);
+}
+
+.vod-row[data-outcome="loss"] {
+  border-left-color: var(--loss-fg);
+}
+
+/* Two lines in one grid cell: the value, and the thing that qualifies it. */
+.vod-identity,
+.vod-score,
+.vod-when {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0.1rem;
+}
+
+.vod-sub {
+  font-size: var(--fs-xs);
+  color: var(--text-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Holds its space before the portrait arrives, so a row does not reflow
+ * when the icon lands a moment after the list. Empty until then, and empty
  * forever for a champion the CDN never answered for — the name beside it
  * has always been the real label. */
 .vod-portrait {
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
+  width: 34px;
+  height: 34px;
   border-radius: var(--r-sm);
   background-color: var(--bg-inset);
   overflow: hidden;
@@ -1294,8 +1312,6 @@ button.armed {
 }
 
 .vod-champ {
-  flex: 1 1 auto;
-  min-width: 0;
   font-weight: 600;
   letter-spacing: -0.01em;
   overflow: hidden;
@@ -1303,40 +1319,26 @@ button.armed {
   white-space: nowrap;
 }
 
-.vod-stats {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: var(--sp-2);
-  margin: 0;
-}
-
-.vod-stats dt {
-  font-size: var(--fs-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--text-subtle);
-}
-
-.vod-stats dd {
-  margin: 0.1rem 0 0;
-  font-size: var(--fs-md);
+.vod-kda {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.vod-card-foot {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  padding-top: var(--sp-2);
-  border-top: 1px solid var(--border);
-  font-size: var(--fs-sm);
-  color: var(--text-subtle);
+.vod-when time {
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-.vod-size {
-  margin-left: auto;
+/* A value the app does not have, said out loud rather than by leaving a
+ * gap. A row that hides its empty slots is a different shape per
+ * recording, which is exactly what stops a list being scannable. */
+.vod-missing {
+  color: var(--text-subtle);
+}
+
+.badge-unknown {
+  background-color: var(--bg-inset);
+  color: var(--text-subtle);
 }
 
 .vod-actions {
@@ -1351,17 +1353,17 @@ button.armed {
   background: none;
 }
 
-/* Actions stay out of the way until the card is engaged with — they're
- * destructive or fiddly, and a grid of cards each showing two buttons is
- * noisier than the data it's meant to present. Pinned is the exception:
+/* Actions stay out of the way until the row is engaged with — they're
+ * destructive or fiddly, and forty rows each showing two buttons is
+ * noisier than the data they're meant to present. Pinned is the exception:
  * that's state, not an action, so it stays visible. */
 .vod-actions .icon-btn:not(.pinned) {
   opacity: 0;
   transition: opacity var(--dur) var(--ease);
 }
 
-.vod-card:hover .vod-actions .icon-btn,
-.vod-card:focus-within .vod-actions .icon-btn {
+.vod-row:hover .vod-actions .icon-btn,
+.vod-row:focus-within .vod-actions .icon-btn {
   opacity: 1;
 }
 

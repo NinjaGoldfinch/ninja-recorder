@@ -38,6 +38,42 @@ export function formatSpan(seconds: number): string {
   return `${h}h ${m}m`;
 }
 
+// Thresholds in seconds, with the unit each one switches to. Ordered
+// coarsest-last; the first that fits wins.
+const RELATIVE_STEPS: [limit: number, unit: Intl.RelativeTimeFormatUnit, per: number][] = [
+  [60, "second", 1],
+  [3600, "minute", 60],
+  [86_400, "hour", 3600],
+  [7 * 86_400, "day", 86_400],
+];
+
+/**
+ * "16 minutes ago", for a row that is scanned rather than read.
+ *
+ * Past a week it hands back to `formatDateTime`: "6 weeks ago" is worse
+ * than a date at that distance, because nobody counts weeks and the
+ * absolute date is what a person would search their memory by.
+ *
+ * `Intl.RelativeTimeFormat` rather than a hand-rolled table, so the
+ * plural rules and the wording follow the user's locale instead of
+ * English's.
+ */
+export function formatRelative(millis: number): string {
+  const seconds = (Date.now() - millis) / 1000;
+  // A clock that disagrees with the file's timestamp should not produce
+  // "in 3 minutes" on a recording that plainly already exists.
+  if (seconds < 0) return formatDateTime(millis);
+
+  const step = RELATIVE_STEPS.find(([limit]) => seconds < limit);
+  if (!step) return formatDateTime(millis);
+
+  const [, unit, per] = step;
+  return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(
+    -Math.floor(seconds / per),
+    unit,
+  );
+}
+
 export function formatDateTime(millis: number): string {
   return new Date(millis).toLocaleString(undefined, {
     day: "numeric",

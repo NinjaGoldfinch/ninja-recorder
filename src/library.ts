@@ -5,6 +5,7 @@ import {
   formatClock,
   formatDateTime,
   formatKda,
+  formatRelative,
   formatSpan,
   kdaRatio,
   queueOrModeLabel,
@@ -84,11 +85,11 @@ export function initLibrary() {
   els.rescan.addEventListener("click", rescanRecordings);
 
   els.grid.addEventListener("click", onGridClick);
-  // Cards are focusable, so they need to be openable from the keyboard —
-  // they carried `tabindex` before this redesign but no key handler.
+  // Rows are focusable, so they need to be openable from the keyboard —
+  // they carried `tabindex` before the first redesign but no key handler.
   els.grid.addEventListener("keydown", (e) => {
     if (e.key !== "Enter" && e.key !== " ") return;
-    const card = (e.target as HTMLElement).closest<HTMLElement>(".vod-card");
+    const card = (e.target as HTMLElement).closest<HTMLElement>(".vod-row");
     if (!card) return;
     e.preventDefault();
     const row = findRow(Number(card.dataset.id));
@@ -233,7 +234,7 @@ async function fillInPortraits(rows: RecordingRow[]) {
     if (!src) continue;
     // The grid may have been re-rendered while the requests were in flight.
     const slot = els.grid.querySelector<HTMLElement>(
-      `.vod-card[data-id="${row.id}"] .vod-portrait`,
+      `.vod-row[data-id="${row.id}"] .vod-portrait`,
     );
     if (slot) slot.innerHTML = `<img src="${escapeAttr(src)}" alt="" loading="lazy" />`;
   }
@@ -294,42 +295,52 @@ function card(row: RecordingRow): string {
           row.win ? "Win" : "Loss"
         }</span>`;
 
-  // `title` is optional and only ever a hover hint — never the only place
-  // a value appears, since touch and keyboard users never see it.
-  const stat = (label: string, value: string | null, title?: string | null) =>
-    `<div><dt>${label}</dt><dd${
-      title ? ` title="${escapeAttr(title)}"` : ""
-    }>${value === null ? "—" : escapeHtml(value)}</dd></div>`;
+  const ratio = kdaRatio(row.kda_k, row.kda_d, row.kda_a);
+  const role = row.role;
+
+  // Every one of these can be absent, and a row that hides the slot when
+  // it is reads as a different shape per recording — which is exactly what
+  // makes a list scannable or not. `—` keeps the columns where they are and
+  // says so out loud.
+  const cell = (value: string | null, title?: string | null) =>
+    value === null
+      ? `<span class="vod-missing">—</span>`
+      : `<span${title ? ` title="${escapeAttr(title)}"` : ""}>${escapeHtml(value)}</span>`;
 
   return `
-    <article class="vod-card" role="listitem" tabindex="0"
+    <article class="vod-row" role="listitem" tabindex="0"
              data-id="${row.id}" data-outcome="${outcomeAttr(row.win)}">
-      <header class="vod-card-head">
-        <span class="vod-portrait" aria-hidden="true"></span>
+      <span class="vod-portrait" aria-hidden="true"></span>
+
+      <span class="vod-identity">
         <span class="vod-champ" title="${escapeAttr(title)}">${escapeHtml(title)}</span>
-        ${badge}
-      </header>
-      <dl class="vod-stats">
-        ${stat("KDA", kda, kdaRatio(row.kda_k, row.kda_d, row.kda_a))}
-        ${stat("Length", length)}
-        ${stat("Queue", queue)}
-      </dl>
-      <footer class="vod-card-foot">
-        <time datetime="${new Date(row.started_at).toISOString()}">${escapeHtml(
-          formatDateTime(row.started_at),
-        )}</time>
-        <span class="vod-size">${formatBytes(row.size_bytes)}</span>
-        <span class="vod-actions">
-          <button class="icon-btn pin-btn${row.pinned ? " pinned" : ""}"
-                  type="button" data-pin="${row.id}"
-                  aria-pressed="${row.pinned}"
-                  title="${row.pinned ? "Unpin" : "Pin (exempt from disk retention)"}"
-          >📌</button>
-          <button class="icon-btn danger" type="button" data-delete="${row.id}"
-                  aria-label="Delete recording" title="Delete recording"
-          >🗑</button>
-        </span>
-      </footer>
+        <span class="vod-sub">${cell(queue)}${role ? ` · ${escapeHtml(role)}` : ""}</span>
+      </span>
+
+      <span class="vod-score">
+        <span class="vod-kda">${cell(kda)}</span>
+        <span class="vod-sub">${ratio ? escapeHtml(ratio) : "&nbsp;"}</span>
+      </span>
+
+      <span class="vod-when">
+        <time datetime="${new Date(row.started_at).toISOString()}"
+              title="${escapeAttr(formatDateTime(row.started_at))}"
+        >${escapeHtml(formatRelative(row.started_at))}</time>
+        <span class="vod-sub">${cell(length)} · ${formatBytes(row.size_bytes)}</span>
+      </span>
+
+      ${badge || `<span class="badge badge-unknown">—</span>`}
+
+      <span class="vod-actions">
+        <button class="icon-btn pin-btn${row.pinned ? " pinned" : ""}"
+                type="button" data-pin="${row.id}"
+                aria-pressed="${row.pinned}"
+                title="${row.pinned ? "Unpin" : "Pin (exempt from disk retention)"}"
+        >📌</button>
+        <button class="icon-btn danger" type="button" data-delete="${row.id}"
+                aria-label="Delete recording" title="Delete recording"
+        >🗑</button>
+      </span>
     </article>`;
 }
 
@@ -353,7 +364,7 @@ function onGridClick(e: MouseEvent) {
   // opening the VOD.
   if (target.closest(".vod-actions")) return;
 
-  const card = target.closest<HTMLElement>(".vod-card");
+  const card = target.closest<HTMLElement>(".vod-row");
   if (!card) return;
   const row = findRow(Number(card.dataset.id));
   if (row) openReview(row);
