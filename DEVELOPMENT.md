@@ -290,6 +290,8 @@ Every API response shape we depend on gets captured to `fixtures/` (JSON) the fi
 
 The reason is #74. Almost every shape this app parses was written by hand and has never been checked against a real client, and a payload the parser could not read ended a recording nine minutes into a game — with no copy of it kept, so the triage was archaeology on a samples table. `record` runs *before* the parse, so with capture on, the payload that broke something is on disk when you go looking.
 
+**`fixtures/live-client/captured-allgamedata.json` is a real one.** Every other file in that directory was written by hand from Riot's documentation, and the difference matters: `HordeKill`, `Primal Smite` and `Unleashed Teleport` were all shipped-and-broken because nothing here had seen a real payload, and `Stolen` turns out to arrive as the string `"False"`. Do not reshape that file to match an invented one — it is pinned by tests that check its marker counts against the KDA the payload states independently, so a "tidy" that changes its meaning fails. It is a mid-game capture, so it carries no `GameEnd`.
+
 What that costs: one file write per response, so roughly 1/s during a game. Each endpoint overwrites a single file rather than accumulating, so there is no growth — and because the Live Client Data events array is cumulative, the last capture of a game contains every event in it. Captured payloads carry the Riot IDs of all ten players, which is worth remembering before committing one as a fixture.
 
 **Revert to opt-in for the v1.0 release** — `fixtures.rs`, `DEFAULT_ON_UNTIL_V1`.
