@@ -403,12 +403,23 @@ button:disabled {
 #review-video {
   display: block;
   width: 100%;
-  min-height: 320px;
-  max-height: 60vh;
+  /* Height follows the recording's own aspect ratio, so the element is
+   * exactly the shape of the video inside it and `object-fit` never has
+   * anything to letterbox. `max-height: 60vh` used to cap it here, which
+   * meant that on any window shorter than the video was wide the player
+   * kept its full width and grew black bars top and bottom — and resizing
+   * the window grew and shrank them. The page scrolls instead.
+   *
+   * `auto 16 / 9` is a placeholder, not an override: the intrinsic ratio
+   * wins the moment metadata lands, and 16/9 only stands in before that
+   * (and for a file that never loads) so the player doesn't visibly jump
+   * from Chromium's default 2:1 box. */
+  height: auto;
+  aspect-ratio: auto 16 / 9;
   background-color: #000;
-  /* Letterbox rather than stretch: a recording that isn't the display's
-   * aspect ratio (ultrawide, or a windowed capture) would otherwise be
-   * distorted once `height: 100%` is forced on it in fullscreen. */
+  /* Letterbox rather than stretch: in fullscreen the box is the screen's
+   * shape, not the video's, and `height: 100%` would otherwise distort a
+   * recording that isn't the display's aspect ratio. */
   object-fit: contain;
 }
 
@@ -425,8 +436,6 @@ button:disabled {
 
 .player-wrap:fullscreen #review-video {
   height: 100%;
-  max-height: none;
-  min-height: 0;
 }
 
 /* Deliberately NOT tokenised. This overlay sits on top of black video in
@@ -879,6 +888,12 @@ button:disabled {
   padding: 0;
   max-height: 16rem;
   overflow-y: auto;
+  /* A scroll container with one axis `auto` and the other `visible` has the
+   * visible axis computed to `auto` as well, so the list grew a horizontal
+   * scrollbar of its own the moment a label plus the vertical scrollbar's
+   * width came to more than a row. Nothing here is meant to scroll
+   * sideways; `.marker-label` below truncates instead. */
+  overflow-x: hidden;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   background-color: var(--bg-surface);
@@ -901,6 +916,15 @@ button:disabled {
 
 .marker-list li:hover {
   background-color: var(--bg-surface-hover);
+}
+
+/* Flex items refuse to shrink below their content by default, which is
+ * what let one long label widen the whole row. */
+.marker-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .marker-list .hint {

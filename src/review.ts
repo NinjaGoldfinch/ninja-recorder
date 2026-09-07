@@ -252,6 +252,12 @@ export function initReview() {
     bindScrubbing(timelineBody, (e) => {
       const target = (e.target as HTMLElement).closest<HTMLElement>("[data-time]");
       if (!target || !video) return false;
+      // Suppressing the compatibility mouse events also suppresses the focus
+      // they would have moved onto the glyph. A glyph is a seek target, not
+      // somewhere to leave the caret: focused, it eats the next Space as
+      // "press me again" instead of play/pause. Keyboard activation is
+      // untouched — this only fires for a pointer.
+      e.preventDefault();
       video.currentTime = Number(target.dataset.time);
       return true;
     });
@@ -346,9 +352,15 @@ function isTypingInField(): boolean {
   return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA");
 }
 
+/** Controls that do something of their own with Space. */
 function isOnFormControl(): boolean {
   const el = document.activeElement;
   return !!el && (el.tagName === "BUTTON" || el.tagName === "SELECT");
+}
+
+/** Controls that do something of their own with the arrow keys. */
+function isOnArrowControl(): boolean {
+  return document.activeElement?.tagName === "SELECT";
 }
 
 function seekBy(seconds: number) {
@@ -367,10 +379,18 @@ function seekBy(seconds: number) {
 function handleHotkey(e: KeyboardEvent) {
   if (!isReviewOpen() || isTypingInField()) return;
 
-  // Space and arrows are the browser's own controls for a focused button or
-  // select, so leave them alone there — stealing Space would break every
-  // control in the row the moment one had focus.
-  if ((e.key === " " || e.key.startsWith("Arrow")) && isOnFormControl()) return;
+  // Space is the browser's own way to press a focused button or open a
+  // focused select, so stealing it would break every control in the row the
+  // moment one had focus.
+  if (e.key === " " && isOnFormControl()) return;
+
+  // Arrows are not: a <button> ignores them entirely, so waving them off for
+  // any focused button bought nothing and cost everything — clicking a
+  // timeline glyph, which *is* a button, left it focused and killed seeking
+  // until you happened to click somewhere else. A <select> does use them,
+  // and a focused <input> is already out by `isTypingInField` (which is what
+  // keeps the volume slider's own arrow handling).
+  if (e.key.startsWith("Arrow") && isOnArrowControl()) return;
 
   if (e.key === " ") {
     e.preventDefault();
@@ -1120,7 +1140,7 @@ function renderMarkerList() {
       const style = MARKER_STYLE[m.kind] ?? { icon: "●", label: m.kind, color: "#999" };
       return `<li data-time="${m.video_time_s}" style="--marker-color:${style.color}">
         <span class="marker-icon">${style.icon}</span>
-        <span>${escapeHtml(markerLabel(m))}</span>
+        <span class="marker-label">${escapeHtml(markerLabel(m))}</span>
         <span class="hint">${formatTime(m.video_time_s)}</span>
       </li>`;
     })
