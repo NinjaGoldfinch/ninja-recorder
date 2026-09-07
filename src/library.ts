@@ -7,6 +7,7 @@ import {
   parseScoreboard,
   runeIcon,
   spellIcon,
+  spellIconById,
 } from "./icons";
 import {
   formatBytes,
@@ -241,9 +242,11 @@ function paintArt(el: HTMLElement, row: RecordingRow) {
         ? itemIcon(Number(key))
         : icon === "spell"
           ? spellIcon(String(key))
-          : icon === "rune"
-            ? runeIcon(Number(key))
-            : null;
+          : icon === "spell-id"
+            ? spellIconById(Number(key))
+            : icon === "rune"
+              ? runeIcon(Number(key))
+              : null;
     if (src) slot.innerHTML = `<img src="${escapeAttr(src)}" alt="" loading="lazy" />`;
   }
 }
@@ -310,7 +313,15 @@ function loadout(row: RecordingRow): string {
            title="${escapeAttr(label)}"></span>`;
   const empty = `<span class="vod-slot vod-slot-empty"></span>`;
 
-  const spells = (us?.spells ?? []).slice(0, 2).map((s) => slot("spell", s, s));
+  // Names when the scoreboard was captured live, ids when it was rebuilt
+  // from match history. Both find the art; neither is converted into the
+  // other, because that would need the CDN in a path that only talks to
+  // the League client.
+  const spells = us
+    ? us.spells.length > 0
+      ? us.spells.slice(0, 2).map((s) => slot("spell", s, s))
+      : (us.spell_ids ?? []).slice(0, 2).map((id) => slot("spell-id", id, `Spell ${id}`))
+    : [];
   while (spells.length < 2) spells.push(empty);
 
   const perks = runes

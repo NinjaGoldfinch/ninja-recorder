@@ -157,6 +157,80 @@ struct ParticipantStats {
     deaths: i64,
     assists: i64,
     win: bool,
+
+    // Everything below is only read when a recording has no scoreboard of
+    // its own — a game played before the live capture existed, or one
+    // whose poller never came up. All optional: this endpoint's shape has
+    // never been seen off a real client, and a field that is not there
+    // costs one slot on a row rather than the whole reconstruction.
+    #[serde(rename = "champLevel", default)]
+    champ_level: Option<i64>,
+    #[serde(rename = "totalMinionsKilled", default)]
+    minions: Option<i64>,
+    /// Jungle camps. Riot counts them separately, and a jungler's CS is
+    /// mostly this — leaving it out would report a jungle game as having
+    /// almost no farm.
+    #[serde(rename = "neutralMinionsKilled", default)]
+    neutral_minions: Option<i64>,
+    #[serde(rename = "spell1Id", default)]
+    spell1_id: Option<i64>,
+    #[serde(rename = "spell2Id", default)]
+    spell2_id: Option<i64>,
+    /// The keystone.
+    #[serde(default)]
+    perk0: Option<i64>,
+    #[serde(rename = "perkPrimaryStyle", default)]
+    perk_primary_style: Option<i64>,
+    #[serde(rename = "perkSubStyle", default)]
+    perk_sub_style: Option<i64>,
+    #[serde(default)]
+    item0: Option<i64>,
+    #[serde(default)]
+    item1: Option<i64>,
+    #[serde(default)]
+    item2: Option<i64>,
+    #[serde(default)]
+    item3: Option<i64>,
+    #[serde(default)]
+    item4: Option<i64>,
+    #[serde(default)]
+    item5: Option<i64>,
+    /// The trinket.
+    #[serde(default)]
+    item6: Option<i64>,
+}
+
+impl ParticipantStats {
+    /// The inventory in slot order, with the empty slots dropped.
+    ///
+    /// Riot writes `0` into a slot nothing is in, and zero is not an item
+    /// id — carrying it through would ask Data Dragon for `0.png`.
+    fn items(&self) -> Vec<i64> {
+        [
+            self.item0, self.item1, self.item2, self.item3, self.item4, self.item5, self.item6,
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|id| *id > 0)
+        .collect()
+    }
+
+    fn spell_ids(&self) -> Vec<i64> {
+        [self.spell1_id, self.spell2_id]
+            .into_iter()
+            .flatten()
+            .filter(|id| *id > 0)
+            .collect()
+    }
+
+    /// Lane minions plus jungle camps, which is what a scoreboard means by
+    /// CS. `None` when the response said nothing about either.
+    fn cs(&self) -> Option<i64> {
+        match (self.minions, self.neutral_minions) {
+            (None, None) => None,
+            (a, b) => Some(a.unwrap_or(0) + b.unwrap_or(0)),
+        }
+    }
 }
 
 /// Riot's two-field spelling of a position: `lane` says where, `role` says
@@ -471,6 +545,10 @@ pub struct PlayedGame {
     /// Seconds.
     pub duration_s: Option<i64>,
     pub summary: MatchSummary,
+    /// Everyone in the game, for rebuilding a scoreboard on a recording
+    /// that has none. Read from the same document the summary came from,
+    /// so it costs no extra request.
+    pub participants: Vec<ParticipantSummary>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -524,6 +602,7 @@ pub async fn fetch_recent_games(
                 game_id: game.game_id,
                 started_at: game.game_creation.filter(|ms| *ms > 0),
                 duration_s: game.game_duration.filter(|s| *s > 0),
+                participants: participants(&me, &game),
                 summary,
             })
         })
@@ -595,6 +674,68 @@ fn split_sides(me: &CurrentSummoner, game: &GameDto) -> Result<Sides, MatchDataE
         ours: ours.iter().map(|p| p.participant_id).collect(),
         theirs: theirs.iter().map(|p| p.participant_id).collect(),
     })
+}
+
+/// One participant as match history describes them, before champion ids
+/// have been turned into names.
+///
+/// The names are the caller's job: resolving one is a lookup against the
+/// client's asset store (`lcu::champions`), which is async and cached, and
+/// this stays a pure read of a document.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParticipantSummary {
+    pub champion_id: i64,
+    /// `"ORDER"` or `"CHAOS"`, or `None` for a side id we cannot name.
+    pub team: Option<String>,
+    pub is_us: bool,
+    pub level: i64,
+    pub kills: i64,
+    pub deaths: i64,
+    pub assists: i64,
+    /// `None` when the response said nothing about minions at all, which
+    /// is different from a game where nobody farmed.
+    pub cs: Option<i64>,
+    pub items: Vec<i64>,
+    pub spell_ids: Vec<i64>,
+    pub keystone_id: Option<i64>,
+    pub primary_tree_id: Option<i64>,
+    pub secondary_tree_id: Option<i64>,
+}
+
+/// Every participant in a match-history document, ours flagged.
+///
+/// For rebuilding a scoreboard for a recording that has none — one played
+/// before the live capture existed, or one whose poller never came up.
+/// Empty when we cannot find ourselves, because a scoreboard that cannot
+/// say which half is ours is not one worth storing.
+fn participants(me: &CurrentSummoner, game: &GameDto) -> Vec<ParticipantSummary> {
+    let Some(our_id) = game
+        .participant_identities
+        .iter()
+        .find(|id| me.is_me(&id.player))
+        .map(|id| id.participant_id)
+    else {
+        return Vec::new();
+    };
+
+    game.participants
+        .iter()
+        .map(|p| ParticipantSummary {
+            champion_id: p.champion_id,
+            team: p.team_id.and_then(team_name),
+            is_us: p.participant_id == our_id,
+            level: p.stats.champ_level.unwrap_or(0),
+            kills: p.stats.kills,
+            deaths: p.stats.deaths,
+            assists: p.stats.assists,
+            cs: p.stats.cs(),
+            items: p.stats.items(),
+            spell_ids: p.stats.spell_ids(),
+            keystone_id: p.stats.perk0.filter(|id| *id > 0),
+            primary_tree_id: p.stats.perk_primary_style.filter(|id| *id > 0),
+            secondary_tree_id: p.stats.perk_sub_style.filter(|id| *id > 0),
+        })
+        .collect()
 }
 
 /// Who was on our side in `game_id`, from the match-history document.

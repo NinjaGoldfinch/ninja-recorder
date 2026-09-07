@@ -582,6 +582,19 @@ flowchart TD
     style PATCH fill:#e8f5e9,stroke:#2e7d32
 ```
 
+**It also rebuilds the scoreboard.** A recording made before the live capture
+existed has no `scoreboard_json`, and the match-history document carries enough
+to reconstruct one: every participant's champion id, items, spell ids, perks,
+level and minion counts. That fills a gap and never corrects one —
+`fill_scoreboard` writes only where the column is NULL, because a scoreboard
+captured live came from the game itself while a rebuilt one is Riot's account
+of it afterwards, and the live one has things the rebuild does not.
+
+The two differ in one visible way: match history reports spell **ids** where
+the live client reports **names**. Both are stored as they arrive rather than
+one being converted into the other, since converting would need Data Dragon in
+a path that otherwise only talks to the League client.
+
 **More than one match is refused, not resolved.** A card labelled with the
 wrong game is worse than one labelled `—`: the value of this library is that
 what it says about a VOD is true, and a wrong label is invisible, because

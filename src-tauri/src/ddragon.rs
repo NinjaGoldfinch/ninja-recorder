@@ -65,6 +65,11 @@ struct ChampionEntry {
     /// The display name, which is what `recordings.champion` holds.
     #[serde(default)]
     name: Option<String>,
+    /// The numeric id, as a string — Data Dragon's own spelling. Only the
+    /// spell map reads it: a scoreboard rebuilt from match history has
+    /// spell *ids* where a live one has names.
+    #[serde(default)]
+    key: Option<String>,
 }
 
 /// Display name → the key its art is filed under. Champions and summoner
@@ -73,6 +78,10 @@ type ArtKeys = HashMap<String, String>;
 
 /// Rune (or rune tree) id → the icon path Data Dragon serves it under.
 type RuneIcons = HashMap<i64, String>;
+
+/// Numeric id → the key art is filed under. Spells only: match history
+/// reports `spell1Id: 4` where the live client says `Flash`.
+type IdKeys = HashMap<i64, String>;
 
 /// Data Dragon's `summoner.json`, reduced the same way `champion.json` is.
 #[derive(Debug, Deserialize)]
@@ -136,6 +145,7 @@ type Cached<T> = Option<(String, Arc<T>)>;
 static CHAMPION_KEYS: Mutex<Cached<ArtKeys>> = Mutex::new(None);
 static SPELL_KEYS: Mutex<Cached<ArtKeys>> = Mutex::new(None);
 static RUNE_ICONS: Mutex<Cached<RuneIcons>> = Mutex::new(None);
+static SPELL_IDS: Mutex<Cached<IdKeys>> = Mutex::new(None);
 
 /// Reads a cached map if it belongs to `version`.
 fn cached_map<T>(cache: &Mutex<Cached<T>>, version: &str) -> Option<Arc<T>> {
@@ -274,6 +284,39 @@ async fn spell_keys(dir: &Path, version: &str) -> Option<Arc<ArtKeys>> {
     Some(keys)
 }
 
+/// Spell numeric id → art key, out of the same document `spell_keys`
+/// reads. Two maps rather than one because the two callers have different
+/// halves: a live scoreboard knows names, a rebuilt one knows ids.
+async fn spell_ids(dir: &Path, version: &str) -> Option<Arc<IdKeys>> {
+    if let Some(keys) = cached_map(&SPELL_IDS, version) {
+        return Some(keys);
+    }
+    let body = cached_json(
+        dir,
+        version,
+        "summoner.json",
+        format!("{CDN}/cdn/{version}/data/en_US/summoner.json"),
+    )
+    .await?;
+
+    let parsed: SpellData = serde_json::from_str(&body)
+        .map_err(|e| warn!("ddragon", "summoner.json did not parse: {e}"))
+        .ok()?;
+
+    let keys = Arc::new(id_to_key(parsed.data));
+    *SPELL_IDS.lock().unwrap() = Some((version.to_string(), Arc::clone(&keys)));
+    Some(keys)
+}
+
+/// Data Dragon writes the numeric id as a string. An entry whose `key` is
+/// not a number is dropped rather than guessed at.
+fn id_to_key(entries: HashMap<String, ChampionEntry>) -> IdKeys {
+    entries
+        .into_values()
+        .filter_map(|entry| Some((entry.key?.parse().ok()?, entry.id?)))
+        .collect()
+}
+
 /// Rune id → icon path, flattened out of the tree document.
 async fn rune_icons(dir: &Path, version: &str) -> Option<Arc<RuneIcons>> {
     if let Some(icons) = cached_map(&RUNE_ICONS, version) {
@@ -374,6 +417,18 @@ pub async fn spell_icon(dir: &Path, spell: &str) -> Option<PathBuf> {
     cached_file(dir, &version, "spell", &format!("{key}.png"), url).await
 }
 
+/// The cached icon for a summoner spell's numeric id, which is what match
+/// history reports.
+pub async fn spell_icon_by_id(dir: &Path, spell_id: i64) -> Option<PathBuf> {
+    if spell_id <= 0 {
+        return None;
+    }
+    let version = version(dir).await?;
+    let key = spell_ids(dir, &version).await?.get(&spell_id)?.clone();
+    let url = format!("{CDN}/cdn/{version}/img/spell/{key}.png");
+    cached_file(dir, &version, "spell", &format!("{key}.png"), url).await
+}
+
 /// The cached icon for a rune or rune tree id.
 ///
 /// Runes are the odd one out twice over: the icon is a *path* rather than
@@ -406,6 +461,10 @@ pub struct IconRequest {
     pub items: Vec<i64>,
     #[serde(default)]
     pub spells: Vec<String>,
+    /// The same spells as ids, for a scoreboard rebuilt from match
+    /// history — it reports ids where the live client reports names.
+    #[serde(default)]
+    pub spell_ids: Vec<i64>,
     #[serde(default)]
     pub runes: Vec<i64>,
 }
@@ -419,6 +478,7 @@ pub struct IconSet {
     pub champions: HashMap<String, String>,
     pub items: HashMap<String, String>,
     pub spells: HashMap<String, String>,
+    pub spell_ids: HashMap<String, String>,
     pub runes: HashMap<String, String>,
 }
 
@@ -445,6 +505,11 @@ pub async fn resolve_icons(dir: &Path, request: &IconRequest) -> IconSet {
     for spell in dedup(&request.spells) {
         if let Some(path) = spell_icon(dir, &spell).await {
             set.spells.insert(spell, display(path));
+        }
+    }
+    for spell in dedup(&request.spell_ids) {
+        if let Some(path) = spell_icon_by_id(dir, spell).await {
+            set.spell_ids.insert(spell.to_string(), display(path));
         }
     }
     for rune in dedup(&request.runes) {
@@ -582,6 +647,42 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rune_icon_map(trees).len(), 1);
+    }
+
+    /// Match history reports `spell1Id: 4` where the live client reports
+    /// `Flash`, so the same document is read twice — once by name and once
+    /// by id — rather than one being converted into the other.
+    #[test]
+    fn spell_ids_map_onto_the_same_key_the_names_do() {
+        let json = r#"{"data":{
+            "SummonerFlash":{"id":"SummonerFlash","key":"4","name":"Flash"},
+            "SummonerSmite":{"id":"SummonerSmite","key":"11","name":"Smite"}
+        }}"#;
+        let by_name = name_to_key(serde_json::from_str::<SpellData>(json).unwrap().data);
+        let by_id = id_to_key(serde_json::from_str::<SpellData>(json).unwrap().data);
+
+        assert_eq!(by_id.get(&4).map(String::as_str), Some("SummonerFlash"));
+        assert_eq!(by_id.get(&11).map(String::as_str), Some("SummonerSmite"));
+        // The two halves have to agree, or a rebuilt scoreboard and a live
+        // one would draw different art for the same spell.
+        assert_eq!(by_id.get(&4), by_name.get("Flash"));
+    }
+
+    /// Data Dragon writes the id as a string. Anything that is not a
+    /// number is dropped rather than guessed at.
+    #[test]
+    fn a_spell_with_an_unparseable_key_is_dropped() {
+        let parsed: SpellData = serde_json::from_str(
+            r#"{"data":{
+                "Good":{"id":"Good","key":"21","name":"Barrier"},
+                "Bad":{"id":"Bad","key":"not a number","name":"Nonsense"},
+                "None":{"id":"None","name":"Keyless"}
+            }}"#,
+        )
+        .unwrap();
+        let by_id = id_to_key(parsed.data);
+        assert_eq!(by_id.len(), 1);
+        assert_eq!(by_id.get(&21).map(String::as_str), Some("Good"));
     }
 
     /// Ten rows sharing a champion must cost one lookup, not ten.

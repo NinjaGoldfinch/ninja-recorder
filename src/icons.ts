@@ -22,6 +22,7 @@ const cache = {
   champions: new Map<string, string | null>(),
   items: new Map<number, string | null>(),
   spells: new Map<string, string | null>(),
+  spellIds: new Map<number, string | null>(),
   runes: new Map<number, string | null>(),
 };
 
@@ -37,6 +38,11 @@ export function spellIcon(name: string): string | null {
   return cache.spells.get(name) ?? null;
 }
 
+/** By id, which is what a scoreboard rebuilt from match history carries. */
+export function spellIconById(id: number): string | null {
+  return cache.spellIds.get(id) ?? null;
+}
+
 export function runeIcon(id: number): string | null {
   return cache.runes.get(id) ?? null;
 }
@@ -46,6 +52,7 @@ interface Wanted {
   champions: Set<string>;
   items: Set<number>;
   spells: Set<string>;
+  spellIds: Set<number>;
   runes: Set<number>;
 }
 
@@ -67,6 +74,7 @@ function collect(rows: RecordingRow[]): Wanted {
     champions: new Set(),
     items: new Set(),
     spells: new Set(),
+    spellIds: new Set(),
     runes: new Set(),
   };
 
@@ -79,6 +87,7 @@ function collect(rows: RecordingRow[]): Wanted {
 
     for (const item of us.items) wanted.items.add(item);
     for (const spell of us.spells) wanted.spells.add(spell);
+    for (const id of us.spell_ids ?? []) wanted.spellIds.add(id);
     if (board?.our_runes) {
       wanted.runes.add(board.our_runes.keystone_id);
       wanted.runes.add(board.our_runes.primary_tree_id);
@@ -99,21 +108,22 @@ export async function loadIcons(rows: RecordingRow[]): Promise<boolean> {
   const champions = [...wanted.champions].filter((c) => !cache.champions.has(c));
   const items = [...wanted.items].filter((i) => !cache.items.has(i));
   const spells = [...wanted.spells].filter((s) => !cache.spells.has(s));
+  const spellIds = [...wanted.spellIds].filter((s) => !cache.spellIds.has(s));
   const runes = [...wanted.runes].filter((r) => !cache.runes.has(r));
 
-  if (!champions.length && !items.length && !spells.length && !runes.length) {
+  if (!champions.length && !items.length && !spells.length && !spellIds.length && !runes.length) {
     return false;
   }
 
   let set: IconSet;
   try {
     set = await call<IconSet>("resolve_icons", {
-      request: { champions, items, spells, runes },
+      request: { champions, items, spells, spellIds, runes },
     });
   } catch {
     // Offline, or the command is unavailable outside the Tauri webview.
     // Record the misses so the same lookup is not retried on every render.
-    set = { champions: {}, items: {}, spells: {}, runes: {} };
+    set = { champions: {}, items: {}, spells: {}, spell_ids: {}, runes: {} };
   }
 
   // Everything asked for is recorded, hit or miss. A key the backend left
@@ -126,6 +136,9 @@ export async function loadIcons(rows: RecordingRow[]): Promise<boolean> {
   }
   for (const name of spells) {
     cache.spells.set(name, set.spells[name] ? assetUrl(set.spells[name]) : null);
+  }
+  for (const id of spellIds) {
+    cache.spellIds.set(id, set.spell_ids[id] ? assetUrl(set.spell_ids[id]) : null);
   }
   for (const id of runes) {
     cache.runes.set(id, set.runes[id] ? assetUrl(set.runes[id]) : null);

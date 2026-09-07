@@ -411,6 +411,17 @@ It adds no new writer. The matched game goes through `to_metadata`,
 `champion_name` and `update_match_metadata` — the same three the deferred patch
 uses, including the same "champion only when NULL" rule.
 
+**It rebuilds the scoreboard too**, for a recording that has none. The
+match-history document already carries every participant's champion id, items,
+spell ids, perks, level and minion counts, so it costs no extra request — and
+`fill_scoreboard` writes only where the column is NULL, for the same reason
+`champion` and `role` do. A scoreboard captured live is the game's own account;
+a rebuilt one is Riot's afterwards, and is missing what the live path had. The
+one visible difference is spells: match history gives ids, the live client
+gives names, and both are stored as they arrive rather than one being converted
+into the other — converting would need Data Dragon in a path that otherwise
+only talks to the League client.
+
 What it cannot do: reach further back than the client's own match history, or
 label a custom game, which never gets a match-history entry at all. Both come
 back as "matched no game", which the report says in as many words rather than

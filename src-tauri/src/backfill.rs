@@ -34,7 +34,8 @@
 //! any question they already answer.
 
 use crate::db::{Db, MatchMetadata};
-use crate::lcu::{self, PlayedGame};
+use crate::lcu::{self, LcuHttpClient, LockfileInfo, ParticipantSummary, PlayedGame};
+use crate::live_client::{Scoreboard, ScoreboardPlayer, ScoreboardRunes};
 use crate::match_summary::to_metadata;
 use crate::{info, warn};
 use serde::Serialize;
@@ -147,6 +148,9 @@ pub struct BackfillReport {
     pub ambiguous: usize,
     /// Rows no game overlapped.
     pub unmatched: usize,
+    /// Rows that gained a scoreboard they did not have — every recording
+    /// made before the live capture existed.
+    pub scoreboards: usize,
 }
 
 /// Runs one backfill pass against the running client.
@@ -213,13 +217,109 @@ pub async fn run(db: &Db) -> Result<BackfillReport, String> {
             Ok(_) => report.patched += 1,
             Err(e) => warn!("backfill", "could not patch recording {}: {e}", candidate.id),
         }
+
+        if fill_scoreboard(db, &client, &lockfile, candidate.id, game).await {
+            report.scoreboards += 1;
+        }
     }
 
     info!("backfill",
-        "{} of {} unlabelled recordings matched against {} games; {} written, {} ambiguous",
-        report.matched, report.scanned, report.games_considered, report.patched, report.ambiguous
+        "{} of {} unlabelled recordings matched against {} games; {} written, \
+         {} scoreboards rebuilt, {} ambiguous",
+        report.matched,
+        report.scanned,
+        report.games_considered,
+        report.patched,
+        report.scoreboards,
+        report.ambiguous
     );
     Ok(report)
+}
+
+/// Rebuilds a scoreboard for one recording out of the match-history
+/// document, if it has none.
+///
+/// Returns whether one was written. Every early return leaves the row as
+/// it was — a recording without a scoreboard still has its champion, KDA
+/// and result, and the row renders without one.
+async fn fill_scoreboard(
+    db: &Db,
+    client: &LcuHttpClient,
+    lockfile: &LockfileInfo,
+    recording_id: i64,
+    game: &PlayedGame,
+) -> bool {
+    if game.participants.is_empty() {
+        return false;
+    }
+
+    let mut players = Vec::with_capacity(game.participants.len());
+    for participant in &game.participants {
+        players.push(scoreboard_player(client, lockfile, participant).await);
+    }
+
+    let us = game.participants.iter().find(|p| p.is_us);
+    let scoreboard = Scoreboard {
+        our_team: us.and_then(|p| p.team.clone()),
+        our_runes: us.and_then(runes_of),
+        players,
+    };
+
+    let json = match serde_json::to_string(&scoreboard) {
+        Ok(json) => json,
+        Err(e) => {
+            warn!("backfill", "could not serialize a scoreboard for {recording_id}: {e}");
+            return false;
+        }
+    };
+
+    match db.fill_scoreboard(recording_id, &json, us.and_then(|p| p.cs)) {
+        Ok(written) => written,
+        Err(e) => {
+            warn!("backfill", "could not write a scoreboard for {recording_id}: {e}");
+            false
+        }
+    }
+}
+
+async fn scoreboard_player(
+    client: &LcuHttpClient,
+    lockfile: &LockfileInfo,
+    participant: &ParticipantSummary,
+) -> ScoreboardPlayer {
+    ScoreboardPlayer {
+        // Best effort, like everywhere else this resolves a champion: a
+        // name it cannot find costs one label, and the row draws the
+        // portrait from the id-less name it does have elsewhere.
+        champion: lcu::champion_name(client, lockfile, participant.champion_id)
+            .await
+            .unwrap_or_default(),
+        team: participant.team.clone().unwrap_or_default(),
+        is_us: participant.is_us,
+        level: participant.level,
+        kills: participant.kills,
+        deaths: participant.deaths,
+        assists: participant.assists,
+        cs: participant.cs.unwrap_or(0),
+        items: participant.items.clone(),
+        // Match history has ids where the live path had names. Both find
+        // the art; neither is converted into the other, because that would
+        // need the CDN in a path that otherwise only talks to the client.
+        spells: Vec::new(),
+        spell_ids: participant.spell_ids.clone(),
+    }
+}
+
+/// Our rune page, if match history said anything about it. A page with no
+/// keystone is the shape of a response that did not carry perks, not a
+/// game played without one.
+fn runes_of(us: &ParticipantSummary) -> Option<ScoreboardRunes> {
+    Some(ScoreboardRunes {
+        keystone_id: us.keystone_id?,
+        keystone: String::new(),
+        primary_tree_id: us.primary_tree_id.unwrap_or(0),
+        secondary_tree_id: us.secondary_tree_id.unwrap_or(0),
+    })
 }
 
 #[cfg(test)]
@@ -238,6 +338,7 @@ mod tests {
                 game_id: Some(game_id),
                 ..Default::default()
             },
+            participants: Vec::new(),
         }
     }
 
@@ -327,6 +428,7 @@ mod tests {
             started_at: None,
             duration_s: None,
             summary: MatchSummary::default(),
+            participants: Vec::new(),
         }];
         assert_eq!(
             match_recording(&recording(10 * MINUTE, Some(1800.0)), &games),

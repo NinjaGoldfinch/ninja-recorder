@@ -853,6 +853,37 @@ impl Db {
         Ok(())
     }
 
+    /// Fills in a recording's scoreboard, and nothing else.
+    ///
+    /// **Only when it has none.** A scoreboard captured live came from the
+    /// game itself; one rebuilt from match history is Riot's account of it
+    /// afterwards, and is missing what the live path had — spell names,
+    /// and the position the game assigned. The rebuild fills a gap, it
+    /// does not correct. Same rule, and the same reasoning, as `champion`
+    /// and `role`.
+    ///
+    /// `cs` moves with it and under the same condition, because they are
+    /// two views of one thing: a row whose scoreboard says 262 and whose
+    /// column says something else is a row that contradicts itself.
+    ///
+    /// Returns whether anything was written.
+    pub fn fill_scoreboard(
+        &self,
+        recording_id: i64,
+        scoreboard_json: &str,
+        cs: Option<i64>,
+    ) -> Result<bool, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let changed = conn.execute(
+            "UPDATE recordings
+                SET scoreboard_json = ?2,
+                    cs = COALESCE(cs, ?3)
+             WHERE id = ?1 AND scoreboard_json IS NULL",
+            params![recording_id, scoreboard_json, cs],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// Rebases a recording's markers and samples after `removed_s` has been
     /// cut off the front of its file, and records the new length.
     ///
