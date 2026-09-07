@@ -811,11 +811,17 @@ impl Db {
     ///
     /// Clamped at zero: a marker for an event backdated to before the cut
     /// belongs at the start of what is left, not at a negative time.
+    ///
+    /// `removed_s` is what actually came off, measured from the durations
+    /// either side — never what was asked for. A stream copy cuts on a
+    /// keyframe, so the two differ, and rebasing on the request would put
+    /// every marker out by that difference.
     pub fn apply_trim(
         &self,
         recording_id: i64,
         removed_s: f64,
         new_duration_s: f64,
+        new_size_bytes: i64,
     ) -> Result<(), DbError> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
@@ -828,9 +834,12 @@ impl Db {
                 params![recording_id, removed_s],
             )?;
         }
+        // `size_bytes` moves with the file or the library over-reports its
+        // own disk usage — and retention, which is driven by that total,
+        // would delete recordings to free space that was already freed.
         tx.execute(
-            "UPDATE recordings SET duration_s = ?2 WHERE id = ?1",
-            params![recording_id, new_duration_s],
+            "UPDATE recordings SET duration_s = ?2, size_bytes = ?3 WHERE id = ?1",
+            params![recording_id, new_duration_s, new_size_bytes],
         )?;
         tx.commit()?;
         Ok(())

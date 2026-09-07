@@ -81,6 +81,8 @@ pub struct TrimReport {
     pub removed_s: f64,
     pub duration_before_s: f64,
     pub duration_after_s: f64,
+    pub size_before_bytes: i64,
+    pub size_after_bytes: i64,
 }
 
 /// Where to cut, given where the game starts. `None` when there is nothing
@@ -225,7 +227,12 @@ pub fn trim_recording(db: &Db, ffmpeg: &Path, recording_id: i64) -> Result<TrimR
         return Err(format!("could not put the trimmed file in place: {e}"));
     }
 
-    if let Err(e) = db.apply_trim(recording_id, removed, after) {
+    // Read after the rename, so it is the size of what is actually there.
+    // Falling back to the row's old size would tell the library the file is
+    // bigger than it is, which is the same lie in a quieter form.
+    let new_size = std::fs::metadata(&video).map(|m| m.len() as i64).unwrap_or(row.size_bytes);
+
+    if let Err(e) = db.apply_trim(recording_id, removed, after, new_size) {
         // The file is already trimmed and the database is not, which would
         // leave every marker out by the length of a loading screen. Put the
         // original back rather than leave that behind.
@@ -247,6 +254,8 @@ pub fn trim_recording(db: &Db, ffmpeg: &Path, recording_id: i64) -> Result<TrimR
         removed_s: removed,
         duration_before_s: before,
         duration_after_s: after,
+        size_before_bytes: row.size_bytes,
+        size_after_bytes: new_size,
     })
 }
 

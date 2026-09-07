@@ -483,6 +483,44 @@ pub fn run() {
             // from `run()` for the same reason the notifier above is —
             // this is where the async runtime is allowed to be reachable
             // from.
+            // The loading screen comes off the file itself, on a blocking
+            // thread rather than inline: it is a stream copy of something
+            // that can be gigabytes, and `stop_recording` calls this under
+            // the recorder lock — where holding on would block the header's
+            // 1 Hz `is_recording` poll and the start of the next game.
+            //
+            // A build with no ffmpeg installs nothing and keeps the whole
+            // file, which is what every recording did before this existed.
+            if let Some(ffmpeg) = ctx.ffmpeg.clone() {
+                let trim_db = Arc::clone(&db);
+                let trim_handle = app.handle().clone();
+                supervisor.set_trim_requester(Box::new(move |recording_id| {
+                    let db = Arc::clone(&trim_db);
+                    let ffmpeg = ffmpeg.clone();
+                    let handle = trim_handle.clone();
+                    tauri::async_runtime::spawn_blocking(move || {
+                        use tauri::Emitter;
+                        match trim::trim_recording(&db, &ffmpeg, recording_id) {
+                            Ok(report) => {
+                                info!("trim", "cut {:.1}s off recording {recording_id}",
+                                    report.removed_s
+                                );
+                                // The card's length and size both changed.
+                                if let Err(e) = handle.emit(LIBRARY_CHANGED_EVENT, ()) {
+                                    warn!("trim", "failed to emit library-changed: {e}");
+                                }
+                            }
+                            // Includes the ordinary "nothing to cut", which
+                            // is what a reconnect and a client that reported
+                            // the game late both look like.
+                            Err(e) => {
+                                debug!("trim", "no trim for recording {recording_id}: {e}")
+                            }
+                        }
+                    });
+                }));
+            }
+
             let summary_db = Arc::clone(&db);
             let summary_handle = app.handle().clone();
             supervisor.set_summary_fetcher(Box::new(move |request| {
@@ -513,7 +551,6 @@ pub fn run() {
                 app.path().app_data_dir()?.join("ddragon"),
                 ffmpeg_path(app.handle()),
             );
-            ctx.supervisor.set_ffmpeg(ctx.ffmpeg.clone());
             ctx.set_autostart(Box::new(PluginAutostart(app.handle().clone())));
             let notify_handle = app.handle().clone();
             ctx.set_library_changed_notifier(Box::new(move || {
