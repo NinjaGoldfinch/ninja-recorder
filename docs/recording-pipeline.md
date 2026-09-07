@@ -532,6 +532,26 @@ optional and an unrecognised response degrades to "this source knew less"
 rather than failing. `dev_patch_match_summary` drives the whole path against
 a live client without playing a game.
 
+### The scoreboard is captured, not fetched
+
+All ten champions, their KDA and CS, the items and spells they finished with,
+and our own rune page come from the Live Client Data poll — the same 1 Hz
+stream the markers and the advantage curve already ride. Nothing extra is
+requested, and the LCU is not involved: it is written at finalize from what
+the game itself was saying while it was running.
+
+**Last good, not last.** The poll carrying `GameEnd` is often the last one that
+succeeds; the ones after it, during the end-of-game screen or as the process
+exits, come back with no `allPlayers` at all. So a snapshot with no players
+yields no scoreboard and the session keeps whatever it captured before —
+overwriting would trade a real scoreboard for the absence of one. Same
+asymmetry, and the same reason, as `LiveSummary::absorb`.
+
+**Which of the ten is us is decided in Rust**, by the same `find_us` the
+advantage curve uses, and stored as a flag on the player. That question already
+had exactly one answer and must not grow a second one in the frontend out of
+champion names.
+
 ## 4a. Labelling what predates all of this
 
 Everything above only labels recordings made *after* it shipped. Older rows —

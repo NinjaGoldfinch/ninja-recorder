@@ -176,6 +176,13 @@ pub fn dev_seed_library(
                     "samples": plan.duration_s as i64,
                 }))
                 .ok(),
+                // Seeded rows get a scoreboard for the same reason they get
+                // diagnostics: the thing that renders it needs something to
+                // render before anyone has played a game. Ten champions,
+                // our own marked, with the seeded champion in our slot so
+                // the row and the scoreboard agree.
+                scoreboard_json: serde_json::to_string(&seeded_scoreboard(&plan)).ok(),
+                cs: Some(plan.duration_s as i64 / 4),
             })
             .map_err(|e| e.to_string())?;
 
@@ -296,6 +303,66 @@ struct RecordingPlan {
     win: Option<bool>,
     kda: Option<(i64, i64, i64)>,
     pinned: bool,
+}
+
+/// A ten-player scoreboard for a seeded row.
+///
+/// Plausible rather than realistic: the point is that whatever renders a
+/// scoreboard has ten champions, two teams, items and spells to draw
+/// before anyone has played a game. Our own slot carries the plan's
+/// champion and KDA, so the row and the scoreboard agree with each other —
+/// a seeded library where they disagreed would look like a bug in the
+/// thing being tested.
+///
+/// A plan with no champion is one we were never matched in, and gets a
+/// scoreboard with nobody marked as us, which is the other case the
+/// renderer has to handle.
+fn seeded_scoreboard(plan: &RecordingPlan) -> crate::live_client::Scoreboard {
+    use crate::live_client::{Scoreboard, ScoreboardPlayer, ScoreboardRunes};
+
+    const CAST: [&str; 10] = [
+        "Ahri", "Garen", "Blitzcrank", "Jinx", "Thresh", "Zed", "Lux", "Nautilus", "Akali",
+        "Pantheon",
+    ];
+    const ITEMS: [i64; 6] = [3089, 3157, 3020, 3135, 3116, 3363];
+    const SPELLS: [&str; 2] = ["Flash", "Ignite"];
+
+    let ours = plan.champion.clone();
+    let players = CAST
+        .iter()
+        .enumerate()
+        .map(|(i, champion)| {
+            let is_us = i == 0 && ours.is_some();
+            let (k, d, a) = plan.kda.unwrap_or((3, 4, 7));
+            ScoreboardPlayer {
+                champion: if is_us {
+                    ours.clone().unwrap_or_else(|| (*champion).to_string())
+                } else {
+                    (*champion).to_string()
+                },
+                team: if i < 5 { "ORDER" } else { "CHAOS" }.to_string(),
+                is_us,
+                level: 11 + (i as i64 % 5),
+                kills: if is_us { k } else { (i as i64 * 2) % 9 },
+                deaths: if is_us { d } else { (i as i64 + 1) % 7 },
+                assists: if is_us { a } else { (i as i64 * 3) % 11 },
+                cs: 120 + (i as i64 * 17),
+                items: ITEMS[..(4 + i % 3)].to_vec(),
+                spells: SPELLS.iter().map(|s| (*s).to_string()).collect(),
+            }
+        })
+        .collect();
+
+    Scoreboard {
+        players,
+        our_team: ours.as_ref().map(|_| "ORDER".to_string()),
+        our_runes: ours.as_ref().map(|_| ScoreboardRunes {
+            keystone_id: 8112,
+            keystone: "Electrocute".to_string(),
+            primary_tree_id: 8100,
+            secondary_tree_id: 8300,
+        }),
+    }
 }
 
 /// Cycles the seeded rows through the real presets so the library contains

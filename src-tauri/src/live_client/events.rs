@@ -40,6 +40,35 @@ pub struct ActivePlayer {
     pub current_gold: f64,
     #[serde(default)]
     pub level: i64,
+    /// Our own runes. Only the active player gets these in full — the
+    /// other nine carry a reduced `runes` object — which is why the
+    /// scoreboard records runes for us and not for them.
+    #[serde(rename = "fullRunes", default)]
+    pub full_runes: FullRunes,
+}
+
+/// The runes worth showing on a row: the keystone, and the two trees it
+/// sits between. `generalRunes` and `statRunes` are in the response and
+/// are left out — nine more icons on a row nobody is reading at that size.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct FullRunes {
+    #[serde(default)]
+    pub keystone: Rune,
+    #[serde(rename = "primaryRuneTree", default)]
+    pub primary_tree: Rune,
+    #[serde(rename = "secondaryRuneTree", default)]
+    pub secondary_tree: Rune,
+}
+
+/// A rune as the live API describes it. The `id` is what Data Dragon's
+/// `runesReforged.json` files the icon under; the name is kept for the
+/// case where the id resolves to nothing and the row needs words.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Rune {
+    #[serde(default)]
+    pub id: i64,
+    #[serde(rename = "displayName", default)]
+    pub display_name: String,
 }
 
 /// One entry from `allPlayers`. Every field is `default` because the
@@ -47,10 +76,10 @@ pub struct ActivePlayer {
 /// that drops a field for enemies must degrade to a missing contribution
 /// rather than failing the whole poll (and with it, marker extraction).
 ///
-/// `items` used to be modelled here, to price each team's holdings into a
-/// gold estimate. That estimate is gone (`lcu::timeline`), so the field is
-/// gone with it rather than being carried unread — the next thing to want
-/// items will want `itemID`, which this never had.
+/// `items` came back for the scoreboard, and this time it carries
+/// `itemID` — the thing Data Dragon files art under. It was modelled once
+/// before with only `price` and `count`, for a gold estimate that turned
+/// out to be unfixable (`lcu::timeline`), and removed with it.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct PlayerEntry {
     #[serde(rename = "summonerName", default)]
@@ -66,7 +95,44 @@ pub struct PlayerEntry {
     #[serde(default)]
     pub team: String,
     #[serde(default)]
+    pub level: i64,
+    #[serde(default)]
+    pub items: Vec<PlayerItem>,
+    #[serde(rename = "summonerSpells", default)]
+    pub summoner_spells: SummonerSpells,
+    #[serde(default)]
     pub scores: PlayerScores,
+}
+
+/// One inventory slot. Only the id and the slot are read: the id is what
+/// art is filed under, and the slot is what puts the trinket at the end
+/// rather than wherever the response happened to list it.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PlayerItem {
+    #[serde(rename = "itemID", default)]
+    pub item_id: i64,
+    #[serde(default)]
+    pub slot: i64,
+}
+
+/// The two spells, as the response nests them.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SummonerSpells {
+    #[serde(rename = "summonerSpellOne", default)]
+    pub one: SummonerSpell,
+    #[serde(rename = "summonerSpellTwo", default)]
+    pub two: SummonerSpell,
+}
+
+/// A spell as the live API describes it. `displayName` is the human name
+/// ("Flash"); Data Dragon files the art under a key ("SummonerFlash"), so
+/// something has to map between them the way champion art already does.
+/// The name is what gets stored, because it is the half that survives a
+/// response shape changing.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SummonerSpell {
+    #[serde(rename = "displayName", default)]
+    pub display_name: String,
 }
 
 impl PlayerEntry {
@@ -80,11 +146,11 @@ impl PlayerEntry {
     }
 }
 
-/// `kills` and `creep_score` feed the advantage curve; `deaths` and
-/// `assists` feed the library card's KDA (`self_summary`). `wardScore` is
-/// in the real response too and is still left out — modelling fields
-/// nothing reads is what the original `allPlayers` comment was avoiding,
-/// and what removing `items` restored.
+/// `kills` and `creep_score` feed the advantage curve and the scoreboard;
+/// `deaths` and `assists` feed the library row's KDA (`self_summary`).
+/// `wardScore` is in the real response too and is still left out — nothing
+/// displays it yet, and modelling fields nothing reads is what the
+/// original `allPlayers` comment was avoiding.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct PlayerScores {
     #[serde(default)]
@@ -375,6 +441,141 @@ impl LiveSummary {
             self.win = newer.win;
         }
     }
+}
+
+/// The end-of-game scoreboard, as the library row wants to draw it.
+///
+/// Serialized whole into `recordings.scoreboard_json` rather than spread
+/// across columns: nothing filters or sorts on the other nine players, it
+/// is always read in one piece, and a column is disposed of with its row
+/// so retention needs no cascade. Same reasoning as `audio_tracks_json`
+/// and `diagnostics_json` (docs/data-model.md).
+///
+/// Our own CS is the exception and gets a real column, because it is shown
+/// on the row and is worth sorting by.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Scoreboard {
+    /// Both teams, in the order the response listed them.
+    pub players: Vec<ScoreboardPlayer>,
+    /// `"ORDER"` or `"CHAOS"`, or absent when we could not be matched —
+    /// in which case the row cannot say which half is ours and shows
+    /// neither.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub our_team: Option<String>,
+    /// Ours only: the live API gives the full rune page for the active
+    /// player and a reduced one for everybody else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub our_runes: Option<ScoreboardRunes>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ScoreboardPlayer {
+    pub champion: String,
+    /// `"ORDER"` or `"CHAOS"`.
+    pub team: String,
+    /// True for the row's owner, so the frontend does not have to match
+    /// names a second time — that question has one answer here (`find_us`)
+    /// and it should not grow a second one in TypeScript.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_us: bool,
+    pub level: i64,
+    pub kills: i64,
+    pub deaths: i64,
+    pub assists: i64,
+    pub cs: i64,
+    /// Item ids in slot order, trinket included. Empty slots are dropped
+    /// rather than zero-filled: a zero is an item id that does not exist,
+    /// and the row draws as many boxes as it wants regardless.
+    pub items: Vec<i64>,
+    /// Spell display names — `["Flash", "Smite"]`. Names rather than the
+    /// keys Data Dragon files art under, because the name is the half that
+    /// survives a response shape changing; mapping one to the other is the
+    /// art layer's job, as it already is for champions.
+    pub spells: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ScoreboardRunes {
+    pub keystone_id: i64,
+    pub keystone: String,
+    pub primary_tree_id: i64,
+    pub secondary_tree_id: i64,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// Reduces one snapshot to the scoreboard the row draws.
+///
+/// `None` when the response carried no players at all, which is what a
+/// poll during the loading screen looks like — an empty scoreboard is not
+/// the end-of-game state, it is the absence of one, and storing it would
+/// overwrite a real one captured earlier.
+pub fn scoreboard(snapshot: &AllGameData) -> Option<Scoreboard> {
+    if snapshot.all_players.is_empty() {
+        return None;
+    }
+
+    let us = find_us(snapshot);
+    let our_names: Vec<&str> = us.map(|p| p.candidate_names()).unwrap_or_default();
+    let is_us = |player: &PlayerEntry| {
+        !our_names.is_empty()
+            && player
+                .candidate_names()
+                .iter()
+                .any(|n| our_names.iter().any(|ours| names_match(n, ours)))
+    };
+
+    Some(Scoreboard {
+        players: snapshot
+            .all_players
+            .iter()
+            .map(|player| {
+                let mut items: Vec<(i64, i64)> = player
+                    .items
+                    .iter()
+                    .filter(|item| item.item_id > 0)
+                    .map(|item| (item.slot, item.item_id))
+                    .collect();
+                // Slot order, because the response's order is not promised
+                // to be it and a build that reshuffles between polls would
+                // make the row flicker.
+                items.sort_by_key(|(slot, _)| *slot);
+
+                ScoreboardPlayer {
+                    champion: player.champion_name.clone(),
+                    team: player.team.clone(),
+                    is_us: is_us(player),
+                    level: player.level,
+                    kills: player.scores.kills,
+                    deaths: player.scores.deaths,
+                    assists: player.scores.assists,
+                    cs: player.scores.creep_score,
+                    items: items.into_iter().map(|(_, id)| id).collect(),
+                    spells: [
+                        player.summoner_spells.one.display_name.clone(),
+                        player.summoner_spells.two.display_name.clone(),
+                    ]
+                    .into_iter()
+                    .filter(|name| !name.is_empty())
+                    .collect(),
+                }
+            })
+            .collect(),
+        our_team: us.map(|p| p.team.clone()).filter(|t| !t.is_empty()),
+        our_runes: snapshot.active_player.as_ref().and_then(|active| {
+            let runes = &active.full_runes;
+            // A rune page with no keystone id is the loading screen's
+            // empty shape, not a page worth storing.
+            (runes.keystone.id > 0).then(|| ScoreboardRunes {
+                keystone_id: runes.keystone.id,
+                keystone: runes.keystone.display_name.clone(),
+                primary_tree_id: runes.primary_tree.id,
+                secondary_tree_id: runes.secondary_tree.id,
+            })
+        }),
+    })
 }
 
 /// Extracts the recording player's own champion, KDA, game mode and (once
@@ -1304,12 +1505,75 @@ mod tests {
             riot_id_game_name: "EnemyA".to_string(),
             current_gold: 450.0,
             level: 11,
+            ..Default::default()
         });
 
         let diff = team_diff(&snapshot).expect("EnemyA is in allPlayers");
         assert_eq!(diff.our_team, "CHAOS");
         assert_eq!(diff.kill_diff, -2);
         assert_eq!(diff.cs_diff, -45);
+    }
+
+    // --- scoreboard -------------------------------------------------------
+
+    #[test]
+    fn scoreboard_carries_every_player_with_their_items() {
+        let board = scoreboard(&fixture()).expect("the fixture has players");
+        assert_eq!(board.players.len(), 4);
+        assert_eq!(board.our_team.as_deref(), Some("ORDER"));
+
+        let ahri = &board.players[0];
+        assert_eq!(ahri.champion, "Ahri");
+        assert_eq!(ahri.team, "ORDER");
+        assert_eq!(ahri.cs, 150);
+        // Ids, not names: Data Dragon files item art under the id.
+        assert_eq!(ahri.items, vec![3089, 3157, 2003]);
+    }
+
+    /// The row has to know which of the ten is the person watching, and
+    /// that question already has an answer here (`find_us`). Marking it in
+    /// the stored scoreboard is what stops the frontend growing a second
+    /// one out of champion names.
+    #[test]
+    fn exactly_one_player_is_marked_as_us() {
+        let board = scoreboard(&fixture()).unwrap();
+        let ours: Vec<&ScoreboardPlayer> = board.players.iter().filter(|p| p.is_us).collect();
+        assert_eq!(ours.len(), 1);
+        assert_eq!(ours[0].champion, "Ahri");
+    }
+
+    /// Same refusal as `team_diff`: a snapshot we cannot place ourselves in
+    /// still describes the game, but nothing in it may claim to be us.
+    #[test]
+    fn nobody_is_us_when_we_are_not_in_all_players() {
+        let mut snapshot = fixture();
+        snapshot.active_player = Some(ActivePlayer {
+            riot_id_game_name: "SomeoneElse".to_string(),
+            ..Default::default()
+        });
+        let board = scoreboard(&snapshot).unwrap();
+        assert!(board.players.iter().all(|p| !p.is_us));
+        assert_eq!(board.our_team, None);
+    }
+
+    /// A poll during the loading screen has no player list. Storing that
+    /// would trade a real scoreboard captured earlier for the absence of
+    /// one — see `RecordingSession::scoreboard`.
+    #[test]
+    fn a_snapshot_with_no_players_yields_no_scoreboard() {
+        let mut snapshot = fixture();
+        snapshot.all_players.clear();
+        assert!(scoreboard(&snapshot).is_none());
+    }
+
+    /// The trimmed fixture carries no `summonerSpells` and no `fullRunes`,
+    /// which is also what an older client that stops sending them looks
+    /// like. Neither may fail the whole scoreboard.
+    #[test]
+    fn missing_spells_and_runes_are_absent_rather_than_fatal() {
+        let board = scoreboard(&fixture()).unwrap();
+        assert!(board.players.iter().all(|p| p.spells.is_empty()));
+        assert_eq!(board.our_runes, None);
     }
 
     #[test]

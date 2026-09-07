@@ -226,6 +226,8 @@ mod tests {
             audio_tracks_json: None,
             game_mode: None,
             diagnostics_json: None,
+            scoreboard_json: None,
+            cs: None,
         }
     }
 
