@@ -141,7 +141,7 @@ flowchart TB
     DEDUP --> CL{"classify_event<br/><small>are we named in it?</small>"}
     CL -->|"no"| DROP["dropped<br/><small>never becomes a marker</small>"]
     CL -->|"killer / victim / assister"| K["kill · death · assist"]
-    CL -->|"killer / assister"| O["dragon · baron · herald<br/>turret · inhibitor"]
+    CL -->|"killer / assister"| O["dragon · baron · herald · voidgrubs<br/>turret · inhibitor"]
     CL -->|"acer / recipient"| M["ace · multikill · first_blood"]
     K --> AL
     O --> AL
@@ -170,9 +170,9 @@ result of most games. A value once known is therefore never overwritten
 with `None`.
 
 **Marker kinds** (`MarkerKind::as_str`, matching `markers.kind` in SQLite):
-`kill`, `death`, `assist`, `dragon`, `baron`, `herald`, `turret`,
-`inhibitor`, `ace`, `multikill`, `first_blood`. `custom` exists in the
-schema for hand-added markers.
+`kill`, `death`, `assist`, `dragon`, `baron`, `herald`, `voidgrubs`,
+`turret`, `inhibitor`, `ace`, `multikill`, `first_blood`. `custom` exists
+in the schema for hand-added markers.
 
 ### What ends a recording, and what must not
 

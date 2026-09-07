@@ -484,11 +484,14 @@ fn plan_markers(spec: &SeedSpec, rng: &mut Rng, duration_s: f64) -> Vec<db::NewM
         // timestamps: teamfight pile-ups are what the timeline's pixel
         // clustering exists for.
         let t = rng.range_f64(30.0, (duration_s - 10.0).max(60.0));
-        // Exclusive of the upper bound, so this yields 0..=11 and the
-        // catch-all arm is the twelfth. It read `(0, 9)` before, which
+        // Exclusive of the upper bound, so this yields 0..=12 and the
+        // catch-all arm is the thirteenth. It read `(0, 9)` before, which
         // stopped at 8 and left `_ => ace` unreachable — no seeded library
-        // has ever contained an ace marker.
-        let marker = match rng.range_usize(0, 12) {
+        // has ever contained an ace marker. Raise this with every arm
+        // added, and keep the catch-all a single value: widening it is the
+        // same bug wearing the other hat, silently doubling one kind's
+        // share of every seeded library.
+        let marker = match rng.range_usize(0, 13) {
             0..=2 => mk("kill", t, serde_json::json!({ "victim": rng.pick(ENEMIES) })),
             3..=4 => mk("death", t, serde_json::json!({ "killer": rng.pick(ENEMIES) })),
             5 => mk(
@@ -524,6 +527,11 @@ fn plan_markers(spec: &SeedSpec, rng: &mut Rng, duration_s: f64) -> Vec<db::NewM
                 // 2..=5 covers every named streak, so the label table is
                 // exercised rather than only its numeric fallback.
                 serde_json::json!({ "kill_streak": rng.range_i64(2, 6) }),
+            ),
+            11 => mk(
+                "voidgrubs",
+                t,
+                serde_json::json!({ "killer": rng.pick(CHAMPIONS), "stolen": rng.next_bool() }),
             ),
             _ => mk(
                 "ace",
@@ -734,7 +742,7 @@ mod tests {
                 "assist" => &["victim", "killer"],
                 "dragon" => &["killer", "dragon_type"],
                 "turret" => &["killer", "turret"],
-                "baron" | "herald" => &["killer"],
+                "baron" | "herald" | "voidgrubs" => &["killer"],
                 "inhibitor" => &["killer", "inhibitor"],
                 "ace" => &["acer", "acing_team"],
                 // `kill_streak` is a number, not a string, so it has no
