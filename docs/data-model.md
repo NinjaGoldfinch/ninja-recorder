@@ -182,6 +182,14 @@ Zero rows changed is a no-op, not an error: retention runs during the same
 finalize, and the user can delete a card at any point, so the row can
 legitimately be gone by the time the patch lands.
 
+**The backfill is the third writer of these columns**, and it goes through the
+same `UPDATE` rather than a path of its own. It exists for the rows that
+predate the whole pipeline, which have no `game_id` to ask about — a game id is
+captured during the game — so it matches on the clock instead and refuses to
+write anything when more than one game overlaps a recording. See
+[DEVELOPMENT.md §4.2](../DEVELOPMENT.md) and
+[recording-pipeline.md §4a](recording-pipeline.md).
+
 ### What lives in `settings_kv`
 
 Every key, and which side owns the default. There is no schema and no

@@ -532,7 +532,45 @@ optional and an unrecognised response degrades to "this source knew less"
 rather than failing. `dev_patch_match_summary` drives the whole path against
 a live client without playing a game.
 
-Rows that predate all of this keep their NULLs; sweeping them up is #56.
+## 4a. Labelling what predates all of this
+
+Everything above only labels recordings made *after* it shipped. Older rows —
+and anything `reconcile` imported from a folder the user pointed at — have no
+`game_id`, because a finalize captures one *during* the game and these rows
+never had one.
+
+`backfill::run` is the manual pass that fixes them, triggered from settings and
+never on startup: it is a bulk read against the user's client and the moment to
+do that is theirs. One request for the match history and one for the summoner
+cover the whole run, because the list response carries entire game documents —
+forty unlabelled recordings cost two requests, not forty-two.
+
+The only handle left is the clock, so `match_recording` compares windows: the
+recording ran from some instant for some length, and so did a game. A game
+counts when it overlaps by at least half of the shorter of the two windows,
+which is loose enough for a recording that brackets the loading screen and
+tight enough that consecutive games in one session do not brush each other.
+
+```mermaid
+flowchart TD
+    START["rows WHERE win IS NULL<br/>OR champion IS NULL"] --> EACH[for each row]
+    EACH --> OVER{"games overlapping<br/>≥50% of the shorter window"}
+    OVER -->|none| SKIP["unmatched<br/><small>older than the client's history,<br/>or a custom, or not a game</small>"]
+    OVER -->|exactly one| PATCH["update_match_metadata<br/><small>same UPDATE the deferred patch uses</small>"]
+    OVER -->|more than one| REFUSE["ambiguous — write nothing"]
+    style REFUSE fill:#ffebee,stroke:#c62828
+    style PATCH fill:#e8f5e9,stroke:#2e7d32
+```
+
+**More than one match is refused, not resolved.** A card labelled with the
+wrong game is worse than one labelled `—`: the value of this library is that
+what it says about a VOD is true, and a wrong label is invisible, because
+nobody re-checks a row that already looks plausible.
+
+The report counts every outcome rather than only the successes. "Nothing to
+fill in" and "nothing could be matched" look identical otherwise, and they mean
+opposite things — the second says the recordings are older than the client's
+own history, and re-running will never help.
 
 ## 5. Where recording can refuse to start
 

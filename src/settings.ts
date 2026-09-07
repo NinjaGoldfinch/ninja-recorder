@@ -18,6 +18,7 @@ import type {
   AudioPreset,
   AudioPresetKey,
   AutostartStatus,
+  BackfillReport,
   EnforcementReport,
   RetentionPolicy,
 } from "./types";
@@ -48,6 +49,8 @@ interface Els {
   report: HTMLElement;
   path: HTMLElement;
   openFolder: HTMLButtonElement;
+  backfill: HTMLButtonElement;
+  backfillReport: HTMLElement;
   version: HTMLElement;
 }
 
@@ -80,6 +83,8 @@ export function initSettings() {
     report: el("#retention-report"),
     path: el("#recordings-path"),
     openFolder: el<HTMLButtonElement>("#open-folder-btn"),
+    backfill: el<HTMLButtonElement>("#backfill-btn"),
+    backfillReport: el("#backfill-report"),
     version: el("#about-version"),
   };
 
@@ -158,6 +163,7 @@ export function initSettings() {
   els.form.addEventListener("submit", saveRetentionPolicy);
 
   els.openFolder.addEventListener("click", openFolder);
+  els.backfill.addEventListener("click", () => void runBackfill());
 
   defaultAutostartHint = els.autostartHint.textContent ?? "";
 
@@ -356,6 +362,61 @@ async function loadRecordingsDir() {
   } catch (err) {
     els.path.textContent = `Unavailable: ${err}`;
   }
+}
+
+/**
+ * Reads the client's match history and labels whatever it can. Disabled
+ * while it runs: it is one request for the history plus one champion
+ * lookup, but it walks every unlabelled row and a second click would ask
+ * the same questions again to no effect.
+ */
+async function runBackfill() {
+  els.backfill.disabled = true;
+  els.backfillReport.hidden = true;
+  try {
+    const report = await call<BackfillReport>("backfill_match_metadata");
+    els.backfillReport.textContent = backfillSummary(report);
+    els.backfillReport.hidden = false;
+    if (report.patched > 0) await Promise.all([refreshLibrary(), refreshDiskUsage()]);
+  } catch (err) {
+    toast(`Couldn't fill in match data: ${err}`, "error");
+  } finally {
+    els.backfill.disabled = false;
+  }
+}
+
+/**
+ * Says what happened to every row, not just the ones that worked.
+ *
+ * "Nothing to fill in" and "none of them matched" look identical if only
+ * the successes are reported, and they call for opposite reactions — the
+ * second one means the recordings are older than the client's history and
+ * no amount of re-running will help. Ambiguous rows get their own sentence
+ * because refusing to guess is a decision, not a failure.
+ */
+function backfillSummary(report: BackfillReport): string {
+  if (report.scanned === 0) return "Nothing to fill in — every recording already has its match data.";
+
+  const parts = [
+    `Checked ${report.scanned} recording${report.scanned === 1 ? "" : "s"} against ` +
+      `${report.games_considered} game${report.games_considered === 1 ? "" : "s"} of match history.`,
+  ];
+  parts.push(
+    report.patched > 0
+      ? `Filled in ${report.patched}.`
+      : "Nothing could be filled in.",
+  );
+  if (report.ambiguous > 0) {
+    parts.push(
+      `${report.ambiguous} overlapped more than one game and were left alone rather than guessed at.`,
+    );
+  }
+  if (report.unmatched > 0) {
+    parts.push(
+      `${report.unmatched} matched no game — they are older than your client's history, or were customs.`,
+    );
+  }
+  return parts.join(" ");
 }
 
 async function openFolder() {

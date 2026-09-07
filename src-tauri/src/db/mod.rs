@@ -827,6 +827,30 @@ impl Db {
         .map_err(DbError::from)
     }
 
+    /// Recordings with nothing the LCU could have told us, newest first.
+    ///
+    /// `win IS NULL OR champion IS NULL` rather than a single column: a row
+    /// can have one and not the other — Live Client Data writes the
+    /// champion the moment it sees a game and the outcome only at the end,
+    /// so a poller that came up late or a crash mid-game leaves exactly
+    /// that shape. Either gap is worth a backfill pass.
+    pub fn recordings_missing_metadata(&self) -> Result<Vec<crate::backfill::Candidate>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, started_at, duration_s FROM recordings
+             WHERE win IS NULL OR champion IS NULL
+             ORDER BY started_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(crate::backfill::Candidate {
+                id: row.get(0)?,
+                started_at: row.get(1)?,
+                duration_s: row.get(2)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+    }
+
     pub fn get_recording(&self, id: i64) -> Result<Option<RecordingRow>, DbError> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
