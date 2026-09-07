@@ -443,6 +443,14 @@ export const COMMANDS: CommandSpec[] = [
     ],
   },
   {
+    name: "champion_icon",
+    group: "Library",
+    dev: false,
+    description:
+      "The cached Data Dragon portrait for a champion display name, fetched on first use. Returns a path for convertFileSrc, or null for anything that failed — offline, unknown champion, unwritable cache.",
+    args: [{ name: "champion", kind: "string", default: "Wukong" }],
+  },
+  {
     name: "dev_lcu_get",
     group: "Dev · Simulate",
     dev: true,

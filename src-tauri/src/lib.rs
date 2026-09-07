@@ -1,6 +1,7 @@
 mod audio_tracks;
 mod core;
 mod db;
+mod ddragon;
 #[cfg(feature = "devtools")]
 mod dev;
 mod fixtures;
@@ -506,6 +507,7 @@ pub fn run() {
                 supervisor,
                 db,
                 dir,
+                app.path().app_data_dir()?.join("ddragon"),
                 ffmpeg_path(app.handle()),
             );
             ctx.set_autostart(Box::new(PluginAutostart(app.handle().clone())));

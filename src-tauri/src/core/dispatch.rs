@@ -22,8 +22,9 @@ use serde_json::Value;
 /// Expands one table row into its `match` arm.
 ///
 /// The leading token picks the shape, because the commands are not uniform:
-/// most take `&Ctx` and return `Result`, two return a plain value, and two
-/// take no context at all (one of those is the only async command).
+/// most take `&Ctx` and return `Result`, two return a plain value, two take
+/// no context at all, and two are async — one of those with a context and
+/// one without.
 macro_rules! invoke_one {
     (ctx_result $name:ident, $ctx:expr, $a:expr, $($arg:ident,)*) => {
         serde_json::to_value(super::$name($ctx, $($a.$arg,)*)?).map_err(|e| e.to_string())
@@ -36,6 +37,9 @@ macro_rules! invoke_one {
     };
     (bare_async $name:ident, $ctx:expr, $a:expr,) => {
         serde_json::to_value(super::$name().await).map_err(|e| e.to_string())
+    };
+    (ctx_async $name:ident, $ctx:expr, $a:expr, $($arg:ident,)*) => {
+        serde_json::to_value(super::$name($ctx, $($a.$arg,)*).await?).map_err(|e| e.to_string())
     };
 }
 
@@ -54,10 +58,14 @@ macro_rules! invoke_one_blocking {
     (bare_async $name:ident, $ctx:expr, $a:expr,) => {
         Err(format!("{} is async and must go through dispatch()", stringify!($name)))
     };
+    (ctx_async $name:ident, $ctx:expr, $a:expr, $($arg:ident,)*) => {
+        Err(format!("{} is async and must go through dispatch()", stringify!($name)))
+    };
 }
 
 macro_rules! is_async_arm {
     (bare_async) => { true };
+    (ctx_async) => { true };
     ($other:ident) => { false };
 }
 
@@ -178,6 +186,7 @@ dispatch_table! {
     bare_result list_audio_inputs();
     ctx_result  extract_audio_track(recording_path: String, track_index: usize);
     bare_async  lcu_status();
+    ctx_async   champion_icon(champion: String);
     ctx_plain   game_state_status();
 }
 
@@ -201,7 +210,7 @@ mod tests {
         ));
         let supervisor =
             state_machine::Supervisor::new(Arc::clone(&recorder), dir.clone(), Arc::clone(&db));
-        Ctx::new(recorder, supervisor, db, dir, None)
+        Ctx::new(recorder, supervisor, db, dir.clone(), dir.join("ddragon"), None)
     }
 
     /// A representative argument payload per command, in the **camelCase the
@@ -223,6 +232,10 @@ mod tests {
             // Internally tagged on `preset`, so the value is an object.
             "set_audio_preset" => json!({ "preset": { "preset": "game" } }),
             "extract_audio_track" => json!({ "recordingPath": "/tmp/nope.mp4", "trackIndex": 1 }),
+            // Blank on purpose: `champion_icon` answers a blank name
+            // without a request, so this exercises the argument mapping
+            // without the suite reaching a CDN.
+            "champion_icon" => json!({ "champion": "" }),
             _ => json!({}),
         }
     }

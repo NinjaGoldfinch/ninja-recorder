@@ -78,6 +78,7 @@ flowchart TB
 | `recorder/mod.rs` | The `Recorder` trait and its config/error types | `Recorder`, `RecordConfig` |
 | `recorder/libobs/` | Windows capture backend (WGC + hardware encode) | `LibObsRecorder` |
 | `recorder/stub.rs` | Dev/macOS backend that copies a fixture MP4 | `StubRecorder` |
+| `ddragon.rs` | Champion art from Data Dragon, fetched on first use and cached on disk | `champion_icon` |
 | `db/mod.rs` | Schema, migrations, every query | `Db` |
 | `db/reconcile.rs` | Reconciling DB rows against files on disk | `reconcile` |
 | `probe.rs` | Reading a container's duration back out with ffmpeg, for files `reconcile` imported | `duration_s` |
