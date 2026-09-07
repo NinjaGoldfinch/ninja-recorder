@@ -800,11 +800,19 @@ pub struct Marker {
 }
 
 /// Classifies one event into a marker, or `None` if it's not a kind we
-/// track (`GameStart`, `MinionsSpawning`, etc.). Only `ChampionKill` is
-/// filtered to events involving us (kill/death/assist) — every other kind
-/// is recorded regardless of which team it belongs to, since seeing what
-/// the *enemy* team did (e.g. they took Baron while we were dead) is
-/// useful VOD-review context.
+/// track (`GameStart`, `MinionsSpawning`, etc.) or not one we took part
+/// in.
+///
+/// **Every kind is gated on us being named in the event**, not just
+/// `ChampionKill`. A marker is a seek target and a stop on the review
+/// player's `[`/`]` navigation, so the bar is "was this about me", not
+/// "did this happen" — a turret a teammate took while we were on the far
+/// side of the map is exactly the stop nobody wants. The gate reads the
+/// event's own killer/victim/assister/acer/recipient fields and never
+/// team membership, and drops here so an uninvolved event never reaches
+/// the database. That is irreversible per recording: Live Client Data is
+/// gone once the game ends. The trade, and the two alternatives rejected
+/// for it, are in DEVELOPMENT.md §3.2.
 fn classify_event(event: &GameEvent, our_names: &[&str]) -> Option<Marker> {
     let is_ours = |name: &Option<String>| -> bool {
         match name {

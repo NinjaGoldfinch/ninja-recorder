@@ -609,41 +609,51 @@ Wukong's portrait — so `champion.json` is fetched as a display-name → key ma
 That is the mirror of what §3.1 does and the reason this cannot be a URL the
 frontend builds out of the `champion` column on its own.
 
-**Summoner spell art does not come from Data Dragon at all.** Its
-`img/spell/` set is the pre-refresh icons and has been for years, so a Flash
-drawn from it does not match the one in the game, and there is no newer path on
-that CDN. The art comes from the running client's own asset store
-(`/lol-game-data/assets/v1/summoner-spells/{id}.png`) — by definition the art
-the game is using, on a host already authenticated against — and falls back to
-Community Dragon, which mirrors the same game data publicly, for the usual case
-where the library is browsed with League closed. Whichever answers is cached,
-so one session with the client open fixes every spell permanently.
+**Summoner spell art comes from Data Dragon, and from nothing else.** It
+briefly came from two other places. The reasoning was that `img/spell/` is the
+pre-refresh icon set and a Flash drawn from it would not match the one in the
+game, so art was taken from the running client's own asset store — by
+definition what the game is using — falling back to Community Dragon, which
+mirrors the same data publicly, for the usual case of browsing with League
+closed.
 
-**Community Dragon has no `summoner-spells/{id}.png`.** The first version of
-the fallback assumed it did, by analogy with the client's own route, and every
-spell resolved to nothing for anyone browsing with League closed — which is
-almost everyone. Nothing said so, because a 404 and "this spell has no art" are
-the same answer downstream. What that CDN publishes is the client's asset
-*manifest* (`v1/summoner-spells.json`), and each entry carries the path the art
-really lives at: drop the `/lol-game-data/assets` prefix the client uses,
-lowercase the rest, and it is a URL. `spell_asset_map` is that rule, and it is
-unit-tested against the awkward cases — `Summoner_Teleport_New.png`, and the
-Jade spells filed under `ASSETS/UX` rather than `DATA/Spells`.
+**The art was never the problem.** `img/spell/SummonerFlash.png` is the icon
+the game draws. What made spells look broken was `summoner.json` itself:
+**it has one entry per game-mode variant, not one per spell.** `Flash` names
+three of them — `SummonerFlash` (4), `SummonerFlash_Jade` (74) and
+`SummonerCherryFlash` (2202) — and nine other display names collide the same
+way. Collecting those straight into a name → id map let `HashMap` iteration
+order pick the winner, so a row drew the Arena set's armoured figure on one run
+and the right picture on the next. Three sources on top of that meant three
+ways for one row to be wrong, and a cache holding `74.client.png`,
+`2202.client.png` and `SummonerFlash_Jade.png` side by side with no way to tell
+which a row would use.
 
-That manifest also settles the *client* route, which had been guessed the
-same way and was equally wrong: the `iconPath` it publishes **is** a route on
-the client's own HTTP server, so it is asked for verbatim rather than rebuilt
-from the id.
+`spell_art_map` picks deliberately instead: prefer an art key with **no
+underscore** (what separates `SummonerFlash` from `SummonerFlash_Jade`), then
+the **lowest id** (what separates it from `SummonerCherryFlash`). It is a
+preference and not a filter, so a name that exists *only* as a variant —
+`Fortify`, `Revive`, the rest of the retired set — still resolves to the one
+picture there is. The id map is keyed on **every** variant's id but stores the
+name's chosen key, so a scoreboard rebuilt from match history carrying 74 or
+712 draws the standard art too.
 
-**The two sources cache under different names** (`{id}.client.png` and
-`{id}.png`). Sharing one made the fallback permanent — whichever source
-answered on a cold cache won forever, so a library first opened with League
-closed would never take the client's art no matter how many sessions ran with
-it open, which is the opposite of what this is for.
+**Smite is renamed in place mid-game.** The jungle item upgrades it, and from
+that point the live client reports `Primal Smite` or `Unleashed Smite` where it
+reported `Smite` at the start. Data Dragon has an entry for none of those
+names, so a jungle recording drew an empty circle where its Smite should be.
+`canonical_spell_name` folds anything ending in "Smite" onto plain `Smite` —
+one button, one picture — which also covers the names Riot used before
+(`Chilling Smite`, `Challenging Smite`) and whatever it renames them to next.
+Because the fold happens at lookup rather than at capture, recordings already
+in the library get the right icon too; their hover text still says what the
+client said at the time.
 
-`summoner.json` is still read, but only to get from a name to an id: Data
-Dragon's *data* is current even where its art is not, and a live-captured
-scoreboard says `Flash` where a rebuilt one says `4`. **Runes are the odd one out twice over**: the
+Both maps come from one parse, and name and id resolve through the same
+`spell_art_file`, so the cache holds one `SummonerFlash.png` rather than a copy
+per id per source.
+
+**Runes are the odd one out twice over**: the
 icon is a path rather than a filename, and it is served from an *unversioned*
 part of the CDN. `runesReforged.json` is trees of slots of runes, and a row
 wants both the keystone and a tree crest, so all of it flattens into one id →
