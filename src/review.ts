@@ -180,7 +180,10 @@ export function initReview() {
   video?.addEventListener("ratechange", () => {
     if (stemAudio) stemAudio.playbackRate = video!.playbackRate;
   });
-  video?.addEventListener("loadedmetadata", updatePlayhead);
+  video?.addEventListener("loadedmetadata", () => {
+    applyStartPosition();
+    updatePlayhead();
+  });
 
   playPauseBtn?.addEventListener("click", togglePlay);
   muteBtn?.addEventListener("click", toggleMute);
@@ -258,7 +261,7 @@ export function initReview() {
       // "press me again" instead of play/pause. Keyboard activation is
       // untouched — this only fires for a pointer.
       e.preventDefault();
-      video.currentTime = Number(target.dataset.time);
+      seekTo(Number(target.dataset.time));
       return true;
     });
   }
@@ -282,7 +285,7 @@ export function initReview() {
 
   markerListEl?.addEventListener("click", (e) => {
     const target = (e.target as HTMLElement).closest<HTMLElement>("li[data-time]");
-    if (target && video) video.currentTime = Number(target.dataset.time);
+    if (target && video) seekTo(Number(target.dataset.time));
   });
 
   document.addEventListener("keydown", handleHotkey);
@@ -364,8 +367,8 @@ function isOnArrowControl(): boolean {
 }
 
 function seekBy(seconds: number) {
-  if (!video || !isFinite(video.duration)) return;
-  video.currentTime = clamp(video.currentTime + seconds, 0, video.duration);
+  if (!video) return;
+  seekTo(video.currentTime + seconds);
 }
 
 /**
@@ -444,7 +447,90 @@ function jumpToMarker(direction: 1 | -1, predicate: (m: MarkerRow) => boolean) {
       [...candidates].reverse().find((m) => m.video_time_s < current - 0.25) ??
       candidates[candidates.length - 1];
   }
-  video.currentTime = target.video_time_s;
+  seekTo(target.video_time_s);
+}
+
+// --- The playable window --------------------------------------------------
+
+/**
+ * How much of the loading screen to keep in front of the game.
+ *
+ * Not zero: cutting to the exact frame the clock starts on means a VOD
+ * opens mid-fade with no sense of where it began, and the alignment is
+ * measured from a 1 Hz poll so it is only accurate to about a second
+ * anyway. Two is enough to see the game appear without waiting for it.
+ */
+const LEAD_IN_S = 2;
+
+/** Below this there is no loading screen worth skipping. */
+const MIN_SKIP_S = 3;
+
+/**
+ * Where the game clock starts, in video time.
+ *
+ * A recording begins when the client says the game is in progress, which is
+ * the loading screen — twenty seconds of a static splash before anything
+ * happens. Markers already know this: every one is stamped with the
+ * game-time → video-time alignment measured during the game, so the
+ * difference between a sample's two clocks *is* the length of the loading
+ * screen. It is read back out of the samples the timeline already fetches
+ * rather than stored, which means it works on every recording ever made,
+ * with no migration and nothing to keep in sync.
+ *
+ * Zero when there are no samples — a game whose live poller never came up
+ * has no alignment, and guessing one would open the VOD somewhere arbitrary.
+ */
+let gameStartsAt = 0;
+
+function measureGameStart(samples: readonly SampleRow[]): number {
+  const earliest = samples.reduce<SampleRow | null>(
+    (best, s) => (best === null || s.game_time_s < best.game_time_s ? s : best),
+    null,
+  );
+  if (!earliest) return 0;
+  const offset = earliest.video_time_s - earliest.game_time_s;
+  // Negative means capture started *after* the game did — a reconnect —
+  // and there is no loading screen in front of it to skip.
+  return offset >= MIN_SKIP_S ? offset : 0;
+}
+
+/** The first video position the player will show. */
+function windowStart(): number {
+  return Math.max(0, gameStartsAt - LEAD_IN_S);
+}
+
+/** How much video the player treats as the recording. */
+function windowSpan(): number {
+  if (!video || !isFinite(video.duration)) return 0;
+  return Math.max(0, video.duration - windowStart());
+}
+
+/** Video time → the position shown to the user, where 0 is the window's start. */
+function displayTime(videoTime: number): number {
+  return Math.max(0, videoTime - windowStart());
+}
+
+/** Fraction across the window, for anything drawn along the timeline. */
+function windowFraction(videoTime: number): number {
+  const span = windowSpan();
+  if (span <= 0) return 0;
+  return clamp((videoTime - windowStart()) / span, 0, 1);
+}
+
+/** Every seek goes through here, so nothing can land in the skipped lead. */
+function seekTo(videoTime: number) {
+  if (!video || !isFinite(video.duration)) return;
+  video.currentTime = clamp(videoTime, windowStart(), video.duration);
+}
+
+/** Set once per recording, when both the samples and the duration are in. */
+let startApplied = false;
+
+function applyStartPosition() {
+  if (!video || !isFinite(video.duration) || !video.duration) return;
+  if (startApplied) return;
+  startApplied = true;
+  if (windowStart() > 0) video.currentTime = windowStart();
 }
 
 // --- Timeline rendering ---------------------------------------------------
@@ -566,9 +652,7 @@ function renderGraph() {
 
   const reduced = downsample(points, 500);
   const bound = Math.max(...reduced.map((p) => Math.abs(p.v)));
-  const duration = video.duration;
-
-  const x = (t: number) => clamp((t / duration) * 1000, 0, 1000);
+  const x = (t: number) => windowFraction(t) * 1000;
   // Symmetric about the y=50 baseline, 5 units of headroom each side.
   const y = (v: number) => (bound === 0 ? 50 : 50 - (v / bound) * 45);
 
@@ -645,12 +729,10 @@ function renderGlyphs() {
   // Zero while the review view is still hidden — the ResizeObserver fires
   // again with a real width once it's shown.
   if (width === 0) return;
-  const duration = video.duration;
-
   currentClusters = [];
   let clusterStartX = -Infinity;
   for (const marker of currentMarkers) {
-    const px = (marker.video_time_s / duration) * width;
+    const px = windowFraction(marker.video_time_s) * width;
     if (currentClusters.length > 0 && px - clusterStartX <= CLUSTER_PX) {
       currentClusters[currentClusters.length - 1].push(marker);
     } else {
@@ -665,7 +747,7 @@ function renderGlyphs() {
       const style = markerStyle(lead);
       const mean =
         cluster.reduce((sum, m) => sum + m.video_time_s, 0) / cluster.length;
-      const pct = clamp((mean / duration) * 100, 0, 100);
+      const pct = windowFraction(mean) * 100;
       const badge =
         cluster.length > 1
           ? `<span class="glyph-badge">${cluster.length}</span>`
@@ -704,19 +786,23 @@ const MAX_RULER_LABELS = 16;
 
 function renderRuler() {
   if (!timelineRuler || !video || !isFinite(video.duration) || !video.duration) return;
-  const duration = video.duration;
+  // The window, not the file: the ruler reads 0:00 where the player starts,
+  // so the skipped loading screen is not a stretch of timeline with nothing
+  // in it.
+  const span = windowSpan();
+  if (span <= 0) return;
 
   const major =
-    RULER_STEPS.find((step) => duration / step <= MAX_RULER_LABELS) ??
+    RULER_STEPS.find((step) => span / step <= MAX_RULER_LABELS) ??
     RULER_STEPS[RULER_STEPS.length - 1];
 
   // Minor ticks are a repeating gradient with a percentage period, so they
   // reflow with the container for free — no resize handling needed.
-  timelineRuler.style.setProperty("--minor-gap", `${((major / 4) / duration) * 100}%`);
+  timelineRuler.style.setProperty("--minor-gap", `${((major / 4) / span) * 100}%`);
 
   const labels: string[] = [];
-  for (let t = 0; t <= duration; t += major) {
-    const pct = (t / duration) * 100;
+  for (let t = 0; t <= span; t += major) {
+    const pct = (t / span) * 100;
     labels.push(
       `<span class="ruler-label" style="left:${pct.toFixed(3)}%">${formatTime(t)}</span>`
     );
@@ -726,7 +812,9 @@ function renderRuler() {
 
 function updatePlayhead() {
   if (!video || !isFinite(video.duration) || !video.duration) return;
-  const pct = clamp((video.currentTime / video.duration) * 100, 0, 100);
+  const pct = windowFraction(video.currentTime) * 100;
+  const at = displayTime(video.currentTime);
+  const total = windowSpan();
   if (timelinePlayhead) {
     timelinePlayhead.style.left = `${pct.toFixed(3)}%`;
   }
@@ -736,17 +824,15 @@ function updatePlayhead() {
     playerProgress.style.width = `${pct.toFixed(3)}%`;
   }
   if (playerScrub) {
-    playerScrub.setAttribute("aria-valuemax", video.duration.toFixed(0));
-    playerScrub.setAttribute("aria-valuenow", video.currentTime.toFixed(0));
+    playerScrub.setAttribute("aria-valuemax", total.toFixed(0));
+    playerScrub.setAttribute("aria-valuenow", at.toFixed(0));
     playerScrub.setAttribute(
       "aria-valuetext",
-      `${formatTime(video.currentTime)} of ${formatTime(video.duration)}`
+      `${formatTime(at)} of ${formatTime(total)}`
     );
   }
   if (timeDisplay) {
-    timeDisplay.textContent = `${formatTime(video.currentTime)} / ${formatTime(
-      video.duration
-    )}`;
+    timeDisplay.textContent = `${formatTime(at)} / ${formatTime(total)}`;
   }
 }
 
@@ -802,7 +888,8 @@ function seekFromPointer(track: HTMLElement, clientX: number) {
   if (!video || !isFinite(video.duration) || !video.duration) return;
   const rect = track.getBoundingClientRect();
   if (rect.width === 0) return;
-  video.currentTime = clamp((clientX - rect.left) / rect.width, 0, 1) * video.duration;
+  const fraction = clamp((clientX - rect.left) / rect.width, 0, 1);
+  seekTo(windowStart() + fraction * windowSpan());
 }
 
 /// Makes `track` a click-to-seek, hold-to-scrub surface.
@@ -1164,6 +1251,8 @@ export async function openReview(row: RecordingRow) {
   currentMarkers = [];
   currentSamples = [];
   currentClusters = [];
+  gameStartsAt = 0;
+  startApplied = false;
   renderTimeline();
   renderMarkerList();
   syncPlayButton();
@@ -1179,6 +1268,8 @@ export async function openReview(row: RecordingRow) {
     ]);
     currentMarkers = markers;
     currentSamples = samples;
+    gameStartsAt = measureGameStart(samples);
+    applyStartPosition();
   } catch (err) {
     console.error("Failed to load timeline data", err);
   }

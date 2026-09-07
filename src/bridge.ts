@@ -191,6 +191,17 @@ const FIXTURE_ROWS: RecordingRow[] = [
   row(12, "Twisted Fate", true, { duration_s: 880 }),
 ];
 
+/**
+ * How far into the video the game clock starts, in the fixtures.
+ *
+ * A real recording begins on the loading screen and carries about twenty
+ * seconds of it before anything happens — which is exactly what the review
+ * player's window has to skip, so a browser-only session has to have one to
+ * skip. The old fixtures used five seconds, which is short enough that the
+ * behaviour was invisible.
+ */
+const LOADING_SCREEN_S = 20;
+
 const FIXTURE_MARKERS: MarkerRow[] = [
   ["first_blood", 132], ["kill", 240], ["death", 415], ["dragon", 602],
   ["assist", 745], ["kill", 760], ["multikill", 762], ["turret", 900],
@@ -200,7 +211,7 @@ const FIXTURE_MARKERS: MarkerRow[] = [
   id: i + 1,
   recording_id: 1,
   game_time_s: t as number,
-  video_time_s: (t as number) + 5,
+  video_time_s: (t as number) + LOADING_SCREEN_S,
   kind: kind as string,
   payload_json: "{}",
 }));
@@ -224,7 +235,7 @@ const FIXTURE_SAMPLES: SampleRow[] = [
       id: i + 1,
       recording_id: 1,
       game_time_s: t,
-      video_time_s: t + 5,
+      video_time_s: t + LOADING_SCREEN_S,
       our_team: "ORDER",
       gold_diff: null,
       kill_diff: Math.round(curve(t) / 900),
@@ -239,7 +250,7 @@ const FIXTURE_SAMPLES: SampleRow[] = [
       id: 1000 + i,
       recording_id: 1,
       game_time_s: t,
-      video_time_s: t + 5,
+      video_time_s: t + LOADING_SCREEN_S,
       our_team: "ORDER",
       gold_diff: curve(t),
       kill_diff: null,
