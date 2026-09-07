@@ -597,6 +597,40 @@ Wukong's portrait — so `champion.json` is fetched as a display-name → key ma
 That is the mirror of what §3.1 does and the reason this cannot be a URL the
 frontend builds out of the `champion` column on its own.
 
+### 5.4 Decision: the loading screen is skipped, not cut
+
+A recording starts when the client says the game is in progress, which is the
+loading screen — roughly twenty seconds of a static splash before anything
+happens. Opening a VOD landed on it every time.
+
+**The player skips it; the file keeps it.** `review.ts` treats the recording as
+a window `[game start − 2s, end]`: playback opens there, the scrubber spans it,
+the ruler reads 0:00 at its start, and every seek is clamped into it. Two
+seconds rather than zero because cutting to the exact frame the clock starts on
+opens a VOD mid-fade with no sense of where it began, and the alignment comes
+from a 1 Hz poll so it is only accurate to about a second anyway.
+
+**Where the number comes from is the point.** Markers already know it: every
+one is stamped with the game-time → video-time alignment measured during the
+game (§3.2), so the difference between a sample's two clocks *is* the length of
+the loading screen. The player reads it back out of the samples the timeline
+already fetches. No column, no migration, nothing to keep in sync — and it
+works on every recording ever made, including the ones that predate this.
+
+**Why not trim the file.** It was the obvious reading of the request and it is
+the worse answer. A stream-copy cut lands on the nearest keyframe, so the real
+cut point is up to a GOP away from the one asked for, and every marker and
+sample would have to shift by an amount only a second probe could establish. It
+is also irreversible, on the user's only copy, in a pass no test on any
+developer machine here can exercise — there is no ffmpeg on the Linux box and
+CI runs unit tests, not video. The saving is about twenty megabytes a game.
+That is not a trade worth making by default; if it is ever wanted it belongs
+behind a setting that is off, with the original kept on any failure.
+
+A recording whose live poller never came up has no alignment and no samples, so
+its window is the whole file — the honest outcome, since nothing knows where
+its game started.
+
 ---
 
 ## 6. Disk management (launch feature, not a later one)

@@ -174,6 +174,22 @@ stateDiagram-v2
     settings --> library: close (always returns to library)
 ```
 
+### The player skips the loading screen
+
+A recording starts on the loading screen, so opening a VOD used to land on
+twenty seconds of a static splash. The review view treats the recording as a
+window instead — `[game start − 2s, end]` — and playback opens there, the
+scrubber spans it, the ruler reads 0:00 at its start, and every seek is clamped
+into it by a single `seekTo`.
+
+**The file is untouched.** The number comes from the samples the timeline
+already fetches: each carries both a game clock and a video clock, so the
+difference between them *is* the length of the loading screen. No column, no
+migration, and it works on recordings made long before this existed. A
+recording with no samples has no alignment, so its window is the whole file.
+
+See [DEVELOPMENT.md §5.4](../DEVELOPMENT.md) for why the file is not cut.
+
 ## Backend communication
 
 Two directions, deliberately asymmetric.
