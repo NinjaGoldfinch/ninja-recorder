@@ -298,10 +298,24 @@ mod tests {
         assert_eq!(paths[0], PathBuf::from("/tmp/whatever-lockfile"));
     }
 
+    /// Discovery has to work with no configuration on the platforms the
+    /// app ships on, so each of those contributes at least one path.
+    ///
+    /// Linux contributes none, and that is correct rather than a gap:
+    /// League does not run natively there, and the only reason this crate
+    /// compiles for Linux at all is that the dev box is Linux. The
+    /// assertion is therefore switched rather than the test skipped — it
+    /// still guards Windows and macOS, and it pins the Linux answer as
+    /// deliberate instead of leaving `cargo test` red on the machine the
+    /// code is written on.
     #[test]
     fn candidate_paths_without_override_has_platform_defaults() {
         let paths = candidate_paths(None);
-        assert!(!paths.is_empty(), "expected at least one platform default path");
+        if cfg!(any(target_os = "windows", target_os = "macos")) {
+            assert!(!paths.is_empty(), "expected at least one platform default path");
+        } else {
+            assert!(paths.is_empty(), "no platform has defaults here: {paths:?}");
+        }
     }
 
     #[test]
