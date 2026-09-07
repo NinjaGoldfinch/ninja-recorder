@@ -772,6 +772,10 @@ pub enum MarkerKind {
     Dragon,
     Baron,
     Herald,
+    /// The Voidgrubs. The API calls the event `HordeKill` and the objective
+    /// the Horde; players call them grubs, and the timeline is read by
+    /// players.
+    Voidgrubs,
     Turret,
     Inhibitor,
     Ace,
@@ -790,6 +794,7 @@ impl MarkerKind {
             MarkerKind::Dragon => "dragon",
             MarkerKind::Baron => "baron",
             MarkerKind::Herald => "herald",
+            MarkerKind::Voidgrubs => "voidgrubs",
             MarkerKind::Turret => "turret",
             MarkerKind::Inhibitor => "inhibitor",
             MarkerKind::Ace => "ace",
@@ -908,6 +913,19 @@ fn classify_event(event: &GameEvent, our_names: &[&str]) -> Option<Marker> {
         ),
         "HeraldKill" if took_part() => marker(
             MarkerKind::Herald,
+            serde_json::json!({
+                "killer": event.killer_name,
+                "stolen": event.stolen,
+            }),
+        ),
+        // The Voidgrubs, which the API files under `HordeKill` — one event
+        // per grub, so a cleared camp is three markers a few seconds apart
+        // rather than one. They are left that way: each is a separate kill
+        // with its own `EventID`, the tracker dedupes on exactly that, and
+        // collapsing them would mean inventing a window over which three
+        // kills become one camp.
+        "HordeKill" if took_part() => marker(
+            MarkerKind::Voidgrubs,
             serde_json::json!({
                 "killer": event.killer_name,
                 "stolen": event.stolen,
@@ -1363,6 +1381,49 @@ mod tests {
             event_time: 612.0,
             killer_name: Some("EnemyA#NA1".into()),
             kill_streak: Some(5),
+            ..blank_event()
+        }];
+
+        assert!(MarkerTracker::new().ingest(&snapshot).is_empty());
+    }
+
+    /// The Voidgrubs, straight off a real ranked capture: the API files
+    /// them under `HordeKill`, with `Stolen` as the string `"False"`.
+    /// Nothing handled the name, so a cleared camp produced no markers at
+    /// all.
+    #[test]
+    fn voidgrubs_we_took_become_markers() {
+        let mut snapshot = fixture();
+        // Three events, because the API emits one per grub.
+        snapshot.events.events = (0..3)
+            .map(|i| GameEvent {
+                event_id: 200 + i,
+                event_name: "HordeKill".into(),
+                event_time: 509.0 + i as f64 * 8.0,
+                killer_name: Some("Ninja#NA1".into()),
+                stolen: Some(false),
+                ..blank_event()
+            })
+            .collect();
+
+        let markers = MarkerTracker::new().ingest(&snapshot);
+        // One per grub, not one per camp — they dedupe on `EventID`, and
+        // nothing here decides how far apart two grubs are still one camp.
+        assert_eq!(markers.len(), 3);
+        assert!(markers.iter().all(|m| m.kind == MarkerKind::Voidgrubs));
+        assert_eq!(markers[0].payload["stolen"], false);
+    }
+
+    /// Gated like every other objective: the enemy jungler taking all
+    /// three is not a stop on our timeline.
+    #[test]
+    fn the_enemy_junglers_voidgrubs_are_not_our_markers() {
+        let mut snapshot = fixture();
+        snapshot.events.events = vec![GameEvent {
+            event_id: 210,
+            event_name: "HordeKill".into(),
+            event_time: 509.0,
+            killer_name: Some("Sejuani".into()),
             ..blank_event()
         }];
 

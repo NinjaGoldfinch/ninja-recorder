@@ -78,7 +78,7 @@ static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
             recording_id  INTEGER NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
             game_time_s   REAL NOT NULL,
             video_time_s  REAL NOT NULL,
-            kind          TEXT NOT NULL, -- kill|death|assist|dragon|baron|herald|turret|ace|first_blood|custom
+            kind          TEXT NOT NULL, -- kill|death|assist|dragon|baron|herald|voidgrubs|turret|ace|first_blood|custom
             payload_json  TEXT NOT NULL DEFAULT '{}'
         );
 

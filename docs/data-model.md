@@ -44,7 +44,7 @@ erDiagram
         INTEGER recording_id FK "ON DELETE CASCADE"
         REAL    game_time_s
         REAL    video_time_s "aligned seek target"
-        TEXT    kind "kill, death, assist, dragon, baron, herald, turret, inhibitor, ace, multikill, first_blood, custom"
+        TEXT    kind "kill, death, assist, dragon, baron, herald, voidgrubs, turret, inhibitor, ace, multikill, first_blood, custom"
         TEXT    payload_json "raw event detail"
     }
     samples {

@@ -14,6 +14,7 @@ const MARKER_STYLE: Record<string, { icon: string; label: string; color: string 
   dragon: { icon: "🐉", label: "Dragon", color: "#8e24aa" },
   baron: { icon: "👑", label: "Baron", color: "#6d4c41" },
   herald: { icon: "🦅", label: "Herald", color: "#00897b" },
+  voidgrubs: { icon: "🪱", label: "Voidgrubs", color: "#c0ca33" },
   turret: { icon: "🏰", label: "Turret", color: "#fb8c00" },
   inhibitor: { icon: "💠", label: "Inhibitor", color: "#5e35b1" },
   ace: { icon: "⭐", label: "Ace", color: "#fdd835" },
@@ -33,6 +34,7 @@ const MARKER_PRIORITY = [
   "baron",
   "dragon",
   "herald",
+  "voidgrubs",
   "inhibitor",
   "ace",
   "first_blood",
@@ -1213,6 +1215,8 @@ function markerLabel(m: MarkerRow): string {
       return `Baron${stolen(payload)}`;
     case "herald":
       return `Herald${stolen(payload)}`;
+    case "voidgrubs":
+      return `Voidgrubs${stolen(payload)}`;
     case "turret":
       return "Turret";
     case "inhibitor":
