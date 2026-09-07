@@ -1,5 +1,13 @@
-import { assetUrl, call } from "./bridge";
+import { call } from "./bridge";
 import { el, escapeAttr, escapeHtml } from "./dom";
+import {
+  championIcon,
+  itemIcon,
+  loadIcons,
+  parseScoreboard,
+  runeIcon,
+  spellIcon,
+} from "./icons";
 import {
   formatBytes,
   formatClock,
@@ -195,49 +203,48 @@ function render() {
   els.empty.hidden = true;
   els.grid.hidden = false;
   els.grid.innerHTML = rows.map(card).join("");
-  void fillInPortraits(rows);
+  void fillInArt(rows);
 }
 
 /**
- * Champion portraits, resolved after the grid is already on screen.
+ * Art, filled in after the list is already on screen.
  *
- * Deliberately a second pass rather than part of `card`. The first one is a
- * cache miss per champion and each miss is a CDN round trip, so blocking the
- * grid on it would trade a library that renders instantly for one that
- * renders once the network says so — and the whole thing has to work with no
- * network at all, where the answer is "no icon" and the card is already
- * correct without one.
- *
- * Cached per champion for the session, `null` included: a champion the CDN
- * has never heard of must not be asked about once per card, per render.
+ * Deliberately a second pass. The first sighting of any icon is a CDN round
+ * trip, so blocking the list on it would trade a library that renders
+ * instantly for one that renders once the network says so — and the whole
+ * thing has to work with no network at all, where the answer is "no art"
+ * and every row is already correct without it.
  */
-const portraits = new Map<string, string | null>();
-
-async function fillInPortraits(rows: RecordingRow[]) {
-  const wanted = [...new Set(rows.map((r) => r.champion).filter((c): c is string => !!c))];
-  const unknown = wanted.filter((c) => !portraits.has(c));
-
-  await Promise.all(
-    unknown.map(async (champion) => {
-      try {
-        const path = await call<string | null>("champion_icon", { champion });
-        portraits.set(champion, path ? assetUrl(path) : null);
-      } catch {
-        // Offline, or the command is unavailable. Same outcome as an
-        // unknown champion, and just as unremarkable.
-        portraits.set(champion, null);
-      }
-    }),
-  );
+async function fillInArt(rows: RecordingRow[]) {
+  if (!(await loadIcons(rows))) return;
 
   for (const row of rows) {
-    const src = row.champion ? portraits.get(row.champion) : null;
-    if (!src) continue;
-    // The grid may have been re-rendered while the requests were in flight.
-    const slot = els.grid.querySelector<HTMLElement>(
-      `.vod-row[data-id="${row.id}"] .vod-portrait`,
-    );
-    if (slot) slot.innerHTML = `<img src="${escapeAttr(src)}" alt="" loading="lazy" />`;
+    // The list may have been re-rendered while the requests were in flight.
+    const el = els.grid.querySelector<HTMLElement>(`.vod-row[data-id="${row.id}"]`);
+    if (!el) continue;
+    paintArt(el, row);
+  }
+}
+
+/** Puts the resolved art into one row's already-rendered slots. */
+function paintArt(el: HTMLElement, row: RecordingRow) {
+  const portrait = championIcon(row.champion);
+  const portraitSlot = el.querySelector<HTMLElement>(".vod-portrait");
+  if (portraitSlot && portrait) {
+    portraitSlot.innerHTML = `<img src="${escapeAttr(portrait)}" alt="" loading="lazy" />`;
+  }
+
+  for (const slot of el.querySelectorAll<HTMLElement>("[data-icon]")) {
+    const { icon, key } = slot.dataset;
+    const src =
+      icon === "item"
+        ? itemIcon(Number(key))
+        : icon === "spell"
+          ? spellIcon(String(key))
+          : icon === "rune"
+            ? runeIcon(Number(key))
+            : null;
+    if (src) slot.innerHTML = `<img src="${escapeAttr(src)}" alt="" loading="lazy" />`;
   }
 }
 
@@ -273,6 +280,53 @@ function renderStats(rows: RecordingRow[]) {
   els.statDiskSub.textContent = usage
     ? `${formatBytes(usage.free_bytes)} free`
     : "";
+}
+
+/** "8.3 /min", or nothing when either half is missing. */
+function csPerMinute(row: RecordingRow): string | null {
+  if (row.cs === null || row.duration_s === null || row.duration_s <= 0) return null;
+  return `${(row.cs / (row.duration_s / 60)).toFixed(1)} /min`;
+}
+
+/**
+ * The spells, runes and items the game ended on.
+ *
+ * Empty slots are rendered, not skipped. A build with four items is a
+ * different thing from a game with no scoreboard, and a row that shrank
+ * to fit would say neither — the boxes are the shape of the information.
+ *
+ * Every slot starts blank and is filled by `paintArt` once the CDN answers,
+ * so this renders identically offline, just without pictures. The `title`
+ * carries what each one is, which is the whole of what a row with no art
+ * can tell you.
+ */
+function loadout(row: RecordingRow): string {
+  const board = parseScoreboard(row.scoreboard_json);
+  const us = board?.players.find((p) => p.is_us) ?? null;
+  const runes = board?.our_runes ?? null;
+
+  const slot = (kind: string, key: string | number, label: string) =>
+    `<span class="vod-slot" data-icon="${kind}" data-key="${escapeAttr(String(key))}"
+           title="${escapeAttr(label)}"></span>`;
+  const empty = `<span class="vod-slot vod-slot-empty"></span>`;
+
+  const spells = (us?.spells ?? []).slice(0, 2).map((s) => slot("spell", s, s));
+  while (spells.length < 2) spells.push(empty);
+
+  const perks = runes
+    ? [
+        slot("rune", runes.keystone_id, runes.keystone || "Keystone"),
+        slot("rune", runes.secondary_tree_id, "Secondary tree"),
+      ]
+    : [empty, empty];
+
+  // Six plus the trinket, which is what an inventory holds.
+  const items = (us?.items ?? []).slice(0, 7).map((id) => slot("item", id, `Item ${id}`));
+  while (items.length < 7) items.push(empty);
+
+  return `
+      <span class="vod-perks" aria-hidden="true">${spells.join("")}${perks.join("")}</span>
+      <span class="vod-items" aria-hidden="true">${items.join("")}</span>`;
 }
 
 function outcomeAttr(win: boolean | null): string {
@@ -348,6 +402,13 @@ function card(row: RecordingRow): string {
         <span class="vod-value vod-kda">${kdaMarkup}</span>
         <span class="vod-sub">${ratio ? escapeHtml(ratio) : "&nbsp;"}</span>
       </span>
+
+      <span class="vod-cell">
+        <span class="vod-value">${cell(row.cs === null ? null : `${row.cs} cs`)}</span>
+        <span class="vod-sub">${csPerMinute(row) ?? "&nbsp;"}</span>
+      </span>
+
+      ${loadout(row)}
 
       <span class="vod-slack" aria-hidden="true"></span>
 

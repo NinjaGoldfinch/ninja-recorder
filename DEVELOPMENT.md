@@ -597,6 +597,22 @@ Wukong's portrait — so `champion.json` is fetched as a display-name → key ma
 That is the mirror of what §3.1 does and the reason this cannot be a URL the
 frontend builds out of the `champion` column on its own.
 
+Summoner spells have the same problem (`Flash` → `SummonerFlash`) and get the
+same answer from `summoner.json`. **Runes are the odd one out twice over**: the
+icon is a path rather than a filename, and it is served from an *unversioned*
+part of the CDN. `runesReforged.json` is trees of slots of runes, and a row
+wants both the keystone and a tree crest, so all of it flattens into one id →
+path map. Items need no map at all: Data Dragon files them under the numeric id
+the game itself reports.
+
+**One request per page, not per icon.** A row carries up to twelve pieces of
+art and a library shows dozens of rows, so `resolve_icons` takes four lists and
+answers with four maps. It resolves them sequentially rather than in parallel:
+the first call of a session warms the version, three JSON documents and every
+icon at once, and firing that at a CDN as a hundred simultaneous requests is
+how an application gets rate-limited — while the row renders without art in the
+meantime either way.
+
 ### 5.4 Decision: the loading screen is skipped, not cut
 
 A recording starts when the client says the game is in progress, which is the

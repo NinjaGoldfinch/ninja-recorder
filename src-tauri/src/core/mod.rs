@@ -385,23 +385,23 @@ pub async fn backfill_match_metadata(ctx: &Ctx) -> Result<crate::backfill::Backf
     crate::backfill::run(&ctx.db).await
 }
 
-/// The cached square portrait for a champion, fetched on first use.
+/// Cached art for a page of rows — champions, items, summoner spells and
+/// runes — fetched on first use.
 ///
-/// Returns a path for the frontend to hand to `convertFileSrc`, or `None`
-/// for every way this can fail to produce one — offline, an unknown
-/// champion, an unwritable cache. None of those is an error: the card
-/// renders the text it always did, which is why this cannot fail loudly.
-pub async fn champion_icon(ctx: &Ctx, champion: String) -> Result<Option<String>, String> {
-    // A blank name is what a NULL `champion` column looks like by the time
-    // it reaches here. There is nothing to ask a CDN about, and answering
-    // without a request also keeps the dispatch round-trip test — which
-    // really invokes every command — off the network.
-    if champion.trim().is_empty() {
-        return Ok(None);
-    }
-    Ok(crate::ddragon::champion_icon(&ctx.assets_dir, &champion)
-        .await
-        .map(|path| path.to_string_lossy().into_owned()))
+/// Returns paths for the frontend to hand to `convertFileSrc`. Anything
+/// that could not be resolved is **absent** rather than null: offline, an
+/// unknown id, an unwritable cache. None of those is an error, because the
+/// row renders the text it always did, which is why this cannot fail
+/// loudly.
+///
+/// One call for a whole page rather than one per icon: a row carries up to
+/// seven items, two spells, three runes and a champion, so a library of
+/// forty rows would otherwise be several hundred round trips.
+pub async fn resolve_icons(
+    ctx: &Ctx,
+    request: crate::ddragon::IconRequest,
+) -> Result<crate::ddragon::IconSet, String> {
+    Ok(crate::ddragon::resolve_icons(&ctx.assets_dir, &request).await)
 }
 
 /// Markers for the review timeline.

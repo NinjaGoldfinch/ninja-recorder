@@ -451,12 +451,19 @@ export const COMMANDS: CommandSpec[] = [
     args: [],
   },
   {
-    name: "champion_icon",
+    name: "resolve_icons",
     group: "Library",
     dev: false,
     description:
-      "The cached Data Dragon portrait for a champion display name, fetched on first use. Returns a path for convertFileSrc, or null for anything that failed — offline, unknown champion, unwritable cache.",
-    args: [{ name: "champion", kind: "string", default: "Wukong" }],
+      "Cached Data Dragon art for a page of rows — champions by display name, items and runes by id, spells by display name. Fetches whatever is not cached yet. Anything that could not be resolved is absent from the result rather than null.",
+    args: [
+      {
+        name: "request",
+        kind: "json",
+        default: { champions: ["Wukong"], items: [3089], spells: ["Flash"], runes: [8112] },
+        help: "Four lists: champions, items, spells, runes. Any of them may be omitted.",
+      },
+    ],
   },
   {
     name: "dev_trim_lead_in",

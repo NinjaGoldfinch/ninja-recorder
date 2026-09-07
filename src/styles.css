@@ -1251,11 +1251,17 @@ button.armed {
     auto                  /* portrait */
     minmax(6rem, 12rem)   /* champion + role */
     minmax(6rem, 9rem)    /* KDA + ratio */
+    minmax(4.5rem, 6rem)  /* CS + per minute */
+    auto                  /* spells + runes */
+    auto                  /* items */
     minmax(0, 1fr)        /* slack — see above */
     auto                  /* size */
     auto;                 /* actions */
   align-items: center;
-  gap: var(--sp-3);
+  /* Tighter than the page's usual rhythm. Nine columns at `--sp-3` spend
+   * more than a hundred pixels on gaps, which at the 960px minimum window
+   * is the difference between the items strip fitting and not. */
+  gap: var(--sp-2);
   padding: var(--sp-2) var(--sp-4);
   border: 1px solid var(--border);
   border-left: 4px solid var(--border-strong);
@@ -1301,6 +1307,47 @@ button.armed {
     var(--loss-bg),
     transparent 18rem
   );
+}
+
+/* Spells and runes in a 2x2 block, items in a strip. Both are grids of
+ * fixed boxes rather than a flow of images: an empty slot has to hold its
+ * place, because a build with four items is a different thing from a game
+ * that has no scoreboard at all, and a row that shrank to fit would say
+ * neither. */
+.vod-perks {
+  display: grid;
+  grid-template-columns: repeat(2, 18px);
+  gap: 2px;
+}
+
+.vod-items {
+  display: grid;
+  grid-template-columns: repeat(7, 22px);
+  gap: 2px;
+}
+
+.vod-slot {
+  border-radius: 3px;
+  background-color: var(--bg-inset);
+  overflow: hidden;
+  aspect-ratio: 1;
+}
+
+.vod-perks .vod-slot {
+  border-radius: 50%;
+}
+
+.vod-slot img {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* A slot nothing was ever put in reads as part of the frame rather than as
+ * a thing that failed to load. */
+.vod-slot-empty {
+  background-color: transparent;
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 
 /* The result as a word, inside the sub-line rather than in a column of its
