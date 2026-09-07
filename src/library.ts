@@ -207,6 +207,9 @@ function render() {
   void fillInArt(rows);
 }
 
+/** How many rows to resolve art for before painting what has arrived. */
+const ART_CHUNK = 8;
+
 /**
  * Art, filled in after the list is already on screen.
  *
@@ -224,7 +227,16 @@ async function fillInArt(rows: RecordingRow[]) {
   // what returning early on "nothing new to fetch" did — left the rows
   // blank from the second render onwards.
   paintAll(rows);
-  if (await loadIcons(rows)) paintAll(rows);
+
+  // A chunk at a time, top down, so the rows a person is actually looking
+  // at fill in first. The total wait is the same; what changes is that it
+  // stops being one wait for everything. On a warm cache every chunk
+  // resolves without a request and this is indistinguishable from the
+  // single pass it replaced.
+  for (let i = 0; i < rows.length; i += ART_CHUNK) {
+    const chunk = rows.slice(i, i + ART_CHUNK);
+    if (await loadIcons(chunk)) paintAll(chunk);
+  }
 }
 
 function paintAll(rows: RecordingRow[]) {
