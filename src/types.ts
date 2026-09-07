@@ -156,6 +156,19 @@ export interface ReconcileReport {
   imported: number;
 }
 
+/** Mirrors `backfill::BackfillReport`. Every count is reported, not just
+ *  the successes: "nothing matched" is a different answer from "nothing to
+ *  do", and it is the user's cue that their recordings predate what their
+ *  client still remembers. */
+export interface BackfillReport {
+  scanned: number;
+  games_considered: number;
+  matched: number;
+  patched: number;
+  ambiguous: number;
+  unmatched: number;
+}
+
 export interface DiskUsage {
   total_bytes: number;
   recording_count: number;

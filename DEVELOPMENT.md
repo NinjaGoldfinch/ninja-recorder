@@ -373,6 +373,48 @@ the probe.
 
 ---
 
+### 4.2 Decision: the backfill matches on the clock, and refuses ties
+
+Every column #49 added only ever gets filled for recordings made after it
+shipped. Older rows keep their NULLs forever, and in a real library those are
+most of the rows — which makes the win-rate tile wrong for as long as they
+dominate. `reconcile`-imported files have the same problem for the same reason.
+
+**There is no game id to ask about.** One is captured *during* the game, from
+the gameflow session (§3.1), which is exactly what these rows never had. So the
+only handle left is time: the recording ran from some instant for some length,
+and so did a game. `backfill::match_recording` compares those two windows and
+accepts a game when it overlaps at least half of the shorter one.
+
+Half, rather than any overlap or near-exact agreement, because neither extreme
+is right. A recording brackets the loading screen and the client's
+`gameDuration` does not, so they never agree exactly; and consecutive games in
+one session can brush each other at the edges, so any overlap would match the
+wrong one.
+
+**Two matches means write nothing.** Not "pick the better one" — the ranking
+would be invented, and the failure it protects against is silent. A card
+labelled with the wrong game looks exactly as plausible as a correct one, and
+nobody re-checks a row that looks fine, so the error would live in the library
+permanently. `—` is recoverable; a confident lie is not. This is the same rule
+`match_data` applies to participant identity and `team_diff` applies to team
+side: when the answer is not certain, the column stays NULL.
+
+**Manual, never on startup.** It is a bulk read against the user's running
+client, and the moment to do that is theirs to pick — not something that fires
+while they are loading into a game. It is also cheap: the match-history list
+response carries whole game documents, so the pass costs one request for the
+history and one for the summoner regardless of how many rows it labels.
+
+It adds no new writer. The matched game goes through `to_metadata`,
+`champion_name` and `update_match_metadata` — the same three the deferred patch
+uses, including the same "champion only when NULL" rule.
+
+What it cannot do: reach further back than the client's own match history, or
+label a custom game, which never gets a match-history entry at all. Both come
+back as "matched no game", which the report says in as many words rather than
+leaving the user to guess why nothing happened.
+
 ## 5. Review player
 
 - WebView2 `<video>` element — H.264/AAC MP4 decodes natively, so seeking and playback rate are free.

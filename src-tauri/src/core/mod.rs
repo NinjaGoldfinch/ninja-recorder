@@ -360,6 +360,25 @@ pub fn rescan_recordings(ctx: &Ctx) -> Result<db::reconcile::ReconcileReport, St
         .map_err(|e| e.to_string())
 }
 
+/// Labels the recordings that predate the metadata pipeline, by matching
+/// them against the client's match history on the clock.
+///
+/// Manual on purpose — never on startup. It is a bulk read against the
+/// user's running client, and when to do that is theirs to choose. The
+/// frontend refreshes the library itself when this returns rather than the
+/// backend emitting `library-changed`: the caller is right there, and one
+/// refresh at the end beats one per patched row.
+///
+/// Async, so `rpc` awaits it on an async worker rather than handing it to
+/// `spawn_blocking` — and it does its SQLite work there, which the dispatch
+/// table's own comment warns about. Accepted rather than wrapped: this runs
+/// when a person clicks a button in settings, at most once in a while, and
+/// the awaits between the writes are the long part. Making it a background
+/// job with progress would be the fix if it ever walks thousands of rows.
+pub async fn backfill_match_metadata(ctx: &Ctx) -> Result<crate::backfill::BackfillReport, String> {
+    crate::backfill::run(&ctx.db).await
+}
+
 /// Markers for the review timeline.
 pub fn get_recording_markers(ctx: &Ctx, recording_id: i64) -> Result<Vec<db::MarkerRow>, String> {
     ctx.db.get_markers(recording_id).map_err(|e| e.to_string())
