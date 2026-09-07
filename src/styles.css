@@ -158,6 +158,40 @@
   );
 }
 
+/* ---------------------------------------------------------------------
+ * This is a window, not a page
+ *
+ * A webview brings every browser reflex with it: dragging across a card
+ * leaves half of it highlighted blue, double-clicking a stat selects the
+ * word under it, and a stray drag peels the brand mark off the header as
+ * a ghost image. None of it means anything here — there is no page to
+ * select, and nowhere to drop what you dragged.
+ *
+ * Selection is therefore off by default and switched back on per element
+ * below. `desktop.ts` handles the half CSS cannot see (the context menu,
+ * drags, and the browser's own keyboard shortcuts).
+ * ------------------------------------------------------------------- */
+:root {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Text worth copying out: paths, versions, IDs, error detail, and anything
+ * the user typed themselves. The form controls are not optional — Chromium
+ * applies an inherited `user-select: none` inside them too, so leaving them
+ * out silently breaks selecting the text in the search box. */
+input,
+textarea,
+select,
+[contenteditable],
+code,
+.mono,
+.about-list dd,
+.selectable {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 body {
   margin: 0;
   min-height: 100vh;

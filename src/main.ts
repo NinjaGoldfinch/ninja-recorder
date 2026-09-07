@@ -1,5 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 
+import { initDesktop } from "./desktop";
 import { el } from "./dom";
 import { initDevPortal } from "./devportal";
 import { applyDefaultSort, initLibrary, refreshDiskUsage, refreshLibrary } from "./library";
@@ -15,6 +16,11 @@ window.addEventListener("DOMContentLoaded", () => {
   // The theme is already on <html> from the inline boot script; this adopts
   // that value into module state and starts following the OS.
   initTheme();
+
+  // Before anything else binds a listener: these are `document`-level
+  // suppressions of browser behaviour, and none of them depend on the views
+  // existing.
+  initDesktop();
 
   registerView("library", el("#library-view"));
   registerView("review", el("#review-view"));

@@ -68,6 +68,25 @@ export async function call<T>(
   throw new Error(`invoke("${command}") outside Tauri`);
 }
 
+/**
+ * Whether this build carries the `devtools` Cargo feature, decided the only
+ * way the frontend can decide it: ask whether the `dev_*` commands are
+ * registered. A shipped build rejects the call, and that rejection *is* the
+ * answer, so this resolves `false` rather than throwing.
+ *
+ * Memoised because two callers want it — `devportal.ts` to reveal the portal
+ * button, and `desktop.ts` to leave the webview's own context menu and
+ * reload key alone in a build that can inspect — and one probe is enough.
+ */
+let devCommands: Promise<boolean> | null = null;
+
+export function hasDevCommands(): Promise<boolean> {
+  devCommands ??= call<string[]>("dev_registered_commands")
+    .then((commands) => commands.length > 0)
+    .catch(() => false);
+  return devCommands;
+}
+
 function row(
   id: number,
   champion: string | null,

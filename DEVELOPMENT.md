@@ -405,6 +405,27 @@ longer follows the OS for free — `theme.ts` listens on the matchMedia
 `change` event to put that back, and removing that listener is a silent
 regression with no test to catch it.
 
+**The window is not a page.** A webview brings the whole browser with it, and
+most of what it brings is meaningless here: dragging across a card leaves half
+of it highlighted, right-click offers to reload the app or save the video, F5
+throws the UI away mid-recording without the backend hearing about it, and
+icons peel off under the cursor as drag images. `desktop.ts` and one CSS block
+suppress that. The split is not arbitrary — only CSS can hand selection back
+per element (`.selectable`, plus form fields, `code` and `.mono`, because text
+the user typed or might want to copy is the one kind worth keeping), and only
+JS can see the events.
+
+Both halves are narrow by construction: they suppress browser chrome, never app
+behaviour, and each suppression names the one case where it would be a
+regression. Text fields keep their context menu, because there it is the
+ordinary Cut/Copy/Paste menu a desktop app would show anyway. A build you can
+inspect — the vite dev server, or anything with the `devtools` Cargo feature —
+keeps the native menu and the reload key outright, since "Inspect element" and
+a reload are the two things most worth having while working on the frontend.
+That check reuses `devportal.ts`'s existing probe (`hasDevCommands` in
+`bridge.ts`, memoised) rather than adding a second flag that could disagree
+with the Rust side.
+
 Preferences live in `settings_kv` (migration 4), a deliberately unseeded
 key/value table: a missing pref means "use the frontend default", so adding
 one needs no migration. They also mirror into `localStorage` for exactly

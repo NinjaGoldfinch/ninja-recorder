@@ -21,6 +21,7 @@ flowchart TB
     REVIEW["review.ts<br/><small>owns: the player + timeline</small>"]
     SETTINGS["settings.ts<br/><small>owns: the settings form</small>"]
     TOAST["toast.ts<br/><small>owns: the transient message</small>"]
+    DESK["desktop.ts<br/><small>owns: the browser behaviours we suppress</small>"]
     BRIDGE["bridge.ts<br/><small>invoke + asset URLs</small>"]
     DOM["dom.ts<br/><small>el, escapeHtml, escapeAttr</small>"]
     FMT["format.ts<br/><small>pure formatters + label fallbacks</small>"]
@@ -34,6 +35,8 @@ flowchart TB
     MAIN --> REVIEW
     MAIN --> SETTINGS
     MAIN --> TOAST
+    MAIN --> DESK
+    DESK --> BRIDGE
     STATUS --> LIB
     SETTINGS --> LIB
     SETTINGS --> THEME
@@ -56,6 +59,37 @@ flowchart TB
 
 `types.ts` sits apart deliberately: putting each shape beside its first
 consumer would make `bridge` → `review` → `bridge` a cycle.
+
+`devportal.ts` is left off the graph: it is one button and a probe, and it is
+compiled out of what it talks to. Its edge to `bridge.ts` is the same
+`hasDevCommands` one `desktop.ts` draws.
+
+### Suppressed browser behaviour
+
+`desktop.ts` is the only module that exists to make things *not* happen. A
+webview arrives as a page — selectable text, a browser context menu, drag
+images, F5 — and a window wants none of it. What each half handles:
+
+| Behaviour | Where | Exemption |
+|---|---|---|
+| Text selection | `styles.css`, `user-select` | Form fields, `code`, `.mono`, `.about-list dd`, and anything marked `.selectable` |
+| Context menu | `contextmenu` | Text fields (it is the Cut/Copy/Paste menu there); every build that can inspect |
+| Drag images | `dragstart` | Text fields |
+| Middle-click autoscroll | `mousedown`, button 1 | — |
+| Reload (F5, Ctrl+R) | `keydown` | Every build that can inspect |
+| Print (Ctrl+P) | `keydown` | — |
+
+"Every build that can inspect" means the vite dev server (`import.meta.env.DEV`)
+or a `devtools` build, detected through `bridge.ts`'s `hasDevCommands` probe.
+The flag is read when the event fires, not captured at init, so the few
+milliseconds before that probe resolves simply behave like a shipped build.
+
+The dev portal (`dev.html`, `src/dev/`) does none of this. It is a debugging
+surface: log output and query results are there to be selected and copied, and
+"Inspect element" is a feature of the window.
+
+The reasoning behind all of it is in
+[DEVELOPMENT.md §5.1](../DEVELOPMENT.md).
 
 ### What a card says when the data is missing
 
