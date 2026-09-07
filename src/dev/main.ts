@@ -104,12 +104,37 @@ function markActive(id: string) {
   });
 }
 
+/**
+ * Hands the next panel a listener-free `#dev-main`.
+ *
+ * Panels bind their delegated handlers to the element they are given and
+ * have no way to unbind them — `unmount` gets no reference to it. Mounting
+ * onto the *same* element every time therefore stacked a handler per
+ * mount, and `refresh()` alone remounts on every `r`, every
+ * `library-changed`, and every panel that calls it. Two live handlers turn
+ * one click into two toggles, which is a no-op that renders once on the
+ * way through: the Log panel's tag chips lit up and reverted within the
+ * same frame. Worse, the stale handlers belong to *other* panels, and
+ * generic hooks like `[data-reload]` and `[data-copy]` are not unique
+ * across them.
+ *
+ * A shallow clone carries the id, class and tabindex across and no
+ * listeners at all, so every panel starts clean without any of them having
+ * to know that this is why.
+ */
+function freshMain(): HTMLElement {
+  const host = main();
+  const fresh = host.cloneNode(false) as HTMLElement;
+  host.replaceWith(fresh);
+  return fresh;
+}
+
 async function mountPanel(panel: Panel) {
   current?.unmount?.();
   current = panel;
   markActive(panel.id);
   document.title = `${panel.title} — ninja-recorder dev portal`;
-  await panel.mount(main(), ctx);
+  await panel.mount(freshMain(), ctx);
 }
 
 function route() {
