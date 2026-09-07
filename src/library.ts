@@ -395,7 +395,9 @@ function card(row: RecordingRow): string {
 
       <span class="vod-cell">
         <span class="vod-champ" title="${escapeAttr(title)}">${escapeHtml(title)}</span>
-        <span class="vod-sub">${row.role === null ? "&nbsp;" : escapeHtml(row.role)}</span>
+        <span class="vod-sub">${
+          row.role === null ? `<span class="vod-missing">Unknown</span>` : escapeHtml(row.role)
+        }</span>
       </span>
 
       <span class="vod-cell">

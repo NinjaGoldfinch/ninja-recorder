@@ -350,6 +350,12 @@ pub struct RecordingRow {
 pub struct MatchMetadata {
     pub game_id: Option<i64>,
     pub queue: Option<i64>,
+    /// Only written when the column is **NULL**, like `champion`.
+    ///
+    /// Live Client Data reports the position the game itself assigned;
+    /// the LCU answers with `timeline.lane`/`role`, which is Riot working
+    /// it out after the fact and is weakest exactly between top and
+    /// jungle. The inference fills a gap, it does not correct.
     pub role: Option<String>,
     pub patch: Option<String>,
     pub win: Option<bool>,
@@ -586,7 +592,12 @@ impl Db {
             "UPDATE recordings SET
                 game_id  = COALESCE(?2, game_id),
                 queue    = COALESCE(?3, queue),
-                role     = COALESCE(?4, role),
+                -- The other way round, like `champion` below: the live
+                -- client reports where we actually played, and the LCU's
+                -- `timeline.lane`/`role` is Riot inferring it afterwards
+                -- from where we spent time. The inference is a fallback for
+                -- a game the poller missed, never a correction.
+                role     = COALESCE(role, ?4),
                 patch    = COALESCE(?5, patch),
                 win      = COALESCE(?6, win),
                 kda_k    = COALESCE(?7, kda_k),

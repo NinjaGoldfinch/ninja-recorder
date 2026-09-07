@@ -871,6 +871,7 @@ impl Supervisor {
                     game_id: game.game_id,
                     queue: game.queue_id,
                     champion: live.champion.clone(),
+                    role: live.role.clone(),
                     win: live.win,
                     kda_k: live.kda.map(|k| k.kills),
                     kda_d: live.kda.map(|k| k.deaths),
