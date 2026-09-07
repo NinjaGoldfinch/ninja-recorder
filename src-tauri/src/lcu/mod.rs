@@ -3,8 +3,10 @@
 //! Two entry points matter to the rest of the app: `lockfile::discover` /
 //! `lockfile::watch` to find the running client, and `gameflow::watch` to
 //! track game state once connected. `match_data` pulls post-game stats for
-//! VOD metadata.
+//! VOD metadata, and `champions` turns the champion id it answers with
+//! into the display name the library sorts on.
 
+pub mod champions;
 pub mod client;
 pub mod gameflow;
 pub mod lockfile;
@@ -24,3 +26,4 @@ pub use gameflow::{GameflowSource, GameflowUpdate};
 pub use lockfile::{LockfileError, LockfileInfo, LockfileState};
 #[allow(unused_imports)]
 pub use match_data::{fetch_match_summary, MatchDataError, MatchSummary};
+pub use champions::champion_name;

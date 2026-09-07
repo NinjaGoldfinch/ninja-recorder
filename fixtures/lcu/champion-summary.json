@@ -1,0 +1,30 @@
+[
+  {
+    "id": -1,
+    "name": "None",
+    "alias": "NoChampion",
+    "squarePortraitPath": "/lol-game-data/assets/v1/champion-icons/-1.png",
+    "roles": []
+  },
+  {
+    "id": 62,
+    "name": "Wukong",
+    "alias": "MonkeyKing",
+    "squarePortraitPath": "/lol-game-data/assets/v1/champion-icons/62.png",
+    "roles": ["fighter", "tank"]
+  },
+  {
+    "id": 103,
+    "name": "Ahri",
+    "alias": "Ahri",
+    "squarePortraitPath": "/lol-game-data/assets/v1/champion-icons/103.png",
+    "roles": ["mage", "assassin"]
+  },
+  {
+    "id": 145,
+    "name": "Kai'Sa",
+    "alias": "Kaisa",
+    "squarePortraitPath": "/lol-game-data/assets/v1/champion-icons/145.png",
+    "roles": ["marksman"]
+  }
+]

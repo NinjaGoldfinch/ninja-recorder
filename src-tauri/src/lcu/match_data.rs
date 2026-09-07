@@ -2,10 +2,10 @@
 //! role and patch. DEVELOPMENT.md §3.1.
 //!
 //! Champion *name* resolution (id → display name) is out of scope here —
-//! this module only surfaces what the LCU itself returns. The common path
-//! never needs it anyway: Live Client Data writes a display name during
-//! the game, and only a game whose poller never came up arrives here
-//! without one.
+//! this module only surfaces what the LCU itself returns; `champions`
+//! turns the id into a name. The common path never needs even that: Live
+//! Client Data writes a display name during the game, and only a game
+//! whose poller never came up arrives here without one.
 //!
 //! Called after a finalize, not during one — see `crate::match_summary`
 //! for the retry loop and the DB patch that own the timing. At the instant
