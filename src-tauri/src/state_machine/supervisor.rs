@@ -219,6 +219,16 @@ struct RecordingSession {
     /// why the last snapshot alone isn't enough — the poll carrying
     /// `GameEnd` is often the last one that ever succeeds.
     live: LiveSummary,
+    /// The last poll that carried a player list, reduced to what the row
+    /// draws.
+    ///
+    /// Last-good rather than last, for the same reason `LiveSummary`
+    /// absorbs instead of replacing: the poll carrying `GameEnd` is often
+    /// the last one that succeeds, and the ones after it — during the
+    /// end-of-game screen, or as the process exits — come back with no
+    /// `allPlayers` at all. Overwriting with one of those would trade a
+    /// real scoreboard for the absence of one.
+    scoreboard: Option<live_client::Scoreboard>,
     /// Diagnostic counters, for `RecordingDiagnostics` at finalize.
     polls: usize,
     first_game_time_s: Option<f64>,
@@ -251,6 +261,9 @@ impl RecordingSession {
         // afterwards.
         self.ever_matched |= summary.kda.is_some();
         self.live.absorb(summary);
+        if let Some(scoreboard) = live_client::scoreboard(snapshot) {
+            self.scoreboard = Some(scoreboard);
+        }
 
         self.polls += 1;
         self.first_game_time_s
@@ -745,6 +758,7 @@ impl Supervisor {
                     samples: Vec::new(),
                     align: AlignmentTracker::new(),
                     live: LiveSummary::default(),
+                    scoreboard: None,
                     polls: 0,
                     first_game_time_s: None,
                     last_game_time_s: None,
@@ -807,6 +821,7 @@ impl Supervisor {
                 // ended before the poller ever came up still writes a row —
                 // just an emptier one, exactly as it does today.
                 let live = session.as_ref().map(|s| s.live.clone()).unwrap_or_default();
+                let scoreboard = session.as_ref().and_then(|s| s.scoreboard.clone());
                 // Read from the supervisor, not the session: the identity
                 // is resolved when gameflow reaches InProgress, which is
                 // before this recording's session existed.
@@ -864,6 +879,16 @@ impl Supervisor {
                     size_bytes,
                     audio_tracks_json,
                     diagnostics_json,
+                    // Serialization failing costs the scoreboard and
+                    // nothing else, exactly as it does for the two blobs
+                    // above — the row is written either way.
+                    scoreboard_json: scoreboard
+                        .as_ref()
+                        .and_then(|s| serde_json::to_string(s).ok()),
+                    cs: scoreboard
+                        .as_ref()
+                        .and_then(|s| s.players.iter().find(|p| p.is_us))
+                        .map(|p| p.cs),
                     ..Default::default()
                 }) {
                     Ok(id) => {
@@ -1250,6 +1275,7 @@ mod tests {
             samples: Vec::new(),
             align: AlignmentTracker::new(),
             live: LiveSummary::default(),
+            scoreboard: None,
             polls: 0,
             first_game_time_s: None,
             last_game_time_s: None,

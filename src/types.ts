@@ -36,6 +36,14 @@ export interface RecordingRow {
   /// Null for every row predating it and anything a rescan imported.
   /// Nothing in the main UI reads this; the dev portal does (#72).
   diagnostics_json: string | null;
+  /// JSON `Scoreboard` — all ten champions as the game ended. Null for a
+  /// game whose poller never saw a player list, for anything a rescan
+  /// imported, and for every row predating migration 9.
+  scoreboard_json: string | null;
+  /// Our own creep score. Also inside `scoreboard_json`; a column of its
+  /// own because the row sorts on it and CS per minute wants it beside
+  /// `duration_s`.
+  cs: number | null;
 }
 
 /** One capturable audio source. Mirrors Rust's `AudioSourceKind`. */
@@ -149,6 +157,44 @@ export interface SupervisorStatus {
   // not timed in the UI, which would restart from zero if the window were
   // opened part-way through a game.
   recording_elapsed_s: number | null;
+}
+
+/** Mirrors `live_client::Scoreboard`, stored as `recordings.scoreboard_json`. */
+export interface Scoreboard {
+  players: ScoreboardPlayer[];
+  /** Absent when the live poller never matched us in `allPlayers`, in which
+   *  case the row cannot say which half is ours and shows neither. */
+  our_team?: string;
+  /** Ours only — the live API gives a full rune page for the active player
+   *  and a reduced one for everybody else. */
+  our_runes?: ScoreboardRunes;
+}
+
+export interface ScoreboardPlayer {
+  champion: string;
+  /** "ORDER" or "CHAOS". */
+  team: string;
+  /** True for the row's owner. Decided in Rust, where "which of these ten
+   *  is us" already has exactly one answer — see `find_us`. */
+  is_us?: boolean;
+  level: number;
+  kills: number;
+  deaths: number;
+  assists: number;
+  cs: number;
+  /** Item ids in slot order. Data Dragon files item art under the id. */
+  items: number[];
+  /** Display names — `["Flash", "Smite"]`. Art is filed under a key
+   *  ("SummonerFlash"), so something has to map between them, the way
+   *  champion art already does. */
+  spells: string[];
+}
+
+export interface ScoreboardRunes {
+  keystone_id: number;
+  keystone: string;
+  primary_tree_id: number;
+  secondary_tree_id: number;
 }
 
 export interface ReconcileReport {

@@ -118,6 +118,12 @@ function row(
     // in the main UI reads it — the dev portal does (#72) — but the mock
     // carries a realistic one so a browser-only session is not the odd
     // case out.
+    // Ten champions, ours marked, so a browser-only session has a
+    // scoreboard to draw before anyone has played a game — and so the
+    // "no scoreboard" case is visibly a different row rather than the
+    // only one that ever renders.
+    scoreboard_json: JSON.stringify(fixtureScoreboard(champion)),
+    cs: champion === null ? null : 180 + id * 11,
     diagnostics_json: JSON.stringify({
       game_id: 5000 + id,
       queue_id: 420,
@@ -155,6 +161,40 @@ const LAYOUTS = {
 // Deliberately awkward: nulls everywhere a rescan-imported file has them,
 // a champion name long enough to wrap a card, and a filename that would
 // break out of an attribute if it were interpolated unescaped.
+/**
+ * A plausible ten-player scoreboard for the fixtures.
+ *
+ * `null` champion means the live poller never matched us, which is the
+ * shape a rescan import has — no scoreboard at all, so the row has to
+ * render without one.
+ */
+function fixtureScoreboard(champion: string | null) {
+  if (champion === null) return null;
+  const cast = ["Garen", "Blitzcrank", "Jinx", "Thresh", "Zed", "Lux", "Nautilus", "Akali", "Pantheon"];
+  const items = [3089, 3157, 3020, 3135, 3116, 3363];
+  return {
+    our_team: "ORDER",
+    our_runes: {
+      keystone_id: 8112,
+      keystone: "Electrocute",
+      primary_tree_id: 8100,
+      secondary_tree_id: 8300,
+    },
+    players: [champion, ...cast].map((name, i) => ({
+      champion: name,
+      team: i < 5 ? "ORDER" : "CHAOS",
+      is_us: i === 0,
+      level: 11 + (i % 5),
+      kills: i === 0 ? 15 : (i * 2) % 9,
+      deaths: i === 0 ? 3 : (i + 1) % 7,
+      assists: i === 0 ? 5 : (i * 3) % 11,
+      cs: 120 + i * 17,
+      items: items.slice(0, 4 + (i % 3)),
+      spells: ["Flash", i % 2 === 0 ? "Ignite" : "Teleport"],
+    })),
+  };
+}
+
 const FIXTURE_ROWS: RecordingRow[] = [
   row(1, "Ahri", true, { pinned: true }),
   // Single track: the player must hide the stem picker entirely.

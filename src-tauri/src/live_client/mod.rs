@@ -7,9 +7,15 @@ pub mod poller;
 
 pub use client::LiveClientDataClient;
 pub use events::{
-    poll_trace, self_summary, team_diff, AlignmentTracker, AllGameData, LiveSummary, Marker,
-    MarkerTracker, TeamDiff, TimeAlignment,
+    poll_trace, scoreboard, self_summary, team_diff, AlignmentTracker, AllGameData, LiveSummary,
+    Marker, MarkerTracker, Scoreboard, TeamDiff, TimeAlignment,
 };
+
+// Named only by the dev portal's seed, which is compiled out without the
+// `devtools` feature — so without it these read as unused re-exports and
+// `-D warnings` fails on them.
+#[allow(unused_imports)]
+pub use events::{ScoreboardPlayer, ScoreboardRunes};
 
 // Re-exported for consumers outside this module (the supervisor, the dev
 // portal) — not used internally.

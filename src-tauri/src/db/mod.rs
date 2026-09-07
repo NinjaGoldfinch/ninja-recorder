@@ -220,6 +220,27 @@ static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
         ALTER TABLE samples RENAME COLUMN gold_diff_est TO gold_diff;
         UPDATE samples SET gold_diff = NULL;
         ",
+    ), M::up(
+        "
+        -- The end-of-game scoreboard: all ten champions, their KDA and CS,
+        -- the items and spells they finished with, and our own rune page.
+        -- JSON rather than a child table for the same three reasons as
+        -- `audio_tracks_json` and `diagnostics_json` — always read whole,
+        -- never queried by predicate, one per recording — plus a fourth:
+        -- a column is disposed of with its row, so retention and
+        -- `delete_recording` need no cascade to get wrong.
+        --
+        -- Nothing filters or sorts on the other nine players. The five
+        -- filters the library offers (queue, role, result, patch,
+        -- champion) are all columns that already exist.
+        ALTER TABLE recordings ADD COLUMN scoreboard_json TEXT;
+
+        -- Our own creep score, which the scoreboard also carries. A real
+        -- column because it is shown on the row and is worth sorting by,
+        -- and because CS per minute needs it beside `duration_s` rather
+        -- than inside a blob every query would have to parse.
+        ALTER TABLE recordings ADD COLUMN cs INTEGER;
+        ",
     )];
     let count = migrations.len() as i64;
     (Migrations::new(migrations), count)
@@ -252,6 +273,13 @@ pub struct NewRecording {
     /// COALESCEd on upsert like `audio_tracks_json`, so a `reconcile`
     /// rescan cannot erase it.
     pub diagnostics_json: Option<String>,
+    /// JSON `live_client::Scoreboard` — all ten champions as the game
+    /// ended. See migration 9. COALESCEd on upsert for the same reason.
+    pub scoreboard_json: Option<String>,
+    /// Our own creep score, also carried inside `scoreboard_json`. A
+    /// column of its own because the row sorts on it and CS per minute
+    /// wants it beside `duration_s`.
+    pub cs: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -303,6 +331,12 @@ pub struct RecordingRow {
     /// JSON `state_machine::supervisor::RecordingDiagnostics`. `None` for anything
     /// recorded before migration 7 and anything `reconcile` imported.
     pub diagnostics_json: Option<String>,
+    /// JSON `live_client::Scoreboard`. `None` for a game whose poller
+    /// never saw a player list, and for anything `reconcile` imported.
+    pub scoreboard_json: Option<String>,
+    /// Our own creep score. Also inside `scoreboard_json`; here as well
+    /// because the row sorts on it.
+    pub cs: Option<i64>,
 }
 
 /// The post-game columns `update_match_metadata` may fill in, once the LCU
@@ -389,6 +423,8 @@ fn row_to_recording(row: &rusqlite::Row) -> rusqlite::Result<RecordingRow> {
         audio_tracks_json: row.get(15)?,
         game_mode: row.get(16)?,
         diagnostics_json: row.get(17)?,
+        scoreboard_json: row.get(18)?,
+        cs: row.get(19)?,
     })
 }
 
@@ -464,8 +500,9 @@ impl Db {
             "INSERT INTO recordings
                 (path, started_at, duration_s, game_id, queue, champion, role,
                  win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
-                 audio_tracks_json, game_mode, diagnostics_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+                 audio_tracks_json, game_mode, diagnostics_json, scoreboard_json, cs)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+                     ?18, ?19)
              ON CONFLICT(path) DO UPDATE SET
                 started_at = excluded.started_at,
                 duration_s = excluded.duration_s,
@@ -490,7 +527,10 @@ impl Db {
                 game_mode =
                     COALESCE(excluded.game_mode, recordings.game_mode),
                 diagnostics_json =
-                    COALESCE(excluded.diagnostics_json, recordings.diagnostics_json)
+                    COALESCE(excluded.diagnostics_json, recordings.diagnostics_json),
+                scoreboard_json =
+                    COALESCE(excluded.scoreboard_json, recordings.scoreboard_json),
+                cs = COALESCE(excluded.cs, recordings.cs)
              RETURNING id",
             params![
                 new.path,
@@ -510,6 +550,8 @@ impl Db {
                 new.audio_tracks_json,
                 new.game_mode,
                 new.diagnostics_json,
+                new.scoreboard_json,
+                new.cs,
             ],
             |row| row.get(0),
         )
@@ -655,7 +697,7 @@ impl Db {
         let mut stmt = conn.prepare(
             "SELECT id, path, started_at, duration_s, game_id, queue, champion, role,
                     win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
-                    audio_tracks_json, game_mode, diagnostics_json
+                    audio_tracks_json, game_mode, diagnostics_json, scoreboard_json, cs
              FROM recordings ORDER BY started_at DESC",
         )?;
         let rows = stmt.query_map([], row_to_recording)?;
@@ -901,7 +943,7 @@ impl Db {
         conn.query_row(
             "SELECT id, path, started_at, duration_s, game_id, queue, champion, role,
                     win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
-                    audio_tracks_json, game_mode, diagnostics_json
+                    audio_tracks_json, game_mode, diagnostics_json, scoreboard_json, cs
              FROM recordings WHERE id = ?1",
             [id],
             row_to_recording,
