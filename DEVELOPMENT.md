@@ -617,15 +617,39 @@ the loading screen. The player reads it back out of the samples the timeline
 already fetches. No column, no migration, nothing to keep in sync — and it
 works on every recording ever made, including the ones that predate this.
 
-**Why not trim the file.** It was the obvious reading of the request and it is
-the worse answer. A stream-copy cut lands on the nearest keyframe, so the real
-cut point is up to a GOP away from the one asked for, and every marker and
-sample would have to shift by an amount only a second probe could establish. It
-is also irreversible, on the user's only copy, in a pass no test on any
-developer machine here can exercise — there is no ffmpeg on the Linux box and
-CI runs unit tests, not video. The saving is about twenty megabytes a game.
-That is not a trade worth making by default; if it is ever wanted it belongs
-behind a setting that is off, with the original kept on any failure.
+**The file is trimmed too, at finalize** (`crate::trim`), which saves the
+twenty-odd megabytes a game that the skipped lead occupies. The player's window
+stays regardless: it is what makes an untrimmed recording — one made before
+this, or one a build with no ffmpeg produced — open in the same place as a
+trimmed one.
+
+**It fires only on a measured answer, never a guess.** The two cases split
+cleanly, which is what makes automating it defensible. Capture started before
+the game and the sample gap says by how much: cut that. Capture started at or
+after it — a reconnect, or a client that reported the game late — and the gap
+is zero or negative, so there is no loading screen in the file and nothing is
+touched. A recording with no samples has no alignment and is likewise left
+alone.
+
+Three things keep it from being reckless. It **probes the result** rather than
+trusting the request, because a stream copy cuts on the nearest keyframe and
+removes up to a GOP less than asked — the real figure is what markers and
+samples are rebased by. It **refuses** when the measured removal is not close
+to the requested one, since that means something other than a stream copy
+happened. And it **moves the original aside** rather than overwriting, putting
+it back on any failure — including a database write that fails after the file
+is already in place, which would otherwise leave every marker out by a loading
+screen.
+
+It is best effort throughout: a failed trim is logged and the recording stands
+as it was. A VOD with its loading screen still on it is a working VOD.
+
+What has *not* been established is whether multi-track audio, stream
+dispositions and the faststart index survive the copy. There is no ffmpeg on
+the machine this was written on and CI runs unit tests rather than video, so
+that wants confirming on real footage before it is trusted. `dev_trim_lead_in`
+runs the same path by hand, for recordings that predate this and for a file the
+finalize skipped.
 
 A recording whose live poller never came up has no alignment and no samples, so
 its window is the whole file — the honest outcome, since nothing knows where

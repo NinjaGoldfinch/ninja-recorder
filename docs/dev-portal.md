@@ -78,7 +78,7 @@ no panel has to know any of this.
 | **Simulate** | The supervisor's async glue was only drivable by real League polling. Dispatches `StateEvent`s into the live supervisor (really starting and stopping the recorder), injects Live Client Data payloads through the real `MarkerTracker`, and replays a scripted game at a speed multiplier until it finalizes into a real row. Its League API probes cover the paths that need a running client: `dev_lcu_get` for any raw endpoint, `dev_champion_name` for the asset-store lookup as the code actually performs it, `dev_fetch_match_summary` for one un-retried post-game fetch, and `dev_patch_match_summary` for the whole deferred patch — retry schedule, `UPDATE` and all — against a recording already in the library, without playing a game first |
 | **Retention** | `set_retention_policy` saves *and* enforces, with no preview. `select_for_deletion` is pure and takes an injected clock, so this panel dry-runs it — including at a fabricated "now", to test an age rule without waiting days |
 | **Database** | Schema browse, paged table reads, row insert/update/delete, raw SQL, full reset |
-| **Commands** | Every registered command, invocable by hand, with a drift banner (below) |
+| **Commands** | Every registered command, invocable by hand, with a drift banner (below). Also the only home of `dev_trim_lead_in` (below), which is a one-off per recording rather than a workflow worth a panel |
 | **Recorder** | `start_recording` / `stop_recording` / `is_recording` directly, without a game |
 | **Fixtures** | Read/write `fixtures/`, toggle live capture at runtime — the replay mode the fixture strategy always called for. Capture is **on by default until v1.0** (DEVELOPMENT.md §3.3), so this panel is now mostly for turning it *off* |
 | **Diagnostics** | A recording's card tells you what it contains; nothing told you what the finalize *observed*. Reads `recordings.diagnostics_json` (migration 7) for the 25 most recent and leads with what is wrong or missing — never matched in `allPlayers`, no game id, an alignment that was never proven, or polling that stopped well before the recorder did (the #74 fingerprint). A row of eleven numbers is not an answer |
@@ -121,6 +121,33 @@ non-zero or leaves the binary behind (a still-running app is enough).
 running app" check reaches across at the other. The `identifier` is
 deliberately *not* overridden, so the portal still opens the library the real
 app writes to.
+
+## Cutting the loading screen off a file
+
+`dev_trim_lead_in` rewrites one recording's video in place, cutting the loading
+screen off the front and rebasing its markers and samples onto what is left.
+
+**Finalize already does this** ([DEVELOPMENT.md §5.4](../DEVELOPMENT.md)). The
+command is for the recordings made before it did, and for re-running one by
+hand where the finalize skipped it — a build with no ffmpeg, or a file still
+being written when it reached for it. It is a no-op on anything already
+trimmed: the rebase moved the samples with the file, so the measured loading
+screen is then under the floor.
+
+What keeps the shared path from being reckless:
+
+- It **probes the trimmed file** instead of trusting the request. `-ss` with a
+  stream copy lands on the nearest keyframe at or before the cut, so the amount
+  actually removed is up to a GOP less than the amount asked for — and that
+  real figure is what markers and samples shift by.
+- It **refuses** when the measured removal is not close to the requested one.
+  More coming off than asked is impossible for a keyframe cut, and far less
+  means something other than a stream copy happened; either way it stops rather
+  than rebasing every marker onto a wrong number.
+- It **moves the original aside** rather than overwriting it, and only deletes
+  it once both the file and the database agree. A database write that failed
+  after the file was replaced would otherwise leave every seek target out by a
+  loading screen, which looks exactly like a working recording.
 
 ## Known limits
 

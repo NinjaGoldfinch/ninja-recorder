@@ -117,6 +117,9 @@ type EventNotifier = Box<dyn Fn(SupervisorEvent) + Send + Sync>;
 /// nothing spawns and the finalize path they drive is unchanged.
 type SummaryFetcher = Box<dyn Fn(crate::match_summary::SummaryRequest) + Send + Sync>;
 
+/// Takes a recording id and returns immediately. See `set_trim_requester`.
+type TrimRequester = Box<dyn Fn(i64) + Send + Sync>;
+
 /// Something the supervisor wants the rest of the app to know about.
 ///
 /// A single enum behind a single notifier, rather than one callback per
@@ -357,6 +360,14 @@ pub struct Supervisor {
     /// is never revisited — which is what every unit test below wants, and
     /// what a build with no League client running gets anyway.
     summary_fetcher: Mutex<Option<SummaryFetcher>>,
+    /// Asks for the loading screen to be cut off a finished recording
+    /// (`crate::trim`).
+    ///
+    /// Type-erased and installed from `lib.rs` for the same two reasons as
+    /// `summary_fetcher`: this module stays free of the async runtime, and
+    /// left `None` a finalize spawns no process and rewrites no file, which
+    /// is what every unit test below wants.
+    trim_requester: Mutex<Option<TrimRequester>>,
 }
 
 impl Supervisor {
@@ -378,6 +389,7 @@ impl Supervisor {
             last_finalized: Mutex::new(None),
             on_event: Mutex::new(None),
             summary_fetcher: Mutex::new(None),
+            trim_requester: Mutex::new(None),
         })
     }
 
@@ -401,6 +413,32 @@ impl Supervisor {
     /// real one spawns a task and returns; see `crate::match_summary`.
     pub fn set_summary_fetcher(&self, fetch: SummaryFetcher) {
         *self.summary_fetcher.lock().unwrap() = Some(fetch);
+    }
+
+    /// Gives the supervisor somewhere to send a finished recording to have
+    /// its loading screen cut off. Called once from `lib.rs`'s `setup`.
+    ///
+    /// **Whatever is installed here must return immediately**, exactly like
+    /// `set_summary_fetcher`, and for a sharper reason: this is called from
+    /// inside `stop_recording` under the recorder lock, and the work behind
+    /// it is a stream copy of a file that can be gigabytes. Done inline it
+    /// would hold that lock for as long as the copy takes — blocking
+    /// `is_recording`, which the header polls once a second, and
+    /// `start_recording`, which is how the *next* game begins.
+    pub fn set_trim_requester(&self, request: TrimRequester) {
+        *self.trim_requester.lock().unwrap() = Some(request);
+    }
+
+    /// Asks for the loading screen to be cut off the recording just
+    /// written, and returns.
+    ///
+    /// Sent *after* the markers and samples are in, because the trim is
+    /// expressed as a rebase of exactly those rows — the same path
+    /// `dev_trim_lead_in` takes for a recording made before this existed.
+    fn request_trim(&self, recording_id: i64) {
+        if let Some(request) = self.trim_requester.lock().unwrap().as_ref() {
+            request(recording_id);
+        }
     }
 
     fn emit(&self, event: SupervisorEvent) {
@@ -922,6 +960,12 @@ impl Supervisor {
                 // off this path entirely. `crate::match_summary` owns the
                 // waiting; this only hands over the identifiers.
                 self.request_summary(recording_id, game, &live);
+                // Same shape, same reason, and the size on the card is
+                // whatever the trim leaves behind — so this follows the
+                // library signal above rather than delaying it.
+                if let Some(id) = recording_id {
+                    self.request_trim(id);
+                }
             }
             Err(e) => {
                 error!("state_machine", "failed to stop recording: {e}");

@@ -455,12 +455,13 @@ function jumpToMarker(direction: 1 | -1, predicate: (m: MarkerRow) => boolean) {
 /**
  * How much of the loading screen to keep in front of the game.
  *
- * Not zero: cutting to the exact frame the clock starts on means a VOD
- * opens mid-fade with no sense of where it began, and the alignment is
- * measured from a 1 Hz poll so it is only accurate to about a second
- * anyway. Two is enough to see the game appear without waiting for it.
+ * Not zero: cutting to the exact frame the clock starts on opens a VOD
+ * mid-fade with no sense of where it began. One second, matching
+ * `trim::LEAD_IN_S`, so a trimmed recording and an untrimmed one open at
+ * the same place — the alignment is measured from a 1 Hz poll and is only
+ * accurate to about that anyway.
  */
-const LEAD_IN_S = 2;
+const LEAD_IN_S = 1;
 
 /** Below this there is no loading screen worth skipping. */
 const MIN_SKIP_S = 3;
