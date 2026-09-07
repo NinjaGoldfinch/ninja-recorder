@@ -11,6 +11,7 @@ pub mod client;
 pub mod gameflow;
 pub mod lockfile;
 pub mod match_data;
+pub mod timeline;
 
 pub use client::LcuHttpClient;
 pub use gameflow::{fetch_session, GameflowPhase, GameIdentity};
@@ -25,5 +26,6 @@ pub use gameflow::{GameflowSource, GameflowUpdate};
 #[allow(unused_imports)]
 pub use lockfile::{LockfileError, LockfileInfo, LockfileState};
 #[allow(unused_imports)]
-pub use match_data::{fetch_match_summary, MatchDataError, MatchSummary};
+pub use match_data::{fetch_match_summary, fetch_sides, MatchDataError, MatchSummary, Sides};
+pub use timeline::{fetch_gold_series, GoldPoint};
 pub use champions::champion_name;

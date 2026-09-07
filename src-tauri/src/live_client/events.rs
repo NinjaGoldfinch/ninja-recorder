@@ -20,7 +20,7 @@ pub struct AllGameData {
     /// this (it matches our own name straight against event Killer/Victim/
     /// Assister fields — see `classify_event`), but the review timeline's
     /// advantage curve does: it's the only place the API exposes per-player
-    /// items and scores, and the only way to learn which side we're on.
+    /// scores, and the only way to learn which side we're on.
     #[serde(rename = "allPlayers", default)]
     pub all_players: Vec<PlayerEntry>,
     pub events: EventsWrapper,
@@ -44,8 +44,13 @@ pub struct ActivePlayer {
 
 /// One entry from `allPlayers`. Every field is `default` because the
 /// hand-trimmed fixtures omit most of them, and because a live response
-/// that drops `items` for enemies must degrade to a zero contribution
+/// that drops a field for enemies must degrade to a missing contribution
 /// rather than failing the whole poll (and with it, marker extraction).
+///
+/// `items` used to be modelled here, to price each team's holdings into a
+/// gold estimate. That estimate is gone (`lcu::timeline`), so the field is
+/// gone with it rather than being carried unread — the next thing to want
+/// items will want `itemID`, which this never had.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct PlayerEntry {
     #[serde(rename = "summonerName", default)]
@@ -61,8 +66,6 @@ pub struct PlayerEntry {
     #[serde(default)]
     pub team: String,
     #[serde(default)]
-    pub items: Vec<PlayerItem>,
-    #[serde(default)]
     pub scores: PlayerScores,
 }
 
@@ -75,27 +78,13 @@ impl PlayerEntry {
             .filter(|n| !n.is_empty())
             .collect()
     }
-
-    fn item_gold(&self) -> f64 {
-        self.items
-            .iter()
-            .map(|i| (i.price * i.count.max(1)) as f64)
-            .sum()
-    }
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct PlayerItem {
-    #[serde(default)]
-    pub price: i64,
-    #[serde(default)]
-    pub count: i64,
 }
 
 /// `kills` and `creep_score` feed the advantage curve; `deaths` and
 /// `assists` feed the library card's KDA (`self_summary`). `wardScore` is
 /// in the real response too and is still left out — modelling fields
-/// nothing reads is what the original `allPlayers` comment was avoiding.
+/// nothing reads is what the original `allPlayers` comment was avoiding,
+/// and what removing `items` restored.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct PlayerScores {
     #[serde(default)]
@@ -277,7 +266,6 @@ pub struct TeamDiff {
     /// from true gold via sold items, consumed consumables, component-vs-
     /// completed-item pricing, and the enemy's unknowable unspent gold, so
     /// it must never be presented to the user as an exact figure.
-    pub gold_diff_est: f64,
     /// Exact, from `allPlayers[].scores`.
     pub kill_diff: i64,
     /// Exact, from `allPlayers[].scores`.
@@ -298,30 +286,26 @@ pub struct TeamDiff {
 /// which is why the lookup lives in `find_us` — shared with `self_summary`
 /// and built on `names_match` — rather than comparing names directly here.
 pub fn team_diff(snapshot: &AllGameData) -> Option<TeamDiff> {
-    let active = snapshot.active_player.as_ref()?;
     let our_team = find_us(snapshot)
         .map(|p| p.team.clone())
         .filter(|t| !t.is_empty())?;
 
-    let (mut our_gold, mut their_gold) = (active.current_gold, 0.0);
     let (mut our_kills, mut their_kills) = (0i64, 0i64);
     let (mut our_cs, mut their_cs) = (0i64, 0i64);
 
     for player in &snapshot.all_players {
         let ours = player.team == our_team;
-        let (gold, kills, cs) = if ours {
-            (&mut our_gold, &mut our_kills, &mut our_cs)
+        let (kills, cs) = if ours {
+            (&mut our_kills, &mut our_cs)
         } else {
-            (&mut their_gold, &mut their_kills, &mut their_cs)
+            (&mut their_kills, &mut their_cs)
         };
-        *gold += player.item_gold();
         *kills += player.scores.kills;
         *cs += player.scores.creep_score;
     }
 
     Some(TeamDiff {
         our_team,
-        gold_diff_est: our_gold - their_gold,
         kill_diff: our_kills - their_kills,
         cs_diff: our_cs - their_cs,
     })
@@ -1293,16 +1277,16 @@ mod tests {
     // with every marker test above) readable.
     //
     // Expected fixture values, ORDER = us:
-    //   gold  ORDER items 6400 + 5300 = 11700, + our 450 unspent = 12150
-    //         CHAOS items 4100 + 3200 =  7300           diff = +4850
     //   kills ORDER 3 + 2 = 5, CHAOS 2 + 1 = 3          diff =    +2
     //   cs    ORDER 150 + 120 = 270, CHAOS 130 + 95 = 225  diff =   +45
+    //
+    // Gold is deliberately absent: it is Riot's number now, arrives after
+    // the game, and is tested in `lcu::timeline`.
 
     #[test]
     fn team_diff_is_positive_when_our_team_is_ahead() {
         let diff = team_diff(&fixture()).expect("active player is in allPlayers");
         assert_eq!(diff.our_team, "ORDER");
-        assert_eq!(diff.gold_diff_est, 4850.0);
         assert_eq!(diff.kill_diff, 2);
         assert_eq!(diff.cs_diff, 45);
     }
@@ -1324,8 +1308,6 @@ mod tests {
 
         let diff = team_diff(&snapshot).expect("EnemyA is in allPlayers");
         assert_eq!(diff.our_team, "CHAOS");
-        // Same 450 unspent, now on the other side: 7750 - 11700.
-        assert_eq!(diff.gold_diff_est, -3950.0);
         assert_eq!(diff.kill_diff, -2);
         assert_eq!(diff.cs_diff, -45);
     }
@@ -1348,36 +1330,6 @@ mod tests {
         let mut snapshot = fixture();
         snapshot.active_player = None;
         assert!(team_diff(&snapshot).is_none());
-    }
-
-    /// A live response that omits `items` for enemies (unverified against a
-    /// real game — see the plan's capture step) must still yield exact kill
-    /// and CS diffs, with the gold estimate degrading rather than the whole
-    /// snapshot failing.
-    #[test]
-    fn team_diff_survives_players_with_no_items() {
-        let mut snapshot = fixture();
-        for player in &mut snapshot.all_players {
-            if player.team == "CHAOS" {
-                player.items.clear();
-            }
-        }
-        let diff = team_diff(&snapshot).unwrap();
-        assert_eq!(diff.gold_diff_est, 12150.0, "our side only");
-        assert_eq!(diff.kill_diff, 2, "scores are unaffected by missing items");
-        assert_eq!(diff.cs_diff, 45);
-    }
-
-    /// `count` matters: Blitz holds 2 Control Wards at 350 each. A naive
-    /// sum of `price` alone would under-count stacked consumables.
-    #[test]
-    fn item_gold_multiplies_by_stack_count() {
-        let blitz = fixture()
-            .all_players
-            .into_iter()
-            .find(|p| p.riot_id_game_name == "Blitz")
-            .unwrap();
-        assert_eq!(blitz.item_gold(), 5300.0); // 3300 + 1300 + 350*2
     }
 
     #[test]

@@ -29,7 +29,7 @@
 //! id is not worth interrupting somebody's next game over.
 
 use crate::{info, warn};
-use crate::db::{Db, MatchMetadata};
+use crate::db::{Db, MatchMetadata, NewSample};
 use crate::lcu::{self, MatchDataError, MatchSummary};
 use crate::live_client::LiveSummary;
 use std::time::Duration;
@@ -231,6 +231,12 @@ pub async fn patch(db: &Db, request: &SummaryRequest) -> bool {
         );
     }
 
+    // Before the metadata write, because it is the slower half and the
+    // caller only learns "something changed" once. Its own failures are
+    // logged and swallowed: a game with no timeline still has a name, an
+    // outcome and a queue, and those are worth more than a curve.
+    write_gold_series(db, &client, request).await;
+
     match db.update_match_metadata(request.recording_id, &to_metadata(&summary, champion)) {
         // The row was deleted between the finalize and now — retention
         // runs during the same finalize, and the user can delete a card at
@@ -248,6 +254,73 @@ pub async fn patch(db: &Db, request: &SummaryRequest) -> bool {
             );
             false
         }
+    }
+}
+
+/// Adds the gold curve, from Riot's own per-participant accounting.
+///
+/// Best effort throughout. Every early return here is a recording that
+/// keeps its kill and CS curves and simply has no gold line, which the
+/// review view renders as "no gold data" — never as a flat zero, because
+/// zero on that chart means "you were even" and that reading is the entire
+/// reason the old estimate had to go (`lcu::timeline`).
+///
+/// **Custom and practice games end here**, at the empty series: they never
+/// reach match history, so there is no timeline to ask for.
+async fn write_gold_series(db: &Db, client: &lcu::LcuHttpClient, request: &SummaryRequest) {
+    let offset = match db.sample_alignment_offset(request.recording_id) {
+        Ok(Some(offset)) => offset,
+        // No samples at all — the live poller never came up. There is no
+        // alignment to place frames through, and a guessed one would draw
+        // the right curve at the wrong times.
+        Ok(None) => return,
+        Err(e) => {
+            warn!("match-summary", "no alignment for recording {}: {e}", request.recording_id);
+            return;
+        }
+    };
+
+    let sides = match lcu::fetch_sides(client, request.game_id).await {
+        Ok(sides) => sides,
+        Err(e) => {
+            warn!("match-summary", "could not tell the sides apart for game {}: {e}",
+                request.game_id
+            );
+            return;
+        }
+    };
+
+    let points = match lcu::fetch_gold_series(client, &sides, request.game_id).await {
+        Ok(points) => points,
+        Err(e) => {
+            warn!("match-summary", "no gold timeline for game {}: {e}", request.game_id);
+            return;
+        }
+    };
+    if points.is_empty() {
+        return;
+    }
+
+    let samples: Vec<NewSample> = points
+        .iter()
+        // A frame from before the recording started is outside the video.
+        .filter(|p| p.game_time_s + offset >= 0.0)
+        .map(|p| NewSample {
+            game_time_s: p.game_time_s,
+            video_time_s: p.game_time_s + offset,
+            our_team: sides.our_team.clone(),
+            gold_diff: Some(p.gold_diff),
+            ..Default::default()
+        })
+        .collect();
+
+    match db.replace_gold_samples(request.recording_id, &samples) {
+        Ok(()) => info!("match-summary", "wrote {} gold points for recording {}",
+            samples.len(), request.recording_id
+        ),
+        Err(e) => warn!("match-summary", "could not write the gold series for recording {}: {e}",
+            request.recording_id
+        ),
     }
 }
 

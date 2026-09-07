@@ -108,7 +108,7 @@ export interface SampleRow {
   game_time_s: number;
   video_time_s: number;
   our_team: string | null;
-  gold_diff_est: number | null;
+  gold_diff: number | null;
   kill_diff: number | null;
   cs_diff: number | null;
   our_gold: number | null;

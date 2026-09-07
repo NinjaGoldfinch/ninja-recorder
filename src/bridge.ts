@@ -205,23 +205,50 @@ const FIXTURE_MARKERS: MarkerRow[] = [
   payload_json: "{}",
 }));
 
-const FIXTURE_SAMPLES: SampleRow[] = Array.from({ length: 300 }, (_, i) => {
-  const t = i * 5;
-  // A plausible curve: even early, ahead mid, thrown late.
-  const gold = Math.sin(i / 40) * 4200 + i * 12 - 900;
-  return {
-    id: i + 1,
-    recording_id: 1,
-    game_time_s: t,
-    video_time_s: t + 5,
-    our_team: "ORDER",
-    gold_diff_est: gold,
-    kill_diff: Math.round(gold / 900),
-    cs_diff: Math.round(gold / 260),
-    our_gold: 300 + (i % 40) * 55,
-    our_level: Math.min(18, 1 + Math.floor(i / 17)),
-  };
-});
+// A plausible arc: even early, ahead mid, thrown late.
+const curve = (t: number) => Math.sin(t / 200) * 4200 + t * 2.4 - 900;
+
+/**
+ * Two densities, because that is what the real table holds.
+ *
+ * Kill and CS diffs are sampled live at 1 Hz; gold comes from the post-game
+ * match timeline at one frame a minute and lands as rows of its own with
+ * every other metric NULL (`lcu::timeline`). A mock that put all three on
+ * every row would hide exactly the case the renderer has to handle — and
+ * hide the "no gold data" state entirely.
+ */
+const FIXTURE_SAMPLES: SampleRow[] = [
+  ...Array.from({ length: 300 }, (_, i) => {
+    const t = i * 5;
+    return {
+      id: i + 1,
+      recording_id: 1,
+      game_time_s: t,
+      video_time_s: t + 5,
+      our_team: "ORDER",
+      gold_diff: null,
+      kill_diff: Math.round(curve(t) / 900),
+      cs_diff: Math.round(curve(t) / 260),
+      our_gold: 300 + (i % 40) * 55,
+      our_level: Math.min(18, 1 + Math.floor(i / 17)),
+    };
+  }),
+  ...Array.from({ length: 25 }, (_, i) => {
+    const t = i * 60;
+    return {
+      id: 1000 + i,
+      recording_id: 1,
+      game_time_s: t,
+      video_time_s: t + 5,
+      our_team: "ORDER",
+      gold_diff: curve(t),
+      kill_diff: null,
+      cs_diff: null,
+      our_gold: null,
+      our_level: null,
+    };
+  }),
+];
 
 const MOCKS: Record<string, unknown> = {
   get_recording_markers: FIXTURE_MARKERS,

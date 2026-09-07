@@ -51,7 +51,7 @@ erDiagram
         REAL    game_time_s
         REAL    video_time_s
         TEXT    our_team "ORDER or CHAOS, NULL if unmatched"
-        REAL    gold_diff_est "signed, + = our team ahead, ESTIMATE"
+        REAL    gold_diff "signed, + = our team ahead, from the match timeline"
         INTEGER kill_diff "signed, exact"
         INTEGER cs_diff "signed, exact"
         REAL    our_gold "unspent"
@@ -84,6 +84,7 @@ included).
 | 4 | `settings_kv` (unseeded) | UI preferences. A missing key means "use the frontend default", which makes adding a preference a zero-migration change |
 | 5 | `recordings.audio_tracks_json` (nullable) | Which audio source landed on which MP4 track. Nullable because NULL is the honest answer twice over: every row predating multi-track audio, and anything `reconcile` imported from a file we didn't record. The review player renders NULL as no stem picker rather than as a guess |
 | 6 | `recordings.game_mode` (nullable) | Live Client Data's `gameData.gameMode`. Kept out of `queue`, which holds Riot's real *queue id* as an INTEGER: the live API never exposes a queue id and the LCU never exposes a mode string, so the two arrive from different sources at different times (mode during the game, queue only post-game). A row can carry either, both or neither, and the card's Queue label falls back from one to the other |
+| 8 | `samples.gold_diff_est` → `gold_diff`, existing values cleared | The column stops claiming to be an estimate because it stops being one: gold now comes from the LCU's match timeline, which is Riot's own per-participant accounting. The old values are cleared rather than carried across — every one of them is the item-price estimate, and leaving them under a column named `gold_diff` would relabel a known-wrong number as Riot's. NULL renders as "no gold data", which is true; a flat line near zero read as "you were even", which was the bug |
 | 7 | `recordings.diagnostics_json` (nullable) | What the app *observed* while making the recording, as against what the recording contains: how many Live Client Data polls landed, whether we were ever found in `allPlayers`, the alignment the markers were mapped through, which capture backend was live. None of it is derivable afterwards — the live API is gone the moment the game ends. JSON rather than a child table for the same reasons as `audio_tracks_json`, plus one more: a column is disposed of with its row, so retention and `delete_recording` need no cascade to get wrong |
 
 ### The audio layout is JSON, not a child table
@@ -216,15 +217,24 @@ Two conventions worth knowing before adding one:
 mean *unbounded disk usage*. `settings_kv` is unseeded because a missing theme
 just means "use the default". Same word, opposite failure modes.
 
-### `gold_diff_est` is an estimate
+### `samples` holds two densities, not one
 
-The Live Client Data API exposes no per-player gold, so the diff is derived
-from summed item prices plus unspent gold. It is stored **pre-signed from the
-recording player's point of view** with `our_team` alongside, so the sign
-convention is auditable in the data rather than being an unwritten frontend
-assumption. `our_team` is `NULL` when the active player could not be matched
-in `allPlayers`; the UI renders that as team-unknown rather than risk drawing
-an inverted line.
+Kill and CS diffs are sampled live at 1 Hz. **Gold is not a live number at
+all** — it comes from the LCU's match timeline after the game, one frame a
+minute, and lands as rows of its own with every other metric NULL. The
+frontend builds each metric's series by dropping the rows that are NULL for
+it, so the two coexist without either knowing about the other, and a game
+with no timeline (a custom, a practice game) simply has no gold rows.
+
+Writing it as rows rather than interpolating onto the 1 Hz ones keeps the
+frames' own timestamps, and means a recording can carry a gold curve even
+when the live poller never came up.
+
+Every diff is stored **pre-signed from the recording player's point of
+view**, with `our_team` alongside, so the sign convention is auditable in the
+data rather than being an unwritten frontend assumption. `our_team` is `NULL`
+when the player could not be matched; the UI renders that as team-unknown
+rather than risk drawing an inverted line.
 
 ## Reconciliation
 
