@@ -58,9 +58,14 @@ macro_rules! invoke_one_blocking {
     (bare_async $name:ident, $ctx:expr, $a:expr,) => {
         Err(format!("{} is async and must go through dispatch()", stringify!($name)))
     };
-    (ctx_async $name:ident, $ctx:expr, $a:expr, $($arg:ident,)*) => {
+    // Reads the parsed arguments before refusing. This arm does not invoke
+    // anything, and the first async command to take an argument made the
+    // generated `Args` field dead code here — which `-D warnings` fails on,
+    // from inside a macro, pointing at the table rather than the command.
+    (ctx_async $name:ident, $ctx:expr, $a:expr, $($arg:ident,)*) => {{
+        $( let _ = &$a.$arg; )*
         Err(format!("{} is async and must go through dispatch()", stringify!($name)))
-    };
+    }};
 }
 
 macro_rules! is_async_arm {
