@@ -91,6 +91,10 @@ type RuneIcons = HashMap<i64, String>;
 /// this is only ever used to get from one to the other.
 type SpellNameIds = HashMap<String, i64>;
 
+/// Spell id → the asset's path on Community Dragon, already rewritten and
+/// lowercased. Out of a document the *client* publishes, not Data Dragon.
+type SpellAssets = HashMap<i64, String>;
+
 /// Data Dragon's `summoner.json`, reduced the same way `champion.json` is.
 #[derive(Debug, Deserialize)]
 struct SpellData {
@@ -153,6 +157,7 @@ type Cached<T> = Option<(String, Arc<T>)>;
 static CHAMPION_KEYS: Mutex<Cached<ArtKeys>> = Mutex::new(None);
 static RUNE_ICONS: Mutex<Cached<RuneIcons>> = Mutex::new(None);
 static SPELL_NAME_IDS: Mutex<Cached<SpellNameIds>> = Mutex::new(None);
+static SPELL_ASSETS: Mutex<Cached<SpellAssets>> = Mutex::new(None);
 
 /// Reads a cached map if it belongs to `version`.
 fn cached_map<T>(cache: &Mutex<Cached<T>>, version: &str) -> Option<Arc<T>> {
@@ -300,6 +305,61 @@ fn name_to_id(entries: HashMap<String, ChampionEntry>) -> SpellNameIds {
         .collect()
 }
 
+/// One entry of Community Dragon's `summoner-spells.json`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommunitySpell {
+    id: i64,
+    icon_path: String,
+}
+
+/// Spell id → Community Dragon asset path.
+///
+/// There is no `summoner-spells/{id}.png` on that CDN — the first version
+/// of this assumed there was and every spell silently resolved to nothing.
+/// What it publishes is the client's own asset *manifest*, and each entry
+/// carries the path the art really lives at.
+async fn spell_assets(dir: &Path, version: &str) -> Option<Arc<SpellAssets>> {
+    if let Some(assets) = cached_map(&SPELL_ASSETS, version) {
+        return Some(assets);
+    }
+    // Cached under the Data Dragon version even though the document is
+    // unversioned: a patch is exactly when the art can change, and it
+    // keeps the cache one directory per version with nothing outside it.
+    let body = cached_json(
+        dir,
+        version,
+        "summoner-spells.json",
+        format!("{COMMUNITY_CDN}/v1/summoner-spells.json"),
+    )
+    .await?;
+
+    let parsed: Vec<CommunitySpell> = serde_json::from_str(&body)
+        .map_err(|e| warn!("ddragon", "summoner-spells.json did not parse: {e}"))
+        .ok()?;
+
+    let assets = Arc::new(spell_asset_map(parsed));
+    *SPELL_ASSETS.lock().unwrap() = Some((version.to_string(), Arc::clone(&assets)));
+    Some(assets)
+}
+
+/// Rewrites each entry's client-side `iconPath` into a Community Dragon one.
+///
+/// The rule is the CDN's own: drop the `/lol-game-data/assets` prefix the
+/// client uses and lowercase the rest. `Summoner_flash.png` under
+/// `DATA/Spells/Icons2D` becomes `/data/spells/icons2d/summoner_flash.png`,
+/// and the same rule carries the odd ones — `Summoner_Teleport_New.png`,
+/// and the Jade skins filed under `ASSETS/UX` instead.
+fn spell_asset_map(entries: Vec<CommunitySpell>) -> SpellAssets {
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            let path = entry.icon_path.strip_prefix("/lol-game-data/assets")?;
+            Some((entry.id, path.to_lowercase()))
+        })
+        .collect()
+}
+
 /// Rune id → icon path, flattened out of the tree document.
 async fn rune_icons(dir: &Path, version: &str) -> Option<Arc<RuneIcons>> {
     if let Some(icons) = cached_map(&RUNE_ICONS, version) {
@@ -434,14 +494,8 @@ pub async fn spell_icon_by_id(
     if let Some(bytes) = spell_from_client(lockfile, spell_id).await {
         return write_asset(&path, &bytes);
     }
-    cached_file(
-        dir,
-        &version,
-        "spell",
-        &name,
-        format!("{COMMUNITY_CDN}/v1/summoner-spells/{spell_id}.png"),
-    )
-    .await
+    let asset = spell_assets(dir, &version).await?.get(&spell_id)?.clone();
+    cached_file(dir, &version, "spell", &name, format!("{COMMUNITY_CDN}{asset}")).await
 }
 
 /// The client's own icon for a spell, if a client is running.
@@ -542,6 +596,9 @@ pub async fn resolve_icons(dir: &Path, request: &IconRequest) -> IconSet {
         }
         if !request.spells.is_empty() {
             let _ = spell_name_ids(dir, &version).await;
+        }
+        if !request.spells.is_empty() || !request.spell_ids.is_empty() {
+            let _ = spell_assets(dir, &version).await;
         }
         if !request.runes.is_empty() {
             let _ = rune_icons(dir, &version).await;
@@ -740,6 +797,118 @@ mod tests {
         let ids = name_to_id(parsed.data);
         assert_eq!(ids.len(), 1);
         assert_eq!(ids.get("Barrier"), Some(&21));
+    }
+
+    /// The concurrency bound is the whole point of `resolve_each`, and it
+    /// is invisible in the output — a map resolved six at a time and one
+    /// resolved a hundred at a time are the same map. So it is asserted
+    /// directly: without this, raising `CONCURRENCY` to something that
+    /// looks like a burst to a CDN would pass every other test here.
+    #[tokio::test]
+    async fn no_more_than_the_bound_are_ever_in_flight() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let live = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+
+        let keys: Vec<i64> = (0..CONCURRENCY as i64 * 3).collect();
+        let resolved = resolve_each(keys, |id: i64| {
+            let (live, peak) = (live.clone(), peak.clone());
+            async move {
+                let now = live.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(now, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                live.fetch_sub(1, Ordering::SeqCst);
+                Some(PathBuf::from(format!("{id}.png")))
+            }
+        })
+        .await;
+
+        assert_eq!(peak.load(Ordering::SeqCst), CONCURRENCY);
+        assert_eq!(resolved.len(), CONCURRENCY * 3);
+        assert!(live.load(Ordering::SeqCst) == 0, "a fetch outlived the stream");
+    }
+
+    /// A key that could not be resolved is **absent**, not present and
+    /// empty. The frontend falls back to the text that was there before
+    /// art existed by asking whether the key is in the map, so an empty
+    /// string would paint a broken image over a perfectly good name.
+    #[tokio::test]
+    async fn unresolved_keys_stay_out_of_the_map() {
+        let resolved = resolve_each(vec![1i64, 2, 3, 4], |id: i64| async move {
+            (id % 2 == 0).then(|| PathBuf::from(format!("{id}.png")))
+        })
+        .await;
+
+        assert_eq!(resolved.len(), 2);
+        assert!(resolved.contains_key("2"));
+        assert!(!resolved.contains_key("1"), "a miss leaked into the map");
+    }
+
+    /// Nothing asked for is nothing fetched — a library with no art to
+    /// resolve must not reach the network to find that out.
+    #[tokio::test]
+    async fn an_empty_request_fetches_nothing() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let resolved = resolve_each(Vec::<i64>::new(), move |_: i64| {
+            let c = c.clone();
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                None
+            }
+        })
+        .await;
+
+        assert!(resolved.is_empty());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    /// The rewrite is the whole fallback. The first attempt guessed at a
+    /// `summoner-spells/{id}.png` route that does not exist, which fails
+    /// *silently* — a 404 is indistinguishable from "no art" downstream —
+    /// so the real document's shape is pinned here.
+    #[test]
+    fn client_asset_paths_become_community_dragon_ones() {
+        let parsed: Vec<CommunitySpell> = serde_json::from_str(
+            r#"[
+                {"id":4,"name":"Flash","iconPath":"/lol-game-data/assets/DATA/Spells/Icons2D/Summoner_flash.png"},
+                {"id":12,"name":"Teleport","iconPath":"/lol-game-data/assets/DATA/Spells/Icons2D/Summoner_Teleport_New.png"},
+                {"id":74,"name":"Flash","iconPath":"/lol-game-data/assets/ASSETS/UX/Jade/S3Icons/SameSized/S3_Summoner_flash.project_jade.png"}
+            ]"#,
+        )
+        .unwrap();
+        let assets = spell_asset_map(parsed);
+
+        assert_eq!(
+            assets.get(&4).map(String::as_str),
+            Some("/data/spells/icons2d/summoner_flash.png")
+        );
+        // Mixed case in the filename is lowercased too, not just the dirs.
+        assert_eq!(
+            assets.get(&12).map(String::as_str),
+            Some("/data/spells/icons2d/summoner_teleport_new.png")
+        );
+        // Not every spell lives under DATA/Spells — the Jade set does not.
+        assert_eq!(
+            assets.get(&74).map(String::as_str),
+            Some("/assets/ux/jade/s3icons/samesized/s3_summoner_flash.project_jade.png")
+        );
+    }
+
+    /// An entry whose path is not under the prefix the rule strips is
+    /// dropped rather than turned into a URL that 404s.
+    #[test]
+    fn spell_entries_outside_the_asset_root_are_dropped() {
+        let parsed: Vec<CommunitySpell> = serde_json::from_str(
+            r#"[{"id":9001,"iconPath":"https://example.invalid/elsewhere.png"}]"#,
+        )
+        .unwrap();
+        assert!(spell_asset_map(parsed).is_empty());
     }
 
     /// Ten rows sharing a champion must cost one lookup, not ten.
