@@ -167,11 +167,19 @@ would unpin the recording and zero its size. Every column it writes
 COALESCEs so a value the LCU could not establish never erases one the live
 client did.
 
-`champion` COALESCEs the other way round — the existing value wins:
+`role` and `champion` both COALESCE the other way round — the existing value
+wins:
 
 ```sql
+role     = COALESCE(role, ?)
 champion = COALESCE(champion, ?)
 ```
+
+`role` is the same argument in a different place: Live Client Data reports the
+position the game assigned, and the LCU answers with `timeline.lane`/`role`,
+which is Riot inferring it afterwards from where a player spent time. The
+inference is weakest between top and jungle, so it fills a gap for a game the
+poller missed and never corrects one.
 
 `champion` is sorted on, filtered on and used as the card title, so one
 champion under two spellings would split its games in two everywhere in the

@@ -96,6 +96,15 @@ pub struct PlayerEntry {
     pub team: String,
     #[serde(default)]
     pub level: i64,
+    /// Where the game says this player is: `TOP`, `JUNGLE`, `MIDDLE`,
+    /// `BOTTOM`, `UTILITY`, or empty in modes that have no lanes.
+    ///
+    /// This is the *game's* answer, not an inference. The LCU's
+    /// `timeline.lane`/`role` pair is Riot working it out afterwards from
+    /// where a player spent time, and it is weakest exactly between top
+    /// and jungle — see `role` on `LiveSummary`.
+    #[serde(default)]
+    pub position: String,
     #[serde(default)]
     pub items: Vec<PlayerItem>,
     #[serde(rename = "summonerSpells", default)]
@@ -416,6 +425,16 @@ pub struct LiveSummary {
     pub game_mode: Option<String>,
     /// `None` means "not decided yet", never "lost" — see `outcome`.
     pub win: Option<bool>,
+    /// Where we played, from `allPlayers[].position`.
+    ///
+    /// **The game's answer, not Riot's inference.** The LCU's
+    /// `timeline.lane`/`role` pair is derived after the fact from where a
+    /// player spent time, and it confuses top with jungle often enough to
+    /// put the wrong word on a row. This is what the client itself
+    /// reported while the game was running, so it wins — and
+    /// `update_match_metadata` fills `role` only when it is NULL for
+    /// exactly that reason.
+    pub role: Option<String>,
 }
 
 impl LiveSummary {
@@ -440,7 +459,32 @@ impl LiveSummary {
         if newer.win.is_some() {
             self.win = newer.win;
         }
+        if newer.role.is_some() {
+            self.role = newer.role;
+        }
     }
+}
+
+/// Live Client Data's position, in the words the `role` column already
+/// holds.
+///
+/// The vocabulary has to match `lcu::match_data::position` exactly: one
+/// column, two writers, and a column carrying both `Support` and `UTILITY`
+/// is one nothing can group by. Same rule as champion names.
+///
+/// An unrecognised value — including the empty string a mode with no lanes
+/// reports — yields `None`, which the row renders as `Unknown`. A guess
+/// here would be a guess in a slot people read as fact.
+fn live_position(position: &str) -> Option<String> {
+    let named = match position.trim().to_ascii_uppercase().as_str() {
+        "TOP" => "Top",
+        "JUNGLE" => "Jungle",
+        "MIDDLE" | "MID" => "Middle",
+        "BOTTOM" | "BOT" => "Bottom",
+        "UTILITY" | "SUPPORT" => "Support",
+        _ => return None,
+    };
+    Some(named.to_string())
 }
 
 /// The end-of-game scoreboard, as the library row wants to draw it.
@@ -668,6 +712,7 @@ pub fn self_summary(snapshot: &AllGameData) -> LiveSummary {
             .filter(|m| !m.is_empty())
             .map(str::to_string),
         win: outcome(snapshot),
+        role: us.and_then(|p| live_position(&p.position)),
     }
 }
 
@@ -1512,6 +1557,55 @@ mod tests {
         assert_eq!(diff.our_team, "CHAOS");
         assert_eq!(diff.kill_diff, -2);
         assert_eq!(diff.cs_diff, -45);
+    }
+
+    // --- role ---------------------------------------------------------------
+
+    /// The vocabulary has to match `lcu::match_data::position` exactly.
+    /// One column, two writers: a `role` holding both `Support` and
+    /// `UTILITY` is one nothing can group by.
+    #[test]
+    fn live_positions_map_onto_the_words_the_column_already_holds() {
+        assert_eq!(live_position("TOP").as_deref(), Some("Top"));
+        assert_eq!(live_position("JUNGLE").as_deref(), Some("Jungle"));
+        assert_eq!(live_position("MIDDLE").as_deref(), Some("Middle"));
+        assert_eq!(live_position("BOTTOM").as_deref(), Some("Bottom"));
+        // The live API says UTILITY where the LCU says BOTTOM+DUO_SUPPORT.
+        // Both have to land on the same word.
+        assert_eq!(live_position("UTILITY").as_deref(), Some("Support"));
+        // Case and padding are the response's business, not ours.
+        assert_eq!(live_position(" jungle ").as_deref(), Some("Jungle"));
+    }
+
+    /// A mode with no lanes reports an empty position, and a mode we have
+    /// never seen could report anything. Neither is a role, and guessing
+    /// one would put a word in a slot people read as fact.
+    #[test]
+    fn an_unknown_position_has_no_role_rather_than_a_guessed_one() {
+        assert_eq!(live_position(""), None);
+        assert_eq!(live_position("   "), None);
+        assert_eq!(live_position("NEXUS_BLITZ_LANE"), None);
+    }
+
+    /// The trimmed fixture has no `position` at all, which is also what a
+    /// client that stops sending it looks like.
+    #[test]
+    fn a_snapshot_without_positions_yields_no_role() {
+        assert_eq!(self_summary(&fixture()).role, None);
+    }
+
+    #[test]
+    fn our_own_position_becomes_the_role() {
+        let mut snapshot = fixture();
+        for player in &mut snapshot.all_players {
+            player.position = if player.champion_name == "Ahri" {
+                "MIDDLE".to_string()
+            } else {
+                "TOP".to_string()
+            };
+        }
+        // Ours, not whoever happened to be first.
+        assert_eq!(self_summary(&snapshot).role.as_deref(), Some("Middle"));
     }
 
     // --- scoreboard -------------------------------------------------------
