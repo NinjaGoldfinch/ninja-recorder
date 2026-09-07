@@ -378,11 +378,11 @@ the probe.
 
 Implemented in `src/review.ts` + `index.html`'s `#review-view`. The video loads via Tauri's asset protocol (`convertFileSrc`, scoped in `tauri.conf.json` to `$APPDATA/recordings/*` — needed the `protocol-asset` Cargo feature, not just config).
 
-**The player chrome lives inside `.player-wrap`, and that placement is a constraint rather than a style choice.** `requestFullscreen` is called on `.player-wrap`; the Fullscreen API renders only the fullscreened element's subtree, so a control bar that is a *sibling* of the video is not drawn at all in fullscreen — which is exactly how it behaved. Moving the bar inside the frame is the only fix; no amount of CSS reaches an element outside the subtree. The `:fullscreen` rules in `styles.css` are the other half: without them the video keeps the `max-height: 60vh` it needs when embedded and renders as a small rectangle floating in a black screen. The rich `#vod-timeline` is deliberately left outside, so it is unavailable in fullscreen — duplicating the metric graph, glyphs and ruler into the overlay would be a second implementation of the most intricate widget in the app, and the `[` / `]` / `d` / `D` hotkeys already cover marker navigation there.
+**The player chrome lives inside `.player-wrap`, and that placement is a constraint rather than a style choice.** `requestFullscreen` is called on `.player-wrap`; the Fullscreen API renders only the fullscreened element's subtree, so a control bar that is a *sibling* of the video is not drawn at all in fullscreen — which is exactly how it behaved. Moving the bar inside the frame is the only fix; no amount of CSS reaches an element outside the subtree. The `:fullscreen` rules in `styles.css` are the other half: without them the embedded `height: auto` still applies and the video renders as a band across the middle of a black screen. Embedded, the element is sized by the recording's own aspect ratio and nothing else — it was capped at `max-height: 60vh`, which kept the full width and made up the difference in black bars above and below, growing and shrinking them as the window was resized. The page scrolls instead; the window's default height (§12) is chosen so the player and the timeline both clear the fold. The rich `#vod-timeline` is deliberately left outside, so it is unavailable in fullscreen — duplicating the metric graph, glyphs and ruler into the overlay would be a second implementation of the most intricate widget in the app, and the `[` / `]` / `d` / `D` hotkeys already cover marker navigation there.
 
 **Frame-stepping was dropped** along with that rework. It was a ±1/30s time nudge rather than a true frame seek — no per-recording frame rate is probed anywhere — so it was an approximation presented as precision, and it cost two buttons in a control bar that had to shed width to fit inside the frame. Closely-spaced markers (common near a teamfight) collapse into a single cluster glyph rather than colliding, with `MARKER_PRIORITY` deciding which icon the cluster shows. The library grid, filters, sort, and the stats bar above them are all client-side over the already-fetched row set — fine at solo-user library sizes, would need real pagination/querying if that stops being true.
 
-Verified: layout/CSS visually in a browser (with injected mock data, since a plain browser tab has no Tauri IPC bridge to exercise real `invoke` calls) and a full `cargo tauri dev` launch (asset-protocol config + new `get_recording_markers` command, no capability/schema errors, stable). **Not verified**: the hotkey→seek interaction against real marker data (needs a loaded recording, which needs a live app session to click through manually). Video playback itself is now testable — `fixtures/sample.mp4` is checked in (§10), and the dev portal's Review-ready seed preset builds a recording around it.
+Verified: layout/CSS visually in a browser (with injected mock data, since a plain browser tab has no Tauri IPC bridge to exercise real `invoke` calls) and a full `cargo tauri dev` launch (asset-protocol config + new `get_recording_markers` command, no capability/schema errors, stable). **Not verified**: the hotkey→seek interaction against real marker data (needs a loaded recording, which needs a live app session to click through manually) — and that gap did hide a bug. The hotkey handler stands aside for a focused form control so it does not steal a key the control uses itself, but it applied that to Space *and* the arrows, for any `<button>`. A timeline glyph is a button, so clicking one to jump left it focused and killed seeking entirely until you clicked elsewhere. A `<button>` does nothing with the arrows, so the exemption bought nothing there: Space now stands aside for a button or a select, the arrows only for a select, and a glyph no longer takes focus from a pointer at all. Video playback itself is now testable — `fixtures/sample.mp4` is checked in (§10), and the dev portal's Review-ready seed preset builds a recording around it.
 
 ### 5.1 App shell, theming and settings
 
@@ -404,6 +404,27 @@ construction rather than by CSS specificity. The cost is that "System" no
 longer follows the OS for free — `theme.ts` listens on the matchMedia
 `change` event to put that back, and removing that listener is a silent
 regression with no test to catch it.
+
+**The window is not a page.** A webview brings the whole browser with it, and
+most of what it brings is meaningless here: dragging across a card leaves half
+of it highlighted, right-click offers to reload the app or save the video, F5
+throws the UI away mid-recording without the backend hearing about it, and
+icons peel off under the cursor as drag images. `desktop.ts` and one CSS block
+suppress that. The split is not arbitrary — only CSS can hand selection back
+per element (`.selectable`, plus form fields, `code` and `.mono`, because text
+the user typed or might want to copy is the one kind worth keeping), and only
+JS can see the events.
+
+Both halves are narrow by construction: they suppress browser chrome, never app
+behaviour, and each suppression names the one case where it would be a
+regression. Text fields keep their context menu, because there it is the
+ordinary Cut/Copy/Paste menu a desktop app would show anyway. A build you can
+inspect — the vite dev server, or anything with the `devtools` Cargo feature —
+keeps the native menu and the reload key outright, since "Inspect element" and
+a reload are the two things most worth having while working on the frontend.
+That check reuses `devportal.ts`'s existing probe (`hasDevCommands` in
+`bridge.ts`, memoised) rather than adding a second flag that could disagree
+with the Rust side.
 
 Preferences live in `settings_kv` (migration 4), a deliberately unseeded
 key/value table: a missing pref means "use the frontend default", so adding
@@ -647,6 +668,14 @@ Building it from `setup` is safe. The hazard `dev_open_portal` documents —
 building a window re-entrantly from inside a WebView2 IPC callback yields a
 blank window — applies to windows created from a command, which `setup` is not.
 A window created later from a tray click will have to respect it.
+
+**The default size is derived from the frontend, not picked by eye.** The
+content column stops at `--content-max: 1120px`; add the container's padding
+and room for a scrollbar and 1200 is the narrowest inner width at which it
+reaches full width, so anything narrower squeezes every view and anything wider
+only adds background. The 900 height clears the review player and its timeline
+— the marker list under them is left to scroll, because a window tall enough to
+show it as well would not fit on a 1080p desktop.
 
 Verified on macOS against the real binary: a default start registers a GUI
 window, `--hidden` starts with none and stays running, `--daemon` exits 2, and
