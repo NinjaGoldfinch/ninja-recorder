@@ -289,10 +289,15 @@ function card(row: RecordingRow): string {
   const queue = queueOrModeLabel(row);
   const length = row.duration_s === null ? null : formatClock(row.duration_s);
 
-  // The result is the leading accent and nothing else visible. It is still
-  // *said*, once, for anything that cannot see a colour — a screen reader,
-  // and the hover.
-  const outcome = row.win === null ? "Result unknown" : row.win ? "Win" : "Loss";
+  // Said once, in the sub-line, and shown once, as the leading accent. The
+  // word is what makes the row readable without colour — green and red are
+  // exactly the pair a red-green deficiency cannot separate — and it costs
+  // no column because the sub-line is already a run of text.
+  //
+  // Absent when the result is unknown, which is unambiguous rather than a
+  // gap: a word is present on every decided row, so no word means undecided.
+  const outcomeWord = row.win === null ? null : row.win ? "Win" : "Loss";
+  const outcome = outcomeWord ?? "Result unknown";
 
   const ratio = kdaRatio(row.kda_k, row.kda_d, row.kda_a);
   const role = row.role;
@@ -314,7 +319,9 @@ function card(row: RecordingRow): string {
 
       <span class="vod-cell">
         <span class="vod-champ" title="${escapeAttr(title)}">${escapeHtml(title)}</span>
-        <span class="vod-sub">${cell(queue)}${role ? ` · ${escapeHtml(role)}` : ""}</span>
+        <span class="vod-sub">${cell(queue)}${role ? ` · ${escapeHtml(role)}` : ""}${
+          outcomeWord ? ` · <span class="vod-outcome">${outcomeWord}</span>` : ""
+        }</span>
       </span>
 
       <span class="vod-cell">

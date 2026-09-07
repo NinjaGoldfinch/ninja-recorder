@@ -1281,11 +1281,10 @@ button.armed {
  * — it makes the edge read as the row's state rather than as a decoration
  * beside it, without tinting forty rows into a wall of red and green.
  *
- * The cost is honest and worth naming: **the outcome is now colour only.**
- * It is still carried as text on the row's `aria-label` and on the
- * timestamp's hover, which covers a screen reader but not a sighted
- * red-green deficiency. If that matters, the place to put the word back is
- * the queue sub-line, where it costs no column. */
+ * The *word* did not go with the badge. It moved into the queue sub-line
+ * (`.vod-outcome`), where it costs no column, so the result is still
+ * legible to someone who cannot separate green from red — which is exactly
+ * the pair this encodes. Colour and text, one place each. */
 .vod-row[data-outcome="win"] {
   border-left-color: var(--win-fg);
   background-image: linear-gradient(
@@ -1302,6 +1301,21 @@ button.armed {
     var(--loss-bg),
     transparent 18rem
   );
+}
+
+/* The result as a word, inside the sub-line rather than in a column of its
+ * own. Coloured as well as written, so it carries both channels at once
+ * for anyone who can use either. */
+.vod-outcome {
+  font-weight: 600;
+}
+
+.vod-row[data-outcome="win"] .vod-outcome {
+  color: var(--win-fg);
+}
+
+.vod-row[data-outcome="loss"] .vod-outcome {
+  color: var(--loss-fg);
 }
 
 /* Two lines in one grid cell: the value, and the thing that qualifies it.
