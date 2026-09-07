@@ -506,6 +506,59 @@ commands (unreferenced from the frontend): `start_recording` carries the
 `has_room_to_record` preflight, and dropping them would make
 `chrono_stamp` dead code, which fails CI's `clippy -D warnings`.
 
+### 5.2 Decision: the gold curve is Riot's number, not ours
+
+The advantage curve's gold series used to be computed live, by summing the
+price of the items each team was holding and adding our own unspent gold. It
+was wrong — not miscalibrated, wrong in a way no coefficient fixes:
+
+- **The enemy's unspent gold is invisible and ours is not.** Live Client Data
+  has exactly one gold field and it is ours, so the estimate is biased in our
+  favour by whatever the other team is carrying — several thousand while five
+  of them are backing.
+- **Sold and consumed items subtract from it but not from gold earned.** Every
+  potion drunk and every ward placed walks the curve backwards for a player who
+  is doing fine.
+- **Trinkets and wards price at zero**, so support gold is under-counted on
+  both sides, unevenly, depending on who happens to be holding what.
+
+Item value is a lower bound on gold earned whose deficit is unbounded,
+per-team and time-varying. A 33-minute game read as a flat band around zero,
+which is not the shape of any real game, and the honest caveat in the tooltip
+did not rescue a chart that told somebody they were even in a game they lost by
+eight thousand. **A lie with a footnote is still the thing people read off the
+screen.**
+
+`/lol-match-history/v1/game-timelines/{gameId}` carries per-participant
+`totalGold` per frame. `lcu::timeline` sums each side and signs the difference
+from ours; `lcu::match_data::split_sides` says which participants those are,
+because "which of these ten players are we" already has one home on the LCU
+side and a second answer would be the bug #60 documents, again.
+
+**What it costs, and why each cost is acceptable.** Resolution drops from 1 Hz
+to one frame a minute — about 35 points for a 35-minute game rather than 2100 —
+which is no loss, because the renderer already buckets down to roughly a
+thousand points and per-second precision on a number wrong by thousands was
+fake precision. There is **no live gold** any more, since it does not exist
+until the game is over; kill and CS diffs stay live and stay exact. **Custom
+and practice games get no gold curve at all**, because they never reach match
+history, and that renders as "no gold data for this recording" rather than a
+flat zero line — a zero line reads as "you were even", which is the exact
+failure this replaced.
+
+It arrives with the deferred summary patch (§3.1), on the same
+`summary_fetcher` seam and the same retry schedule, for the same reason: at
+`Recording → Finalizing` the client is in `WaitingForStats` and the gameflow
+watch is being torn down in the same transition. No second spawn point, no
+second retry loop, no second set of magic numbers.
+
+The frames carry a game clock, so they go through the alignment the 1 Hz
+samples already used — recovered from an existing sample row rather than
+recomputed, because the API that produced it stops answering the moment the
+game ends. A recording with no samples gets no gold: there is no alignment to
+place frames through, and a guessed one would draw the right curve at the wrong
+times.
+
 ### 5.3 Decision: art comes from a CDN, names do not
 
 §3.1 refuses Data Dragon for champion *names*, and this uses it for champion

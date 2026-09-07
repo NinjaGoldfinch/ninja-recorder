@@ -453,18 +453,21 @@ type MetricKey = "gold_diff" | "kill_diff" | "cs_diff" | "none";
 
 const METRIC_META: Record<
   Exclude<MetricKey, "none">,
-  { label: string; estimated: boolean; format: (v: number) => string }
+  { label: string; empty: string; format: (v: number) => string }
 > = {
-  gold_diff: { label: "Gold diff", estimated: true, format: formatSignedGold },
-  kill_diff: { label: "Kill diff", estimated: false, format: formatSigned },
-  cs_diff: { label: "CS diff", estimated: false, format: formatSigned },
+  gold_diff: {
+    label: "Gold diff",
+    // Its own message, because its absence has its own cause. Gold comes
+    // from the post-game match timeline, so a custom or a practice game
+    // never has one, and a real game does not have one until the deferred
+    // patch lands. Falling back to the generic "not enough data" would
+    // read as a bug in all three cases.
+    empty: "No gold data for this recording",
+    format: formatSignedGold,
+  },
+  kill_diff: { label: "Kill diff", empty: "Not enough data to plot", format: formatSigned },
+  cs_diff: { label: "CS diff", empty: "Not enough data to plot", format: formatSigned },
 };
-
-const GOLD_ESTIMATE_CAVEAT =
-  "Estimated, not exact. The Live Client Data API exposes no per-player gold, " +
-  "so this is the summed price of the items each team is holding, plus your own " +
-  "unspent gold. Sold items, consumables and the enemy's unspent gold aren't " +
-  "accounted for. Kill diff and CS diff are exact.";
 
 /** Re-renders every part of the timeline. Cheap enough to call wholesale. */
 function renderTimeline() {
@@ -477,7 +480,7 @@ function renderTimeline() {
 function metricValue(sample: SampleRow, metric: MetricKey): number | null {
   switch (metric) {
     case "gold_diff":
-      return sample.gold_diff_est;
+      return sample.gold_diff;
     case "kill_diff":
       return sample.kill_diff;
     case "cs_diff":
@@ -557,7 +560,7 @@ function renderGraph() {
 
   if (points.length < 2) {
     hideGraph();
-    setMetricSummary("Not enough data to plot", true);
+    setMetricSummary(meta.empty, true);
     return;
   }
 
@@ -589,11 +592,9 @@ function renderGraph() {
 
   const last = reduced[reduced.length - 1].v;
   const peak = reduced.reduce((a, p) => (Math.abs(p.v) > Math.abs(a) ? p.v : a), 0);
-  const label = meta.estimated ? `${meta.label} (est.)` : meta.label;
   setMetricSummary(
-    `${label} · ${meta.format(last)} at end · peak ${meta.format(peak)}`,
-    false,
-    meta.estimated ? GOLD_ESTIMATE_CAVEAT : ""
+    `${meta.label} · ${meta.format(last)} at end · peak ${meta.format(peak)}`,
+    false
   );
 }
 

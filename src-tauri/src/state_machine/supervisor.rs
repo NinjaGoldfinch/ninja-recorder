@@ -851,7 +851,11 @@ impl Supervisor {
                                 game_time_s: s.game_time_s,
                                 video_time_s: s.video_time_s,
                                 our_team: s.diff.as_ref().map(|d| d.our_team.clone()),
-                                gold_diff_est: s.diff.as_ref().map(|d| d.gold_diff_est),
+                                // Left NULL on purpose. Gold is Riot's
+                                // number now and arrives with the summary
+                                // patch, as its own sparser rows — nothing
+                                // during the game knows it (`lcu::timeline`).
+                                gold_diff: None,
                                 kill_diff: s.diff.as_ref().map(|d| d.kill_diff),
                                 cs_diff: s.diff.as_ref().map(|d| d.cs_diff),
                                 our_gold: Some(s.our_gold),
@@ -1363,7 +1367,7 @@ mod tests {
                 game_time_s: 12.0,
                 diff: Some(live_client::TeamDiff {
                     our_team: "CHAOS".into(),
-                    gold_diff_est: -1250.0,
+
                     kill_diff: -2,
                     cs_diff: 15,
                 }),
@@ -1387,7 +1391,8 @@ mod tests {
         let samples = sup.db.get_samples(finalized.recording_id.unwrap()).unwrap();
         assert_eq!(samples.len(), 1);
         assert_eq!(samples[0].our_team, Some("CHAOS".to_string()));
-        assert_eq!(samples[0].gold_diff_est, Some(-1250.0));
+        // Gold is not a live number any more; the finalize writes none.
+        assert_eq!(samples[0].gold_diff, None);
         assert_eq!(samples[0].kill_diff, Some(-2));
 
         let rows = sup.db.list_recordings().unwrap();

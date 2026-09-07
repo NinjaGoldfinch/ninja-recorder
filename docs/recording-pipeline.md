@@ -510,6 +510,22 @@ would not parse — each of those resolves to no name rather than a wrong one,
 and none of them stops the rest of the patch. The outcome and the queue id
 are worth more than the name.
 
+**The gold curve rides along with the patch.** Kill and CS diffs are sampled
+live at 1 Hz and are exact; gold is not a live number at all. The Live Client
+Data API exposes no per-player gold, so it used to be estimated from summed
+item prices — an estimate whose error was unbounded, signed in our favour and
+time-varying (DEVELOPMENT.md §5.2). It now comes from
+`/lol-match-history/v1/game-timelines/{gameId}`, which carries Riot's own
+per-participant `totalGold` per frame, and lands as its own sparser rows in
+`samples` — one a minute against one a second, with every other metric NULL.
+
+The frames carry a game clock, so they go through the same game-time →
+video-time alignment the 1 Hz samples did, recovered from an existing sample
+row. A recording with no samples gets no gold: there is no alignment to place
+frames through. A custom or practice game gets none either — it never reaches
+match history — and that renders as "no gold data for this recording", never as
+a flat zero line, because a zero line reads as "you were even".
+
 **Known gap:** neither endpoint's shape has been seen off a real client —
 both are modelled from the LCU's own OpenAPI spec, so every field is
 optional and an unrecognised response degrades to "this source knew less"
