@@ -630,6 +630,17 @@ lowercase the rest, and it is a URL. `spell_asset_map` is that rule, and it is
 unit-tested against the awkward cases — `Summoner_Teleport_New.png`, and the
 Jade spells filed under `ASSETS/UX` rather than `DATA/Spells`.
 
+That manifest also settles the *client* route, which had been guessed the
+same way and was equally wrong: the `iconPath` it publishes **is** a route on
+the client's own HTTP server, so it is asked for verbatim rather than rebuilt
+from the id.
+
+**The two sources cache under different names** (`{id}.client.png` and
+`{id}.png`). Sharing one made the fallback permanent — whichever source
+answered on a cold cache won forever, so a library first opened with League
+closed would never take the client's art no matter how many sessions ran with
+it open, which is the opposite of what this is for.
+
 `summoner.json` is still read, but only to get from a name to an id: Data
 Dragon's *data* is current even where its art is not, and a live-captured
 scoreboard says `Flash` where a rebuilt one says `4`. **Runes are the odd one out twice over**: the

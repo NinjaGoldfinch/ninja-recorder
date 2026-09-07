@@ -91,8 +91,10 @@ type RuneIcons = HashMap<i64, String>;
 /// this is only ever used to get from one to the other.
 type SpellNameIds = HashMap<String, i64>;
 
-/// Spell id → the asset's path on Community Dragon, already rewritten and
-/// lowercased. Out of a document the *client* publishes, not Data Dragon.
+/// Spell id → the asset's path **as the client writes it**, e.g.
+/// `/lol-game-data/assets/DATA/Spells/Icons2D/Summoner_flash.png`. Kept in
+/// that form because it is both a live LCU route and, once rewritten, a
+/// Community Dragon one — `community_url` does the rewriting.
 type SpellAssets = HashMap<i64, String>;
 
 /// Data Dragon's `summoner.json`, reduced the same way `champion.json` is.
@@ -343,21 +345,30 @@ async fn spell_assets(dir: &Path, version: &str) -> Option<Arc<SpellAssets>> {
     Some(assets)
 }
 
-/// Rewrites each entry's client-side `iconPath` into a Community Dragon one.
-///
-/// The rule is the CDN's own: drop the `/lol-game-data/assets` prefix the
-/// client uses and lowercase the rest. `Summoner_flash.png` under
-/// `DATA/Spells/Icons2D` becomes `/data/spells/icons2d/summoner_flash.png`,
-/// and the same rule carries the odd ones — `Summoner_Teleport_New.png`,
-/// and the Jade skins filed under `ASSETS/UX` instead.
 fn spell_asset_map(entries: Vec<CommunitySpell>) -> SpellAssets {
     entries
         .into_iter()
-        .filter_map(|entry| {
-            let path = entry.icon_path.strip_prefix("/lol-game-data/assets")?;
-            Some((entry.id, path.to_lowercase()))
-        })
+        .filter(|entry| entry.icon_path.starts_with(CLIENT_ASSET_ROOT))
+        .map(|entry| (entry.id, entry.icon_path))
         .collect()
+}
+
+/// The prefix the client puts in front of every asset path it publishes.
+/// It is a route on the client's own HTTP server, and the part after it is
+/// what Community Dragon mirrors.
+const CLIENT_ASSET_ROOT: &str = "/lol-game-data/assets";
+
+/// Rewrites a client asset path into the Community Dragon URL for it.
+///
+/// The rule is the CDN's own: drop the `/lol-game-data/assets` prefix and
+/// lowercase the rest. `Summoner_flash.png` under `DATA/Spells/Icons2D`
+/// becomes `/data/spells/icons2d/summoner_flash.png`, and the same rule
+/// carries the odd ones — `Summoner_Teleport_New.png`, which has mixed
+/// case in the filename and not just the directories, and the Jade spells
+/// filed under `ASSETS/UX` rather than `DATA/Spells`.
+fn community_url(icon_path: &str) -> Option<String> {
+    let path = icon_path.strip_prefix(CLIENT_ASSET_ROOT)?;
+    Some(format!("{COMMUNITY_CDN}{}", path.to_lowercase()))
 }
 
 /// Rune id → icon path, flattened out of the tree document.
@@ -485,24 +496,45 @@ pub async fn spell_icon_by_id(
         return None;
     }
     let version = version(dir).await?;
-    let name = format!("{spell_id}.png");
-    let path = dir.join(&version).join("spell").join(&name);
-    if path.is_file() {
-        return Some(path);
+
+    // Client art and fallback art are cached under *different* names, and
+    // the client's is checked first. Sharing one name made the fallback
+    // permanent: whichever source answered on the cold cache won forever,
+    // so a library first opened with League closed would never take the
+    // client's art no matter how many sessions ran with it open — which is
+    // the opposite of what this function is documented to do.
+    let from_client = dir.join(&version).join("spell").join(format!("{spell_id}.client.png"));
+    if from_client.is_file() {
+        return Some(from_client);
     }
 
-    if let Some(bytes) = spell_from_client(lockfile, spell_id).await {
-        return write_asset(&path, &bytes);
+    let icon_path = spell_assets(dir, &version).await?.get(&spell_id)?.clone();
+
+    if lockfile.is_some() {
+        if let Some(bytes) = spell_from_client(lockfile, &icon_path).await {
+            return write_asset(&from_client, &bytes);
+        }
     }
-    let asset = spell_assets(dir, &version).await?.get(&spell_id)?.clone();
-    cached_file(dir, &version, "spell", &name, format!("{COMMUNITY_CDN}{asset}")).await
+    cached_file(
+        dir,
+        &version,
+        "spell",
+        &format!("{spell_id}.png"),
+        community_url(&icon_path)?,
+    )
+    .await
 }
 
 /// The client's own icon for a spell, if a client is running.
-async fn spell_from_client(lockfile: Option<&LockfileInfo>, spell_id: i64) -> Option<Vec<u8>> {
+///
+/// `icon_path` is already a route on the client's HTTP server — that is
+/// what the manifest publishes — so it is asked for verbatim. The first
+/// version of this built `v1/summoner-spells/{id}.png` by analogy instead,
+/// which no client has ever served.
+async fn spell_from_client(lockfile: Option<&LockfileInfo>, icon_path: &str) -> Option<Vec<u8>> {
     let client = LcuHttpClient::new(lockfile?).ok()?;
     client
-        .get_bytes(&format!("/lol-game-data/assets/v1/summoner-spells/{spell_id}.png"))
+        .get_bytes(icon_path)
         .await
         .ok()
         .filter(|bytes| !bytes.is_empty())
@@ -884,19 +916,26 @@ mod tests {
         .unwrap();
         let assets = spell_asset_map(parsed);
 
+        // The map keeps the client's own path, because that is also a live
+        // route on the client's HTTP server.
         assert_eq!(
             assets.get(&4).map(String::as_str),
-            Some("/data/spells/icons2d/summoner_flash.png")
+            Some("/lol-game-data/assets/DATA/Spells/Icons2D/Summoner_flash.png")
+        );
+
+        assert_eq!(
+            community_url(&assets[&4]).unwrap(),
+            format!("{COMMUNITY_CDN}/data/spells/icons2d/summoner_flash.png")
         );
         // Mixed case in the filename is lowercased too, not just the dirs.
         assert_eq!(
-            assets.get(&12).map(String::as_str),
-            Some("/data/spells/icons2d/summoner_teleport_new.png")
+            community_url(&assets[&12]).unwrap(),
+            format!("{COMMUNITY_CDN}/data/spells/icons2d/summoner_teleport_new.png")
         );
         // Not every spell lives under DATA/Spells — the Jade set does not.
         assert_eq!(
-            assets.get(&74).map(String::as_str),
-            Some("/assets/ux/jade/s3icons/samesized/s3_summoner_flash.project_jade.png")
+            community_url(&assets[&74]).unwrap(),
+            format!("{COMMUNITY_CDN}/assets/ux/jade/s3icons/samesized/s3_summoner_flash.project_jade.png")
         );
     }
 
@@ -909,6 +948,7 @@ mod tests {
         )
         .unwrap();
         assert!(spell_asset_map(parsed).is_empty());
+        assert_eq!(community_url("https://example.invalid/elsewhere.png"), None);
     }
 
     /// Ten rows sharing a champion must cost one lookup, not ten.
