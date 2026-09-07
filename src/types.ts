@@ -188,6 +188,9 @@ export interface ScoreboardPlayer {
    *  ("SummonerFlash"), so something has to map between them, the way
    *  champion art already does. */
   spells: string[];
+  /** The same two spells as ids. A scoreboard captured live has names; one
+   *  rebuilt from match history has ids. Either finds the art. */
+  spell_ids?: number[];
 }
 
 export interface ScoreboardRunes {
@@ -205,6 +208,7 @@ export interface IconSet {
   champions: Record<string, string>;
   items: Record<string, string>;
   spells: Record<string, string>;
+  spell_ids: Record<string, string>;
   runes: Record<string, string>;
 }
 

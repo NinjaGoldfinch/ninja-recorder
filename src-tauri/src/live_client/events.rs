@@ -535,7 +535,17 @@ pub struct ScoreboardPlayer {
     /// keys Data Dragon files art under, because the name is the half that
     /// survives a response shape changing; mapping one to the other is the
     /// art layer's job, as it already is for champions.
+    #[serde(default)]
     pub spells: Vec<String>,
+    /// The same two spells as ids, which is all match history gives.
+    ///
+    /// A scoreboard captured live has names and no ids; one rebuilt from
+    /// match history has ids and no names. Both are enough to find the
+    /// art, so both are stored rather than one being converted into the
+    /// other — converting would need the CDN, in a path that otherwise
+    /// only talks to the League client.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spell_ids: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -604,6 +614,9 @@ pub fn scoreboard(snapshot: &AllGameData) -> Option<Scoreboard> {
                     .into_iter()
                     .filter(|name| !name.is_empty())
                     .collect(),
+                    // The live API gives names; ids are the match-history
+                    // rebuild's half of this.
+                    spell_ids: Vec::new(),
                 }
             })
             .collect(),

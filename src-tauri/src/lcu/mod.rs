@@ -28,8 +28,8 @@ pub use gameflow::{GameflowSource, GameflowUpdate};
 pub use lockfile::{LockfileError, LockfileInfo, LockfileState};
 #[allow(unused_imports)]
 pub use match_data::{
-    fetch_match_summary, fetch_recent_games, fetch_sides, MatchDataError, MatchSummary, PlayedGame,
-    Sides,
+    fetch_match_summary, fetch_recent_games, fetch_sides, MatchDataError, MatchSummary,
+    ParticipantSummary, PlayedGame, Sides,
 };
 // `GoldPoint` is deliberately not re-exported: the one caller never names
 // it, and `-D warnings` fails on a re-export nothing uses — this line has no
