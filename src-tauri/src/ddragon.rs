@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::warn;
 
@@ -67,15 +67,108 @@ struct ChampionEntry {
     name: Option<String>,
 }
 
-/// Display name → the key its art is filed under.
+/// Display name → the key its art is filed under. Champions and summoner
+/// spells have the same problem and the same shape of answer.
 type ArtKeys = HashMap<String, String>;
 
-type Cached = Option<(String, Arc<ArtKeys>)>;
+/// Rune (or rune tree) id → the icon path Data Dragon serves it under.
+type RuneIcons = HashMap<i64, String>;
 
-/// Resolved once per process. Two callers racing costs a duplicate request
-/// for a static document, which is a better trade than holding a lock
-/// across an await.
-static CACHE: Mutex<Cached> = Mutex::new(None);
+/// Data Dragon's `summoner.json`, reduced the same way `champion.json` is.
+#[derive(Debug, Deserialize)]
+struct SpellData {
+    #[serde(default)]
+    data: HashMap<String, ChampionEntry>,
+}
+
+/// One tree from `runesReforged.json`. The tree itself has an icon, and so
+/// does every rune in every slot — all of them keyed by id, all of them a
+/// path rather than a filename.
+#[derive(Debug, Deserialize)]
+struct RuneTree {
+    #[serde(default)]
+    id: Option<i64>,
+    #[serde(default)]
+    icon: Option<String>,
+    #[serde(default)]
+    slots: Vec<RuneSlot>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RuneSlot {
+    #[serde(default)]
+    runes: Vec<RuneEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RuneEntry {
+    #[serde(default)]
+    id: Option<i64>,
+    #[serde(default)]
+    icon: Option<String>,
+}
+
+/// Flattens the tree-of-slots-of-runes into id → icon path, trees
+/// included: a row shows the keystone and both tree crests, and all three
+/// are looked up the same way.
+fn rune_icon_map(trees: Vec<RuneTree>) -> RuneIcons {
+    let mut icons = RuneIcons::new();
+    for tree in trees {
+        if let (Some(id), Some(icon)) = (tree.id, tree.icon.clone()) {
+            icons.insert(id, icon);
+        }
+        for slot in tree.slots {
+            for rune in slot.runes {
+                if let (Some(id), Some(icon)) = (rune.id, rune.icon) {
+                    icons.insert(id, icon);
+                }
+            }
+        }
+    }
+    icons
+}
+
+type Cached<T> = Option<(String, Arc<T>)>;
+
+/// Resolved once per process, per document. Two callers racing costs a
+/// duplicate request for a static file, which is a better trade than
+/// holding a lock across an await.
+static CHAMPION_KEYS: Mutex<Cached<ArtKeys>> = Mutex::new(None);
+static SPELL_KEYS: Mutex<Cached<ArtKeys>> = Mutex::new(None);
+static RUNE_ICONS: Mutex<Cached<RuneIcons>> = Mutex::new(None);
+
+/// Reads a cached map if it belongs to `version`.
+fn cached_map<T>(cache: &Mutex<Cached<T>>, version: &str) -> Option<Arc<T>> {
+    let guard = cache.lock().unwrap();
+    match guard.as_ref() {
+        Some((cached, map)) if cached == version => Some(Arc::clone(map)),
+        _ => None,
+    }
+}
+
+/// Fetches a Data Dragon JSON document, caching the raw body on disk so a
+/// later session parses it without a request.
+async fn cached_json(dir: &Path, version: &str, name: &str, url: String) -> Option<String> {
+    let path = dir.join(version).join(name);
+    if let Ok(body) = std::fs::read_to_string(&path) {
+        return Some(body);
+    }
+    let body = client()?
+        .get(url)
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?
+        .text()
+        .await
+        .ok()?;
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, &body);
+    Some(body)
+}
 
 fn client() -> Option<reqwest::Client> {
     reqwest::Client::builder()
@@ -137,66 +230,96 @@ async fn fetch_latest_version() -> Option<String> {
 /// Display name → art key, cached on disk per version and in memory per
 /// process.
 async fn art_keys(dir: &Path, version: &str) -> Option<Arc<ArtKeys>> {
-    if let Some((cached_version, keys)) = CACHE.lock().unwrap().as_ref() {
-        if cached_version == version {
-            return Some(Arc::clone(keys));
-        }
+    if let Some(keys) = cached_map(&CHAMPION_KEYS, version) {
+        return Some(keys);
     }
-
-    let path = dir.join(version).join("champion.json");
-    let body = match std::fs::read_to_string(&path) {
-        Ok(body) => body,
-        Err(_) => {
-            let body = client()?
-                .get(format!("{CDN}/cdn/{version}/data/en_US/champion.json"))
-                .send()
-                .await
-                .ok()?
-                .error_for_status()
-                .ok()?
-                .text()
-                .await
-                .ok()?;
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let _ = std::fs::write(&path, &body);
-            body
-        }
-    };
+    let body = cached_json(
+        dir,
+        version,
+        "champion.json",
+        format!("{CDN}/cdn/{version}/data/en_US/champion.json"),
+    )
+    .await?;
 
     let parsed: ChampionData = serde_json::from_str(&body)
         .map_err(|e| warn!("ddragon", "champion.json did not parse: {e}"))
         .ok()?;
 
-    let keys: ArtKeys = parsed
-        .data
-        .into_values()
-        .filter_map(|entry| Some((entry.name?, entry.id?)))
-        .collect();
-
-    let keys = Arc::new(keys);
-    *CACHE.lock().unwrap() = Some((version.to_string(), Arc::clone(&keys)));
+    let keys = Arc::new(name_to_key(parsed.data));
+    *CHAMPION_KEYS.lock().unwrap() = Some((version.to_string(), Arc::clone(&keys)));
     Some(keys)
 }
 
-/// The cached square portrait for a champion display name, fetching it if
-/// this is the first time it has been asked for.
-///
-/// `None` for everything that could go wrong — no network, an unknown
-/// champion, an unwritable cache — because the caller's fallback is the
-/// text that was on the card before any of this existed.
-pub async fn champion_icon(dir: &Path, champion: &str) -> Option<PathBuf> {
-    let version = version(dir).await?;
-    let key = art_keys(dir, &version).await?.get(champion)?.clone();
+/// Summoner spell display name → art key, the same mapping as champions
+/// and for the same reason: the live API says `Flash`, the art is filed
+/// under `SummonerFlash`.
+async fn spell_keys(dir: &Path, version: &str) -> Option<Arc<ArtKeys>> {
+    if let Some(keys) = cached_map(&SPELL_KEYS, version) {
+        return Some(keys);
+    }
+    let body = cached_json(
+        dir,
+        version,
+        "summoner.json",
+        format!("{CDN}/cdn/{version}/data/en_US/summoner.json"),
+    )
+    .await?;
 
-    let path = dir.join(&version).join("champion").join(format!("{key}.png"));
+    let parsed: SpellData = serde_json::from_str(&body)
+        .map_err(|e| warn!("ddragon", "summoner.json did not parse: {e}"))
+        .ok()?;
+
+    let keys = Arc::new(name_to_key(parsed.data));
+    *SPELL_KEYS.lock().unwrap() = Some((version.to_string(), Arc::clone(&keys)));
+    Some(keys)
+}
+
+/// Rune id → icon path, flattened out of the tree document.
+async fn rune_icons(dir: &Path, version: &str) -> Option<Arc<RuneIcons>> {
+    if let Some(icons) = cached_map(&RUNE_ICONS, version) {
+        return Some(icons);
+    }
+    let body = cached_json(
+        dir,
+        version,
+        "runesReforged.json",
+        format!("{CDN}/cdn/{version}/data/en_US/runesReforged.json"),
+    )
+    .await?;
+
+    let trees: Vec<RuneTree> = serde_json::from_str(&body)
+        .map_err(|e| warn!("ddragon", "runesReforged.json did not parse: {e}"))
+        .ok()?;
+
+    let icons = Arc::new(rune_icon_map(trees));
+    *RUNE_ICONS.lock().unwrap() = Some((version.to_string(), Arc::clone(&icons)));
+    Some(icons)
+}
+
+/// Both `champion.json` and `summoner.json` are an object of entries with
+/// a display `name` and the `id` art is filed under. An entry missing
+/// either half is dropped rather than becoming a broken image URL.
+fn name_to_key(entries: HashMap<String, ChampionEntry>) -> ArtKeys {
+    entries
+        .into_values()
+        .filter_map(|entry| Some((entry.name?, entry.id?)))
+        .collect()
+}
+
+/// Fetches one asset into the cache if it is not there, and hands back the
+/// path either way.
+///
+/// `sub` is the directory under the version — `champion`, `item`, `spell`,
+/// `rune` — and `name` the file inside it. `url` is asked for only on a
+/// miss, so a warm cache makes no request at all.
+async fn cached_file(dir: &Path, version: &str, sub: &str, name: &str, url: String) -> Option<PathBuf> {
+    let path = dir.join(version).join(sub).join(name);
     if path.is_file() {
         return Some(path);
     }
 
     let bytes = client()?
-        .get(format!("{CDN}/cdn/{version}/img/champion/{key}.png"))
+        .get(url)
         .send()
         .await
         .ok()?
@@ -211,6 +334,135 @@ pub async fn champion_icon(dir: &Path, champion: &str) -> Option<PathBuf> {
     }
     std::fs::write(&path, &bytes).ok()?;
     Some(path)
+}
+
+/// The cached square portrait for a champion display name.
+///
+/// `None` for everything that could go wrong — no network, an unknown
+/// champion, an unwritable cache — because the caller's fallback is the
+/// text that was on the row before any of this existed. That holds for
+/// every resolver below too.
+pub async fn champion_icon(dir: &Path, champion: &str) -> Option<PathBuf> {
+    let version = version(dir).await?;
+    let key = art_keys(dir, &version).await?.get(champion)?.clone();
+    let url = format!("{CDN}/cdn/{version}/img/champion/{key}.png");
+    cached_file(dir, &version, "champion", &format!("{key}.png"), url).await
+}
+
+/// The cached icon for an item id.
+///
+/// The only one of these that needs no map: Data Dragon files item art
+/// under the numeric id the game itself reports.
+pub async fn item_icon(dir: &Path, item_id: i64) -> Option<PathBuf> {
+    if item_id <= 0 {
+        return None;
+    }
+    let version = version(dir).await?;
+    let url = format!("{CDN}/cdn/{version}/img/item/{item_id}.png");
+    cached_file(dir, &version, "item", &format!("{item_id}.png"), url).await
+}
+
+/// The cached icon for a summoner spell's display name.
+///
+/// Same shape of problem as champions: the live API says `Flash` and the
+/// art is filed under `SummonerFlash`, so `summoner.json` is read as a
+/// display-name → key map.
+pub async fn spell_icon(dir: &Path, spell: &str) -> Option<PathBuf> {
+    let version = version(dir).await?;
+    let key = spell_keys(dir, &version).await?.get(spell)?.clone();
+    let url = format!("{CDN}/cdn/{version}/img/spell/{key}.png");
+    cached_file(dir, &version, "spell", &format!("{key}.png"), url).await
+}
+
+/// The cached icon for a rune or rune tree id.
+///
+/// Runes are the odd one out twice over: the icon is a *path* rather than
+/// a filename, and it is served from an **unversioned** part of the CDN.
+/// The path is flattened into a single cache filename so the layout on
+/// disk stays one directory per kind.
+pub async fn rune_icon(dir: &Path, rune_id: i64) -> Option<PathBuf> {
+    if rune_id <= 0 {
+        return None;
+    }
+    let version = version(dir).await?;
+    let icon = rune_icons(dir, &version).await?.get(&rune_id)?.clone();
+    let name = format!("{rune_id}.png");
+    let url = format!("{CDN}/cdn/img/{icon}");
+    cached_file(dir, &version, "rune", &name, url).await
+}
+
+/// What a page of rows needs drawing, asked for in one go.
+///
+/// A row carries up to seven items, two spells, three runes and a
+/// champion, and a library shows dozens of rows — one IPC call per icon
+/// would be hundreds. The frontend collects everything visible, asks once,
+/// and keys what comes back.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IconRequest {
+    #[serde(default)]
+    pub champions: Vec<String>,
+    #[serde(default)]
+    pub items: Vec<i64>,
+    #[serde(default)]
+    pub spells: Vec<String>,
+    #[serde(default)]
+    pub runes: Vec<i64>,
+}
+
+/// Paths for everything that resolved. **Anything that did not is simply
+/// absent** rather than present-and-null: the caller's fallback is the
+/// text that was on the row before any of this existed, and a missing key
+/// says that more plainly than a null does.
+#[derive(Debug, Default, Serialize)]
+pub struct IconSet {
+    pub champions: HashMap<String, String>,
+    pub items: HashMap<String, String>,
+    pub spells: HashMap<String, String>,
+    pub runes: HashMap<String, String>,
+}
+
+/// Resolves a page's worth of art, fetching whatever is not cached yet.
+///
+/// Sequential rather than parallel on purpose. The first call of a session
+/// warms the version, three JSON documents and every icon at once; firing
+/// that at a CDN as a hundred simultaneous requests is how an application
+/// gets rate-limited, and the row renders without art in the meantime
+/// either way.
+pub async fn resolve_icons(dir: &Path, request: &IconRequest) -> IconSet {
+    let mut set = IconSet::default();
+
+    for champion in dedup(&request.champions) {
+        if let Some(path) = champion_icon(dir, &champion).await {
+            set.champions.insert(champion, display(path));
+        }
+    }
+    for item in dedup(&request.items) {
+        if let Some(path) = item_icon(dir, item).await {
+            set.items.insert(item.to_string(), display(path));
+        }
+    }
+    for spell in dedup(&request.spells) {
+        if let Some(path) = spell_icon(dir, &spell).await {
+            set.spells.insert(spell, display(path));
+        }
+    }
+    for rune in dedup(&request.runes) {
+        if let Some(path) = rune_icon(dir, rune).await {
+            set.runes.insert(rune.to_string(), display(path));
+        }
+    }
+    set
+}
+
+/// Ten rows sharing a champion should cost one lookup, not ten.
+fn dedup<T: Clone + Eq + std::hash::Hash>(values: &[T]) -> Vec<T> {
+    let mut seen = std::collections::HashSet::new();
+    values.iter().filter(|v| seen.insert((*v).clone())).cloned().collect()
+}
+
+fn display(path: PathBuf) -> String {
+    path.to_string_lossy().into_owned()
 }
 
 #[cfg(test)]
@@ -263,6 +515,80 @@ mod tests {
             .filter_map(|e| Some((e.name?, e.id?)))
             .collect();
         assert_eq!(keys.len(), 1);
+    }
+
+    /// `summoner.json` has the same shape as `champion.json`, which is why
+    /// one mapper serves both: the live API says `Flash` and the art is
+    /// filed under `SummonerFlash`.
+    #[test]
+    fn spell_names_map_onto_the_key_art_is_filed_under() {
+        let parsed: SpellData = serde_json::from_str(
+            r#"{"data":{
+                "SummonerFlash":{"id":"SummonerFlash","key":"4","name":"Flash"},
+                "SummonerSmite":{"id":"SummonerSmite","key":"11","name":"Smite"}
+            }}"#,
+        )
+        .unwrap();
+        let keys = name_to_key(parsed.data);
+        assert_eq!(keys.get("Flash").map(String::as_str), Some("SummonerFlash"));
+        assert_eq!(keys.get("Smite").map(String::as_str), Some("SummonerSmite"));
+    }
+
+    /// Runes are the awkward one: the document is trees of slots of runes,
+    /// the icon is a path rather than a filename, and a row needs both the
+    /// keystone and the tree crests — so trees and runes flatten into one
+    /// map keyed the same way.
+    #[test]
+    fn rune_trees_flatten_into_one_map_of_ids() {
+        let trees: Vec<RuneTree> = serde_json::from_str(
+            r#"[{
+                "id": 8100,
+                "icon": "perk-images/Styles/7200_Domination.png",
+                "slots": [
+                    {"runes": [
+                        {"id": 8112, "icon": "perk-images/Styles/Domination/Electrocute/Electrocute.png"},
+                        {"id": 8124, "icon": "perk-images/Styles/Domination/Predator/Predator.png"}
+                    ]},
+                    {"runes": [{"id": 8126, "icon": "perk-images/Styles/Domination/CheapShot/CheapShot.png"}]}
+                ]
+            }]"#,
+        )
+        .unwrap();
+        let icons = rune_icon_map(trees);
+
+        // The tree crest and every rune under it, from every slot.
+        assert_eq!(icons.len(), 4);
+        assert_eq!(
+            icons.get(&8112).map(String::as_str),
+            Some("perk-images/Styles/Domination/Electrocute/Electrocute.png")
+        );
+        assert_eq!(
+            icons.get(&8100).map(String::as_str),
+            Some("perk-images/Styles/7200_Domination.png")
+        );
+    }
+
+    /// Same rule as everywhere else here: a remote document that changed
+    /// under us costs the icons it describes and nothing more.
+    #[test]
+    fn runes_missing_an_id_or_an_icon_are_dropped() {
+        let trees: Vec<RuneTree> = serde_json::from_str(
+            r#"[{"slots": [{"runes": [
+                {"id": 1, "icon": "a.png"},
+                {"id": 2},
+                {"icon": "c.png"},
+                {}
+            ]}]}]"#,
+        )
+        .unwrap();
+        assert_eq!(rune_icon_map(trees).len(), 1);
+    }
+
+    /// Ten rows sharing a champion must cost one lookup, not ten.
+    #[test]
+    fn duplicate_requests_are_asked_for_once() {
+        assert_eq!(dedup(&["Ahri", "Wukong", "Ahri", "Ahri"]), vec!["Ahri", "Wukong"]);
+        assert_eq!(dedup(&[3089i64, 3089, 3157]), vec![3089, 3157]);
     }
 
     #[test]

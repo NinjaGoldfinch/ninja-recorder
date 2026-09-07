@@ -197,6 +197,17 @@ export interface ScoreboardRunes {
   secondary_tree_id: number;
 }
 
+/** Mirrors `ddragon::IconSet`. A key that could not be resolved is
+ *  **absent** rather than null — the row's fallback is the text that was
+ *  there before art existed. Item and rune maps are keyed by the id as a
+ *  string, because that is what JSON objects can hold. */
+export interface IconSet {
+  champions: Record<string, string>;
+  items: Record<string, string>;
+  spells: Record<string, string>;
+  runes: Record<string, string>;
+}
+
 export interface ReconcileReport {
   orphans_removed: number;
   imported: number;

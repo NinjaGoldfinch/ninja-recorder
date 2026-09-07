@@ -190,6 +190,26 @@ recording with no samples has no alignment, so its window is the whole file.
 
 See [DEVELOPMENT.md §5.4](../DEVELOPMENT.md) for why the file is not cut.
 
+### Art is asked for once per page, not once per icon
+
+A row carries a champion portrait, two summoner spells, two rune icons and
+seven item slots. Forty rows is therefore several hundred icons, and one IPC
+call each — every one a CDN round trip the first time — would be a library that
+renders over several seconds.
+
+So `icons.ts` collects what the visible rows want, asks once (`resolve_icons`),
+and caches the answer for the session. Misses are cached too: a champion Data
+Dragon has never heard of must not be asked about again on every render.
+
+**The row is correct before any of it arrives.** Slots render empty and are
+filled in afterwards, which is also exactly what an offline session gets
+forever — the row still says the champion, the KDA, the CS and the result in
+words. Nothing about the layout depends on a picture turning up.
+
+Empty slots hold their place rather than collapsing. A build with four items is
+a different thing from a game with no scoreboard, and a strip that shrank to fit
+would say neither.
+
 ### What a marker says
 
 Two shapes, and the split is about who the marker is *about*.
@@ -274,7 +294,7 @@ a shipped build.
 | `list_recordings` | `Vec<RecordingRow>` | library grid |
 | `rescan_recordings` | `ReconcileReport` | library toolbar → rescan |
 | `backfill_match_metadata` | `BackfillReport` | settings → storage → fill in |
-| `champion_icon` | `string \| null` | library card portraits, after the grid paints |
+| `resolve_icons` | `IconSet` | library row art, after the list paints |
 | `get_recording_markers` | `Vec<MarkerRow>` | review timeline |
 | `get_recording_samples` | `Vec<SampleRow>` | advantage curve |
 | `get_disk_usage` | `DiskUsage` | library stats bar |

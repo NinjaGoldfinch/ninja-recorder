@@ -192,7 +192,7 @@ dispatch_table! {
     ctx_result  extract_audio_track(recording_path: String, track_index: usize);
     bare_async  lcu_status();
     ctx_async   backfill_match_metadata();
-    ctx_async   champion_icon(champion: String);
+    ctx_async   resolve_icons(request: crate::ddragon::IconRequest);
     ctx_plain   game_state_status();
 }
 
@@ -238,10 +238,10 @@ mod tests {
             // Internally tagged on `preset`, so the value is an object.
             "set_audio_preset" => json!({ "preset": { "preset": "game" } }),
             "extract_audio_track" => json!({ "recordingPath": "/tmp/nope.mp4", "trackIndex": 1 }),
-            // Blank on purpose: `champion_icon` answers a blank name
-            // without a request, so this exercises the argument mapping
-            // without the suite reaching a CDN.
-            "champion_icon" => json!({ "champion": "" }),
+            // Every list empty, so `resolve_icons` has nothing to look
+            // up and the suite never reaches a CDN — this exercises the
+            // argument mapping and nothing else.
+            "resolve_icons" => json!({ "request": {} }),
             _ => json!({}),
         }
     }
