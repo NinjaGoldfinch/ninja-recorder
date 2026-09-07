@@ -619,6 +619,17 @@ Community Dragon, which mirrors the same game data publicly, for the usual case
 where the library is browsed with League closed. Whichever answers is cached,
 so one session with the client open fixes every spell permanently.
 
+**Community Dragon has no `summoner-spells/{id}.png`.** The first version of
+the fallback assumed it did, by analogy with the client's own route, and every
+spell resolved to nothing for anyone browsing with League closed — which is
+almost everyone. Nothing said so, because a 404 and "this spell has no art" are
+the same answer downstream. What that CDN publishes is the client's asset
+*manifest* (`v1/summoner-spells.json`), and each entry carries the path the art
+really lives at: drop the `/lol-game-data/assets` prefix the client uses,
+lowercase the rest, and it is a URL. `spell_asset_map` is that rule, and it is
+unit-tested against the awkward cases — `Summoner_Teleport_New.png`, and the
+Jade spells filed under `ASSETS/UX` rather than `DATA/Spells`.
+
 `summoner.json` is still read, but only to get from a name to an id: Data
 Dragon's *data* is current even where its art is not, and a live-captured
 scoreboard says `Flash` where a rebuilt one says `4`. **Runes are the odd one out twice over**: the
