@@ -491,7 +491,7 @@ pub fn run() {
             //
             // A build with no ffmpeg installs nothing and keeps the whole
             // file, which is what every recording did before this existed.
-            if let Some(ffmpeg) = ctx.ffmpeg.clone() {
+            if let Some(ffmpeg) = ffmpeg_path(app.handle()) {
                 let trim_db = Arc::clone(&db);
                 let trim_handle = app.handle().clone();
                 supervisor.set_trim_requester(Box::new(move |recording_id| {
