@@ -169,11 +169,13 @@ client did.
 champion = COALESCE(champion, ?)
 ```
 
-The live path writes a display name (`Wukong`); resolving a champion *id*
-gives the internal alias (`MonkeyKing`). `champion` is sorted on, filtered
-on and used as the card title, so one champion under two spellings would
-split its games in two everywhere in the UI. The patch may only fill the
-column when nothing else has.
+`champion` is sorted on, filtered on and used as the card title, so one
+champion under two spellings would split its games in two everywhere in the
+UI. Two writers can reach the column — Live Client Data during the game, and
+the id `lcu::champions` resolves after it — and both aim at the same display
+name (`Wukong`, never the internal `MonkeyKing` alias). Filling only when the
+column is NULL means they cannot disagree in it even if they ever disagree
+with each other.
 
 Zero rows changed is a no-op, not an error: retention runs during the same
 finalize, and the user can delete a card at any point, so the row can

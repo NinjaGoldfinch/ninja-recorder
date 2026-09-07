@@ -575,6 +575,7 @@ pub fn run() {
         dev::dev_replay_stop,
         dev::dev_replay_status,
         dev::dev_lcu_get,
+        dev::dev_champion_name,
         dev::dev_fetch_match_summary,
         dev::dev_patch_match_summary,
         dev::dev_live_client_probe,

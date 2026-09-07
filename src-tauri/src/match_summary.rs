@@ -115,12 +115,13 @@ fn worth_retrying(error: &MatchDataError) -> bool {
 
 /// The columns this patch is allowed to write.
 ///
-/// `champion` is deliberately absent: the LCU answers with a champion
-/// *id*, and turning one into the same display name Live Client Data
-/// writes needs the lookup that is still to come. Writing the internal
-/// alias in the meantime would split one champion into two everywhere the
-/// library sorts and filters — see `db::MatchMetadata::champion`.
-pub fn to_metadata(summary: &MatchSummary) -> MatchMetadata {
+/// `champion` comes in separately because the LCU answers with a champion
+/// *id* and this mapping is pure: resolving one into the display name Live
+/// Client Data writes is a request against the client's asset store
+/// (`lcu::champions`). `None` — an unresolved id, or a lookup that failed
+/// — leaves the column exactly as it was, which is the one direction
+/// `update_match_metadata` COALESCEs the other way round.
+pub fn to_metadata(summary: &MatchSummary, champion: Option<String>) -> MatchMetadata {
     MatchMetadata {
         game_id: summary.game_id,
         queue: summary.queue_id,
@@ -130,7 +131,7 @@ pub fn to_metadata(summary: &MatchSummary) -> MatchMetadata {
         kda_k: summary.kills,
         kda_d: summary.deaths,
         kda_a: summary.assists,
-        champion: None,
+        champion,
     }
 }
 
@@ -211,6 +212,17 @@ pub async fn patch(db: &Db, request: &SummaryRequest) -> bool {
         }
     };
 
+    // Last, and best effort. A name is worth less than the outcome and the
+    // queue id sitting beside it in the same row, so a lookup that fails
+    // resolves to `None` and the rest of the patch lands regardless. The
+    // common case never gets here at all: `champion_id` is only set on a
+    // summary because the LCU answered, and the column it would fill is
+    // usually already holding what Live Client Data wrote during the game.
+    let champion = match summary.champion_id {
+        Some(id) => lcu::champion_name(&client, &request.lockfile, id).await,
+        None => None,
+    };
+
     for note in disagreements(&request.live, &summary) {
         eprintln!(
             "[match-summary] game {} disagrees with what was recorded live — {note}. \
@@ -219,7 +231,7 @@ pub async fn patch(db: &Db, request: &SummaryRequest) -> bool {
         );
     }
 
-    match db.update_match_metadata(request.recording_id, &to_metadata(&summary)) {
+    match db.update_match_metadata(request.recording_id, &to_metadata(&summary, champion)) {
         // The row was deleted between the finalize and now — retention
         // runs during the same finalize, and the user can delete a card at
         // any point. Nothing went wrong; there is just nothing to say.
@@ -307,33 +319,52 @@ mod tests {
 
     // --- summary → columns ------------------------------------------------
 
-    /// The champion name is the one thing this patch must not write: the
-    /// LCU gives an id, and the alias it resolves to (`MonkeyKing`) is not
-    /// the display name Live Client Data wrote (`Wukong`).
+    /// The id on the summary is never the thing written — the resolved
+    /// name is, and only if the asset store had one. An id that resolved
+    /// to nothing has to leave the column alone rather than fall back to
+    /// something id-shaped.
     #[test]
-    fn the_patch_never_writes_a_champion() {
-        let meta = to_metadata(&MatchSummary {
-            champion_id: Some(62),
-            queue_id: Some(420),
-            ..Default::default()
-        });
+    fn an_unresolved_champion_id_writes_no_champion() {
+        let meta = to_metadata(
+            &MatchSummary {
+                champion_id: Some(62),
+                queue_id: Some(420),
+                ..Default::default()
+            },
+            None,
+        );
         assert_eq!(meta.champion, None);
         assert_eq!(meta.queue, Some(420));
     }
 
     #[test]
+    fn a_resolved_name_is_the_one_that_gets_written() {
+        let meta = to_metadata(
+            &MatchSummary {
+                champion_id: Some(62),
+                ..Default::default()
+            },
+            Some("Wukong".into()),
+        );
+        assert_eq!(meta.champion.as_deref(), Some("Wukong"));
+    }
+
+    #[test]
     fn every_column_the_lcu_answers_for_is_carried_across() {
-        let meta = to_metadata(&MatchSummary {
-            game_id: Some(555),
-            queue_id: Some(420),
-            champion_id: Some(62),
-            win: Some(true),
-            kills: Some(7),
-            deaths: Some(2),
-            assists: Some(5),
-            role: Some("Middle".into()),
-            patch: Some("15.3.412.9873".into()),
-        });
+        let meta = to_metadata(
+            &MatchSummary {
+                game_id: Some(555),
+                queue_id: Some(420),
+                champion_id: Some(62),
+                win: Some(true),
+                kills: Some(7),
+                deaths: Some(2),
+                assists: Some(5),
+                role: Some("Middle".into()),
+                patch: Some("15.3.412.9873".into()),
+            },
+            None,
+        );
 
         assert_eq!(
             meta,
@@ -444,15 +475,21 @@ mod tests {
             })
             .unwrap();
 
-        let meta = to_metadata(&MatchSummary {
-            game_id: Some(555),
-            queue_id: Some(420),
-            champion_id: Some(103),
-            win: Some(true),
-            role: Some("Middle".into()),
-            patch: Some("15.3.412.9873".into()),
-            ..Default::default()
-        });
+        // Deliberately handed a *different* name than the row already
+        // holds: the live path's value wins, so a lookup that disagreed
+        // must not be able to rewrite it.
+        let meta = to_metadata(
+            &MatchSummary {
+                game_id: Some(555),
+                queue_id: Some(420),
+                champion_id: Some(103),
+                win: Some(true),
+                role: Some("Middle".into()),
+                patch: Some("15.3.412.9873".into()),
+                ..Default::default()
+            },
+            Some("Wukong".into()),
+        );
         assert_eq!(db.update_match_metadata(id, &meta).unwrap(), 1);
 
         let row = db.get_recording(id).unwrap().unwrap();

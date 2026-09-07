@@ -225,6 +225,14 @@ function draw() {
         <button type="button" data-lcu-get>GET</button>
       </div>
       <div class="row" style="margin-top:.5rem">
+        <label class="field field-inline"><span>Champion id</span>
+          <input type="number" id="champion-id" value="62" style="width:11rem" /></label>
+        <button type="button" data-champion-name>champion_name</button>
+        <span class="hint">The real lookup, not the raw document: fetches the asset store and
+          resolves the id the way a finalize does. 62 must answer <code>Wukong</code> —
+          <code>MonkeyKing</code> means the parse is reading <code>alias</code>.</span>
+      </div>
+      <div class="row" style="margin-top:.5rem">
         <label class="field field-inline"><span>Game id</span>
           <input type="number" id="game-id" style="width:11rem" /></label>
         <button type="button" data-match-summary>fetch_match_summary</button>
@@ -437,6 +445,23 @@ export const simulatePanel: Panel = {
         const result = await tryCall<unknown>("dev_lcu_get", { path });
         const out = root?.querySelector<HTMLElement>("#probe-out");
         if (out) out.innerHTML = output(result.ok ? result.value : result.error, !result.ok);
+        return;
+      }
+
+      if (target.closest("[data-champion-name]")) {
+        const championId = Number(root?.querySelector<HTMLInputElement>("#champion-id")?.value);
+        if (Number.isNaN(championId)) {
+          toast("Enter a champion id", "err");
+          return;
+        }
+        const result = await tryCall<string | null>("dev_champion_name", { championId });
+        const out = root?.querySelector<HTMLElement>("#probe-out");
+        if (out) {
+          // `null` is a real answer here — no such id, or the fetch failed —
+          // so it has to render as something, not as an empty box.
+          const value = result.ok ? (result.value ?? "null — no name (see the Log panel)") : result.error;
+          out.innerHTML = output(value, !result.ok);
+        }
         return;
       }
 

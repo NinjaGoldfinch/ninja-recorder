@@ -493,10 +493,22 @@ rows changed is a no-op, not an error: retention runs during the same
 finalize, and the user can delete a card at any time.
 
 `champion` is the one column the patch leaves alone when it is already set.
-The LCU answers with a champion *id*, and the display name the live path
-writes (`Wukong`) is not the alias an id resolves to (`MonkeyKing`) — one
-champion under two spellings would split its games in two everywhere the
-library sorts and filters. Resolving ids to display names is #54.
+The LCU answers with a champion *id*, which `lcu::champions` turns into a
+name by asking the client's own asset store
+(`/lol-game-data/assets/v1/champion-summary.json`, fetched once per client
+session and cached against its lockfile). It reads that entry's `name`, never
+its `alias`, because `alias` is where the legacy internal spellings live —
+`MonkeyKing` beside `Wukong` — and one champion under two spellings would
+split its games in two everywhere the library sorts and filters. The store
+also repeats display names across ids (a `Jade_*` block in the 60000s), which
+id → name does not mind and a name → id map could not survive. Filling only
+when the column is NULL is the second half of the same guarantee: the two
+writers can disagree without the column ever holding both.
+
+An id the store has never heard of, a client that went away, a shape that
+would not parse — each of those resolves to no name rather than a wrong one,
+and none of them stops the rest of the patch. The outcome and the queue id
+are worth more than the name.
 
 **Known gap:** neither endpoint's shape has been seen off a real client —
 both are modelled from the LCU's own OpenAPI spec, so every field is

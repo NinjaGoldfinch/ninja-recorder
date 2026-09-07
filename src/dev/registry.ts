@@ -450,6 +450,21 @@ export const COMMANDS: CommandSpec[] = [
     args: [{ name: "path", kind: "string", default: "/lol-gameflow/v1/gameflow-phase" }],
   },
   {
+    name: "dev_champion_name",
+    group: "Dev · Simulate",
+    dev: true,
+    description:
+      "Resolves a champion id through the real asset-store lookup. 62 must come back as Wukong — MonkeyKing means the parse is reading `alias`. Needs the League Client running.",
+    args: [
+      {
+        name: "championId",
+        kind: "number",
+        default: 62,
+        help: "62 is the one worth asking: its display name and its alias differ.",
+      },
+    ],
+  },
+  {
     name: "dev_fetch_match_summary",
     group: "Dev · Simulate",
     dev: true,

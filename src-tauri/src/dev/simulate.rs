@@ -369,6 +369,26 @@ pub async fn dev_lcu_get(path: String) -> Result<serde_json::Value, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Runs the real champion lookup — the asset-store fetch, the map, and
+/// the display-name-not-alias decision — against a live client.
+///
+/// `dev_lcu_get` on the same endpoint shows the raw document; this shows
+/// what the code makes of it, which is the part that has never been
+/// checked against a real response. Ask it for 62: the answer has to be
+/// `Wukong`, and `MonkeyKing` means the parse is reading `alias`.
+///
+/// `null` covers both "the store has no such id" and "the fetch failed",
+/// because the resolver is best-effort by design and swallows the
+/// difference. The Log panel's `lcu` tag says which it was.
+#[tauri::command]
+pub async fn dev_champion_name(champion_id: i64) -> Result<Option<String>, String> {
+    let lockfile = lcu::lockfile::discover()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "League Client not running (no lockfile found)".to_string())?;
+    let client = lcu::LcuHttpClient::new(&lockfile).map_err(|e| e.to_string())?;
+    Ok(lcu::champion_name(&client, &lockfile, champion_id).await)
+}
+
 /// One shot at `lcu::match_data::fetch_match_summary` — both endpoints,
 /// no retries — so its parsing can be checked against a real client
 /// without waiting out a schedule. `dev_patch_match_summary` is the same

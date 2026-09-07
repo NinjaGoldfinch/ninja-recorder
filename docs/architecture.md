@@ -68,6 +68,7 @@ flowchart TB
 | `lcu/lockfile.rs` | Finding the running client and its credentials | `discover`, `watch` |
 | `lcu/gameflow.rs` | Phase changes (WebSocket, polling fallback), and which game is running | `watch`, `fetch_session` |
 | `lcu/match_data.rs` | Post-game summary from the end-of-game block, then match history (win, KDA, champion id, queue, role, patch) | `fetch_match_summary` |
+| `lcu/champions.rs` | Champion id → display name, from the client's asset store, cached per client session | `champion_name` |
 | `lcu/client.rs` | HTTPS + Basic auth against the client's self-signed cert | `LcuHttpClient` |
 | `live_client/client.rs` | Port 2999 HTTPS client | `fetch_all_game_data` |
 | `live_client/poller.rs` | 1 Hz poll loop with exponential backoff (cap 10 s) | `watch` |
