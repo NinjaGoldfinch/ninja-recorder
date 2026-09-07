@@ -265,11 +265,15 @@ mod tests {
 
     #[test]
     fn keeps_a_lead_in_and_ignores_a_short_one() {
-        assert_eq!(trim_point_s(20.0), Some(18.0));
-        // 4 − 2 is under the 3s floor: not worth rewriting a file for.
-        assert_eq!(trim_point_s(4.0), None);
+        // The ordinary case: twenty seconds of loading screen, one kept.
+        assert_eq!(trim_point_s(20.0), Some(19.0));
+        // Exactly on the floor still cuts.
+        assert_eq!(trim_point_s(4.0), Some(3.0));
+        // 3.5 − 1 is under it: not worth rewriting a file to save 2.5s.
+        assert_eq!(trim_point_s(3.5), None);
         assert_eq!(trim_point_s(0.0), None);
-        // A reconnect: capture started after the game did.
+        // A reconnect: capture started after the game did, so there is no
+        // loading screen in the file at all.
         assert_eq!(trim_point_s(-30.0), None);
     }
 
