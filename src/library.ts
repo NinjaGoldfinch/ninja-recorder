@@ -289,12 +289,10 @@ function card(row: RecordingRow): string {
   const queue = queueOrModeLabel(row);
   const length = row.duration_s === null ? null : formatClock(row.duration_s);
 
-  const badge =
-    row.win === null
-      ? ""
-      : `<span class="badge badge-${row.win ? "win" : "loss"}">${
-          row.win ? "Win" : "Loss"
-        }</span>`;
+  // The result is the leading accent and nothing else visible. It is still
+  // *said*, once, for anything that cannot see a colour — a screen reader,
+  // and the hover.
+  const outcome = row.win === null ? "Result unknown" : row.win ? "Win" : "Loss";
 
   const ratio = kdaRatio(row.kda_k, row.kda_d, row.kda_a);
   const role = row.role;
@@ -310,7 +308,8 @@ function card(row: RecordingRow): string {
 
   return `
     <article class="vod-row" role="listitem" tabindex="0"
-             data-id="${row.id}" data-outcome="${outcomeAttr(row.win)}">
+             data-id="${row.id}" data-outcome="${outcomeAttr(row.win)}"
+             aria-label="${escapeAttr(`${title} — ${outcome}`)}">
       <span class="vod-portrait" aria-hidden="true"></span>
 
       <span class="vod-cell">
@@ -330,12 +329,10 @@ function card(row: RecordingRow): string {
 
       <span class="vod-cell">
         <time class="vod-value" datetime="${new Date(row.started_at).toISOString()}"
-              title="${escapeAttr(formatDateTime(row.started_at))}"
+              title="${escapeAttr(`${outcome} · ${formatDateTime(row.started_at)}`)}"
         >${escapeHtml(formatRelative(row.started_at))}</time>
         <span class="vod-sub">${formatBytes(row.size_bytes)}</span>
       </span>
-
-      ${badge || `<span class="badge badge-unknown">—</span>`}
 
       <span class="vod-slack" aria-hidden="true"></span>
 

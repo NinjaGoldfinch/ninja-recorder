@@ -111,6 +111,14 @@ the left, the actions stay pinned right, and the slack between them is where
 the scoreboard, items and team compositions land next — the row is already the
 shape it is growing into.
 
+**The outcome is colour, not a label.** The leading edge carries it, with a
+wash of the same colour fading out across the first few centimetres so it reads
+as the row's state rather than as decoration beside it. That is deliberately a
+single channel — a badge repeating it cost a whole column — and the trade is
+worth naming: the word is still on the row's `aria-label` and the timestamp's
+hover, which covers a screen reader but not a sighted red-green deficiency. The
+place to put the word back at no cost in layout is the queue sub-line.
+
 **A row never hides an empty slot.** A missing value renders as `—` in the
 place it would have occupied, because a row that collapses its gaps is a
 different shape per recording, which is precisely what stops a list being
@@ -130,7 +138,7 @@ scattering `??` through the row template:
 | Title (`vodTitle`) | `champion` → game mode → filename | Never empty. The filename is untrusted input, so the caller still escapes it |
 | Queue (`queueOrModeLabel`) | `queue` id → `game_mode` | `CLASSIC` renders as "Summoner's Rift", the *map*: the mode string cannot tell blind from draft from ranked, and naming one would be a guess in a slot read as fact |
 | KDA (`formatKda`) | all three or nothing | A partial KDA reads as a real one. The ratio (`kdaRatio`) is a hover hint, not a fourth number in a column three numbers wide |
-| Outcome | badge only when `win` is non-null | Undecided rows are excluded from the win-rate tile too, so an unknown never reads as a loss. The badge slot still renders, greyed, so the column holds its place |
+| Outcome | the leading accent, and text on `aria-label` / the timestamp hover | Undecided rows are excluded from the win-rate tile too, so an unknown never reads as a loss — it gets the neutral edge and no wash. A Win/Loss badge used to sit in its own column and was dropped as redundant: the edge already said it, in the same place on every row |
 | When (`formatRelative`) | relative inside a week → absolute date | "6 weeks ago" is worse than a date at that distance: nobody counts weeks, and the date is what a person searches their memory by. The absolute form is on the `title` either way |
 
 An unrecognised queue id shows as `Queue 1234` and an unrecognised mode
