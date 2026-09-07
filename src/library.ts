@@ -6,6 +6,7 @@ import {
   formatDateTime,
   formatKda,
   formatRelative,
+  patchLabel,
   formatSpan,
   kdaRatio,
   queueOrModeLabel,
@@ -312,24 +313,31 @@ function card(row: RecordingRow): string {
              data-id="${row.id}" data-outcome="${outcomeAttr(row.win)}">
       <span class="vod-portrait" aria-hidden="true"></span>
 
-      <span class="vod-identity">
+      <span class="vod-cell">
         <span class="vod-champ" title="${escapeAttr(title)}">${escapeHtml(title)}</span>
         <span class="vod-sub">${cell(queue)}${role ? ` · ${escapeHtml(role)}` : ""}</span>
       </span>
 
-      <span class="vod-score">
-        <span class="vod-kda">${cell(kda)}</span>
+      <span class="vod-cell">
+        <span class="vod-value">${cell(kda)}</span>
         <span class="vod-sub">${ratio ? escapeHtml(ratio) : "&nbsp;"}</span>
       </span>
 
-      <span class="vod-when">
-        <time datetime="${new Date(row.started_at).toISOString()}"
+      <span class="vod-cell">
+        <span class="vod-value">${cell(length)}</span>
+        <span class="vod-sub">${cell(patchLabel(row.patch), row.patch)}</span>
+      </span>
+
+      <span class="vod-cell">
+        <time class="vod-value" datetime="${new Date(row.started_at).toISOString()}"
               title="${escapeAttr(formatDateTime(row.started_at))}"
         >${escapeHtml(formatRelative(row.started_at))}</time>
-        <span class="vod-sub">${cell(length)} · ${formatBytes(row.size_bytes)}</span>
+        <span class="vod-sub">${formatBytes(row.size_bytes)}</span>
       </span>
 
       ${badge || `<span class="badge badge-unknown">—</span>`}
+
+      <span class="vod-slack" aria-hidden="true"></span>
 
       <span class="vod-actions">
         <button class="icon-btn pin-btn${row.pinned ? " pinned" : ""}"

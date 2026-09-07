@@ -1233,19 +1233,28 @@ button.armed {
   gap: var(--sp-2);
 }
 
-/* The columns are fixed rather than content-sized on purpose: values line
- * up down the list, so a column can be read vertically without the eye
- * re-finding it on every row. `minmax(0, …)` on the flexible one is what
- * lets a long champion name ellipsize instead of widening the row. */
+/* Columns are capped rather than content-sized or free-growing: values
+ * line up down the list, so a column can be read vertically without the
+ * eye re-finding it on every row.
+ *
+ * **The slack sits before the actions, not inside the data.** One column
+ * at `1fr` stretched the champion cell across half the window and threw
+ * everything else at the right edge, which read as two unrelated clusters
+ * with a hole between them. Every data column now has a maximum, so they
+ * stay a group at the left and the leftover width collects in one place —
+ * which is also where the scoreboard, items and team compositions land
+ * next (#85), so the row is already the shape it is growing into. */
 .vod-row {
   display: grid;
   grid-template-columns:
-    auto                /* portrait */
-    minmax(0, 1fr)      /* champion + queue */
-    minmax(6.5rem, auto)/* KDA */
-    minmax(9rem, auto)  /* when + length */
-    4.5rem              /* result */
-    auto;               /* actions */
+    auto                  /* portrait */
+    minmax(7rem, 15rem)   /* champion + queue · role */
+    minmax(5.5rem, 7rem)  /* KDA + ratio */
+    minmax(4.5rem, 6rem)  /* length + patch */
+    minmax(7rem, 9.5rem)  /* when + size */
+    3.5rem                /* result */
+    minmax(0, 1fr)        /* slack — see above */
+    auto;                 /* actions */
   align-items: center;
   gap: var(--sp-3);
   padding: var(--sp-3) var(--sp-4);
@@ -1275,10 +1284,11 @@ button.armed {
   border-left-color: var(--loss-fg);
 }
 
-/* Two lines in one grid cell: the value, and the thing that qualifies it. */
-.vod-identity,
-.vod-score,
-.vod-when {
+/* Two lines in one grid cell: the value, and the thing that qualifies it.
+ * `min-width: 0` because a grid item defaults to `auto`, which refuses to
+ * shrink below its content and would let one long champion name widen the
+ * column past its own maximum. */
+.vod-cell {
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -1298,9 +1308,10 @@ button.armed {
  * forever for a champion the CDN never answered for — the name beside it
  * has always been the real label. */
 .vod-portrait {
-  width: 34px;
-  height: 34px;
+  width: 40px;
+  height: 40px;
   border-radius: var(--r-sm);
+  border: 1px solid var(--border);
   background-color: var(--bg-inset);
   overflow: hidden;
 }
@@ -1319,14 +1330,23 @@ button.armed {
   white-space: nowrap;
 }
 
-.vod-kda {
+/* Tabular figures so the digits sit in the same columns from row to row —
+ * the point of a list is that a number can be compared down it without
+ * being read. */
+.vod-value {
   font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.vod-when time {
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+/* Fills its column and centres, so Win, Loss and — stack into a readable
+ * column instead of three differently-sized pills each starting at a
+ * different place. */
+.vod-row .badge {
+  display: block;
+  text-align: center;
+  padding-block: 0.15em;
 }
 
 /* A value the app does not have, said out loud rather than by leaving a

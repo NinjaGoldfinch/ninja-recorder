@@ -99,10 +99,17 @@ when — and a card grid answers that in two dimensions when one would do. Rows
 also leave somewhere for the scoreboard, items and team compositions to go
 without a second redesign (#85).
 
-The columns are fixed widths rather than content-sized, so values line up down
-the list and a column can be read vertically without the eye re-finding it on
-each row. The champion cell is the only flexible one, and it ellipsizes rather
-than widening the row.
+Every column is *capped*, so values line up down the list and a column can be
+read vertically without the eye re-finding it on each row. Cells ellipsize
+rather than widening the row.
+
+**The leftover width collects in one place, before the actions.** A single
+column at `1fr` stretched the champion cell across half the window and threw
+everything else at the right edge, so the row read as two unrelated clusters
+with a hole between them. With every data column capped they stay one group at
+the left, the actions stay pinned right, and the slack between them is where
+the scoreboard, items and team compositions land next — the row is already the
+shape it is growing into.
 
 **A row never hides an empty slot.** A missing value renders as `—` in the
 place it would have occupied, because a row that collapses its gaps is a
