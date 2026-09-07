@@ -956,18 +956,29 @@ impl Db {
         .map_err(DbError::from)
     }
 
-    /// Recordings with nothing the LCU could have told us, newest first.
+    /// Recordings missing anything the backfill can fill, newest first.
     ///
-    /// `win IS NULL OR champion IS NULL` rather than a single column: a row
-    /// can have one and not the other — Live Client Data writes the
-    /// champion the moment it sees a game and the outcome only at the end,
-    /// so a poller that came up late or a crash mid-game leaves exactly
-    /// that shape. Either gap is worth a backfill pass.
+    /// **Every column it writes, not just two.** This asked for
+    /// `win IS NULL OR champion IS NULL` while the backfill was only #56's
+    /// metadata pass, and kept asking for it after the backfill learned to
+    /// rebuild scoreboards — so a library whose rows all had a champion and
+    /// a result selected nothing, and the button did nothing at all. A row
+    /// with a champion can still be missing its scoreboard, its role, or
+    /// its patch.
+    ///
+    /// The cost of casting wide is one pass over rows that turn out to be
+    /// unfillable — a custom game never gets a queue id or a patch from
+    /// match history, so it is selected every time and matched every time.
+    /// That is a request the pass already makes and a comparison against a
+    /// list already in hand, and it is much cheaper than the alternative
+    /// failure, which is a button that silently does nothing.
     pub fn recordings_missing_metadata(&self) -> Result<Vec<crate::backfill::Candidate>, DbError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, started_at, duration_s FROM recordings
-             WHERE win IS NULL OR champion IS NULL
+             WHERE win IS NULL OR champion IS NULL OR role IS NULL
+                OR patch IS NULL OR queue IS NULL OR game_id IS NULL
+                OR scoreboard_json IS NULL OR cs IS NULL
              ORDER BY started_at DESC",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -1684,6 +1695,54 @@ mod tests {
             our_gold: Some(450.0),
             our_level: Some(11),
         }
+    }
+
+    /// The bug this exists to stop coming back: the backfill selected rows
+    /// missing `win` or `champion` only, so a library where every row had
+    /// both — which is every library, once the live path is working —
+    /// selected nothing, and the button did nothing at all.
+    #[test]
+    fn a_row_with_a_champion_and_a_result_still_needs_its_scoreboard() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db
+            .insert_recording(&NewRecording {
+                path: "/labelled.mp4".into(),
+                started_at: 1,
+                champion: Some("Shyvana".into()),
+                win: Some(true),
+                role: Some("Jungle".into()),
+                patch: Some("16.17".into()),
+                queue: Some(420),
+                game_id: Some(7),
+                // Everything the LCU answers for, and no scoreboard.
+                ..Default::default()
+            })
+            .unwrap();
+
+        let candidates = db.recordings_missing_metadata().unwrap();
+        assert_eq!(candidates.len(), 1, "a missing scoreboard is worth a pass");
+        assert_eq!(candidates[0].id, id);
+    }
+
+    #[test]
+    fn a_row_with_everything_is_left_alone() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/complete.mp4".into(),
+            started_at: 1,
+            champion: Some("Shyvana".into()),
+            win: Some(true),
+            role: Some("Jungle".into()),
+            patch: Some("16.17".into()),
+            queue: Some(420),
+            game_id: Some(7),
+            scoreboard_json: Some("{}".into()),
+            cs: Some(262),
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert!(db.recordings_missing_metadata().unwrap().is_empty());
     }
 
     fn gold_sample(game_time_s: f64, gold: f64) -> NewSample {

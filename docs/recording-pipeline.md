@@ -573,7 +573,7 @@ tight enough that consecutive games in one session do not brush each other.
 
 ```mermaid
 flowchart TD
-    START["rows WHERE win IS NULL<br/>OR champion IS NULL"] --> EACH[for each row]
+    START["rows missing anything<br/>the pass can fill"] --> EACH[for each row]
     EACH --> OVER{"games overlapping<br/>≥50% of the shorter window"}
     OVER -->|none| SKIP["unmatched<br/><small>older than the client's history,<br/>or a custom, or not a game</small>"]
     OVER -->|exactly one| PATCH["update_match_metadata<br/><small>same UPDATE the deferred patch uses</small>"]
