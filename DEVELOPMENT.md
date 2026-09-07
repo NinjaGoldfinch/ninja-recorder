@@ -630,11 +630,28 @@ the game itself reports.
 
 **One request per page, not per icon.** A row carries up to twelve pieces of
 art and a library shows dozens of rows, so `resolve_icons` takes four lists and
-answers with four maps. It resolves them sequentially rather than in parallel:
-the first call of a session warms the version, three JSON documents and every
-icon at once, and firing that at a CDN as a hundred simultaneous requests is
-how an application gets rate-limited — while the row renders without art in the
-meantime either way.
+answers with four maps.
+
+**Six icons in flight, not one and not all of them.** The first version
+resolved them strictly in series, on the reasoning that firing a cold cache at
+a CDN as a hundred simultaneous requests is how an application gets
+rate-limited. That was the right worry and the wrong end of the trade: a page
+with fourteen distinct icons meant fourteen round trips one after another,
+which is long enough that a person watches the art arrive. `CONCURRENCY = 6` is
+what a browser allows per host, for the same reason — a couple of rounds
+instead of a couple of dozen, without ever looking like a burst.
+
+The three shared JSON documents (`champion.json`, `summoner.json`,
+`runesReforged.json`) are warmed **before** the fan-out, in series. Six tasks
+starting against an empty cache would each fetch the same document, which is
+the exact duplicate-request problem the cache exists to prevent, multiplied by
+the concurrency.
+
+**The frontend paints in chunks of eight rows** rather than waiting for the
+whole page. The total wait is unchanged; what changes is that it stops being
+one wait for everything, so the rows someone is actually looking at fill in
+first. On a warm cache every chunk resolves without a request and it is
+indistinguishable from the single pass it replaced.
 
 ### 5.4 Decision: the loading screen is skipped, not cut
 

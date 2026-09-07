@@ -515,47 +515,85 @@ pub struct IconSet {
     pub runes: HashMap<String, String>,
 }
 
-/// Resolves a page's worth of art, fetching whatever is not cached yet.
+/// How many icons to have in flight at once.
 ///
-/// Sequential rather than parallel on purpose. The first call of a session
-/// warms the version, three JSON documents and every icon at once; firing
-/// that at a CDN as a hundred simultaneous requests is how an application
-/// gets rate-limited, and the row renders without art in the meantime
-/// either way.
-pub async fn resolve_icons(dir: &Path, request: &IconRequest) -> IconSet {
-    let mut set = IconSet::default();
+/// Six, which is what a browser allows per host, and the same reasoning:
+/// enough that a page of art arrives in a couple of rounds rather than a
+/// couple of dozen, few enough that a cold cache does not reach a CDN as a
+/// burst. Sequential was the first answer and it was the wrong end of that
+/// trade — fourteen distinct icons meant fourteen round trips in series,
+/// which is long enough to sit and watch.
+const CONCURRENCY: usize = 6;
 
+/// Resolves a page's worth of art, fetching whatever is not cached yet.
+pub async fn resolve_icons(dir: &Path, request: &IconRequest) -> IconSet {
     // Once per call, not once per spell: it is a file read, and whether a
     // client is running does not change halfway through a page.
     let lockfile = crate::lcu::lockfile::discover().ok().flatten();
     let lockfile = lockfile.as_ref();
 
-    for champion in dedup(&request.champions) {
-        if let Some(path) = champion_icon(dir, &champion).await {
-            set.champions.insert(champion, display(path));
+    // The shared documents are warmed first, in series. Six tasks each
+    // finding an empty map would each fetch `champion.json` — the
+    // duplicate-request problem the cache exists to avoid, multiplied by
+    // the concurrency.
+    if let Some(version) = version(dir).await {
+        if !request.champions.is_empty() {
+            let _ = art_keys(dir, &version).await;
+        }
+        if !request.spells.is_empty() {
+            let _ = spell_name_ids(dir, &version).await;
+        }
+        if !request.runes.is_empty() {
+            let _ = rune_icons(dir, &version).await;
         }
     }
-    for item in dedup(&request.items) {
-        if let Some(path) = item_icon(dir, item).await {
-            set.items.insert(item.to_string(), display(path));
-        }
+
+    IconSet {
+        champions: resolve_each(dedup(&request.champions), |name: String| async move {
+            champion_icon(dir, &name).await
+        })
+        .await,
+        items: resolve_each(dedup(&request.items), |id: i64| async move {
+            item_icon(dir, id).await
+        })
+        .await,
+        spells: resolve_each(dedup(&request.spells), |name: String| async move {
+            spell_icon(dir, lockfile, &name).await
+        })
+        .await,
+        spell_ids: resolve_each(dedup(&request.spell_ids), |id: i64| async move {
+            spell_icon_by_id(dir, lockfile, id).await
+        })
+        .await,
+        runes: resolve_each(dedup(&request.runes), |id: i64| async move {
+            rune_icon(dir, id).await
+        })
+        .await,
     }
-    for spell in dedup(&request.spells) {
-        if let Some(path) = spell_icon(dir, lockfile, &spell).await {
-            set.spells.insert(spell, display(path));
-        }
-    }
-    for spell in dedup(&request.spell_ids) {
-        if let Some(path) = spell_icon_by_id(dir, lockfile, spell).await {
-            set.spell_ids.insert(spell.to_string(), display(path));
-        }
-    }
-    for rune in dedup(&request.runes) {
-        if let Some(path) = rune_icon(dir, rune).await {
-            set.runes.insert(rune.to_string(), display(path));
-        }
-    }
-    set
+}
+
+/// Runs `fetch` over `keys` with at most `CONCURRENCY` in flight, keeping
+/// only the ones that resolved.
+///
+/// Unordered, because nothing downstream cares: the result is a map and the
+/// frontend paints whatever is in it.
+async fn resolve_each<K, F, Fut>(keys: Vec<K>, fetch: F) -> HashMap<String, String>
+where
+    K: std::fmt::Display,
+    F: Fn(K) -> Fut,
+    Fut: std::future::Future<Output = Option<PathBuf>>,
+{
+    use futures_util::stream::StreamExt;
+
+    futures_util::stream::iter(keys)
+        .map(|key| {
+            let fetch = &fetch;
+            async move { (key.to_string(), fetch(key).await) }
+        })
+        .buffer_unordered(CONCURRENCY)
+        .filter_map(|(key, path)| async move { path.map(|p| (key, display(p))) })
+        .collect()
+        .await
 }
 
 /// Ten rows sharing a champion should cost one lookup, not ten.
