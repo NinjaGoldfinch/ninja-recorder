@@ -778,8 +778,15 @@ pub fn run() {
                         use tauri::Emitter;
                         match trim::trim_recording(&db, &ffmpeg, recording_id) {
                             Ok(report) => {
-                                info!("trim", "cut {:.1}s off recording {recording_id}",
-                                    report.removed_s
+                                // Both ends named separately: only the head
+                                // shifts markers, so if a rebase ever looks
+                                // wrong this line says which number to blame.
+                                info!("trim",
+                                    "cut {:.1}s off recording {recording_id} \
+                                     ({:.1}s loading screen, {:.1}s post-game)",
+                                    report.removed_s,
+                                    report.head_removed_s,
+                                    report.tail_removed_s
                                 );
                                 // The card's length and size both changed.
                                 if let Err(e) = handle.emit(LIBRARY_CHANGED_EVENT, ()) {

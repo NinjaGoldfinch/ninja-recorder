@@ -785,9 +785,24 @@ than 60 s — which is not a post-game tail, since one is five to fifteen
 seconds. That is the same rule `trim.rs` applies to the head: act on a measured
 answer, never on a guessed one, and when the numbers do not agree, do nothing.
 
-Cutting the tail out of the *file*, symmetric with the head trim above, is
-issue #120. The player-side clip came first for the same reason it did at the
-head: it touches no files, so it cannot lose a recording.
+The file is cut at both ends too, in **one pass**. `-ss` for the front and
+`-t` for the length — a duration rather than `-to`, because with `-ss` ahead
+of `-i` the output timeline restarts at zero and a stop *time* would be
+measured from the new start, which is an interaction whose failure mode is a
+file cut in the wrong place.
+
+**The halves have to stay separable, and that is the whole difficulty.**
+Markers and samples rebase by what came off the *front*; a tail cut shifts
+nothing. One pass reports one duration, so the head component is recovered
+from where the cut was told to stop: the output spans `stop_at` back to
+wherever ffmpeg actually started, so the difference is what it skipped. That
+formula reduces to `before - after` when there is no tail cut, which is
+exactly what the head-only trim always computed — so recordings that get only
+a head cut rebase by the same number they always did.
+
+Two guards, because rebasing by a wrong number puts every marker out by a
+loading screen: the existing keyframe-drift check runs on the head component
+only, and a tail-*only* cut additionally asserts that the front did not move.
 
 ---
 
