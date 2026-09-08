@@ -551,6 +551,20 @@
               <dd id="about-last-finalized" class="mono">&#8212;</dd>
             </div>
             <div>
+              <dt>Update channel</dt>
+              <dd>
+                <select id="update-channel" aria-describedby="update-channel-hint">
+                  <option value="stable">Stable &#8212; releases only</option>
+                  <option value="alpha">Alpha &#8212; every build</option>
+                </select>
+                <p id="update-channel-hint" class="setting-hint">
+                  Alpha publishes on every commit and is not tested before
+                  release. Switching back to Stable offers nothing until a
+                  release overtakes the alpha you are on.
+                </p>
+              </dd>
+            </div>
+            <div>
               <dt>Updates</dt>
               <dd>
                 <span id="about-update">Checking&#8230;</span>

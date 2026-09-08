@@ -53,6 +53,8 @@ flowchart TB
     UPDATE --> BRIDGE
     UPDATE --> TOAST
     UPDATE --> DOM
+    UPDATE --> PREFS
+    SETTINGS --> UPDATE
     LIB --> FMT
     REVIEW --> FMT
     LIB --> DOM
@@ -413,6 +415,7 @@ a shipped build.
 | `lcu_status` | `LcuStatus` | header strip |
 | `game_state_status` | `SupervisorStatus` | header strip, About block |
 | `get_update_status` | `UpdateStatus` | settings → About (version + changelog), and the badge on the gear |
+| — | the `updateChannel` pref | the channel dropdown rides `get_ui_prefs`/`set_ui_pref`, so it needs no command of its own |
 | `check_for_update` | — | settings → About → "Check now" |
 | `install_update` | — | settings → About → "Install and restart"; ends the process |
 | `start_recording` / `stop_recording` / `is_recording` | — | registered but unreferenced by the main UI; the dev portal's Recorder panel drives them |

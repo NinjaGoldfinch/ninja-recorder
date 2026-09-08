@@ -248,15 +248,46 @@ fn record_update_result(app: &tauri::AppHandle, found: update::CheckResult) {
     }
 }
 
+/// Builds an updater pointed at the channel this install follows.
+///
+/// Stable uses the endpoints as configured in `tauri.conf.json`, so that URL
+/// has one copy rather than two that can drift. Alpha overrides them at
+/// runtime, which `UpdaterBuilder::endpoints` exists for.
+///
+/// A channel read that fails falls back to stable rather than propagating:
+/// the conservative channel is the right answer to "we could not tell", and
+/// the alternative is an install that stops checking because its preferences
+/// table hiccuped.
+fn updater_for_channel(app: &tauri::AppHandle) -> tauri_plugin_updater::Result<tauri_plugin_updater::Updater> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let channel = {
+        let state = app.state::<AppState>();
+        let stored = state
+            .db
+            .get_ui_prefs()
+            .ok()
+            .and_then(|prefs| prefs.get(update::CHANNEL_PREF_KEY).cloned());
+        update::Channel::from_pref(stored.as_deref())
+    };
+
+    match channel {
+        update::Channel::Stable => app.updater(),
+        update::Channel::Alpha => app
+            .updater_builder()
+            .endpoints(vec![tauri::Url::parse(update::ALPHA_ENDPOINT)
+                .expect("ALPHA_ENDPOINT is a literal and is unit-tested as a URL")])?
+            .build(),
+    }
+}
+
 /// Runs one update check and records what it found.
 ///
 /// Never returns a `Result`: nothing calls this that could act on one. A
 /// failed check is a *state* the About block renders, not an error to
 /// propagate — the user's network being down is not a bug.
 async fn run_update_check(app: tauri::AppHandle) {
-    use tauri_plugin_updater::UpdaterExt;
-
-    let found = match app.updater() {
+    let found = match updater_for_channel(&app) {
         Err(e) => update::CheckResult::Failed(format!("Could not check for updates: {e}")),
         Ok(updater) => match updater.check().await {
             Ok(Some(u)) => update::CheckResult::Found(update::UpdateOffer {
@@ -286,8 +317,6 @@ async fn run_update_check(app: tauri::AppHandle) {
 /// The finalize here is the belt for the gap between that check and this
 /// moment — the same reasoning, and the same call, as `tray::request_quit`.
 async fn run_update_install(app: tauri::AppHandle) {
-    use tauri_plugin_updater::UpdaterExt;
-
     let prep_app = app.clone();
     let finalized = tauri::async_runtime::spawn_blocking(move || {
         let (supervisor, recorder) = {
@@ -344,7 +373,7 @@ async fn run_update_install(app: tauri::AppHandle) {
     // moment the button was pressed, and it has no other way to learn that
     // this did not happen — `install_update` returned the instant the request
     // was handed over, long before any of this ran.
-    let offer = match app.updater() {
+    let offer = match updater_for_channel(&app) {
         Ok(updater) => match updater.check().await {
             Ok(Some(u)) => u,
             Ok(None) => {
