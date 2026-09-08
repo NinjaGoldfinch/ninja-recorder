@@ -449,7 +449,19 @@ async fn cached_file(dir: &Path, version: &str, sub: &str, name: &str, url: Stri
 /// every resolver below too.
 pub async fn champion_icon(dir: &Path, champion: &str) -> Option<PathBuf> {
     let version = version(dir).await?;
-    let key = art_keys(dir, &version).await?.get(champion)?.clone();
+    // Normalized on the way in, because the *stored* name is not always a
+    // champion. Live Client Data reports a champion's current form, so a
+    // transformed Gnar was written as `Mega Gnar` — no such key exists here,
+    // the lookup missed, and the slot rendered as an empty square.
+    //
+    // Fixed at the source in `live_client::events`, but only for recordings
+    // made after that landed. Rows already on disk still say `Mega Gnar`, and
+    // this is where they get their portrait back without a migration.
+    //
+    // The caller's key is untouched: `resolve_icons` keys its map by the name
+    // it was asked for, so the frontend still finds the entry it looked up.
+    let name = crate::live_client::events::normalize_champion(champion);
+    let key = art_keys(dir, &version).await?.get(&name)?.clone();
     let url = format!("{CDN}/cdn/{version}/img/champion/{key}.png");
     cached_file(dir, &version, "champion", &format!("{key}.png"), url).await
 }
@@ -659,6 +671,28 @@ mod tests {
         assert_eq!(keys.get("Ahri").map(String::as_str), Some("Ahri"));
         // The key is never a lookup key itself — a card holds display names.
         assert_eq!(keys.get("MonkeyKing"), None);
+    }
+
+    /// The art path has to normalize too, not just the capture path.
+    /// Recordings written before the source fix still carry `Mega Gnar`, and
+    /// this is what gets them a portrait without a migration.
+    #[test]
+    fn a_stored_transform_name_resolves_to_the_real_champions_key() {
+        let parsed: ChampionData = serde_json::from_str(
+            r#"{"data":{"Gnar":{"id":"Gnar","key":"150","name":"Gnar"}}}"#,
+        )
+        .unwrap();
+        let keys: ArtKeys = parsed
+            .data
+            .into_values()
+            .filter_map(|e| Some((e.name?, e.id?)))
+            .collect();
+
+        // The bug, stated: what the live API wrote is not a champion.
+        assert_eq!(keys.get("Mega Gnar"), None);
+        // And the fix: the art path normalizes before it looks up.
+        let normalized = crate::live_client::events::normalize_champion("Mega Gnar");
+        assert_eq!(keys.get(&normalized).map(String::as_str), Some("Gnar"));
     }
 
     /// Every field is optional because this is a remote document that can
