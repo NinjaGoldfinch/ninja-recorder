@@ -4,6 +4,13 @@
 pub mod client;
 pub mod events;
 pub mod poller;
+// Only the dev portal reads this, so in a shipped build it is genuinely
+// dead code — and clippy runs without `--all-targets`, so its own tests do
+// not count as a use (CLAUDE.md). Compiled either way rather than gated
+// behind `#[cfg(feature = "devtools")]`, so the analysis and its tests keep
+// being checked by the build everyone runs.
+#[cfg_attr(not(feature = "devtools"), allow(dead_code))]
+pub mod shapes;
 
 pub use client::LiveClientDataClient;
 pub use events::{
