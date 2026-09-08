@@ -562,6 +562,11 @@
                     Install and restart
                   </button>
                 </span>
+                <!-- What changed, from `latest.json`. Built as text nodes by
+                     `update.ts`, never as markup: the manifest is fetched
+                     over HTTPS but is *not* covered by the update signature
+                     — only the installer it points at is. -->
+                <div id="about-update-notes" class="update-notes" hidden></div>
               </dd>
             </div>
           </dl>

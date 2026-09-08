@@ -434,6 +434,13 @@ jobs:
           TAG: v${{ needs.version.outputs.version }}
         run: |
           PREV=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+          # Two files, because they have two audiences. `changelog.md` is
+          # what changed and nothing else — it goes into `latest.json`, and
+          # from there into the app's own update panel. `notes.md` is that
+          # plus the standing install caveats, which are written for someone
+          # downloading an installer from the Releases page and are actively
+          # wrong in the in-app panel: "SmartScreen warns on first run" is
+          # not advice for a person clicking Install inside a running app.
           {
             echo "## What's changed"
             echo
@@ -448,6 +455,10 @@ jobs:
                 --pretty=format:'- %s' "${GITHUB_SHA}"
               echo
             fi
+          } > changelog.md
+
+          {
+            cat changelog.md
             cat <<'CAVEATS'
 
           ## Before you install
@@ -476,7 +487,9 @@ jobs:
           silent, switch the preset to Desktop, which uses ordinary loopback.
           CAVEATS
           } > notes.md
-          echo "--- generated notes ---"
+          echo "--- changelog.md (goes to the app) ---"
+          cat changelog.md
+          echo "--- notes.md (goes to the release page) ---"
           cat notes.md
 
       # The update manifest every installed build polls, written from the
@@ -513,9 +526,10 @@ jobs:
             const base = `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/v${v}`;
             fs.writeFileSync("latest.json", JSON.stringify({
               version: v,
-              // The same changelog the release itself carries, so the two
-              // cannot disagree about what this version changed.
-              notes: fs.readFileSync("notes.md", "utf8"),
+              // The changelog only — this is what the app renders in
+              // Settings -> About, and the release page caveats below it
+              // are written for a different reader entirely.
+              notes: fs.readFileSync("changelog.md", "utf8"),
               pub_date: new Date().toISOString(),
               platforms: {
                 "windows-x86_64": {

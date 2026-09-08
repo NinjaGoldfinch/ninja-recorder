@@ -1261,18 +1261,40 @@ because quitting has already stopped everything — but it turns Quit into a
 several-minute operation the user did not ask for, at the exact moment they
 wanted the app gone.
 
-### It is quiet, because the release cadence is loud
+### Quiet about interrupting, not about telling
 
-Every commit on `main` mints a release and the minor version advances by one,
-so "a newer version exists" is true most days. A toast, a system notification
-or a modal on each of them is a thing the user learns to dismiss without
-reading — and the one time it matters, they dismiss that too.
+These are two different questions and the first draft of this feature
+conflated them, which made the panel worse for no reason.
 
-The entire announcement is therefore a dot on the settings button. The
-details, the changelog and the button live in Settings → About, which is where
-someone who wants to update is already going. The only interruption in the
-whole feature is a failed install, and that one is a toast because the user
-pressed a button and is owed an answer.
+**Interrupting: as little as possible.** Every commit on `main` mints a
+release, so "a newer version exists" is true most days. A toast, a system
+notification or a modal on each of them is a thing the user learns to dismiss
+without reading — and the one time it matters, they dismiss that too. So the
+entire announcement is a dot on the settings button.
+
+Notifications in particular stay out of it. A Windows toast for an update is
+an interruption that leaves the app to say something the app could say
+better, and it competes for the same channel the *recording* notifications use
+— the ones that report a capture failing, which are worth reading.
+
+**Telling: everything it knows.** The panel in Settings → About carries the
+version, what changed, and the button. The changelog is not decoration:
+installing means restarting mid-session, possibly between games, and that is
+the user's call to make. A version number alone is not enough to make it —
+"0.9.0 is available" gives nobody a reason to say yes or later.
+
+So the notes ride in `latest.json` (CI writes them from the same `git log` the
+release page gets, minus the install caveats, which are written for someone
+downloading an installer and are simply wrong in a running app) and are
+rendered in the row. **As text nodes, never markup**: the manifest is fetched
+over HTTPS but is *not* covered by the update signature — only the installer
+it points at is — so everything in it is remote text this app did not write.
+Building nodes rather than escaping a string means there is no escaping to get
+wrong.
+
+The one thing that does interrupt is the backend *refusing* an install,
+because the user pressed a button and is owed an answer. A failed download
+reports itself in the row instead — they are already looking at it.
 
 The check runs 30 s after launch and every six hours after that. Late enough
 not to compete with the recorder backend coming up, the database opening or

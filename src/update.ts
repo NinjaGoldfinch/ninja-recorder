@@ -8,11 +8,15 @@ import type { UpdateStatus } from "./types";
 /**
  * The update row in Settings → About, and the dot on the settings button.
  *
- * Deliberately quiet. CI publishes a release for every commit that lands on
- * `main`, so "something newer exists" is true most days — a toast or a system
- * notification on each one would be noise the user learns to dismiss without
- * reading. The dot is the whole announcement; everything else waits until
- * somebody opens Settings. See DEVELOPMENT.md §14.
+ * Quiet about *interrupting*, not about *telling*. CI publishes a release for
+ * every commit on `main`, so "something newer exists" is true most days, and a
+ * toast or a system notification on each one is noise the user learns to
+ * dismiss without reading. So the announcement is a dot and nothing more.
+ *
+ * What the panel itself says is a separate question, and the answer is: as
+ * much as it has. The version, and what changed, because deciding whether to
+ * restart mid-session is the user's call and they cannot make it from a
+ * version number alone. See DEVELOPMENT.md §14.
  *
  * The one thing that interrupts is the backend *refusing* an install — a game
  * started between the render and the click — because the user pressed a button
@@ -22,6 +26,7 @@ import type { UpdateStatus } from "./types";
 
 interface Els {
   text: HTMLElement;
+  notes: HTMLElement;
   install: HTMLButtonElement;
   badge: HTMLElement;
   check: HTMLButtonElement;
@@ -33,6 +38,7 @@ let installing = false;
 export function initUpdate() {
   els = {
     text: el("#about-update"),
+    notes: el("#about-update-notes"),
     install: el("#update-install"),
     badge: el("#update-badge"),
     check: el("#update-check"),
@@ -67,10 +73,52 @@ export async function refreshUpdateStatus() {
   render(status);
 }
 
+/**
+ * Renders the changelog as **text nodes**, never markup.
+ *
+ * `latest.json` is fetched over HTTPS but is not covered by the update
+ * signature — only the installer it points at is — so everything in here is
+ * remote text this app did not write. Building nodes rather than assigning
+ * `innerHTML` means there is no escaping to get wrong.
+ *
+ * The format CI writes is a `## What's changed` heading, `- ` bullets per
+ * commit, and a trailing full-changelog line. The heading is dropped (the row
+ * is already labelled), bullets become a list, and anything else is a
+ * paragraph — an unrecognized line is shown rather than swallowed.
+ */
+function renderNotes(notes: string | null) {
+  els.notes.replaceChildren();
+  const lines = (notes ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"));
+  if (lines.length === 0) {
+    els.notes.hidden = true;
+    return;
+  }
+
+  let list: HTMLUListElement | null = null;
+  for (const line of lines) {
+    if (line.startsWith("- ")) {
+      list ??= els.notes.appendChild(document.createElement("ul"));
+      const item = document.createElement("li");
+      item.textContent = line.slice(2);
+      list.appendChild(item);
+      continue;
+    }
+    list = null;
+    const para = document.createElement("p");
+    para.textContent = line;
+    els.notes.appendChild(para);
+  }
+  els.notes.hidden = false;
+}
+
 function render(status: UpdateStatus) {
   const offering = status.kind === "available";
   els.badge.hidden = !offering;
   els.install.hidden = !offering;
+  if (!offering) els.notes.hidden = true;
   // A download in flight owns the row: a background check landing mid-install
   // must not re-enable the buttons under the user.
   if (installing && status.kind !== "failed") return;
@@ -102,6 +150,7 @@ function render(status: UpdateStatus) {
         ? ""
         : ` Cannot install while ${status.blockedReason ?? "the app is busy"}.`;
       els.text.textContent = `Version ${status.offer.version} is available.${why}`;
+      renderNotes(status.offer.notes);
       break;
     }
   }
@@ -129,6 +178,8 @@ async function install() {
   els.install.disabled = true;
   els.check.disabled = true;
   els.text.textContent = "Downloading the update…";
+  // The changelog stays up. It is what the user was reading to decide, and
+  // removing it the instant they act is the one moment it is least welcome.
   try {
     await call("install_update");
     // `install_update` returns the instant the request is handed over, not

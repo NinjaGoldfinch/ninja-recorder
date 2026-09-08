@@ -1702,6 +1702,36 @@ button.armed {
   vertical-align: middle;
 }
 
+/* What changed, in the About row. Capped and scrollable rather than
+ * unbounded: a release that collects a fortnight of commits would otherwise
+ * push the rest of the settings page off the screen. */
+.update-notes {
+  margin-top: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  max-height: 11rem;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background-color: var(--bg-inset);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.update-notes ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.update-notes li {
+  margin: 0.15rem 0;
+  overflow-wrap: anywhere;
+}
+
+.update-notes p {
+  margin: 0.15rem 0;
+  overflow-wrap: anywhere;
+}
+
 button.small {
   padding: 0.25em 0.7em;
   font-size: var(--fs-sm);
