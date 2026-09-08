@@ -208,21 +208,40 @@ stateDiagram-v2
     settings --> library: close (always returns to library)
 ```
 
-### The player skips the loading screen
+### The player clips both ends
 
-A recording starts on the loading screen, so opening a VOD used to land on
-twenty seconds of a static splash. The review view treats the recording as a
-window instead — `[game start − 2s, end]` — and playback opens there, the
-scrubber spans it, the ruler reads 0:00 at its start, and every seek is clamped
-into it by a single `seekTo`.
+A recording brackets the game: it starts on the loading screen — twenty
+seconds of a static splash — and it keeps rolling after the game window is
+gone, which under WGC captures as *black*, not as a frozen last frame. Opening
+a VOD used to land on the first, and playing one to the end used to land on
+the second.
 
-**The file is untouched.** The number comes from the samples the timeline
-already fetches: each carries both a game clock and a video clock, so the
-difference between them *is* the length of the loading screen. No column, no
-migration, and it works on recordings made long before this existed. A
-recording with no samples has no alignment, so its window is the whole file.
+The review view treats the recording as a window instead,
+`[game start − 1s, game end + 2s]`. Playback opens at its start, stops at its
+end, the scrubber spans it, the ruler reads 0:00 at its start, and every seek
+is clamped into it by a single `seekTo`.
 
-See [DEVELOPMENT.md §5.4](../DEVELOPMENT.md) for why the file is not cut.
+**The file is untouched.** Both numbers come from the samples the timeline
+already fetches: each carries a game clock and a video clock, so the offset
+between them is the loading screen, and the last sample is the last thing the
+game reported. No column, no migration, and it works on recordings made long
+before this existed.
+
+**Three ways it declines to clip the tail**, each falling back to the end of
+the file rather than to a guess:
+
+| Condition | Why |
+|---|---|
+| No samples | A rescan import, or a game whose poller never came up. Nothing knows where its game ended |
+| Tail shorter than the margin | There is nothing to remove |
+| Gap wider than `MAX_TAIL_CLIP_S` (60 s) | Not a post-game tail. A stretch of unreadable Live Client Data responses keeps recording and produces *no samples*, so real gameplay would sit after the last one — cutting there would hide the game |
+
+Playback is stopped at the window end from both the rAF loop and
+`timeupdate`: the loop is smooth but only runs while frames are produced,
+`timeupdate` fires at ~4 Hz regardless. Whichever arrives first wins.
+
+See [DEVELOPMENT.md §5.4](../DEVELOPMENT.md) for why the file is not cut, and
+[#120](../../issues/120) for cutting the tail out of it.
 
 ### Where each kind of art comes from
 

@@ -700,7 +700,7 @@ one wait for everything, so the rows someone is actually looking at fill in
 first. On a warm cache every chunk resolves without a request and it is
 indistinguishable from the single pass it replaced.
 
-### 5.4 Decision: the loading screen is skipped, not cut
+### 5.4 Decision: the dead ends are skipped, not cut
 
 A recording starts when the client says the game is in progress, which is the
 loading screen — roughly twenty seconds of a static splash before anything
@@ -757,6 +757,37 @@ finalize skipped.
 A recording whose live poller never came up has no alignment and no samples, so
 its window is the whole file — the honest outcome, since nothing knows where
 its game started.
+
+#### The same argument at the other end
+
+A recording brackets the game on **both** sides. Capture keeps running after
+the game window is destroyed, because neither signal that ends a recording
+knows at the instant the game ends: `LiveClientDown` waits for five failed
+polls at 1 Hz (§3.2, and it waits five because of #74 — one dropped request
+used to cost half an hour of a real game), and the gameflow phase trails the
+window closing too. A window that no longer exists captures as **black** under
+WGC, not as a frozen last frame, so every VOD ended on several seconds of it.
+
+The player's window is therefore `[game start − 1s, game end + 2s]`, and both
+numbers come from the same place: the last sample is the last thing the game
+reported. Playback stops there rather than running on.
+
+**Where this differs from the head, and why it has to.** The loading screen is
+bounded — it is always about twenty seconds, and being wrong about it costs a
+few seconds of splash. The tail is not: a stretch where Live Client Data
+answered with something the parser could not read keeps recording and produces
+*no samples at all*, so real gameplay can sit after the last one. Clipping
+there would hide the game rather than the black.
+
+So the tail clip refuses in three cases and falls back to the end of the file
+in each: no samples, a tail already shorter than the margin, and a gap wider
+than 60 s — which is not a post-game tail, since one is five to fifteen
+seconds. That is the same rule `trim.rs` applies to the head: act on a measured
+answer, never on a guessed one, and when the numbers do not agree, do nothing.
+
+Cutting the tail out of the *file*, symmetric with the head trim above, is
+issue #120. The player-side clip came first for the same reason it did at the
+head: it touches no files, so it cannot lose a recording.
 
 ---
 

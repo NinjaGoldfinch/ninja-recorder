@@ -171,6 +171,8 @@ export function initReview() {
     updatePlayhead();
     void resumeStem();
   });
+  // The backstop for `stopAtWindowEnd`; see it for why there are two.
+  video?.addEventListener("timeupdate", stopAtWindowEnd);
   // The stem is a slave clock: pause it while the video is between frames
   // rather than letting it run on and then snap back.
   video?.addEventListener("seeking", () => stemAudio?.pause());
@@ -469,6 +471,34 @@ const LEAD_IN_S = 1;
 const MIN_SKIP_S = 3;
 
 /**
+ * How much to keep after the last thing the game reported.
+ *
+ * Capture outlives the game window — nothing stops it at the instant the
+ * game ends, because neither signal that ends a recording knows at that
+ * instant (#119) — and a window that no longer exists captures as *black*
+ * under WGC, not as a frozen last frame. This is the other end of
+ * `LEAD_IN_S`: enough that the final moment is not clipped by the 1 Hz
+ * sample cadence, not so much that the black is back.
+ */
+const TAIL_OUT_S = 2;
+
+/**
+ * Past this, the gap is not a post-game tail and clipping it would be a
+ * guess.
+ *
+ * The tail is normally 5-15 s: five failed polls at 1 Hz, or up to three
+ * times that if the dying game process makes them time out rather than
+ * refuse. A much larger gap means something else — most likely a stretch
+ * where Live Client Data answered with something the parser could not read,
+ * which keeps recording and produces *no samples*, so real gameplay sits
+ * after the last one. Cutting there would hide the game.
+ *
+ * The same rule `trim.rs` applies at the other end: act on a measured
+ * answer, never on a guessed one.
+ */
+const MAX_TAIL_CLIP_S = 60;
+
+/**
  * Where the game clock starts, in video time.
  *
  * A recording begins when the client says the game is in progress, which is
@@ -484,6 +514,26 @@ const MIN_SKIP_S = 3;
  * has no alignment, and guessing one would open the VOD somewhere arbitrary.
  */
 let gameStartsAt = 0;
+
+/**
+ * Where the game last reported itself, in video time — `null` when nothing
+ * did.
+ *
+ * Measured the same way as `gameStartsAt`, from the samples the timeline
+ * already fetches, so it works on every recording ever made with no
+ * migration. `null` means no samples at all: a rescan-imported file, or a
+ * game whose live poller never came up. Those play to the end of the file,
+ * because nothing here knows where their game ended.
+ */
+let gameEndsAt: number | null = null;
+
+function measureGameEnd(samples: readonly SampleRow[]): number | null {
+  let latest: number | null = null;
+  for (const s of samples) {
+    if (latest === null || s.video_time_s > latest) latest = s.video_time_s;
+  }
+  return latest;
+}
 
 function measureGameStart(samples: readonly SampleRow[]): number {
   const earliest = samples.reduce<SampleRow | null>(
@@ -502,10 +552,28 @@ function windowStart(): number {
   return Math.max(0, gameStartsAt - LEAD_IN_S);
 }
 
+/**
+ * The last video position the player will show.
+ *
+ * Three ways this declines to clip, and all of them fall back to the end of
+ * the file rather than to a guess: no samples to measure from, a tail
+ * already shorter than the margin, or a gap too large to be a post-game
+ * tail at all (`MAX_TAIL_CLIP_S`).
+ */
+function windowEnd(): number {
+  if (!video || !isFinite(video.duration)) return 0;
+  const fileEnd = video.duration;
+  if (gameEndsAt === null) return fileEnd;
+  const clipped = gameEndsAt + TAIL_OUT_S;
+  if (clipped >= fileEnd) return fileEnd;
+  if (fileEnd - clipped > MAX_TAIL_CLIP_S) return fileEnd;
+  return Math.max(windowStart(), clipped);
+}
+
 /** How much video the player treats as the recording. */
 function windowSpan(): number {
   if (!video || !isFinite(video.duration)) return 0;
-  return Math.max(0, video.duration - windowStart());
+  return Math.max(0, windowEnd() - windowStart());
 }
 
 /** Video time → the position shown to the user, where 0 is the window's start. */
@@ -520,10 +588,13 @@ function windowFraction(videoTime: number): number {
   return clamp((videoTime - windowStart()) / span, 0, 1);
 }
 
-/** Every seek goes through here, so nothing can land in the skipped lead. */
+/**
+ * Every seek goes through here, so nothing can land in the skipped lead —
+ * or in the black tail past the end of the game.
+ */
 function seekTo(videoTime: number) {
   if (!video || !isFinite(video.duration)) return;
-  video.currentTime = clamp(videoTime, windowStart(), video.duration);
+  video.currentTime = clamp(videoTime, windowStart(), windowEnd());
 }
 
 /** Set once per recording, when both the samples and the duration are in. */
@@ -867,9 +938,33 @@ function onVisibilityChange() {
   }
 }
 
+/**
+ * Stops playback at the end of the window instead of letting it run on into
+ * the black tail (#119).
+ *
+ * Checked from the rAF loop *and* from `timeupdate`: the loop is smooth but
+ * only runs while a frame is being produced, and `timeupdate` keeps firing
+ * at ~4 Hz regardless. Whichever gets there first wins; the second call
+ * finds the video already paused and does nothing.
+ *
+ * A no-op when nothing was clipped, because `windowEnd()` is the file end
+ * and the `ended` event handles that case as it always did.
+ */
+function stopAtWindowEnd() {
+  if (!video || video.paused || !isFinite(video.duration)) return;
+  const end = windowEnd();
+  if (end >= video.duration || video.currentTime < end) return;
+  video.pause();
+  // Clamped rather than left a few milliseconds past: the position is what
+  // the scrub bar and the time display read, and "27:20 / 27:18" is the
+  // kind of thing that looks like a bug.
+  video.currentTime = end;
+}
+
 function startPlayheadLoop() {
   stopPlayheadLoop();
   const tick = () => {
+    stopAtWindowEnd();
     updatePlayhead();
     correctStemDrift();
     rafHandle = requestAnimationFrame(tick);
@@ -966,8 +1061,18 @@ function hideClusterTooltip() {
 
 function togglePlay() {
   if (!video || !video.src) return;
-  if (video.paused) video.play().catch(() => {});
-  else video.pause();
+  if (!video.paused) {
+    video.pause();
+    return;
+  }
+  // Parked at the end of the window, pressing play would hit
+  // `stopAtWindowEnd` on the next frame and pause again — a button that
+  // visibly does nothing. Restart, which is what reaching the end of any
+  // other video does.
+  if (isFinite(video.duration) && video.currentTime >= windowEnd() - 0.05) {
+    seekTo(windowStart());
+  }
+  video.play().catch(() => {});
 }
 
 function syncPlayButton() {
@@ -1285,6 +1390,7 @@ export async function openReview(row: RecordingRow) {
   currentSamples = [];
   currentClusters = [];
   gameStartsAt = 0;
+  gameEndsAt = null;
   startApplied = false;
   renderTimeline();
   renderMarkerList();
@@ -1302,6 +1408,7 @@ export async function openReview(row: RecordingRow) {
     currentMarkers = markers;
     currentSamples = samples;
     gameStartsAt = measureGameStart(samples);
+    gameEndsAt = measureGameEnd(samples);
     applyStartPosition();
   } catch (err) {
     console.error("Failed to load timeline data", err);
