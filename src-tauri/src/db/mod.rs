@@ -972,6 +972,27 @@ impl Db {
     /// game whose live poller never came up looks like. The caller writes
     /// no gold in that case: frames placed through a guessed offset would
     /// draw the right curve at the wrong times.
+    /// Where the game last reported itself, in video time.
+    ///
+    /// The other end of `sample_alignment_offset`. Capture outlives the game
+    /// window — nothing stops it at the instant the game ends — and a window
+    /// that no longer exists captures as black under WGC, so this is where
+    /// the black begins (#120).
+    ///
+    /// `None` when there are no samples, which is the same answer as the head
+    /// end gives and means the same thing: nothing knows, so touch nothing.
+    pub fn last_sample_video_time_s(&self, recording_id: i64) -> Result<Option<f64>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT MAX(video_time_s) FROM samples WHERE recording_id = ?1",
+            [recording_id],
+            |row| row.get::<_, Option<f64>>(0),
+        )
+        .optional()
+        .map(Option::flatten)
+        .map_err(DbError::from)
+    }
+
     pub fn sample_alignment_offset(&self, recording_id: i64) -> Result<Option<f64>, DbError> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(

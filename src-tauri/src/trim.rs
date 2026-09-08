@@ -61,6 +61,17 @@ const LEAD_IN_S: f64 = 1.0;
 /// Below this there is no loading screen worth the rewrite.
 const MIN_TRIM_S: f64 = 3.0;
 
+/// How much to keep after the last thing the game reported.
+///
+/// Matches `review.ts`'s window so a trimmed recording and an untrimmed one
+/// end in the same place. The samples are 1 Hz, so the alignment is only good
+/// to about a second; two gives the nexus falling somewhere to land.
+const TAIL_OUT_S: f64 = 2.0;
+
+/// Past this, the gap at the end is not a post-game tail and cutting it would
+/// be a guess. Matches `review.ts`.
+const MAX_TAIL_CLIP_S: f64 = 60.0;
+
 /// How far the amount actually removed may differ from the amount asked for
 /// before this refuses to touch the database.
 ///
@@ -77,9 +88,15 @@ pub struct TrimReport {
     pub game_starts_at_s: f64,
     /// What was asked of ffmpeg.
     pub requested_s: f64,
-    /// What actually came off, from the durations either side. Lower than
-    /// `requested_s` by up to a GOP, because the cut lands on a keyframe.
+    /// Everything that came off, both ends together — what a human means by
+    /// "how much shorter is it".
     pub removed_s: f64,
+    /// The front alone, which is the only half that shifts timestamps.
+    /// Lower than `requested_s` by up to a GOP, because a `-ss` cut lands on
+    /// a keyframe at or before the point asked for.
+    pub head_removed_s: f64,
+    /// The post-game black at the end (#120). Shifts nothing.
+    pub tail_removed_s: f64,
     pub duration_before_s: f64,
     pub duration_after_s: f64,
     pub size_before_bytes: i64,
@@ -94,6 +111,52 @@ pub struct TrimReport {
 pub fn trim_point_s(game_starts_at_s: f64) -> Option<f64> {
     let point = game_starts_at_s - LEAD_IN_S;
     (point >= MIN_TRIM_S).then_some(point)
+}
+
+/// Where to stop, in video time — the other end of `trim_point_s`.
+///
+/// A recording brackets the game on both sides. Capture keeps running after
+/// the game window is destroyed, because neither signal that ends a recording
+/// knows at that instant, and a window that no longer exists captures as
+/// **black** under WGC rather than as a frozen last frame (#119).
+///
+/// `None` means leave the end alone, and it says so in three cases. Each one
+/// is the same rule the head applies: act on a measured answer, never a
+/// guessed one.
+pub fn tail_point_s(game_ends_at_s: f64, duration_s: f64) -> Option<f64> {
+    let point = game_ends_at_s + TAIL_OUT_S;
+    // Already at or past the end — nothing to remove.
+    if point >= duration_s {
+        return None;
+    }
+    // **Not a post-game tail.** One is five to fifteen seconds: five failed
+    // polls at 1 Hz, or three times that if the dying game process makes them
+    // time out rather than refuse. A much larger gap means something else —
+    // most likely a stretch where Live Client Data answered with something
+    // the parser could not read, which keeps recording and produces *no
+    // samples*, so real gameplay sits after the last one. Cutting there would
+    // hide the game rather than the black.
+    if duration_s - point > MAX_TAIL_CLIP_S {
+        return None;
+    }
+    // Not worth rewriting a gigabyte for.
+    (duration_s - point >= MIN_TRIM_S).then_some(point)
+}
+
+/// How much came off the **front**, given where the cut was told to stop.
+///
+/// The two halves must stay separable, because only the head shifts
+/// timestamps: markers and samples rebase by what came off the front, and a
+/// tail cut moves nothing. A single pass reports one duration, so the head
+/// component is recovered from the relationship between them —
+/// `after` spans exactly `stop_at_s` back to wherever ffmpeg actually
+/// started, so what it started past is the difference.
+///
+/// Uniform across both cases: with no tail cut, `stop_at_s` is the original
+/// duration and this reduces to `before - after`, which is what the head-only
+/// trim always computed.
+pub fn head_removed_s(stop_at_s: f64, after_s: f64) -> f64 {
+    stop_at_s - after_s
 }
 
 /// Whether a measured removal is close enough to the requested one to act
@@ -121,6 +184,7 @@ fn cut(
     input: &Path,
     output: &Path,
     at_s: f64,
+    keep_s: Option<f64>,
     audio_tracks: usize,
 ) -> Result<(), String> {
     let mut command = crate::ffmpeg_command(ffmpeg);
@@ -135,6 +199,15 @@ fn cut(
         // would keep one audio stream and silently drop every other stem.
         .args(["-map", "0:v?", "-map", "0:a?"])
         .args(["-c", "copy", "-movflags", "+faststart"]);
+
+    // `-t` (how much to write) rather than `-to` (when to stop). With `-ss`
+    // ahead of `-i` the output timeline restarts at zero, so `-to` would be
+    // measured from the *new* start — an interaction that is easy to get
+    // backwards and whose failure mode is a file cut in the wrong place. A
+    // duration has no such ambiguity.
+    if let Some(keep) = keep_s {
+        command.args(["-t", &format!("{keep:.3}")]);
+    }
 
     // Track 0 is the combined mix and has to stay the one a player picks.
     for track in 0..audio_tracks {
@@ -179,13 +252,31 @@ pub fn trim_recording(db: &Db, ffmpeg: &Path, recording_id: i64) -> Result<TrimR
             "this recording has no samples, so nothing knows where its game started".to_string()
         })?;
 
-    let requested = trim_point_s(game_starts_at).ok_or_else(|| {
-        format!("nothing worth cutting — the game starts {game_starts_at:.1}s in")
-    })?;
-
     let video = PathBuf::from(&row.path);
     let before = crate::probe::duration_s(ffmpeg, &video)
         .ok_or_else(|| "could not read the recording's duration".to_string())?;
+
+    // Both ends are measured from the same samples the timeline already has,
+    // and either can decline independently.
+    let head = trim_point_s(game_starts_at);
+    let tail = db
+        .last_sample_video_time_s(recording_id)
+        .map_err(|e| e.to_string())?
+        .and_then(|game_ends_at| tail_point_s(game_ends_at, before));
+
+    if head.is_none() && tail.is_none() {
+        return Err(format!(
+            "nothing worth cutting — the game starts {game_starts_at:.1}s in \
+             and runs to the end of the file"
+        ));
+    }
+
+    // Zero rather than `None` for the head: ffmpeg is asked for one cut
+    // either way, and starting at zero is the same as not seeking.
+    let requested = head.unwrap_or(0.0);
+    // Where the output stops, in the *original* file's timeline. Defaults to
+    // the end, which is what makes `head_removed_s` uniform across both.
+    let stop_at = tail.unwrap_or(before);
 
     let tmp = video.with_extension("trim.tmp.mp4");
     let backup = video.with_extension("untrimmed.mp4");
@@ -194,6 +285,7 @@ pub fn trim_recording(db: &Db, ffmpeg: &Path, recording_id: i64) -> Result<TrimR
         &video,
         &tmp,
         requested,
+        tail.map(|stop| stop - requested),
         audio_track_count(row.audio_tracks_json.as_deref()),
     )
     .inspect_err(|_| {
@@ -209,11 +301,29 @@ pub fn trim_recording(db: &Db, ffmpeg: &Path, recording_id: i64) -> Result<TrimR
     };
 
     let removed = before - after;
-    if !removal_is_plausible(requested, removed) {
+    // **Only the head shifts timestamps.** Markers and samples rebase by what
+    // came off the front; a tail cut moves nothing. So the check — and the
+    // number handed to `apply_trim` — is the head component, recovered from
+    // where the cut was told to stop.
+    let head_removed = head_removed_s(stop_at, after);
+    // Only checked when a front cut was actually asked for. A tail-only trim
+    // legitimately removes nothing from the front, which
+    // `removal_is_plausible` reads as a failure — it exists to catch a `-ss`
+    // that landed somewhere unexpected, and there was no `-ss`.
+    if head.is_some() && !removal_is_plausible(requested, head_removed) {
         let _ = std::fs::remove_file(&tmp);
         return Err(format!(
-            "refusing to rebase: asked ffmpeg for {requested:.1}s but {removed:.1}s came off \
-             ({before:.1}s → {after:.1}s)"
+            "refusing to rebase: asked ffmpeg to skip {requested:.1}s but {head_removed:.1}s \
+             came off the front ({before:.1}s → {after:.1}s, stopping at {stop_at:.1}s)"
+        ));
+    }
+    // A tail-only cut must not have moved the front. If it did, every marker
+    // is about to be rebased by a number nobody asked for.
+    if head.is_none() && head_removed.abs() > MAX_DRIFT_S {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!(
+            "refusing to rebase: no front cut was asked for but the file starts \
+             {head_removed:.1}s later than it did"
         ));
     }
 
@@ -233,7 +343,7 @@ pub fn trim_recording(db: &Db, ffmpeg: &Path, recording_id: i64) -> Result<TrimR
     // bigger than it is, which is the same lie in a quieter form.
     let new_size = std::fs::metadata(&video).map(|m| m.len() as i64).unwrap_or(row.size_bytes);
 
-    if let Err(e) = db.apply_trim(recording_id, removed, after, new_size) {
+    if let Err(e) = db.apply_trim(recording_id, head_removed, after, new_size) {
         // The file is already trimmed and the database is not, which would
         // leave every marker out by the length of a loading screen. Put the
         // original back rather than leave that behind.
@@ -253,6 +363,8 @@ pub fn trim_recording(db: &Db, ffmpeg: &Path, recording_id: i64) -> Result<TrimR
         game_starts_at_s: game_starts_at,
         requested_s: requested,
         removed_s: removed,
+        head_removed_s: head_removed,
+        tail_removed_s: (removed - head_removed).max(0.0),
         duration_before_s: before,
         duration_after_s: after,
         size_before_bytes: row.size_bytes,
@@ -282,6 +394,51 @@ mod tests {
     /// removes the same or less. More coming off means something other than
     /// a stream copy happened, and rebasing on it would put every marker
     /// out.
+    /// The tail exists because capture outlives the game window and a
+    /// destroyed window captures as black (#119).
+    #[test]
+    fn the_tail_is_cut_when_there_is_a_real_one() {
+        // Game ends at 1500s in a 1520s file: 18s of black after the margin.
+        assert_eq!(tail_point_s(1500.0, 1520.0), Some(1502.0));
+    }
+
+    /// Each refusal falls back to keeping the whole file, never to a guess —
+    /// the same rule the head end applies.
+    #[test]
+    fn the_tail_is_left_alone_when_the_answer_is_not_measured() {
+        // Already at the end: nothing to remove.
+        assert_eq!(tail_point_s(1500.0, 1501.0), None);
+        // Below the rewrite threshold: not worth a gigabyte of I/O.
+        assert_eq!(tail_point_s(1500.0, 1504.0), None);
+        // **Not a post-game tail.** A real one is 5-15s. A gap this wide
+        // means something else — most likely a stretch of Live Client Data
+        // the parser could not read, which keeps recording and produces no
+        // samples, so real gameplay sits after the last one.
+        assert_eq!(tail_point_s(1500.0, 1600.0), None);
+    }
+
+    /// The two halves must stay separable: markers rebase by what came off
+    /// the *front*, and a tail cut shifts nothing.
+    #[test]
+    fn the_head_component_is_recovered_from_where_the_cut_stopped() {
+        // Asked to skip 20s and stop at 1502s; 1482s came out, so the front
+        // lost exactly 20s.
+        assert_eq!(head_removed_s(1502.0, 1482.0), 20.0);
+        // A keyframe landed early: only 18s actually came off the front,
+        // which is what markers must rebase by — not the 38s the file lost.
+        assert_eq!(head_removed_s(1502.0, 1484.0), 18.0);
+    }
+
+    /// With no tail cut the formula has to reduce to what the head-only trim
+    /// always computed, or every existing recording rebases by the wrong
+    /// number the first time both ends are cut.
+    #[test]
+    fn with_no_tail_cut_the_head_component_is_the_whole_removal() {
+        let before = 1520.0;
+        let after = 1500.0;
+        assert_eq!(head_removed_s(before, after), before - after);
+    }
+
     #[test]
     fn a_cut_may_remove_less_than_asked_but_never_more() {
         assert!(removal_is_plausible(18.0, 18.0));
