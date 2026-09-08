@@ -265,6 +265,10 @@ export interface UpdateOffer {
  *  `unsupported` (DEVELOPMENT.md §14). */
 export type UpdateStatus =
   | { kind: "unsupported" }
+  /** Wired, but the first check has not answered. Deliberately distinct from
+   *  `unsupported`: sharing that variant made a production build report
+   *  "not available in this build" for the first 30 s after launch. */
+  | { kind: "checking" }
   | { kind: "upToDate" }
   | {
       kind: "available";

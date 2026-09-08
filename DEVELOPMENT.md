@@ -1332,6 +1332,21 @@ not to compete with the recorder backend coming up, the database opening or
 the first paint; slack enough that it is not re-discovering the same answer
 all day.
 
+**And once more whenever Settings is opened**, throttled to one a minute.
+Those two are not in tension: the six-hour loop is what feeds the *dot*, and
+being slack about it is right. The panel is different — it is only read when
+someone deliberately opens it, and that is exactly when it is worth being
+right. Without this, an answer computed hours ago is what they read, and a
+perfectly correct "Up to date." from before the last release looks
+indistinguishable from a broken updater.
+
+**"Not checked yet" is not "cannot check".** These shared one state at first,
+and the result was a production build reporting *"Updates are not available in
+this build"* for the thirty seconds before its first check landed — the most
+alarming possible wording for "hang on". `CheckResult::Pending` is now the
+seed and renders as "Checking…"; `Unsupported` is set explicitly, by the one
+place that decides this build will never check.
+
 ### Windows only
 
 `latest.json` carries a `windows-x86_64` entry and nothing else, which is the
@@ -1342,6 +1357,36 @@ the About block says updates are not available in this build.
 Worth keeping in mind if a second platform is ever added: `.dmg` is not an
 updatable bundle format. The updater wants a `.app.tar.gz`, which is a second
 bundle target and a second signing path, not a line in the matrix.
+
+### The capture backend has to be shut down first
+
+**An installer cannot overwrite a file another process holds open, and the
+capture backend is another process.** libobs runs out-of-process (§2.2) and
+comes up as soon as the League client appears — which, for a League recorder,
+is most of the time anyone would be using the app. It holds every DLL in the
+bundled `libobs/` resource folder open while it lives, so NSIS fails on the
+first one it tries to replace:
+
+```
+Error opening file for writing:
+C:\Users\…\AppData\Local\ninja-recorder\libobs\avcodec-61.dll
+[Abort]  [Retry]  [Ignore]
+```
+
+That dialog is the *good* outcome. **Ignore** would skip the file and leave a
+new `extprocess_recorder.exe` beside an old DLL, which is a version mismatch
+that surfaces later as a capture failure with no obvious cause.
+
+NSIS's own "close the running app" check cannot help. It keys off
+`mainBinaryName`, and the worker is a different executable it has never heard
+of — the same property that lets the production and devtools bundles coexist
+(§10) is what makes the worker invisible to it here.
+
+So `run_update_install` calls `Recorder::release` after the finalize and
+before handing over. `release` is a no-op while recording, which is fine
+because the gate has already established that nothing is. Then it waits two
+seconds: the IPC link's `Drop` *asks* the child to exit, and the handles are
+released when it actually does, not when we stop waiting.
 
 ### The devtools bundle must never update itself
 

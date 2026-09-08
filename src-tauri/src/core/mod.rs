@@ -72,8 +72,8 @@ pub struct Ctx {
     /// test` — which on a developer's Windows box would be an app that
     /// starts itself on login forever after.
     autostart: Option<Box<dyn Autostart>>,
-    /// The last thing the background update check found, or `Unsupported`
-    /// until something writes to it.
+    /// The last thing the background update check found, or `Pending` until
+    /// something writes to it.
     ///
     /// A cell rather than a return value because the check is *async* and
     /// every command here is not. Keeping the network half in `lib.rs` — the
@@ -113,7 +113,7 @@ impl Ctx {
             ffmpeg,
             on_library_changed: None,
             autostart: None,
-            update: Mutex::new(CheckResult::Unsupported),
+            update: Mutex::new(CheckResult::Pending),
             on_update_request: None,
         }
     }
