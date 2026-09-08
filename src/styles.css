@@ -1643,7 +1643,11 @@ button.armed {
   margin: 0;
 }
 
-.about-list div {
+/* Direct children only. Each label/value pair is a `div` in this list, but
+ * so is the update panel's changelog block nested inside one of the `dd`s —
+ * and a descendant selector caught that too, laying its bullet list and its
+ * trailing paragraph out as two columns of a 10rem grid. */
+.about-list > div {
   display: grid;
   grid-template-columns: 10rem 1fr;
   gap: var(--sp-3);
@@ -1667,7 +1671,7 @@ button.armed {
     align-items: flex-start;
   }
 
-  .about-list div {
+  .about-list > div {
     grid-template-columns: 1fr;
     gap: 0;
   }
