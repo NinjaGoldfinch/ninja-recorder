@@ -737,7 +737,12 @@ pub fn poll_trace(
 /// resolves `Wukong` to `MonkeyKing` from the client's own asset store,
 /// which is the right place for it because it stays correct when Riot adds
 /// a champion. This is only for names that are not champions at all.
-fn normalize_champion(name: &str) -> String {
+///
+/// `ddragon::champion_icon` calls this too, and needs to: normalizing here
+/// only fixes recordings made *after* it existed. Rows already carrying
+/// `Mega Gnar` are on disk, and the art path is where they get a portrait
+/// back without rewriting the database.
+pub(crate) fn normalize_champion(name: &str) -> String {
     let name = name.trim();
     match name {
         "Mega Gnar" => "Gnar".to_string(),
