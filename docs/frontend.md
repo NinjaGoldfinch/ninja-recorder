@@ -393,7 +393,7 @@ a shipped build.
 | `extract_audio_track` | path to a cached sidecar | review player, stem selection |
 | `lcu_status` | `LcuStatus` | header strip |
 | `game_state_status` | `SupervisorStatus` | header strip, About block |
-| `get_update_status` | `UpdateStatus` | settings → About, and the badge on the gear |
+| `get_update_status` | `UpdateStatus` | settings → About (version + changelog), and the badge on the gear |
 | `check_for_update` | — | settings → About → "Check now" |
 | `install_update` | — | settings → About → "Install and restart"; ends the process |
 | `start_recording` / `stop_recording` / `is_recording` | — | registered but unreferenced by the main UI; the dev portal's Recorder panel drives them |

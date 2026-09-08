@@ -329,11 +329,28 @@ const MOCKS: Record<string, unknown> = {
     last_finalized: null,
     recording_elapsed_s: null,
   } satisfies SupervisorStatus,
-  // The interesting one to look at: an offer is the only state with a badge
-  // and a button. The three duller ones are a one-word edit away.
+  // The interesting one to look at: an offer is the only state with a badge,
+  // a button and a changelog. The three duller ones are a one-word edit away.
+  //
+  // Shaped exactly like what CI writes into `latest.json` — a heading the
+  // renderer drops, one bullet per commit, and the trailing compare link —
+  // so a browser-only session exercises the real parse rather than a
+  // tidied-up version of it.
   get_update_status: {
     kind: "available",
-    offer: { version: "0.9.0", notes: "- fixed a thing", pub_date: null },
+    offer: {
+      version: "0.9.0",
+      notes: [
+        "## What's changed",
+        "",
+        "- feat(review): draw the objective bounty window on the timeline",
+        "- fix(lcu): show the Riot ID as the summoner name",
+        "- fix(recorder): stop the worker leaking a handle per game",
+        "",
+        "**Full changelog**: https://github.com/NinjaGoldfinch/ninja-recorder/compare/v0.8.0...v0.9.0",
+      ].join("\n"),
+      pub_date: null,
+    },
     installable: true,
     blockedReason: null,
   } satisfies UpdateStatus,
