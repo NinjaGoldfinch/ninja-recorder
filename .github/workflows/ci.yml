@@ -90,14 +90,18 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "release=$release" >> "$GITHUB_OUTPUT"
 
-  # Windows-only: GitHub bills macOS runners at 10x wall-clock against the
-  # free plan's 2,000 min/month, and this job's work — tsc, cargo test,
-  # clippy — is platform-independent, so running it twice bought almost
-  # nothing for most of CI's minute spend. The `build` job below still
-  # runs the full matrix natively, so macOS-specific compile breakage
-  # (cfg'd code, the stub recorder) is still caught before a
-  # release. Kept as a single-entry matrix so re-adding macos-latest here
-  # is a one-word change.
+  # Windows-only, which is now the whole of CI: nothing here builds or
+  # tests on another platform. The work in this job — tsc, cargo test,
+  # clippy — is platform-independent, and GitHub bills macOS runners at
+  # 10x wall-clock against the free plan's 2,000 min/month.
+  #
+  # The cost, stated: **no CI job compiles the non-Windows code paths any
+  # more.** `StubRecorder` and everything behind `cfg(not(target_os =
+  # "windows"))` are what make `cargo test` work on a dev box, and a break
+  # in them now surfaces on that box rather than here. That is the accepted
+  # trade — the dev loop hits it in seconds — but it is a real gap, not an
+  # oversight. Kept as a single-entry matrix so adding a runner back is a
+  # one-line change.
   test:
     name: Test (${{ matrix.platform }})
     strategy:
@@ -173,10 +177,10 @@ jobs:
   # `workflow_dispatch` run — which expires on its own and can never be
   # published by accident.
   #
-  # Windows-only: the dev portal exists to exercise the backend without
-  # League running, and the macOS build is the stub recorder, so a
-  # macOS devtools installer cost a 10x-billed runner to exercise a stub.
-  # Re-adding it is one more entry in the matrix below.
+  # Both entries are Windows: real capture is Windows-only
+  # (DEVELOPMENT.md §1.1), so it is the only platform whose bundle is worth
+  # producing. A macOS `.dmg` used to be built here as a dev convenience;
+  # it shipped the stub recorder, could not capture a game, and is gone.
   build:
     name: Build (${{ matrix.platform }}${{ matrix.devtools && ', devtools' || '' }})
     if: github.event_name != 'pull_request'
@@ -186,8 +190,6 @@ jobs:
         include:
           - platform: windows-latest
             bundles: nsis
-          - platform: macos-latest
-            bundles: dmg
           - platform: windows-latest
             bundles: nsis
             devtools: true
@@ -282,8 +284,8 @@ jobs:
       # from at runtime. Deliberately a step outside Cargo's own dependency
       # graph, not a Cargo artifact-dependency — that requires nightly
       # Rust + the unstable `bindeps` flag, which would force the whole
-      # project (including every macOS dev's `cargo check`) onto nightly
-      # just for a Windows-only optional binary. Unverified — see
+      # project — including a dev box's `cargo check` — onto nightly just
+      # for a Windows-only optional binary. Unverified — see
       # DEVELOPMENT.md §2.2's status note.
       - name: Stage libobs capture backend
         if: matrix.platform == 'windows-latest' && steps.libobs-cache.outputs.cache-hit != 'true'
@@ -322,11 +324,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path src-tauri/target/libobs | Out-Null
           Copy-Item $bin.FullName src-tauri/target/libobs/ffmpeg.exe -Force
 
-      # Native build on each platform's own runner — never cross-compiled.
-      # DEVELOPMENT.md §9: NSIS on Windows (not MSI, matches the documented
-      # installer choice); dmg on macOS is the standard Tauri bundle format
-      # there. macOS builds only exercise the stub recorder — real capture
-      # is Windows-only (DEVELOPMENT.md §1.1).
+      # Native, on Windows's own runner — never cross-compiled. NSIS rather
+      # than MSI, matching the documented installer choice
+      # (DEVELOPMENT.md §9).
       #
       # The devtools variant additionally layers tauri.devtools.conf.json
       # over the config, which does two things.
@@ -364,9 +364,8 @@ jobs:
       # every install in the field on its current version
       # (DEVELOPMENT.md §14).
       #
-      # Harmless on the two entries that produce no updater artifact — the
-      # macOS bundle, which `latest.json` never lists, and the devtools
-      # bundle, which sets `createUpdaterArtifacts: false` in
+      # Harmless on the devtools entry, which produces no updater artifact:
+      # it sets `createUpdaterArtifacts: false` in
       # `tauri.devtools.conf.json` so it can never update itself into the
       # production app.
       - name: Build app
@@ -418,12 +417,6 @@ jobs:
           name: ninja-recorder-windows-latest-${{ github.sha }}
           path: artifacts/windows
 
-      - name: Download macOS bundle
-        uses: actions/download-artifact@v4
-        with:
-          name: ninja-recorder-macos-latest-${{ github.sha }}
-          path: artifacts/macos
-
       # Notes are derived from the commit range since the previous release,
       # so each release describes its own changes instead of repeating a
       # hardcoded blurb. Uses git log rather than GitHub's own generator
@@ -459,22 +452,21 @@ jobs:
 
           ## Before you install
 
-          Unsigned build: Windows SmartScreen and macOS Gatekeeper will both
-          warn on first run (no code-signing certificate configured yet). See
-          the installer for your platform below. The `.sig` files attached
-          here are *update* signatures — they let an installed build verify
-          what it downloads — and are a different thing from code signing,
+          Windows only. Real game capture depends on Windows.Graphics.Capture
+          (DEVELOPMENT.md §1.1), so there is no build for another platform.
+
+          Unsigned build: Windows SmartScreen warns on first run (no
+          code-signing certificate configured yet). The `.sig` file attached
+          here is an *update* signature — it lets an installed build verify
+          what it downloads — and is a different thing from code signing,
           which would be what stops the warning.
 
-          Windows builds update themselves from here: the app checks on
-          launch and every six hours, shows a dot on the settings button, and
-          installs when you click, never while a game is being recorded. An
-          install from before that existed has to be updated by hand once
-          more. macOS builds do not update.
+          The app updates itself from here: it checks on launch and every six
+          hours, shows a dot on the settings button, and installs when you
+          click, never while a game is being recorded. An install from before
+          that existed has to be updated by hand once more.
 
-          macOS builds only exercise the stub recorder — real game capture is
-          Windows-only (DEVELOPMENT.md §1.1). The Windows build includes the
-          libobs capture backend, but it has not been verified against a real
+          The libobs capture backend has not been verified against a real
           Vanguard-protected game yet (docs/windows-verification.md).
 
           Multi-track audio (DEVELOPMENT.md §2.5) is new and unverified on
@@ -491,10 +483,9 @@ jobs:
       # artifacts this run just produced rather than from a template — the
       # signature has to be the one that goes with *this* installer.
       #
-      # `windows-x86_64` is the only platform key, deliberately. macOS is the
-      # stub recorder and `.dmg` is not an updatable bundle format, so a macOS
-      # build's check finds no entry and reports "not available in this
-      # build" (DEVELOPMENT.md §14).
+      # `windows-x86_64` is the only platform key, because Windows is the
+      # only platform that ships. A build made anywhere else finds no entry
+      # and reports "not available in this build" (DEVELOPMENT.md §14).
       #
       # The `url` is the **tagged** asset path, not `/releases/latest/`. The
       # endpoint that fetches this file is allowed to float to the newest
@@ -553,5 +544,4 @@ jobs:
           files: |
             artifacts/windows/**/*.exe
             artifacts/windows/**/*.sig
-            artifacts/macos/**/*.dmg
             latest.json

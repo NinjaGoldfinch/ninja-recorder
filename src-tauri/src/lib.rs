@@ -266,8 +266,9 @@ async fn run_update_check(app: tauri::AppHandle) {
             }),
             Ok(None) => update::CheckResult::NothingNewer,
             // Includes the ordinary "this platform has no entry in
-            // `latest.json`", which is exactly what a macOS build gets:
-            // updates are Windows-only (DEVELOPMENT.md §14).
+            // `latest.json`", which is what any build made off Windows
+            // gets: Windows is the only platform that ships
+            // (DEVELOPMENT.md §14).
             Err(e) => update::CheckResult::Failed(format!("Could not check for updates: {e}")),
         },
     };

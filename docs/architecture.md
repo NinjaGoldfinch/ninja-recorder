@@ -77,7 +77,7 @@ flowchart TB
 | `state_machine/supervisor.rs` | Spawning/aborting watchers, driving the recorder, finalizing | `Supervisor` |
 | `recorder/mod.rs` | The `Recorder` trait and its config/error types | `Recorder`, `RecordConfig` |
 | `recorder/libobs/` | Windows capture backend (WGC + hardware encode) | `LibObsRecorder` |
-| `recorder/stub.rs` | Dev/macOS backend that copies a fixture MP4 | `StubRecorder` |
+| `recorder/stub.rs` | Non-Windows dev backend that copies a fixture MP4 | `StubRecorder` |
 | `ddragon.rs` | Champion art from Data Dragon, fetched on first use and cached on disk | `champion_icon` |
 | `db/mod.rs` | Schema, migrations, every query | `Db` |
 | `db/reconcile.rs` | Reconciling DB rows against files on disk | `reconcile` |
@@ -137,7 +137,7 @@ flowchart TB
 The stub is not a mock — it writes a real, playable file into the real
 recordings directory and takes a real amount of time to do it. That is what
 keeps the library, retention, review player and the whole state machine
-developable on macOS with no Windows box in the loop.
+developable away from Windows, with no Windows box in the loop.
 
 `prepare`/`release` exist because the Windows backend is expensive to hold:
 bringing it up spawns the out-of-process worker *and* initializes libobs, so a
