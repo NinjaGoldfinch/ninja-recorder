@@ -28,7 +28,7 @@
 //! carries champion, KDA and outcome from the live path — a missing queue
 //! id is not worth interrupting somebody's next game over.
 
-use crate::{info, warn};
+use crate::{debug, info, warn};
 use crate::db::{Db, MatchMetadata, NewSample};
 use crate::lcu::{self, MatchDataError, MatchSummary};
 use crate::live_client::LiveSummary;
@@ -173,7 +173,82 @@ fn outcome(win: bool) -> &'static str {
     }
 }
 
-/// Fetches the summary for `game_id`, retrying on the schedule
+/// How far back a resume sweep will look.
+///
+/// Generous against the failure it exists for — the real window is the
+/// minute between a game ending and its patch landing — and short enough
+/// that the sweep never grows a tail of games the client has forgotten.
+pub const RESUME_WINDOW: Duration = Duration::from_secs(48 * 60 * 60);
+
+/// Finishes the patches an app exit interrupted.
+///
+/// **Single-shot, not the retry schedule.** `patch` retries because it runs
+/// seconds after a game ends, when the client is still assembling the
+/// result. By the time this runs the game is minutes or hours old: the LCU
+/// either has it or never will, and waiting sixty seconds per recording to
+/// re-learn that would make a client restart cost minutes of pointless
+/// requests.
+///
+/// Returns how many rows it completed, so the caller knows whether to tell
+/// the frontend anything.
+pub async fn resume_pending(db: &Db, lockfile: &lcu::LockfileInfo, now_ms: i64) -> usize {
+    let since = now_ms - RESUME_WINDOW.as_millis() as i64;
+    let pending = match db.recordings_awaiting_summary(since) {
+        Ok(pending) => pending,
+        Err(e) => {
+            warn!("match-summary", "could not look for unfinished patches: {e}");
+            return 0;
+        }
+    };
+    if pending.is_empty() {
+        return 0;
+    }
+
+    let client = match lcu::LcuHttpClient::new(lockfile) {
+        Ok(client) => client,
+        Err(e) => {
+            warn!("match-summary", "could not build an LCU client to resume: {e}");
+            return 0;
+        }
+    };
+
+    info!("match-summary", "resuming {} unfinished patch(es)", pending.len());
+    let mut completed = 0;
+    for (recording_id, game_id) in pending {
+        // `is_custom: false` — the flag exists to skip a match-history
+        // request that a custom game will always 404, and nothing on the row
+        // records it. Being wrong costs one request that fails immediately,
+        // which is why this is a guess worth making rather than a column.
+        let summary = match lcu::fetch_match_summary(&client, game_id, false).await {
+            Ok(summary) => summary,
+            Err(e) => {
+                debug!("match-summary", "still nothing for game {game_id}: {e}");
+                continue;
+            }
+        };
+
+        let champion = match summary.champion_id {
+            Some(id) => lcu::champion_name(&client, lockfile, id).await,
+            None => None,
+        };
+
+        // The gold series first, matching `patch`: it is the slower half and
+        // the caller only learns "something changed" once.
+        write_gold_series(db, &client, recording_id, game_id).await;
+
+        match db.update_match_metadata(recording_id, &to_metadata(&summary, champion)) {
+            Ok(0) => {}
+            Ok(_) => {
+                info!("match-summary", "resumed recording {recording_id} from game {game_id}");
+                completed += 1;
+            }
+            Err(e) => warn!("match-summary", "could not resume recording {recording_id}: {e}"),
+        }
+    }
+    completed
+}
+
+/// Fetches the summary for `request.game_id`, retrying on the schedule
 /// above, and patches the recording's row with it.
 ///
 /// Returns whether a patch actually landed, so the caller knows whether

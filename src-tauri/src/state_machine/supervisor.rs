@@ -119,6 +119,10 @@ type SummaryFetcher = Box<dyn Fn(crate::match_summary::SummaryRequest) + Send + 
 
 /// Takes a recording id and returns immediately. See `set_trim_requester`.
 type TrimRequester = Box<dyn Fn(i64) + Send + Sync>;
+/// Asks for any patches an app exit interrupted to be finished, now that a
+/// client is reachable again (#137). Takes the lockfile because that is the
+/// thing this module has and `match_summary` needs.
+type SummaryResumer = Box<dyn Fn(lcu::LockfileInfo) + Send + Sync>;
 
 /// Something the supervisor wants the rest of the app to know about.
 ///
@@ -373,6 +377,7 @@ pub struct Supervisor {
     /// is never revisited — which is what every unit test below wants, and
     /// what a build with no League client running gets anyway.
     summary_fetcher: Mutex<Option<SummaryFetcher>>,
+    summary_resumer: Mutex<Option<SummaryResumer>>,
     /// Asks for the loading screen to be cut off a finished recording
     /// (`crate::trim`).
     ///
@@ -402,6 +407,7 @@ impl Supervisor {
             last_finalized: Mutex::new(None),
             on_event: Mutex::new(None),
             summary_fetcher: Mutex::new(None),
+            summary_resumer: Mutex::new(None),
             trim_requester: Mutex::new(None),
         })
     }
@@ -424,6 +430,12 @@ impl Supervisor {
     /// Whatever is installed here **must return immediately** — it is
     /// called from inside `stop_recording`, under the recorder lock. The
     /// real one spawns a task and returns; see `crate::match_summary`.
+    /// Same shape and the same reason as `set_summary_fetcher`: the work
+    /// needs the async runtime, and this module stays out of it.
+    pub fn set_summary_resumer(&self, resume: SummaryResumer) {
+        *self.summary_resumer.lock().unwrap() = Some(resume);
+    }
+
     pub fn set_summary_fetcher(&self, fetch: SummaryFetcher) {
         *self.summary_fetcher.lock().unwrap() = Some(fetch);
     }
@@ -587,6 +599,15 @@ impl Supervisor {
 
     fn start_gameflow_watch(self: &Arc<Self>, lockfile: lcu::LockfileInfo) {
         *self.lockfile.lock().unwrap() = Some(lockfile.clone());
+
+        // A client just became reachable, which is the only moment an
+        // interrupted patch can be finished. Deliberately here rather than at
+        // startup: the app can start long before League does, and a sweep
+        // that ran with no client would find nothing and never run again.
+        if let Some(resume) = self.summary_resumer.lock().unwrap().as_ref() {
+            resume(lockfile.clone());
+        }
+
         let sup = Arc::clone(self);
         let handle = tauri::async_runtime::spawn(async move {
             let client = match lcu::LcuHttpClient::new(&lockfile) {
