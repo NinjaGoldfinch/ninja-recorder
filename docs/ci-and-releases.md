@@ -76,19 +76,47 @@ behind `cfg(not(target_os = "windows"))` are what make `cargo test` work on a
 dev box, and a break in them surfaces there rather than here. Accepted rather
 than overlooked: the dev loop hits it within seconds of the change.
 
-## Version
+## Version and channels
 
-The release version is minted **before anything compiles**, because it is
-baked into the binary, the installer filename and the About block.
+Settled **before anything compiles**, because the version is baked into the
+binary, the installer filename and the About block.
 
-It is the commit's **distance from the newest real tag**, not "highest seen
-plus one" — a pure function of the commit. Two consequences: simultaneous
-pushes cannot claim the same version, and re-running a commit updates its own
-release rather than minting a second one.
+`package.json`'s version is what the project is *building toward*, and only
+`npm run release -- next <x.y.z>` moves it. CI never invents one — see
+[DEVELOPMENT.md §15](../DEVELOPMENT.md) for the reasoning.
 
-Publishing creates the tag, which becomes the base the next commit counts
-from — so the minor version advances by one per commit on `main`, and the
-sequence stays monotonic even if a run fails and never reaches `release`.
+| Trigger | Version | Published as |
+|---|---|---|
+| push to `main` | `<declared>-alpha.<commits since newest stable tag>` | prerelease |
+| push of a `v*` tag | the tag, cross-checked against `package.json` | stable release |
+| manual dispatch | the alpha form | nothing, unless `publish_release` |
+
+Still a pure function of the commit: the base comes from a file, the counter
+from `git rev-list --count`. Simultaneous pushes cannot claim the same version
+and re-running a commit updates its own release.
+
+**Alphas are prereleases, and that is load-bearing.** GitHub excludes
+prereleases from `/releases/latest/download/`, which is the stable channel's
+endpoint — so stable installs ignore alphas with no filtering of our own. The
+channels *cannot* be separated by version comparison, because semver says
+`1.1.0-alpha.1 > 1.0.0`; they are separated by endpoint.
+
+| Channel | Manifest |
+|---|---|
+| stable | `releases/latest/download/latest.json` |
+| alpha | `releases/download/alpha/alpha.json`, a permanent prerelease whose single asset is replaced each build |
+
+### Cutting a release
+
+```bash
+npm run release -- cut              # tags the declared version; CI ships it
+npm run release -- next 1.0.0       # start building toward the next one
+```
+
+The script only moves a number and pushes a tag — it never builds. Forgetting
+`next` leaves `package.json` on a released version, and alphas of it sort
+*below* it, so the `version` job fails rather than publishing invisible
+builds.
 
 ## Build
 

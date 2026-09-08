@@ -3,6 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+    # A stable release is cut by pushing a tag, and only ever by a person
+    # running `npm run release -- cut`. Everything that lands on main
+    # publishes an *alpha prerelease* instead (DEVELOPMENT.md §15).
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
   pull_request:
   # Pull requests run `test` only (see `build` below), so a manual run is
   # how the full matrix — including the devtools bundle — gets exercised
@@ -26,18 +30,21 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Every push to main gets its own release, so the version has to be
-  # settled before anything compiles: it is baked into the binary, the
-  # installer filename and the About block, and a version chosen after the
-  # build would disagree with all three.
+  # The version has to be settled before anything compiles: it is baked into
+  # the binary, the installer filename and the About block, and a version
+  # chosen after the build would disagree with all three.
   #
-  # It is derived from the commit's distance to the newest real tag rather
-  # than "highest version seen, plus one". That makes it a pure function of
-  # the commit: two pushes landing at once cannot claim the same version,
-  # and re-running a commit updates its own release instead of minting a
-  # second one. Publishing creates the tag, so the next commit measures
-  # from it and the count restarts from a higher minor — the sequence stays
-  # monotonic whether or not any given run reaches the release step.
+  # **The number a human moves, and the number CI counts.** `package.json`
+  # holds the version being built toward, and only `npm run release -- next`
+  # changes it. CI never invents one — it appends `-alpha.<commits since the
+  # newest stable tag>`, which keeps the property the old commit-distance
+  # scheme was built around: the version is a pure function of the commit, so
+  # two pushes landing at once cannot claim the same one and re-running a
+  # commit updates its own release rather than minting a second.
+  #
+  # What changed is that the *base* no longer moves on its own. It used to
+  # advance a minor per commit, which made `1.0.0` a number you arrived at by
+  # accident rather than declared (DEVELOPMENT.md §15).
   #
   # Skipped entirely on pull requests, which neither build nor release.
   version:
@@ -46,6 +53,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.pick.outputs.version }}
+      channel: ${{ steps.pick.outputs.channel }}
       release: ${{ steps.pick.outputs.release }}
     steps:
       # Full history and every tag: the distance below is measured against
@@ -59,35 +67,53 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           FORCE: ${{ inputs.publish_release }}
+          REF: ${{ github.ref }}
         run: |
           set -euo pipefail
-          base=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
-          if [ -n "$base" ]; then
-            n=$(git rev-list --count "${base}..HEAD")
-            base_version=${base#v}
-          else
-            n=$(git rev-list --count HEAD)
-            base_version=0.0.0
-          fi
-          major=${base_version%%.*}
-          minor=$(printf '%s' "$base_version" | cut -d. -f2)
-          version="${major}.$((minor + n)).0"
+          declared=$(node -p "require('./package.json').version")
+          # Stable tags only. A prerelease tag carries a `-`, and letting one
+          # in here would make the alpha counter restart on every alpha.
+          newest=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -v -- '-' | sort -V | tail -1)
 
-          # Only a push to main — or an explicitly opted-in manual run —
-          # mints a version; a plain manual run builds at whatever the tree
-          # already says, so its installers stay honest about what they
-          # are. The commit-count guard matters in its own right: at zero
-          # commits past the base tag the arithmetic lands back on the base
-          # version, which would overwrite a release that already exists.
-          if [ "$n" -gt 0 ] && { [ "$EVENT" = "push" ] || [ "$FORCE" = "true" ]; }; then
+          if [ "${REF#refs/tags/v}" != "$REF" ]; then
+            # A tag push: the deliberate act. `release.mjs` only ever tags the
+            # declared version, so a mismatch means the tag was pushed by hand
+            # against a tree that says something else — which would publish a
+            # release named after a version it does not contain.
+            version=${REF#refs/tags/v}
+            if [ "$version" != "$declared" ]; then
+              echo "::error::tag v$version does not match package.json ($declared)" >&2
+              exit 1
+            fi
+            channel=stable
             release=true
           else
-            release=false
-            version=$(node -p "require('./package.json').version")
+            if [ -n "$newest" ] && [ "${newest#v}" = "$declared" ]; then
+              # Alphas of an already-released version sort *below* it —
+              # 0.9.0-alpha.1 < 0.9.0 — so every one would be invisible to the
+              # updater. Declare the next version first.
+              echo "::error::package.json still says $declared, which is already released as $newest. Run: npm run release -- next <x.y.z>" >&2
+              exit 1
+            fi
+            if [ -n "$newest" ]; then
+              n=$(git rev-list --count "${newest}..HEAD")
+            else
+              n=$(git rev-list --count HEAD)
+            fi
+            version="${declared}-alpha.${n}"
+            channel=alpha
+            # A plain manual run builds without publishing, so an installer
+            # produced off a branch never claims to be a release.
+            if [ "$EVENT" = "push" ] || [ "$FORCE" = "true" ]; then
+              release=true
+            else
+              release=false
+            fi
           fi
 
-          echo "base=${base:-<none>} commits=$n -> version=$version release=$release"
+          echo "declared=$declared newest_stable=${newest:-<none>} -> $version ($channel, release=$release)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
           echo "release=$release" >> "$GITHUB_OUTPUT"
 
   # Windows-only, which is now the whole of CI: nothing here builds or
@@ -432,11 +458,20 @@ jobs:
       - name: Build release notes
         env:
           TAG: v${{ needs.version.outputs.version }}
+          CHANNEL: ${{ needs.version.outputs.channel }}
         run: |
-          PREV=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+          # A stable release describes the whole cycle since the last stable
+          # one; an alpha describes the commit that produced it. Measuring
+          # both from the last stable tag would make every alpha repeat the
+          # entire changelog so far.
+          if [ "$CHANNEL" = "stable" ]; then
+            PREV=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -v -- '-' | sort -V | tail -1)
+          else
+            PREV=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+          fi
           # Two files, because they have two audiences. `changelog.md` is
-          # what changed and nothing else — it goes into `latest.json`, and
-          # from there into the app's own update panel. `notes.md` is that
+          # what changed and nothing else — it goes into the update manifest,
+          # and from there into the app's own update panel. `notes.md` is that
           # plus the standing install caveats, which are written for someone
           # downloading an installer from the Releases page and are actively
           # wrong in the in-app panel: "SmartScreen warns on first run" is
@@ -508,6 +543,7 @@ jobs:
       - name: Build update manifest
         env:
           VERSION: ${{ needs.version.outputs.version }}
+          CHANNEL: ${{ needs.version.outputs.channel }}
         run: |
           set -euo pipefail
           setup=$(find artifacts/windows -name '*-setup.exe' | head -1)
@@ -519,12 +555,20 @@ jobs:
             echo "::error::No signature beside $setup. Set the TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD repository secrets, and put the matching public key in src-tauri/tauri.conf.json under plugins.updater.pubkey (DEVELOPMENT.md 14)." >&2
             exit 1
           fi
+          # `latest.json` for stable, `alpha.json` for alpha. Two files
+          # rather than one with a channel field, because the *endpoint* is
+          # what separates the channels: semver says 1.1.0-alpha.1 > 1.0.0,
+          # so a stable install that could see the alpha manifest at all
+          # would be offered alphas by default (DEVELOPMENT.md §15).
+          manifest=latest.json
+          [ "$CHANNEL" = "alpha" ] && manifest=alpha.json
+          echo "manifest=$manifest" >> "$GITHUB_ENV"
           node -e '
             const fs = require("fs"), path = require("path");
             const setup = process.argv[1];
             const v = process.env.VERSION;
             const base = `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/v${v}`;
-            fs.writeFileSync("latest.json", JSON.stringify({
+            fs.writeFileSync(process.argv[2], JSON.stringify({
               version: v,
               // The changelog only — this is what the app renders in
               // Settings -> About, and the release page caveats below it
@@ -538,9 +582,9 @@ jobs:
                 },
               },
             }, null, 2) + "\n");
-          ' "$setup"
-          echo "--- latest.json ---"
-          cat latest.json
+          ' "$setup" "$manifest"
+          echo "--- $manifest ---"
+          cat "$manifest"
 
       # Published, not drafted: the `needs` above already withhold this
       # step until the commit's tests pass, so a human clicking Publish
@@ -554,8 +598,34 @@ jobs:
           name: "ninja-recorder v${{ needs.version.outputs.version }}"
           body_path: notes.md
           draft: false
-          prerelease: false
+          # Alphas are prereleases, which is load-bearing rather than
+          # cosmetic: GitHub excludes prereleases from
+          # `/releases/latest/download/`, so the stable channel's endpoint
+          # ignores them with no filtering of our own.
+          prerelease: ${{ needs.version.outputs.channel == 'alpha' }}
           files: |
             artifacts/windows/**/*.exe
             artifacts/windows/**/*.sig
-            latest.json
+            ${{ env.manifest }}
+
+      # The alpha channel needs a URL that does not move, and
+      # `/releases/latest/download/` cannot be it — GitHub excludes
+      # prereleases from `latest`, which is precisely what keeps the stable
+      # channel clean. So one permanent prerelease, tagged `alpha`, holds the
+      # alpha manifest and nothing else, and its single asset is replaced on
+      # every build. The installers stay on their own `-alpha.N` releases;
+      # this only ever points at them.
+      - name: Publish the alpha manifest
+        if: needs.version.outputs.channel == 'alpha'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh release view alpha >/dev/null 2>&1; then
+            gh release create alpha \
+              --prerelease \
+              --title "Alpha channel" \
+              --target "$GITHUB_SHA" \
+              --notes "Rolling pointer for the alpha update channel. The manifest attached here is what an alpha install polls; the builds themselves are the -alpha.N prereleases."
+          fi
+          gh release upload alpha alpha.json --clobber
