@@ -30,7 +30,7 @@ out what to touch.
 | Anything in `src/` | [docs/frontend.md](docs/frontend.md) — the module graph, view diagram, or theming flow |
 | Anything in `src/dev/` or `src-tauri/src/dev/` | [docs/dev-portal.md](docs/dev-portal.md) — the panel table |
 | `.github/workflows/ci.yml` | [docs/ci-and-releases.md](docs/ci-and-releases.md) — the job graph and build flowchart |
-| Capture-backend status, or anything verified on real Windows hardware | [docs/windows-verification.md](docs/windows-verification.md), the README status blockquote, DEVELOPMENT.md §2.2 / §3.4, and the caveat block in `ci.yml`'s release notes |
+| Capture-backend status, or anything verified on real Windows hardware | [docs/windows-verification.md](docs/windows-verification.md), the README status blockquote, and DEVELOPMENT.md §2.2 / §3.4. **Not** `ci.yml`'s release notes — that block is deliberately one line about the unsigned binary and nothing else |
 | A *decision*, constraint, or trade-off | [DEVELOPMENT.md](DEVELOPMENT.md) — the "why" doc |
 | Scope: a feature shipped, dropped, or reordered | [docs/product-design.md](docs/product-design.md) — the phase table and implementation history |
 
