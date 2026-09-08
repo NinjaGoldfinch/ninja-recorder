@@ -608,7 +608,7 @@ pub fn scoreboard(snapshot: &AllGameData) -> Option<Scoreboard> {
                 items.sort_by_key(|(slot, _)| *slot);
 
                 ScoreboardPlayer {
-                    champion: player.champion_name.clone(),
+                    champion: normalize_champion(&player.champion_name),
                     team: player.team.clone(),
                     is_us: is_us(player),
                     level: player.level,
@@ -689,7 +689,7 @@ pub fn poll_trace(
             if p.champion_name.trim().is_empty() {
                 "-".to_string()
             } else {
-                p.champion_name.trim().to_string()
+                normalize_champion(&p.champion_name)
             },
             format!("{}/{}/{}", p.scores.kills, p.scores.deaths, p.scores.assists),
         ),
@@ -718,6 +718,33 @@ pub fn poll_trace(
     )
 }
 
+/// Turns what Live Client Data calls a champion into what Data Dragon files
+/// it under.
+///
+/// **The API reports the champion's current *form*, not its identity.** A
+/// transformed Gnar comes back as `Mega Gnar`, which is not a champion any
+/// asset store has heard of: the portrait lookup finds nothing, and the
+/// scoreboard slot renders as an empty black square for the rest of the
+/// game — which is also what "no art yet" looks like, so it does not even
+/// read as a fault.
+///
+/// Deliberately a rename table rather than a "strip a known prefix" rule.
+/// The set of transforming champions is small, fixed and known, and a rule
+/// that guessed would eventually eat a real champion whose name starts with
+/// a word that looks like a form.
+///
+/// The general name → key mapping is *not* done here — `ddragon` already
+/// resolves `Wukong` to `MonkeyKing` from the client's own asset store,
+/// which is the right place for it because it stays correct when Riot adds
+/// a champion. This is only for names that are not champions at all.
+fn normalize_champion(name: &str) -> String {
+    let name = name.trim();
+    match name {
+        "Mega Gnar" => "Gnar".to_string(),
+        other => other.to_string(),
+    }
+}
+
 pub fn self_summary(snapshot: &AllGameData) -> LiveSummary {
     let us = find_us(snapshot);
 
@@ -725,7 +752,7 @@ pub fn self_summary(snapshot: &AllGameData) -> LiveSummary {
         champion: us
             .map(|p| p.champion_name.trim())
             .filter(|c| !c.is_empty())
-            .map(str::to_string),
+            .map(normalize_champion),
         kda: us.map(|p| Kda {
             kills: p.scores.kills,
             deaths: p.scores.deaths,
@@ -1842,6 +1869,25 @@ mod tests {
     }
 
     // --- scoreboard -------------------------------------------------------
+
+    /// A transformed Gnar comes back as `Mega Gnar`, which no asset store
+    /// has a portrait for — the slot rendered as an empty black square, and
+    /// that is indistinguishable from art that has not loaded yet.
+    #[test]
+    fn a_transformed_champion_is_stored_under_its_real_name() {
+        assert_eq!(normalize_champion("Mega Gnar"), "Gnar");
+        assert_eq!(normalize_champion("  Mega Gnar  "), "Gnar");
+    }
+
+    /// The table must not touch anything else. `Wukong` in particular is
+    /// *not* renamed here — `ddragon` maps it to `MonkeyKing` from the
+    /// client's own asset store, which stays correct as champions are added.
+    #[test]
+    fn every_other_champion_is_left_exactly_as_it_came() {
+        for name in ["Gnar", "Wukong", "Nunu & Willump", "Kai'Sa", "Shyvana"] {
+            assert_eq!(normalize_champion(name), name);
+        }
+    }
 
     #[test]
     fn scoreboard_carries_every_player_with_their_items() {
