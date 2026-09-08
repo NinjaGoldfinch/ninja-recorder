@@ -233,19 +233,31 @@ one-time notice) is unit tested; presentation is not testable anywhere but here.
 
 ### 5.0.4 In-app updates
 
-**Nothing about this is testable off Windows, and most of it is not testable
-without two releases.** The gate — whether an offered update may be installed —
-is pure and unit-tested (`update::decide`); everything below it is not.
-Windows is the only platform `latest.json` carries at all, so there is no
-second platform to cross-check against
-([DEVELOPMENT.md §14](../DEVELOPMENT.md#14-updates)).
+**Nothing about this is testable off Windows, and none of it without two
+builds on the same channel.** The gate — whether an offered update may be
+installed — is pure and unit-tested (`update::decide`); everything below it
+is not ([DEVELOPMENT.md §14](../DEVELOPMENT.md#14-updates)).
 
-Getting into position needs a version to update *from*: install a CI release,
-land another commit so a newer one publishes, then relaunch the old install.
+**Use the alpha channel.** Every commit on `main` publishes one, so getting a
+newer build is one merge rather than a deliberate release: set Settings →
+About → Update channel to Alpha, install an alpha, land any commit, and the
+next check offers its successor. On stable the same exercise costs two
+deliberate cuts ([DEVELOPMENT.md §15](../DEVELOPMENT.md)).
 
-- [ ] `curl -L https://github.com/NinjaGoldfinch/ninja-recorder/releases/latest/download/latest.json`
-      returns a manifest whose `version` matches the newest release and whose
-      `url` points at that release's **tagged** asset, not `/latest/`.
+Whichever channel, the versions must move **forwards**. An alpha is below the
+stable release it precedes, so an alpha install offered a stable build is
+being offered an upgrade, and a stable install will never be offered an alpha
+at all — that is the design, not a fault.
+
+- [ ] Both manifests resolve and name the build they should:
+      `curl -L .../releases/latest/download/latest.json` (stable) and
+      `curl -L .../releases/download/alpha/alpha.json` (alpha). Each `url`
+      must point at that release's **tagged** asset, not `/latest/`.
+- [ ] Switching the channel re-checks immediately, and the row changes to
+      describe the channel just selected rather than the one left behind.
+- [ ] A **stable** install is never offered an alpha, even with alphas newer
+      in time. This is the one that a comparison-based implementation would
+      get wrong, since semver says `1.1.0-alpha.1 > 1.0.0`.
 - [ ] About 30 s after launch, a dot appears on the settings button and
       Settings → About names the newer version. **Nothing else happens** — no
       toast, no Windows notification, no dialog. That is the design, not a
