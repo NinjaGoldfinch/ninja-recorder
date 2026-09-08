@@ -201,6 +201,15 @@ write anything when more than one game overlaps a recording. See
 [DEVELOPMENT.md §4.2](../DEVELOPMENT.md) and
 [recording-pipeline.md §4a](recording-pipeline.md).
 
+**It also rewrites the gold series**, which is the one thing it recovers that
+is not a column on `recordings`. The curve is written by the deferred patch,
+which lives only in memory on a bounded retry — so a quit, a crash or an
+in-app update inside that window loses it, and nothing else on the row shows
+the gap (#137). A candidate is asked for a curve only when it has a `game_id`
+*and* no `gold_diff` samples: without the `game_id` test, every custom game
+and practice-tool run would sit in the candidate list forever asking to be
+retried for a timeline that cannot exist.
+
 ### What lives in `settings_kv`
 
 Every key, and which side owns the default. There is no schema and no

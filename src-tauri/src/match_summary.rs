@@ -173,7 +173,7 @@ fn outcome(win: bool) -> &'static str {
     }
 }
 
-/// Fetches the summary for `request.game_id`, retrying on the schedule
+/// Fetches the summary for `game_id`, retrying on the schedule
 /// above, and patches the recording's row with it.
 ///
 /// Returns whether a patch actually landed, so the caller knows whether
@@ -235,7 +235,7 @@ pub async fn patch(db: &Db, request: &SummaryRequest) -> bool {
     // caller only learns "something changed" once. Its own failures are
     // logged and swallowed: a game with no timeline still has a name, an
     // outcome and a queue, and those are worth more than a curve.
-    write_gold_series(db, &client, request).await;
+    write_gold_series(db, &client, request.recording_id, request.game_id).await;
 
     match db.update_match_metadata(request.recording_id, &to_metadata(&summary, champion)) {
         // The row was deleted between the finalize and now — retention
@@ -267,38 +267,43 @@ pub async fn patch(db: &Db, request: &SummaryRequest) -> bool {
 ///
 /// **Custom and practice games end here**, at the empty series: they never
 /// reach match history, so there is no timeline to ask for.
-async fn write_gold_series(db: &Db, client: &lcu::LcuHttpClient, request: &SummaryRequest) {
-    let offset = match db.sample_alignment_offset(request.recording_id) {
+pub(crate) async fn write_gold_series(
+    db: &Db,
+    client: &lcu::LcuHttpClient,
+    recording_id: i64,
+    game_id: i64,
+) -> bool {
+    let offset = match db.sample_alignment_offset(recording_id) {
         Ok(Some(offset)) => offset,
         // No samples at all — the live poller never came up. There is no
         // alignment to place frames through, and a guessed one would draw
         // the right curve at the wrong times.
-        Ok(None) => return,
+        Ok(None) => return false,
         Err(e) => {
-            warn!("match-summary", "no alignment for recording {}: {e}", request.recording_id);
-            return;
+            warn!("match-summary", "no alignment for recording {}: {e}", recording_id);
+            return false;
         }
     };
 
-    let sides = match lcu::fetch_sides(client, request.game_id).await {
+    let sides = match lcu::fetch_sides(client, game_id).await {
         Ok(sides) => sides,
         Err(e) => {
             warn!("match-summary", "could not tell the sides apart for game {}: {e}",
-                request.game_id
+                game_id
             );
-            return;
+            return false;
         }
     };
 
-    let points = match lcu::fetch_gold_series(client, &sides, request.game_id).await {
+    let points = match lcu::fetch_gold_series(client, &sides, game_id).await {
         Ok(points) => points,
         Err(e) => {
-            warn!("match-summary", "no gold timeline for game {}: {e}", request.game_id);
-            return;
+            warn!("match-summary", "no gold timeline for game {}: {e}", game_id);
+            return false;
         }
     };
     if points.is_empty() {
-        return;
+        return false;
     }
 
     let samples: Vec<NewSample> = points
@@ -314,13 +319,19 @@ async fn write_gold_series(db: &Db, client: &lcu::LcuHttpClient, request: &Summa
         })
         .collect();
 
-    match db.replace_gold_samples(request.recording_id, &samples) {
-        Ok(()) => info!("match-summary", "wrote {} gold points for recording {}",
-            samples.len(), request.recording_id
-        ),
-        Err(e) => warn!("match-summary", "could not write the gold series for recording {}: {e}",
-            request.recording_id
-        ),
+    match db.replace_gold_samples(recording_id, &samples) {
+        Ok(()) => {
+            info!("match-summary", "wrote {} gold points for recording {}",
+                samples.len(), recording_id
+            );
+            true
+        }
+        Err(e) => {
+            warn!("match-summary", "could not write the gold series for recording {}: {e}",
+                recording_id
+            );
+            false
+        }
     }
 }
 

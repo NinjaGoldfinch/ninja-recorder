@@ -63,6 +63,13 @@ pub struct Candidate {
     /// Epoch milliseconds.
     pub started_at: i64,
     pub duration_s: Option<f64>,
+    /// Matched to a game, but carrying no gold curve.
+    ///
+    /// Its own flag rather than something inferred from the columns above: a
+    /// recording can be complete in every other respect and still have lost
+    /// its curve, because the gold series comes from a deferred patch that
+    /// only ever lived in memory (#137).
+    pub needs_gold: bool,
 }
 
 /// What the clock can say about one recording.
@@ -148,6 +155,11 @@ pub struct BackfillReport {
     pub ambiguous: usize,
     /// Rows no game overlapped.
     pub unmatched: usize,
+    /// Rows that regained a gold curve. Separate from `patched` because the
+    /// two fail independently: the timeline is a different endpoint, and a
+    /// game old enough to have fallen out of match history can still yield
+    /// metadata while having no timeline left to fetch.
+    pub gold_filled: usize,
     /// Rows that gained a scoreboard they did not have — every recording
     /// made before the live capture existed.
     pub scoreboards: usize,
@@ -208,6 +220,15 @@ pub async fn run(db: &Db) -> Result<BackfillReport, String> {
             Some(id) => lcu::champion_name(&client, &lockfile, id).await,
             None => None,
         };
+
+        // Before the metadata write, matching the order the deferred patch
+        // uses: it is the slower half, and its failures are logged and
+        // swallowed rather than costing the row its outcome.
+        if candidate.needs_gold
+            && crate::match_summary::write_gold_series(db, &client, candidate.id, game_id).await
+        {
+            report.gold_filled += 1;
+        }
 
         let metadata: MatchMetadata = to_metadata(&game.summary, champion);
         match db.update_match_metadata(candidate.id, &metadata) {
@@ -344,6 +365,7 @@ mod tests {
 
     fn recording(started_at: i64, duration_s: Option<f64>) -> Candidate {
         Candidate {
+            needs_gold: false,
             id: 1,
             started_at,
             duration_s,
