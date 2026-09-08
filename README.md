@@ -7,21 +7,25 @@ not for editing.
 
 No OBS to install. No scenes to configure. No injection into the game, ever.
 
-> **Status: pre-1.0, usable on Windows.** Recording, event markers, the VOD
-> library, the review player and disk retention are all built and running, and
-> installers ship from the [Releases](../../releases) page. It now lives in the
-> system tray: closing the window keeps it recording, and only Quit stops it.
-> Four caveats before you install: builds are **unsigned**, so SmartScreen
-> warns on first run; the libobs capture backend **has not yet been verified
-> against a real Vanguard-protected game**; multi-track audio is newer still —
-> the per-application capture behind every preset that records "game audio" has
-> never run against a Vanguard-protected process, so if your game track comes
-> out silent, switch the preset to Desktop, which uses ordinary loopback; and
-> the tray, the close-button setting, start-on-login, the notifications and
-> the in-app updater are **newer than any Windows testing**, so treat them as
-> unproven there. See
-> [docs/windows-verification.md](docs/windows-verification.md) for exactly
-> what those checks involve.
+> **Status: works, on Windows, against real games.** Capture has been run
+> across many live Vanguard-protected games — the constraint the whole design
+> was built around ([DEVELOPMENT.md §1.1](DEVELOPMENT.md)) — with recording,
+> event markers, the VOD library, the review player, disk retention,
+> multi-track audio, the tray and the notifications all confirmed on real
+> hardware. Installers ship from the [Releases](../../releases) page.
+>
+> Two things to know before you install. Builds are **unsigned**, so
+> SmartScreen warns on first run. And the **in-app updater has not yet
+> completed a real update** — it checks and offers correctly, but the install
+> half is the one part never exercised end to end
+> ([#118](../../issues/118)).
+>
+> Measured on real hardware: **9 MB** idle RAM, a **64 MB** download and a
+> **248 MB** install. The RAM target was 100 MB and is met with room to
+> spare; the install target was 200 MB and is **not** met — most of the
+> difference is bundled libobs and ffmpeg. Recorded as a miss rather than a
+> rounded pass. See
+> [docs/windows-verification.md](docs/windows-verification.md).
 
 ---
 

@@ -516,14 +516,11 @@ jobs:
           click, never while a game is being recorded. An install from before
           that existed has to be updated by hand once more.
 
-          The libobs capture backend has not been verified against a real
-          Vanguard-protected game yet (docs/windows-verification.md).
-
-          Multi-track audio (DEVELOPMENT.md §2.5) is new and unverified on
-          real hardware. In particular, per-application capture — the source
-          behind every preset that records "game audio" — has never been run
-          against a Vanguard-protected process. If your game track comes out
-          silent, switch the preset to Desktop, which uses ordinary loopback.
+          Capture, markers, multi-track audio, the tray and the notifications
+          are all confirmed against real Vanguard-protected games. The one
+          part never exercised end to end is the *install* half of the
+          updater, so if an in-app update fails, reinstall from here and open
+          an issue (docs/windows-verification.md).
           CAVEATS
           } > notes.md
           echo "--- changelog.md (goes to the app) ---"

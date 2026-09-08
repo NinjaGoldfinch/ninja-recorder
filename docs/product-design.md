@@ -131,15 +131,15 @@ small to hide a bug. It is the trait boundary trick applied at function scale.
 | 3 | Live Client Data poller, event → marker pipeline, the game state machine | `live_client/`, `state_machine/` | done |
 | 4 | SQLite VOD library, the data model, folder reconciliation | `db/` | done |
 | 5 | Review UI: player, marker timeline, VOD browser | `src/review.ts`, `src/library.ts` | done |
-| 6 | libobs capture backend — WGC window capture + hardware encode | `recorder/libobs/` | built, **unverified on real hardware** |
+| 6 | libobs capture backend — WGC window capture + hardware encode | `recorder/libobs/` | done, **verified against real Vanguard-protected games** |
 | 7 | CI: tests on every push and PR, installers and a published release per commit on `main` | `.github/workflows/ci.yml` | done |
-| 8 | Integration test on real hardware, Vanguard verification | [windows-verification.md](windows-verification.md) | **open** |
+| 8 | Integration test on real hardware, Vanguard verification | [windows-verification.md](windows-verification.md) | **done** — many live games, capture and markers confirmed |
 | 9 | Disk retention: max size, max age, pinning, free-space preflight | `retention.rs` | done |
 | 10 | YouTube upload (OAuth desktop flow, resumable upload) | [DEVELOPMENT.md §7](../DEVELOPMENT.md#7-youtube-upload-designed-not-built) | not started |
 | 11 | `.rofl` replay download alongside video | [DEVELOPMENT.md §8](../DEVELOPMENT.md#8-rofl-replays-designed-not-built) | not started |
-| 12 | Background operation: tray icon, close-to-tray, notifications, start-on-login, and the idle-cost work that made staying resident defensible | `tray.rs`, `notify.rs`, `launch.rs` | built, **unverified on Windows** |
+| 12 | Background operation: tray icon, close-to-tray, notifications, start-on-login, and the idle-cost work that made staying resident defensible | `tray.rs`, `notify.rs`, `launch.rs` | done, verified on Windows |
 | 13 | Splitting the recorder into its own process, so the UI can exit and a webview crash can't take a recording with it | [DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave) | in progress |
-| 14 | In-app updates on Windows: a background check, a badge, and an install that refuses while a game is being recorded | `update.rs`, `src/update.ts` | built, **unverified on Windows** |
+| 14 | In-app updates on Windows: a background check, a badge, and an install that refuses while a game is being recorded | `update.rs`, `src/update.ts` | built; checks verified, **the install half is not** ([#118](https://github.com/NinjaGoldfinch/ninja-recorder/issues/118)) |
 | — | **Dropped:** the macOS `.dmg`. Shipped the stub recorder, could not capture a game, and cost a 10×-billed runner per commit. The cross-platform code stays; only the bundle is gone | [ci-and-releases.md](ci-and-releases.md) | dropped |
 
 ### Why that dependency order
@@ -298,14 +298,23 @@ thing this app exists not to do — so it asks, and it refuses while a game is
 in progress ([DEVELOPMENT.md §14](../DEVELOPMENT.md)). Neither of those is a
 technical difficulty; both are decisions the plan never anticipated needing.
 
-### One phase is still open, and it is the honest gate
+### The phase that was the honest gate has closed
 
-Phase 8 — real hardware, real Vanguard — has not run. The capture backend
-compiles, bundles and records, and it was written against a working reference
-implementation rather than guessed, but "compiles and was carefully derived"
-is not "verified". Until that checklist is filled in, the specific unknowns
-are enumerated in [windows-verification.md](windows-verification.md), not
-papered over.
+Phase 8 — real hardware, real Vanguard — has run, across many live games.
+Capture, markers, the library, multi-track audio, the tray and the
+notifications all hold up. The bet the whole architecture rested on
+(§1.1: window capture rather than injection, so Vanguard never has an
+opinion) turned out to be right, and it was the one thing that could not be
+established any other way.
+
+What is left is smaller and differently shaped: the **install** half of the
+updater has never run end to end. It is not a capture risk, it is a delivery
+one — if it fails, every fix ships by manual reinstall
+([#118](https://github.com/NinjaGoldfinch/ninja-recorder/issues/118)).
+
+The install-size target was also missed, and is recorded as missed rather
+than quietly rounded: 248 MB against a 200 MB budget (§1.2). Idle RAM came in
+at 9 MB against a 100 MB budget.
 
 ## 5. Where the numbers went
 

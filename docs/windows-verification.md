@@ -1,16 +1,18 @@
 # Windows verification checklist
 
-The capture backend compiles, bundles and records, but has **never run
-against a real Vanguard-protected game**. This is the checklist that closes
-that gap. It must be run on real Windows hardware with a real League client
-and Vanguard active — none of it is executable from the dev box
+Capture has now run across many live Vanguard-protected games, so the gap this
+checklist existed to close is **closed**. Capture, markers, multi-track audio,
+the tray and the notifications all hold up on real hardware.
+
+It stands as the record of what was checked, and as the procedure for
+re-checking after a change to the capture backend. None of it is executable
+from the dev box — it needs real Windows hardware, a real League client and
+Vanguard active
 ([DEVELOPMENT.md §1.1, §9](../DEVELOPMENT.md#11-riot-vanguard-the-constraint-that-shapes-everything)).
 
-Fill in the results inline as each step is done; this file is the record of
-the run, not just the plan. When everything below passes, update
-[DEVELOPMENT.md §2.2 and §3.4](../DEVELOPMENT.md#22-the-recorder-trait)'s
-"not verified" notes and the status paragraph in the
-[README](../README.md).
+**Still open:** the *install* half of the updater (§5.0.4), which has never
+run end to end, and the install-size budget (§5), which is missed rather than
+met. Fill in results inline as each remaining step is done.
 
 ---
 
@@ -97,10 +99,17 @@ First real measurement against the targets in
 
 | Metric | Target | Measured | How |
 |---|---|---|---|
-| Installed size | ≤ 200 MB | | `Get-ChildItem -Recurse \| Measure-Object -Property Length -Sum` on the install folder |
-| Idle RAM | ≤ 100 MB | | Task Manager / `Get-Process` working set, app idle, no League running |
+| Installed size | ≤ 200 MB | **248 MB** — over | `Get-ChildItem -Recurse \| Measure-Object -Property Length -Sum` on the install folder |
+| Installer | — | 64 MB | the NSIS `.exe` on the release page, LZMA-compressed — roughly a quarter of what it unpacks to |
+| Idle RAM | ≤ 100 MB | **9 MB** — well under | Task Manager / `Get-Process` working set, app idle, no League running |
 | Recording overhead | Hardware encoder only, no x264 | | Confirm encoder choice in app logs during §2/§3 |
 | Idle CPU | ~0% | | Task Manager, app idle with the client closed |
+
+**The size target is missed, and that is recorded rather than rounded.** 248 MB
+against a 200 MB budget ([DEVELOPMENT.md §1.2](../DEVELOPMENT.md)); the binary
+is 64 MB of it and the rest is bundled libobs plus ffmpeg. Whether the budget
+was wrong or the bundle is, it is not a pass. Idle RAM went the other way —
+9 MB against 100 MB, which is what staying out of Electron bought.
 
 **Measure idle RAM with the client closed *and* open.** The capture backend is
 now warm only while the League client is running
