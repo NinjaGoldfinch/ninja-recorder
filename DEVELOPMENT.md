@@ -1297,11 +1297,16 @@ wanted the app gone.
 These are two different questions and the first draft of this feature
 conflated them, which made the panel worse for no reason.
 
-**Interrupting: as little as possible.** Every commit on `main` mints a
-release, so "a newer version exists" is true most days. A toast, a system
-notification or a modal on each of them is a thing the user learns to dismiss
-without reading — and the one time it matters, they dismiss that too. So the
-entire announcement is a dot on the settings button.
+**Interrupting: as little as possible.** Every commit on `main` publishes an
+alpha, so on that channel "a newer version exists" is true most days. A toast,
+a system notification or a modal on each of them is a thing the user learns to
+dismiss without reading — and the one time it matters, they dismiss that too.
+So the entire announcement is a dot on the settings button.
+
+Since §15 that argument is specifically about **alpha**. A stable release is a
+deliberate act, possibly weeks apart, and the risk there runs the other way —
+a dot on a gear is easy to sit beside for a month. Whether stable eventually
+deserves something louder is open, and belongs with the channel picker.
 
 Notifications in particular stay out of it. A Windows toast for an update is
 an interruption that leaves the app to say something the app could say
@@ -1450,3 +1455,101 @@ as progress on the other. Update signatures let an installed build verify that
 what it downloaded came from us. Code signing is what stops SmartScreen
 warning on first run, and there is still no certificate configured — see the
 standing caveat block in `ci.yml`'s release notes.
+
+
+## 15. Release channels and what a version number means
+
+Until this, `version` derived a release from the commit's distance to the
+newest tag: `major.(minor + n).0`, published on every push to `main`. It got
+builds into hands, which was the point, and it had one genuinely good property
+worth keeping — the version was a **pure function of the commit**, so two
+pushes landing at once could not claim the same one, and re-running a commit
+updated its own release rather than minting a second.
+
+But the number counted commits. `0.184.0` said nothing about what changed, and
+there was no defensible moment to call something `1.0.0` — you would be
+picking a commit. Worse, every commit was a full release, so there was no way
+to ship something deliberately and no way for a user to ask for only those.
+
+### The number a human moves, and the number CI counts
+
+`package.json`'s version is **what we are building toward**. Only
+`npm run release -- next <x.y.z>` changes it, in its own commit.
+
+CI never invents a version. On a push to `main` it appends
+`-alpha.<commits since the newest stable tag>`, so alphas read
+`0.9.0-alpha.1`, `0.9.0-alpha.2`, and the base moves only when a person moves
+it. The purity property survives intact: the base comes from a file, the
+counter from `git rev-list --count`, and both are functions of the commit.
+
+A stable release is a tag push, and `npm run release -- cut` is the only thing
+that should produce one. CI cross-checks the tag against `package.json` and
+fails if they disagree, because a tag pushed by hand against a different tree
+would publish a release named after a version it does not contain.
+
+**The split is the design.** The script owns the version *decision* and never
+invokes a compiler — one that built locally would be back to cross-compiling
+libobs (§9). CI owns the build and never invents a version.
+
+### Alphas are prereleases, and that does the channel separation for free
+
+GitHub excludes prereleases from `/releases/latest/download/`, which is the
+stable channel's endpoint. Marking alphas as prereleases therefore makes
+stable installs ignore them with no filtering of our own.
+
+That matters more than it sounds, because **the channels cannot be separated
+by comparison**. The updater's default comparator is plain semver `>`, and
+semver says `1.1.0-alpha.1 > 1.0.0` is **true**. A stable install that could
+see the alpha manifest at all would be offered alphas by default. So the
+separation is by *endpoint*, and there are two manifests:
+
+| Channel | URL |
+|---|---|
+| stable | `releases/latest/download/latest.json` |
+| alpha | `releases/download/alpha/alpha.json` |
+
+`/latest/` cannot serve alpha, for exactly the reason it serves stable so
+well. So one permanent prerelease tagged `alpha` holds the alpha manifest and
+nothing else, and its single asset is replaced on every build. The installers
+stay on their own `-alpha.N` releases; that release only ever points at them.
+
+This also narrows §14. Its "quiet because the cadence is loud" argument is
+really about *alpha*, where a release still lands most days. A stable release
+is now a deliberate act weeks apart, and the risk there runs the other way — a
+dot on a gear is easy to sit beside for a month.
+
+### The guard that will actually fire
+
+Forgetting to declare the next version after cutting a release leaves
+`package.json` at a version that is already out, and alphas of it sort
+**below** it — `0.9.0-alpha.1 < 0.9.0` — so every alpha would be invisible to
+the updater while looking perfectly fine in the releases list. CI fails the
+`version` job in that case, naming the command to run.
+
+### The one-time reset, and what it costs
+
+Adopting this meant declaring a base, and the counter had already run to
+`0.184.0`. Declaring `0.9.0` makes the numbers mean something immediately and
+leaves `1.0.0` a deliberate act rather than somewhere the scheme walks you
+into — but `0.9.0 < 0.184.0`, so **every install already in the field is
+stranded**: it will keep checking, keep being told nothing is newer, and never
+move. Each needs one manual reinstall.
+
+That was judged acceptable at this size and is not repeatable. Once anyone is
+running these builds who cannot simply be told to reinstall, the version can
+only go up. `release.mjs` enforces exactly that — `next` refuses a version at
+or below the newest stable tag — so the reset had to be made by editing the
+file directly, and the guard stays strict for every version after it.
+
+### Still to build
+
+The in-app channel picker: an `updateChannel` pref, a control in
+Settings → About, and `UpdaterBuilder::endpoints` chosen at runtime (the API
+supports it). Until then every install is on stable, which is the safe default
+and the one needing no migration.
+
+Two things want deciding when it lands. Switching alpha → stable is a
+**downgrade**, and downgrades do not happen: someone on `1.1.0-alpha.3` who
+switches sees `1.0.0`, is offered nothing, and sits on an alpha until `1.1.0`
+ships. And an alpha release per commit accumulates, so something should prune
+them.
