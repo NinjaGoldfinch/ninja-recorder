@@ -523,27 +523,10 @@ jobs:
             cat changelog.md
             cat <<'CAVEATS'
 
-          ## Before you install
+          ---
 
-          Windows only. Real game capture depends on Windows.Graphics.Capture
-          (DEVELOPMENT.md §1.1), so there is no build for another platform.
-
-          Unsigned build: Windows SmartScreen warns on first run (no
-          code-signing certificate configured yet). The `.sig` file attached
-          here is an *update* signature — it lets an installed build verify
-          what it downloads — and is a different thing from code signing,
-          which would be what stops the warning.
-
-          The app updates itself from here: it checks on launch and every six
-          hours, shows a dot on the settings button, and installs when you
-          click, never while a game is being recorded. An install from before
-          that existed has to be updated by hand once more.
-
-          Capture, markers, multi-track audio, the tray and the notifications
-          are all confirmed against real Vanguard-protected games. The one
-          part never exercised end to end is the *install* half of the
-          updater, so if an in-app update fails, reinstall from here and open
-          an issue (docs/windows-verification.md).
+          Unsigned build — Windows SmartScreen will warn on first run. No
+          code-signing certificate is configured yet.
           CAVEATS
           } > notes.md
           echo "--- changelog.md (goes to the app) ---"
