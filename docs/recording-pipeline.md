@@ -485,6 +485,36 @@ Two skips, both normal and neither logged: no `recording_id` (the row write
 itself failed) and no `game_id` (the gameflow read lost its race, or there
 was no client — which is simply what Practice Tool looks like).
 
+### What happens when the app does not survive that minute
+
+The schedule runs **in memory**, so a quit, a crash or an in-app update
+inside it takes the unfinished patch with it. That mattered more than it
+sounds: the gold curve is written by this path and by nothing else, and the
+row shows no sign of the gap, because champion, KDA and outcome all come from
+the live path at finalize. The failure therefore looks arbitrary — it is
+"did the app stay open for a minute after the game ended" (#137).
+
+So the state is **derived rather than stored**: a recording with a `game_id`
+that is missing `role`, `patch`, `queue`, `win` or a gold curve *is* an
+unfinished patch. No column, no migration, nothing to keep in sync with
+reality — the row already says everything needed.
+
+`match_summary::resume_pending` runs that query when a client becomes
+reachable, which is `start_gameflow_watch` rather than startup: the app can
+start long before League does, and a sweep at boot would find nothing and
+never run again.
+
+Two bounds keep it from becoming a permanent tail of doomed work:
+
+- **48 hours.** The LCU forgets old games, so a recording it can never
+  complete has to drop out rather than be retried at every client start.
+  Settings → Storage → *fill in* stays the unbounded, deliberate version.
+- **Single-shot, not the retry schedule.** `patch` retries because it runs
+  seconds after a game ends, while the client is still assembling the result.
+  By the time this runs the game is minutes or hours old: the LCU either has
+  it or never will, and waiting sixty seconds per recording to re-learn that
+  would make a client restart cost minutes of pointless requests.
+
 **What the patch will not touch.** It is a plain `UPDATE` of the post-game
 columns, never a re-`insert_recording` — that method's `ON CONFLICT(path)`
 takes `pinned`, `size_bytes`, `started_at` and `duration_s` from `excluded`,

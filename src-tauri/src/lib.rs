@@ -799,6 +799,32 @@ pub fn run() {
 
             let summary_db = Arc::clone(&db);
             let summary_handle = app.handle().clone();
+            // Finishes patches an app exit interrupted, once a client is
+            // reachable again (#137). The gold curve in particular is written
+            // by the deferred patch and by nothing else, so without this a
+            // quit — or an in-app update, which exits by design — inside its
+            // one-minute window loses it for good.
+            let resume_db = Arc::clone(&db);
+            let resume_handle = app.handle().clone();
+            supervisor.set_summary_resumer(Box::new(move |lockfile| {
+                let db = Arc::clone(&resume_db);
+                let handle = resume_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    use tauri::Emitter;
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(0);
+                    if match_summary::resume_pending(&db, &lockfile, now_ms).await > 0 {
+                        // Rows changed minutes or days after the library last
+                        // looked at them.
+                        if let Err(e) = handle.emit(LIBRARY_CHANGED_EVENT, ()) {
+                            warn!("match-summary", "failed to emit library-changed: {e}");
+                        }
+                    }
+                });
+            }));
+
             supervisor.set_summary_fetcher(Box::new(move |request| {
                 let db = Arc::clone(&summary_db);
                 let handle = summary_handle.clone();

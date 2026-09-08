@@ -972,6 +972,46 @@ impl Db {
     /// That is a request the pass already makes and a comparison against a
     /// list already in hand, and it is much cheaper than the alternative
     /// failure, which is a button that silently does nothing.
+    /// Recordings that were matched to a game but never finished being
+    /// patched, newest first.
+    ///
+    /// The deferred patch lives only in memory on a bounded retry, so an app
+    /// exit inside its window loses whatever it had not written yet — and the
+    /// row shows nothing to say so, because champion, KDA and outcome all
+    /// come from the live path at finalize (#137). This is how a restart
+    /// finds them again.
+    ///
+    /// **Bounded by age, deliberately.** The LCU only keeps recent games, so
+    /// a recording old enough to have fallen out of match history can never
+    /// be completed — and without a bound it would be retried on every single
+    /// client start, forever. `since_ms` is what stops the sweep growing a
+    /// permanent tail of work that cannot succeed. The backfill button
+    /// remains the unbounded, deliberate version of this.
+    ///
+    /// `game_id IS NOT NULL` for the same reason it appears in
+    /// `recordings_missing_metadata`: a recording that never reached match
+    /// history has nothing to ask for.
+    pub fn recordings_awaiting_summary(
+        &self,
+        since_ms: i64,
+    ) -> Result<Vec<(i64, i64)>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, game_id FROM recordings
+              WHERE game_id IS NOT NULL
+                AND started_at >= ?1
+                AND (role IS NULL OR patch IS NULL OR queue IS NULL OR win IS NULL
+                     OR NOT EXISTS (
+                         SELECT 1 FROM samples
+                          WHERE samples.recording_id = recordings.id
+                            AND samples.gold_diff IS NOT NULL
+                     ))
+              ORDER BY started_at DESC",
+        )?;
+        let rows = stmt.query_map([since_ms], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+    }
+
     pub fn recordings_missing_metadata(&self) -> Result<Vec<crate::backfill::Candidate>, DbError> {
         let conn = self.conn.lock().unwrap();
         // `needs_gold` is computed here rather than inferred from the other
@@ -1768,6 +1808,68 @@ mod tests {
         db.replace_gold_samples(1, &[gold_sample(60.0, 100.0)]).unwrap();
 
         assert!(db.recordings_missing_metadata().unwrap().is_empty());
+    }
+
+    /// The window is what stops the resume sweep growing a permanent tail:
+    /// the LCU forgets old games, so a recording it can never complete must
+    /// drop out rather than be retried on every client start forever.
+    #[test]
+    fn the_resume_sweep_only_looks_at_recent_recordings() {
+        let db = Db::open_in_memory().unwrap();
+        for (path, started_at) in [("/new.mp4", 10_000i64), ("/old.mp4", 1_000i64)] {
+            db.insert_recording(&NewRecording {
+                path: path.into(),
+                started_at,
+                game_id: Some(7),
+                ..Default::default()
+            })
+            .unwrap();
+        }
+
+        let recent = db.recordings_awaiting_summary(5_000).unwrap();
+        assert_eq!(recent.len(), 1, "only the recording inside the window");
+        assert_eq!(recent[0].1, 7, "and it carries the game id to ask about");
+
+        assert_eq!(db.recordings_awaiting_summary(0).unwrap().len(), 2);
+    }
+
+    /// A recording that never reached match history has nothing to ask for,
+    /// so it must not sit in the sweep being retried at every client start.
+    #[test]
+    fn the_resume_sweep_skips_recordings_with_no_game_id() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/custom.mp4".into(),
+            started_at: 10_000,
+            game_id: None,
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert!(db.recordings_awaiting_summary(0).unwrap().is_empty());
+    }
+
+    /// A row that is complete *and* has its curve is finished, and the sweep
+    /// must stop offering it — otherwise every client start re-fetches every
+    /// game the user has ever recorded.
+    #[test]
+    fn the_resume_sweep_leaves_a_finished_recording_alone() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/done.mp4".into(),
+            started_at: 10_000,
+            game_id: Some(7),
+            win: Some(true),
+            role: Some("Jungle".into()),
+            patch: Some("16.17".into()),
+            queue: Some(420),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(db.recordings_awaiting_summary(0).unwrap().len(), 1, "no curve yet");
+
+        db.replace_gold_samples(1, &[gold_sample(60.0, 100.0)]).unwrap();
+        assert!(db.recordings_awaiting_summary(0).unwrap().is_empty());
     }
 
     /// The case #137 is about: complete in every other respect, no curve.
