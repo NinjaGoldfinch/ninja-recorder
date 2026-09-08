@@ -20,6 +20,50 @@
 
 use crate::state_machine::GameState;
 
+/// Which stream of releases this install follows.
+///
+/// **The channels are separated by endpoint, never by comparison**, and that
+/// is not a stylistic choice. The updater compares with plain semver `>`, and
+/// semver says `1.1.0-alpha.1 > 1.0.0` is *true* — so a stable install that
+/// could see the alpha manifest at all would be offered alphas by default.
+/// Two manifests on two URLs is the only arrangement that holds
+/// (DEVELOPMENT.md §15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Channel {
+    Stable,
+    Alpha,
+}
+
+/// `settings_kv` key holding the channel. A missing key means stable, which
+/// is how every pref in that table works — adding one needs no migration.
+pub const CHANNEL_PREF_KEY: &str = "updateChannel";
+
+/// The alpha manifest's URL.
+///
+/// Only the *alpha* endpoint lives here. Stable's is in `tauri.conf.json`
+/// under `plugins.updater.endpoints` and is used as configured, so there is
+/// one copy of it rather than two that can drift.
+///
+/// This URL is a permanent prerelease whose single asset is replaced on every
+/// build — see `ci.yml`'s "Publish the alpha manifest" step. It cannot be
+/// `/releases/latest/download/`, because GitHub excludes prereleases from
+/// `latest`, which is exactly what keeps the stable channel clean.
+pub const ALPHA_ENDPOINT: &str =
+    "https://github.com/NinjaGoldfinch/ninja-recorder/releases/download/alpha/alpha.json";
+
+impl Channel {
+    /// Reads the stored pref. Anything unrecognised is **stable**, not an
+    /// error: a corrupt or hand-edited value should leave an install on the
+    /// conservative channel rather than silently opting it into prereleases.
+    pub fn from_pref(value: Option<&str>) -> Self {
+        match value {
+            Some("alpha") => Self::Alpha,
+            _ => Self::Stable,
+        }
+    }
+}
+
 /// A newer version the endpoint offered, flattened out of the plugin's own
 /// type so this module stays testable without one.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -144,6 +188,25 @@ mod tests {
             notes: Some("- something".into()),
             pub_date: None,
         }
+    }
+
+    /// Anything but an exact "alpha" leaves the install on stable. A
+    /// hand-edited or corrupted pref must not opt someone into prereleases.
+    #[test]
+    fn only_an_exact_alpha_pref_selects_the_alpha_channel() {
+        assert_eq!(Channel::from_pref(Some("alpha")), Channel::Alpha);
+        for value in [None, Some(""), Some("stable"), Some("Alpha"), Some("beta")] {
+            assert_eq!(Channel::from_pref(value), Channel::Stable, "{value:?}");
+        }
+    }
+
+    #[test]
+    fn the_alpha_endpoint_is_a_url() {
+        let url = ALPHA_ENDPOINT.parse::<tauri::Url>();
+        assert!(url.is_ok(), "{ALPHA_ENDPOINT} should parse");
+        // Not `/releases/latest/`: GitHub excludes prereleases from `latest`,
+        // so that path can never serve an alpha.
+        assert!(!ALPHA_ENDPOINT.contains("/releases/latest/"));
     }
 
     #[test]

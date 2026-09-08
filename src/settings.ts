@@ -13,6 +13,7 @@ import {
 import { showView } from "./router";
 import { setThemePref } from "./theme";
 import { toast } from "./toast";
+import { syncChannelControl } from "./update";
 import type {
   AudioInputDevice,
   AudioPreset,
@@ -185,6 +186,10 @@ export function syncSettingsFromPrefs() {
   els.notifyFailed.checked = prefs.notifyRecordingFailed === "on";
   syncNotifyEnabled();
   els.defaultSort.value = prefs.defaultSort;
+  // Owned by `update.ts`, but synced from here: prefs land a beat after the
+  // first paint, and every other control in this view is re-applied the same
+  // way.
+  syncChannelControl();
 }
 
 function syncThemeToggle(active: ThemePref) {

@@ -2,6 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 
 import { call } from "./bridge";
 import { el } from "./dom";
+import { getPrefs, savePref, type UpdateChannelPref } from "./prefs";
 import { onViewChange } from "./router";
 import { toast } from "./toast";
 import type { UpdateStatus } from "./types";
@@ -26,6 +27,7 @@ import type { UpdateStatus } from "./types";
  */
 
 interface Els {
+  channel: HTMLSelectElement;
   text: HTMLElement;
   notes: HTMLElement;
   install: HTMLButtonElement;
@@ -51,6 +53,7 @@ const RECHECK_AFTER_MS = 60_000;
 
 export function initUpdate() {
   els = {
+    channel: el("#update-channel"),
     text: el("#about-update"),
     notes: el("#about-update-notes"),
     install: el("#update-install"),
@@ -60,6 +63,17 @@ export function initUpdate() {
 
   els.install.addEventListener("click", () => void install());
   els.check.addEventListener("click", () => void checkNow());
+  els.channel.addEventListener("change", () => {
+    const value = els.channel.value as UpdateChannelPref;
+    savePref("updateChannel", value);
+    // Check straight away rather than leaving the panel describing the
+    // channel they just left. `savePref` is fire-and-forget, but Rust reads
+    // the pref from SQLite when the check runs, so the write has to land
+    // first — hence awaiting the round trip here and nowhere else.
+    els.text.textContent = "Checking\u2026";
+    lastCheckedAt = 0;
+    void checkNow();
+  });
 
   // Pushed by the background check in `lib.rs`, which runs on a six-hourly
   // loop — far too slow to poll for. `.catch` because `listen` rejects
@@ -83,7 +97,14 @@ export function initUpdate() {
     void checkNow();
   });
 
+  syncChannelControl();
   void refreshUpdateStatus();
+}
+
+/** Called on load and whenever prefs resolve from the database. */
+export function syncChannelControl() {
+  if (!els) return;
+  els.channel.value = getPrefs().updateChannel;
 }
 
 export async function refreshUpdateStatus() {

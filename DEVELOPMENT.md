@@ -1549,15 +1549,32 @@ only go up. `release.mjs` enforces exactly that — `next` refuses a version at
 or below the newest stable tag — so the reset had to be made by editing the
 file directly, and the guard stays strict for every version after it.
 
-### Still to build
+### The channel picker
 
-The in-app channel picker: an `updateChannel` pref, a control in
-Settings → About, and `UpdaterBuilder::endpoints` chosen at runtime (the API
-supports it). Until then every install is on stable, which is the safe default
-and the one needing no migration.
+A dropdown in Settings → About, an `updateChannel` row in `settings_kv`, and
+`UpdaterBuilder::endpoints` chosen per check. **No new commands** — the pref
+rides the existing `get_ui_prefs`/`set_ui_pref` pair, so adding it needed no
+migration and no dispatch-table row.
 
-Two things want deciding when it lands. Switching alpha → stable is a
-**downgrade**, and downgrades do not happen: someone on `1.1.0-alpha.3` who
-switches sees `1.0.0`, is offered nothing, and sits on an alpha until `1.1.0`
-ships. And an alpha release per commit accumulates, so something should prune
-them.
+Only the *alpha* endpoint is a constant in `update.rs`. Stable's stays in
+`tauri.conf.json` and is used as configured, so that URL has one copy rather
+than two that drift apart.
+
+**Anything unrecognised reads as stable**, on both sides. A corrupt or
+hand-edited value should leave an install on the conservative channel, never
+silently opt it into prereleases, and a failed preferences read should not
+stop an install checking at all.
+
+Changing the channel re-checks immediately. The alternative is a panel that
+goes on describing the channel the user just left, which reads as the setting
+having done nothing.
+
+Two consequences worth stating rather than discovering:
+
+**Switching alpha → stable is a downgrade, and downgrades do not happen.**
+Someone on `1.1.0-alpha.3` who switches sees `1.0.0`, is offered nothing, and
+sits on an alpha until `1.1.0` ships. The dropdown's hint says so. Fixing it
+means a custom `version_comparator` *and* an installer willing to go
+backwards, which NSIS has never been asked to do here.
+
+**An alpha release per commit accumulates.** Nothing prunes them yet.
