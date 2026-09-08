@@ -261,8 +261,8 @@ export interface UpdateOffer {
  *
  *  `unsupported` and `upToDate` are deliberately different states: "you are
  *  current" and "this build will never tell you" want different words on
- *  screen. A devtools bundle and a macOS build both report `unsupported`
- *  — updates are Windows-only (DEVELOPMENT.md §14). */
+ *  screen. A devtools bundle and anything built off Windows both report
+ *  `unsupported` (DEVELOPMENT.md §14). */
 export type UpdateStatus =
   | { kind: "unsupported" }
   | { kind: "upToDate" }

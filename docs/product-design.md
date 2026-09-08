@@ -113,8 +113,8 @@ flowchart TB
 
 The stub is not a mock. It takes real time, writes a real playable file into
 the real recordings directory, and returns a real path. That is what let every
-phase after the first develop on macOS in seconds-long loops, with the
-Windows-only work deferred until it was the only thing left.
+phase after the first develop away from Windows in seconds-long loops, with
+the Windows-only work deferred until it was the only thing left.
 
 The same idea shows up again inside the app, in a pattern that repeats three
 times: **a pure decision function plus a thin I/O wrapper.**
@@ -140,6 +140,7 @@ small to hide a bug. It is the trait boundary trick applied at function scale.
 | 12 | Background operation: tray icon, close-to-tray, notifications, start-on-login, and the idle-cost work that made staying resident defensible | `tray.rs`, `notify.rs`, `launch.rs` | built, **unverified on Windows** |
 | 13 | Splitting the recorder into its own process, so the UI can exit and a webview crash can't take a recording with it | [DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave) | in progress |
 | 14 | In-app updates on Windows: a background check, a badge, and an install that refuses while a game is being recorded | `update.rs`, `src/update.ts` | built, **unverified on Windows** |
+| — | **Dropped:** the macOS `.dmg`. Shipped the stub recorder, could not capture a game, and cost a 10×-billed runner per commit. The cross-platform code stays; only the bundle is gone | [ci-and-releases.md](ci-and-releases.md) | dropped |
 
 ### Why that dependency order
 
@@ -174,7 +175,7 @@ information gained. The trait let the risk be scheduled instead of avoided.
 **Phase 7 is out of order, deliberately.** CI landed after phase 3, before the
 library and review UI existed. The reason is phase 6: the *only* way to test
 the capture backend on the Windows box is to install a CI-built installer, and
-never cross-compile from macOS. Building that pipeline is entirely independent
+never cross-compile. Building that pipeline is entirely independent
 of app features, so doing it while the app was still small meant phase 6 began
 with a working delivery path instead of two unknowns at once.
 

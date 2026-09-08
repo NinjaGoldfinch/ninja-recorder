@@ -73,7 +73,7 @@ trait Recorder {
 
 Backends:
 - `LibObsRecorder` — Windows, the real one.
-- `StubRecorder` — dev/macOS: sleeps, copies a fixture MP4 into place. Keeps the entire app layer developable and testable without Windows.
+- `StubRecorder` — every non-Windows build: sleeps, copies a fixture MP4 into place. Keeps the entire app layer developable and testable without Windows. Nothing ships it; since the macOS bundle was dropped it exists purely for the dev loop and `cargo test` (§9).
 
 **Decision: the backend is warm only while the League client is.** Bringing
 `LibObs` up spawns the out-of-process worker *and* sends it `Init`, which runs
@@ -116,7 +116,7 @@ Implemented in `src-tauri/src/recorder/`: `Recorder`, `RecordConfig`, `RecorderE
 
 `LibObsRecorder` picks the game window (`FindWindowA` on title `"League of Legends (TM) Client"` / class `RiotWindowClass` / process `League of Legends.exe` — same identifiers league_record uses, verified against its actual source) and captures at its real client-area size (`GetClientRect`, retried briefly since the size can report (1,1) for a moment right after the window appears) rather than a hardcoded resolution, which is what §2.4's "resolution follows the game window" means in practice. Encoder choice walks `available_encoders()` (already returned in NVENC→AMD→QSV priority order by the crate) and picks the first **H.264** one, explicitly excluding both `OBS_X264` (§2.4's no-silent-software-fallback rule — `start()` errors instead) and the AV1 variants the crate would otherwise prefer for NVENC (§2.4's WebView2-native-H.264-decode requirement, §5). Audio is whatever the user's preset asks for, split across separate mp4 tracks (§2.5); rate control is `CBR(8000)` at 60fps per §2.4's defaults.
 
-**Runtime files: staged outside Cargo, not via artifact-dependencies.** league_record gets `extprocess_recorder.exe` + its libobs DLLs into the build via Cargo's artifact-dependency feature (`artifact = "bin:..."`), which needs nightly Rust + the unstable `bindeps` flag — their whole project builds on nightly (CI: `dtolnay/rust-toolchain@nightly`). We can't do that: `-Z bindeps` syntax in `Cargo.toml` breaks manifest parsing *for every platform*, confirmed locally (`cargo check` on macOS failed until the artifact-dependency lines were removed) — it would force every macOS dev's `cargo check`/`npm run tauri dev` onto nightly + an unstable flag just to support an optional Windows-only binary, which is a real regression against §9's dual-platform dev loop. Instead, CI's "Stage libobs capture backend" step (`.github/workflows/ci.yml`'s `build` job, Windows leg only) builds the fork's `extprocess_recorder` binary as a fully separate `cargo build` invocation and copies it + the matching `libobs_<version>/` DLL folder into `src-tauri/target/libobs/` directly — no Cargo dependency-graph involvement, ordinary stable Rust throughout. `tauri.windows.conf.json` then bundles that folder as a resource, and `LibObsRecorder::new` (lib.rs) resolves it at runtime via Tauri's path resolver. Anyone working on the capture backend locally on the Windows box needs to run the same clone-build-copy sequence by hand before `cargo run`/`npm run tauri dev` until that's scripted for local use too.
+**Runtime files: staged outside Cargo, not via artifact-dependencies.** league_record gets `extprocess_recorder.exe` + its libobs DLLs into the build via Cargo's artifact-dependency feature (`artifact = "bin:..."`), which needs nightly Rust + the unstable `bindeps` flag — their whole project builds on nightly (CI: `dtolnay/rust-toolchain@nightly`). We can't do that: `-Z bindeps` syntax in `Cargo.toml` breaks manifest parsing *for every platform*, confirmed locally (`cargo check` on macOS failed until the artifact-dependency lines were removed) — it would force the dev box's `cargo check`/`npm run tauri dev` onto nightly + an unstable flag just to support an optional Windows-only binary, which is a real regression against §9's dev loop. Instead, CI's "Stage libobs capture backend" step (`.github/workflows/ci.yml`'s `build` job, Windows leg only) builds the fork's `extprocess_recorder` binary as a fully separate `cargo build` invocation and copies it + the matching `libobs_<version>/` DLL folder into `src-tauri/target/libobs/` directly — no Cargo dependency-graph involvement, ordinary stable Rust throughout. `tauri.windows.conf.json` then bundles that folder as a resource, and `LibObsRecorder::new` (lib.rs) resolves it at runtime via Tauri's path resolver. Anyone working on the capture backend locally on the Windows box needs to run the same clone-build-copy sequence by hand before `cargo run`/`npm run tauri dev` until that's scripted for local use too.
 
 **Faststart remux on stop, staged the same way.** The fork's `muxer_settings` (above) trade seekability for crash-safety: `frag_keyframe+empty_moov+default_base_moof` means no player — including the review UI's own WebView2 `<video>` — can reliably scrub the file, since there's no upfront seek index. `LibObsRecorder::stop` fixes this up after every *clean* stop with a stream-copy remux (`ffmpeg -c copy -movflags +faststart`, lossless, just rewrites the container index) before handing the path back. `ffmpeg.exe` is staged into the same `target/libobs/` resource folder by a sibling CI step ("Stage ffmpeg for faststart remux") that downloads a static build from BtbN's FFmpeg-Builds releases — optional at runtime (`lib.rs` resolves it with `.ok()`), so a failed download degrades to unseekable-but-still-playable recordings rather than breaking the build. **Not verified** — same caveat as the rest of this backend below; nothing has confirmed the remux actually runs against a real capture on a real Windows box yet, only that it type-checks.
 
@@ -796,23 +796,23 @@ Pinning is wired end-to-end: the library's 📌 calls `set_pinned` and refreshes
 
 | Layer | Where | Loop |
 |---|---|---|
-| LCU / Live Client Data / state machine | macOS, native (League runs on macOS; APIs identical) | seconds |
-| VOD library, review UI, upload | macOS, stub recorder + fixture MP4s | seconds |
+| LCU / Live Client Data / state machine | Dev box, against captured fixtures (`fixtures/`) | seconds |
+| VOD library, review UI, upload | Dev box, stub recorder + fixture MP4s | seconds |
 | Capture backend | Windows box, `git pull && cargo run` (Rust + MSVC Build Tools installed) | seconds |
 | Full integration + Vanguard verification | Windows, CI-built installer | occasional |
 
 - **Run the app with `npm run tauri:dev`**, not `cargo tauri dev` — it passes `--features devtools`, which is what compiles in the dev portal (§10). Without it the portal's window and every `dev_*` command are absent, and the main window hides its own "Dev portal" button accordingly.
-- **Never cross-compile the Windows build from macOS.** libobs linking + DLL bundling + installer generation via `cargo-xwin` is a fight with no payoff. GitHub Actions `windows-latest` builds the installer (NSIS); download the artifact.
+- **Never cross-compile the Windows build.** libobs linking + DLL bundling + installer generation via `cargo-xwin` is a fight with no payoff. GitHub Actions `windows-latest` builds the installer (NSIS); download the artifact.
 - Vanguard verification (capture works during a real Vanguard-protected game, no flags) is a one-time check per significant capture change, not an iterative loop — capture iterates against any window (browser, video loop), no League needed.
 - **CI** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) — one workflow, four jobs: `test`, `version`, `build`, `release`. The job graph, the staging steps for the libobs runtime, and the release flow are documented in [docs/ci-and-releases.md](docs/ci-and-releases.md). The decisions worth defending here:
   - `test` runs the Rust half **twice**, with and without `--features devtools`. An off-by-default feature is otherwise never compiled by CI, and a broken `#[cfg]` would stay green until someone opened the portal.
-  - macOS was dropped from `test` — the work is platform-independent and GitHub bills macOS runners at 10x against the free plan. `build` still compiles macOS natively, so cfg'd breakage is still caught before a release.
+  - **Windows is the only platform in the workflow.** macOS left `test` first (the work is platform-independent, and GitHub bills those runners at 10x against the free plan), then `build`, once it was clear a `.dmg` shipping the stub recorder was an installer nobody could record with. The cost is real and accepted: **no CI job compiles the non-Windows paths any more**, so a break in `StubRecorder` or anything behind `cfg(not(target_os = "windows"))` surfaces on the dev box rather than in CI. That loop hits it in seconds, which is why it is not worth a runner.
   - **Pull requests run `test` only.** Three Tauri bundles, two of them Windows, are the overwhelming majority of this workflow's minute spend and artifact storage, and nothing consumes a PR's bundles. A branch that needs an installer can get the full matrix from `gh workflow run ci.yml --ref <branch>`.
   - `build` deliberately does *not* `needs: test`. The two share no output, and gating cost the whole test job in latency before the slow Windows bundle even started. Nothing unreviewed escapes, because `release` needs both.
   - `version` is the commit's distance from the newest real tag, not "highest seen plus one" — a pure function of the commit, so simultaneous pushes cannot claim the same version and re-running a commit updates its own release rather than minting a second.
   - `release` publishes rather than drafts, because `needs: [version, test, build]` already withholds it until the commit's tests pass — "published" therefore means "tested", and a human clicking Publish added latency rather than a check. Publishing creates the tag, which becomes the base `version` counts from next time.
 
-  Neither build is code-signed yet (no cert configured) — Windows SmartScreen and macOS Gatekeeper both warn on first run. macOS builds only exercise the stub recorder; they're a dev/testing convenience, not a shipping target (§1.1).
+  The build is not code-signed yet (no cert configured) — Windows SmartScreen warns on first run. Not to be confused with the *update* signing added in §14, which is configured and does something else entirely.
 
 ---
 
@@ -1034,7 +1034,7 @@ Recording unattended is worth very little if the user has to remember to launch
 the recorder first. `tauri-plugin-autostart` registers the app under
 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (a LaunchAgent on
 macOS, a `.desktop` entry on Linux — which is what makes the whole thing
-exercisable in the macOS dev loop), and it is registered with `--hidden`, so a
+exercisable in the dev loop), and it is registered with `--hidden`, so a
 login start costs a tray icon and no webview at all.
 
 **`--hidden`, not `--daemon`.** The daemon is still reserved and exits 2, so
@@ -1281,15 +1281,14 @@ all day.
 
 ### Windows only
 
-`latest.json` carries a `windows-x86_64` entry and nothing else, so a macOS
-build's check finds no platform entry and the About block says updates are not
-available in this build.
+`latest.json` carries a `windows-x86_64` entry and nothing else, which is the
+whole story now that Windows is the only platform that builds (§9). A binary
+made anywhere else — a dev box's `cargo run` — finds no platform entry, and
+the About block says updates are not available in this build.
 
-That is deliberate rather than unfinished. macOS builds only ever exercise the
-stub recorder (§1.1), `.dmg` is not an updatable bundle format — the updater
-wants a `.app.tar.gz` — and covering it means a second bundle target and a
-second signing path on a runner GitHub bills at 10×, to keep a build that
-cannot record up to date.
+Worth keeping in mind if a second platform is ever added: `.dmg` is not an
+updatable bundle format. The updater wants a `.app.tar.gz`, which is a second
+bundle target and a second signing path, not a line in the matrix.
 
 ### The devtools bundle must never update itself
 

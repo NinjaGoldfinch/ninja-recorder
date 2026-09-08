@@ -78,8 +78,8 @@ function render(status: UpdateStatus) {
 
   switch (status.kind) {
     case "unsupported":
-      // Not "you are up to date": this build will never find out. A macOS
-      // build and a devtools bundle both land here.
+      // Not "you are up to date": this build will never find out. A
+      // devtools bundle and anything built off Windows both land here.
       els.text.textContent = "Updates are not available in this build.";
       break;
     case "upToDate":

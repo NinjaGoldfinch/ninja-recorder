@@ -19,7 +19,7 @@ flowchart TB
     subgraph MAIN["Push to main / manual dispatch"]
         T["<b>Test</b> (windows-latest)"]
         V["<b>Version</b> (ubuntu)<br/>commit distance from<br/>the newest real tag"]
-        B["<b>Build</b> (windows + macos)<br/>native bundles:<br/>NSIS · dmg · devtools NSIS"]
+        B["<b>Build</b> (windows ×2)<br/>native bundles:<br/>NSIS · devtools NSIS"]
         R["<b>Release</b> (ubuntu)<br/>publishes from the bundles<br/>the run just produced"]
         V --> B
         V --> R
@@ -70,9 +70,11 @@ and once without: an off-by-default feature is otherwise never compiled by CI,
 and a broken `#[cfg]` would stay green until someone opened the portal. Same
 for clippy, which runs with `-D warnings`.
 
-macOS was dropped from this job — the work is platform-independent and GitHub
-bills macOS runners at 10× against the free plan. `build` still compiles macOS
-natively, so cfg'd breakage is still caught before a release.
+Windows is now the only platform in the whole workflow. **Nothing in CI
+compiles the non-Windows code paths any more** — `StubRecorder` and everything
+behind `cfg(not(target_os = "windows"))` are what make `cargo test` work on a
+dev box, and a break in them surfaces there rather than here. Accepted rather
+than overlooked: the dev loop hits it within seconds of the change.
 
 ## Version
 
@@ -92,16 +94,13 @@ sequence stays monotonic even if a run fails and never reaches `release`.
 
 ```mermaid
 flowchart TB
-    S["Checkout + Node + Rust + cache"] --> P{"platform?"}
-    P -->|"macos-latest"| M["npm ci → tauri build → .dmg<br/><small>stub recorder only</small>"]
-    P -->|"windows-latest"| W1["Resolve libobs backend revision"]
+    S["Checkout + Node + Rust + cache"] --> W1["Resolve libobs backend revision"]
     W1 --> W2{"cache hit?"}
     W2 -->|"no"| W3["Stage libobs capture backend<br/><small>build extprocess_recorder from the fork,<br/>copy it + libobs_&lt;ver&gt;/ DLLs into<br/>src-tauri/target/libobs/</small>"]
     W3 --> W4["Stage ffmpeg for faststart remux<br/><small>static build from BtbN/FFmpeg-Builds</small>"]
     W2 -->|"yes"| W5
     W4 --> W5["tauri build → NSIS installer"]
-    M --> U["Upload artifact (7-day retention)"]
-    W5 --> U
+    W5 --> U["Upload artifact (7-day retention)"]
     W5 -.->|"push / manual only"| W6["Second bundle: --features devtools"]
     W6 --> U
 ```
@@ -110,8 +109,8 @@ flowchart TB
 project pulls its recorder binary in through Cargo's artifact-dependency
 feature (`artifact = "bin:..."`), which needs nightly Rust and the unstable
 `bindeps` flag. `-Z bindeps` syntax in `Cargo.toml` breaks manifest parsing
-*for every platform* — it would force every macOS developer's `cargo check`
-onto nightly just to support an optional Windows-only binary. So CI builds the
+*for every platform* — it would force a dev box's `cargo check` onto nightly
+just to support an optional Windows-only binary. So CI builds the
 fork's `extprocess_recorder` as a separate, ordinary `cargo build` and copies
 the result into place. No Cargo dependency-graph involvement, stable Rust
 throughout.
@@ -141,7 +140,7 @@ sequenceDiagram
     par on every push to main
         T->>T: tsc, cargo test ×2, clippy ×2
     and
-        B->>A: upload windows + macos bundles
+        B->>A: upload the windows bundles
     end
     Note over CI: needs [version, test, build] —<br/>cannot start until both are green
     CI->>A: download the bundles
@@ -202,10 +201,9 @@ newest non-draft, non-prerelease release — so the endpoint in
 is the tagged asset path. If it floated too, a download would follow the next
 release and stop matching the signature sitting beside it.
 
-**`windows-x86_64` is the only platform key.** macOS is the stub recorder and
-`.dmg` is not an updatable bundle format; a macOS build's check finds no entry
-and reports that updates are unavailable. That is the intended behaviour, not
-a gap.
+**`windows-x86_64` is the only platform key**, because Windows is the only
+platform that ships. A build made anywhere else finds no entry and reports
+that updates are unavailable — intended behaviour, not a gap.
 
 **The devtools bundle is excluded by config, not by omission.**
 `tauri.devtools.conf.json` sets `createUpdaterArtifacts: false`, so it neither
@@ -228,14 +226,19 @@ permanent** — the public half ships inside every installer ever built, so
 losing the private half strands every install in the field
 ([DEVELOPMENT.md §14](../DEVELOPMENT.md)).
 
-**Code signing** — not configured, no certificate. Windows SmartScreen and
-macOS Gatekeeper both warn on first run. The standing caveat block appended to
-every release's notes says so; keep it in sync with the real status. The
-`.sig` files attached to a release are update signatures and do nothing about
-this.
+**Code signing** — not configured, no certificate. Windows SmartScreen warns
+on first run. The standing caveat block appended to every release's notes says
+so; keep it in sync with the real status. The `.sig` file attached to a
+release is an update signature and does nothing about this.
 
-## macOS builds are a dev convenience
+## Windows is the only platform that builds
 
-They exercise the stub recorder only. Real game capture is Windows-only, and
-that is a hard constraint, not a gap — see
+A macOS `.dmg` was produced here as a dev convenience until it was dropped. It
+shipped the stub recorder and could not capture a game, so it cost a
+10×-billed runner to produce an installer nobody could record with.
+
+Real game capture is Windows-only, and that is a hard constraint rather than a
+gap — see
 [DEVELOPMENT.md §1.1](../DEVELOPMENT.md#11-riot-vanguard-the-constraint-that-shapes-everything).
+The cross-platform code stays: it is what keeps the app developable and
+testable away from the Windows box.

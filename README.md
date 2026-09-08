@@ -67,24 +67,21 @@ You do not press a button anywhere in that chain.
 
 ## Install
 
-Grab the installer for your platform from
+**Windows only.** Grab the NSIS installer from
 [Releases](../../releases).
 
-- **Windows** — NSIS installer. This is the real target: it includes the
-  libobs capture backend.
-- **macOS** — `.dmg`. A development convenience only; it ships the *stub*
-  recorder and cannot capture a game. Real capture is Windows-only by
-  constraint, not by omission.
+That is a constraint, not an omission: capture is built on
+Windows.Graphics.Capture, which is the only way to record a
+Vanguard-protected game without injecting into it. There is no build for
+another platform, and a stub one would not be able to record.
 
-Both are unsigned, so Windows SmartScreen and macOS Gatekeeper will warn on
-first run.
+The installer is unsigned, so SmartScreen warns on first run.
 
-After the first install, **Windows builds update themselves**: the app checks
-on launch and every six hours, puts a dot on the settings button, and installs
-when you click it in Settings → About — never on its own, and never while a
-game is being recorded. macOS builds do not update. See
-[DEVELOPMENT.md §14](DEVELOPMENT.md#14-updates) for why it asks rather than
-just doing it.
+After the first install it **updates itself**: the app checks on launch and
+every six hours, puts a dot on the settings button, and installs when you
+click it in Settings → About — never on its own, and never while a game is
+being recorded. See [DEVELOPMENT.md §14](DEVELOPMENT.md#14-updates) for why it
+asks rather than just doing it.
 
 ## Architecture in one picture
 
@@ -178,14 +175,14 @@ tests, marks that method used, and hides the failure until CI.
 
 | Layer | Where | Loop |
 |---|---|---|
-| LCU, Live Client Data, state machine | macOS, native — League runs on macOS and both local APIs behave identically | seconds |
-| VOD library, review UI | macOS, stub recorder + fixture MP4s | seconds |
+| LCU, Live Client Data, state machine | Dev box, against captured fixtures | seconds |
+| VOD library, review UI | Dev box, stub recorder + fixture MP4s | seconds |
 | Capture backend | Windows box, `cargo run` | seconds |
 | Full integration + Vanguard check | Windows, CI-built installer | occasional |
 
 Installers are produced by CI, never built locally and never cross-compiled —
-libobs linking, DLL bundling and installer generation from macOS is a fight
-with no payoff.
+libobs linking, DLL bundling and installer generation from anywhere but
+Windows is a fight with no payoff.
 
 ## Non-negotiable constraints
 

@@ -3,7 +3,7 @@
 The capture backend compiles, bundles and records, but has **never run
 against a real Vanguard-protected game**. This is the checklist that closes
 that gap. It must be run on real Windows hardware with a real League client
-and Vanguard active — nothing here is executable from macOS
+and Vanguard active — none of it is executable from the dev box
 ([DEVELOPMENT.md §1.1, §9](../DEVELOPMENT.md#11-riot-vanguard-the-constraint-that-shapes-everything)).
 
 Fill in the results inline as each step is done; this file is the record of
@@ -18,7 +18,7 @@ the run, not just the plan. When everything below passes, update
 
 ```mermaid
 flowchart LR
-    A["macOS dev loop<br/><small>stub recorder,<br/>fixtures, dev portal</small>"] --> B["Everything above<br/>the Recorder trait"]
+    A["Dev-box loop<br/><small>stub recorder,<br/>fixtures, dev portal</small>"] --> B["Everything above<br/>the Recorder trait"]
     C["Windows cargo run"] --> D["Capture code paths,<br/>encoder selection"]
     E["This checklist<br/><small>installed build, real game</small>"] --> F["Vanguard tolerance<br/>Resource targets<br/>Installer + resource resolution<br/>Real gameflow timing"]
     style E fill:#ede7f6,stroke:#5e35b1
@@ -113,7 +113,7 @@ away again when the client closes.
 ### 5.0 Launch modes
 
 The main window is created in Rust now rather than by `tauri.conf.json`, and
-argv selects the mode. Verified on macOS; the Windows behaviour of a windowless
+argv selects the mode. Verified off Windows; the Windows behaviour of a windowless
 process is what needs confirming.
 
 - [ ] A normal start still opens the window at 1160x800 with an 880x600
@@ -128,7 +128,7 @@ process is what needs confirming.
 
 ### 5.0.1 Tray and the close button
 
-Verified on macOS only as far as a script can go: the tray builds without
+Verified off Windows only as far as a script can go: the tray builds without
 error, a default start creates a webview and `--hidden` creates none (0 WebKit
 handles vs 4). **Everything below needs a real click and none of it is covered
 by a test.**
@@ -158,7 +158,7 @@ by a test.**
 The one setting that writes outside the app's own data, and the one whose
 source of truth is not ours: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 Nothing in `cargo test` can reach it (`Ctx::new` leaves the control unset), and
-the macOS dev loop exercises a LaunchAgent, not this — so every row below is
+the dev loop exercises a LaunchAgent or a `.desktop` entry, not this — so every row below is
 Windows-only.
 
 **Check the registry directly, not just the checkbox**, since the checkbox is
@@ -226,9 +226,10 @@ one-time notice) is unit tested; presentation is not testable anywhere but here.
 
 **Nothing about this is testable off Windows, and most of it is not testable
 without two releases.** The gate — whether an offered update may be installed —
-is pure and unit-tested (`update::decide`); everything below it is not. macOS
-builds have no entry in `latest.json` at all, so there is no second platform to
-cross-check against ([DEVELOPMENT.md §14](../DEVELOPMENT.md#14-updates)).
+is pure and unit-tested (`update::decide`); everything below it is not.
+Windows is the only platform `latest.json` carries at all, so there is no
+second platform to cross-check against
+([DEVELOPMENT.md §14](../DEVELOPMENT.md#14-updates)).
 
 Getting into position needs a version to update *from*: install a CI release,
 land another commit so a newer one publishes, then relaunch the old install.
