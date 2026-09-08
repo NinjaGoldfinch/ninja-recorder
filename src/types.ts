@@ -228,6 +228,10 @@ export interface BackfillReport {
   patched: number;
   ambiguous: number;
   unmatched: number;
+  /** Rows that regained a gold curve. Separate from `patched` because the
+   *  two fail independently — the timeline is a different endpoint, and a
+   *  game can yield its metadata after its timeline has aged out. */
+  gold_filled: number;
 }
 
 export interface DiskUsage {

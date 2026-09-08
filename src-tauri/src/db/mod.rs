@@ -974,18 +974,39 @@ impl Db {
     /// failure, which is a button that silently does nothing.
     pub fn recordings_missing_metadata(&self) -> Result<Vec<crate::backfill::Candidate>, DbError> {
         let conn = self.conn.lock().unwrap();
+        // `needs_gold` is computed here rather than inferred from the other
+        // columns, because a recording can be complete in every other respect
+        // and still have no curve: the gold series is written by a deferred
+        // patch that lives only in memory, so an app restart inside its retry
+        // window loses it with nothing else to show for the gap
+        // (`match_summary::write_gold_series`).
+        //
+        // Deliberately narrow. "Has no gold samples" alone would select every
+        // custom game, practice-tool run and poller-less recording forever,
+        // since none of those can ever gain one — they would sit in the report
+        // as permanent unmatched noise. Requiring a `game_id` limits it to
+        // recordings that were matched to a real game and therefore *should*
+        // have a curve.
         let mut stmt = conn.prepare(
-            "SELECT id, started_at, duration_s FROM recordings
-             WHERE win IS NULL OR champion IS NULL OR role IS NULL
-                OR patch IS NULL OR queue IS NULL OR game_id IS NULL
-                OR scoreboard_json IS NULL OR cs IS NULL
-             ORDER BY started_at DESC",
+            "SELECT id, started_at, duration_s,
+                    game_id IS NOT NULL AND NOT EXISTS (
+                        SELECT 1 FROM samples
+                         WHERE samples.recording_id = recordings.id
+                           AND samples.gold_diff IS NOT NULL
+                    ) AS needs_gold
+               FROM recordings
+              WHERE win IS NULL OR champion IS NULL OR role IS NULL
+                 OR patch IS NULL OR queue IS NULL OR game_id IS NULL
+                 OR scoreboard_json IS NULL OR cs IS NULL
+                 OR needs_gold
+              ORDER BY started_at DESC",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(crate::backfill::Candidate {
                 id: row.get(0)?,
                 started_at: row.get(1)?,
                 duration_s: row.get(2)?,
+                needs_gold: row.get(3)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
@@ -1741,8 +1762,64 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
+        // "Everything" now includes a gold curve. A recording matched to a
+        // game and missing one is a candidate, because the curve is written
+        // by a deferred patch that an app restart can lose (#137).
+        db.replace_gold_samples(1, &[gold_sample(60.0, 100.0)]).unwrap();
 
         assert!(db.recordings_missing_metadata().unwrap().is_empty());
+    }
+
+    /// The case #137 is about: complete in every other respect, no curve.
+    #[test]
+    fn a_row_matched_to_a_game_but_missing_its_gold_curve_is_a_candidate() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/no-curve.mp4".into(),
+            started_at: 1,
+            champion: Some("Shyvana".into()),
+            win: Some(true),
+            role: Some("Jungle".into()),
+            patch: Some("16.17".into()),
+            queue: Some(420),
+            game_id: Some(7),
+            scoreboard_json: Some("{}".into()),
+            cs: Some(262),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let candidates = db.recordings_missing_metadata().unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].needs_gold);
+    }
+
+    /// The narrowing that keeps the report honest. A recording with no
+    /// `game_id` never reached match history — a custom game, a practice-tool
+    /// run, or one whose poller never came up — so it can never gain a curve
+    /// and must not sit in the candidate list forever asking to be retried.
+    #[test]
+    fn a_recording_that_never_reached_match_history_is_not_asked_for_gold() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/practice.mp4".into(),
+            started_at: 1,
+            champion: Some("Shyvana".into()),
+            win: Some(true),
+            role: Some("Jungle".into()),
+            patch: Some("16.17".into()),
+            queue: Some(420),
+            game_id: None,
+            scoreboard_json: Some("{}".into()),
+            cs: Some(262),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let candidates = db.recordings_missing_metadata().unwrap();
+        // Selected for its missing `game_id`, but not asked for a curve.
+        assert_eq!(candidates.len(), 1);
+        assert!(!candidates[0].needs_gold);
     }
 
     fn gold_sample(game_time_s: f64, gold: f64) -> NewSample {

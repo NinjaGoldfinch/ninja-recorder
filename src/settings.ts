@@ -382,7 +382,12 @@ async function runBackfill() {
     const report = await call<BackfillReport>("backfill_match_metadata");
     els.backfillReport.textContent = backfillSummary(report);
     els.backfillReport.hidden = false;
-    if (report.patched > 0) await Promise.all([refreshLibrary(), refreshDiskUsage()]);
+    // A recovered curve changes the review view rather than the row, but the
+    // refresh is cheap and the alternative is a library that disagrees with
+    // what the report just said.
+    if (report.patched > 0 || report.gold_filled > 0) {
+      await Promise.all([refreshLibrary(), refreshDiskUsage()]);
+    }
   } catch (err) {
     toast(`Couldn't fill in match data: ${err}`, "error");
   } finally {
@@ -411,6 +416,14 @@ function backfillSummary(report: BackfillReport): string {
       ? `Filled in ${report.patched}.`
       : "Nothing could be filled in.",
   );
+  // Counted separately from `patched` because they fail independently: the
+  // gold timeline is a different endpoint, and a game can still yield its
+  // metadata after the timeline has aged out of the client's history.
+  if (report.gold_filled > 0) {
+    parts.push(
+      `Recovered the gold curve for ${report.gold_filled}.`,
+    );
+  }
   if (report.ambiguous > 0) {
     parts.push(
       `${report.ambiguous} overlapped more than one game and were left alone rather than guessed at.`,
