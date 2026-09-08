@@ -981,6 +981,35 @@ impl Db {
     ///
     /// `None` when there are no samples, which is the same answer as the head
     /// end gives and means the same thing: nothing knows, so touch nothing.
+    /// How many markers and gold-bearing samples one recording carries.
+    ///
+    /// Counted rather than fetched: the inspector wants to know whether a
+    /// recording *has* a timeline, and reading fifteen hundred sample rows to
+    /// find out would be the expensive way to ask.
+    ///
+    /// Gold samples are counted separately from all samples because they come
+    /// from a different source on a different schedule — the LCU's match
+    /// timeline at one frame a minute, against the live poller's 1 Hz — so
+    /// "1500 samples, 0 with gold" is a diagnosis rather than a contradiction
+    /// (#137).
+    /// Only the dev portal's inspector calls this, and clippy runs without
+    /// `--all-targets`, so in a shipped build it is genuinely dead code
+    /// (CLAUDE.md). Same shape as `command_names`'s allow.
+    #[cfg_attr(not(feature = "devtools"), allow(dead_code))]
+    pub fn recording_counts(&self, recording_id: i64) -> Result<(i64, i64, i64), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT
+               (SELECT COUNT(*) FROM markers WHERE recording_id = ?1),
+               (SELECT COUNT(*) FROM samples WHERE recording_id = ?1),
+               (SELECT COUNT(*) FROM samples
+                 WHERE recording_id = ?1 AND gold_diff IS NOT NULL)",
+            [recording_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(DbError::from)
+    }
+
     pub fn last_sample_video_time_s(&self, recording_id: i64) -> Result<Option<f64>, DbError> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
