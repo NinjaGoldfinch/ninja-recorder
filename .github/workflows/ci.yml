@@ -99,7 +99,23 @@ jobs:
               echo "::error::package.json still says $declared, which is already released as $newest. Run: npm run release -- next <x.y.z>" >&2
               exit 1
             fi
-            if [ -n "$newest" ]; then
+            # Anchored on the commit that *declared* this version, not on the
+            # newest stable tag. Those coincide only when a declaration
+            # immediately follows a cut, and when they diverge the number is
+            # nonsense: 1.0.0 was declared eleven commits after v0.188.0, so
+            # its first alpha published as `1.0.0-alpha.11`. The counter is
+            # meant to say "the Nth alpha of the version being built toward",
+            # which is what people read it as.
+            #
+            # `-S` finds the commit where that exact version string entered
+            # package.json, so the declaration's own build is alpha.1.
+            anchor=$(git log -1 --format=%H -S"\"version\": \"$declared\"" -- package.json)
+            if [ -n "$anchor" ]; then
+              n=$(( $(git rev-list --count "${anchor}..HEAD") + 1 ))
+            elif [ -n "$newest" ]; then
+              # No anchor: the version predates this scheme, or history was
+              # rewritten under it. Fall back to the old measure rather than
+              # publishing everything as alpha.1.
               n=$(git rev-list --count "${newest}..HEAD")
             else
               n=$(git rev-list --count HEAD)

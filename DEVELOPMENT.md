@@ -1477,9 +1477,17 @@ to ship something deliberately and no way for a user to ask for only those.
 `npm run release -- next <x.y.z>` changes it, in its own commit.
 
 CI never invents a version. On a push to `main` it appends
-`-alpha.<commits since the newest stable tag>`, so alphas read
-`0.9.0-alpha.1`, `0.9.0-alpha.2`, and the base moves only when a person moves
-it. The purity property survives intact: the base comes from a file, the
+`-alpha.<commits since this version was declared>`, so alphas read
+`1.0.0-alpha.1`, `1.0.0-alpha.2`, and the base moves only when a person moves
+it.
+
+**Anchored on the declaration, not on the newest stable tag.** Those coincide
+only when a declaration immediately follows a cut, and the first time they did
+not the number was nonsense: 1.0.0 was declared eleven commits after
+`v0.188.0`, so its first alpha published as `1.0.0-alpha.11`. The counter is
+read as "the Nth alpha of the version being built toward", so that is what it
+now counts — `git log -1 -S` finds the commit where the version string entered
+`package.json`, which makes the declaration's own build alpha.1. The purity property survives intact: the base comes from a file, the
 counter from `git rev-list --count`, and both are functions of the commit.
 
 A stable release is a tag push, and `npm run release -- cut` is the only thing
