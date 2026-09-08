@@ -73,7 +73,11 @@ jobs:
           declared=$(node -p "require('./package.json').version")
           # Stable tags only. A prerelease tag carries a `-`, and letting one
           # in here would make the alpha counter restart on every alpha.
-          newest=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -v -- '-' | sort -V | tail -1)
+          #
+          # `sed` rather than `grep -v -- -`: a lone dash as a grep pattern is
+          # ambiguous enough that not every grep accepts it (ugrep rejects it
+          # outright), and this is not worth depending on the runner's.
+          newest=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sed '/-/d' | sort -V | tail -1)
 
           if [ "${REF#refs/tags/v}" != "$REF" ]; then
             # A tag push: the deliberate act. `release.mjs` only ever tags the
@@ -465,7 +469,7 @@ jobs:
           # both from the last stable tag would make every alpha repeat the
           # entire changelog so far.
           if [ "$CHANNEL" = "stable" ]; then
-            PREV=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -v -- '-' | sort -V | tail -1)
+            PREV=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sed '/-/d' | sort -V | tail -1)
           else
             PREV=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
           fi
