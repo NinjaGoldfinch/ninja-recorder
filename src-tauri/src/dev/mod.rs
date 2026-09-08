@@ -71,17 +71,41 @@ const PORTAL_LABEL: &str = "devtools";
 /// dispatches to the event loop from off the main thread and waits for it
 /// properly.
 #[tauri::command]
-pub async fn dev_open_portal(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn dev_open_portal(
+    app: tauri::AppHandle,
+    recording_id: Option<i64>,
+) -> Result<(), String> {
     use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+
+    // The portal routes off `location.hash`, so a target is a fragment. Built
+    // here from an **integer** rather than taking a path from the caller:
+    // nothing string-shaped then crosses into a URL, and there is no escaping
+    // to get wrong.
+    let fragment = recording_id
+        .map(|id| format!("#/library/{id}"))
+        .unwrap_or_default();
 
     if let Some(existing) = app.get_webview_window(PORTAL_LABEL) {
         existing.show().map_err(|e| e.to_string())?;
         existing.set_focus().map_err(|e| e.to_string())?;
+        // Already open, so the fragment has to be pushed rather than built
+        // into the URL. `hashchange` is what the portal's router listens on,
+        // and assigning the same value fires nothing — which is correct: the
+        // panel is already showing that recording.
+        if !fragment.is_empty() {
+            existing
+                .eval(format!("location.hash = '{fragment}'"))
+                .map_err(|e| e.to_string())?;
+        }
         return Ok(());
     }
 
     let window =
-        WebviewWindowBuilder::new(&app, PORTAL_LABEL, WebviewUrl::App("dev.html".into()))
+        WebviewWindowBuilder::new(
+            &app,
+            PORTAL_LABEL,
+            WebviewUrl::App(format!("dev.html{fragment}").into()),
+        )
             .title("ninja-recorder — dev portal")
             .inner_size(1280.0, 860.0)
             .min_inner_size(900.0, 600.0)

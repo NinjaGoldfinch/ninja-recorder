@@ -1507,6 +1507,15 @@ button.armed {
  * destructive or fiddly, and forty rows each showing two buttons is
  * noisier than the data they're meant to present. Pinned is the exception:
  * that's state, not an action, so it stays visible. */
+
+/* Devtools only. Hidden in the markup and revealed by
+ * `revealRowInspectors` once the probe answers, so a shipped build shows
+ * nothing at all — the class is only here to keep it visually quieter than
+ * pin and delete, which are the actions people actually reach for. */
+.vod-actions .dev-only {
+  color: var(--text-subtle);
+}
+
 .vod-actions .icon-btn:not(.pinned) {
   opacity: 0;
   transition: opacity var(--dur) var(--ease);

@@ -414,6 +414,7 @@ a shipped build.
 | `extract_audio_track` | path to a cached sidecar | review player, stem selection |
 | `lcu_status` | `LcuStatus` | header strip |
 | `game_state_status` | `SupervisorStatus` | header strip, About block |
+| `dev_open_portal` | — | the header's dev button, and the 🔎 on each library row (which passes a `recordingId` so the portal opens on it) |
 | `get_update_status` | `UpdateStatus` | settings → About (version + changelog), and the badge on the gear |
 | — | the `updateChannel` pref | the channel dropdown rides `get_ui_prefs`/`set_ui_pref`, so it needs no command of its own |
 | `check_for_update` | — | settings → About → "Check now" |
