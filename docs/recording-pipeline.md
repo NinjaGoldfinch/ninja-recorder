@@ -119,10 +119,10 @@ while a recording is in flight.
 | Client restart during finalize | Handled regardless of ordering against `FinalizeComplete` |
 
 Two cases are **not** verified, both because they need a live client on real
-hardware: **spectator mode** (no phase beyond `InProgress`/`Reconnect` is
-special-cased, so if spectating also reports `InProgress` it would be
-recorded) and **machine sleep** (backoff and the lockfile watch should
-recover after wake, untested). See
+hardware, and neither comes up in ordinary play: **spectator mode** (no phase
+beyond `InProgress`/`Reconnect` is special-cased, so if spectating also
+reports `InProgress` it would be recorded) and **machine sleep** (backoff and
+the lockfile watch should recover after wake). See
 [windows-verification.md](windows-verification.md).
 
 ## 3. Events → markers

@@ -32,9 +32,10 @@
 //! keyframe interval could explain.
 //!
 //! Whether multi-track audio, stream dispositions and the faststart index
-//! all survive the copy is true in theory and has not been seen: there is no
-//! ffmpeg on the machine this was written on, and CI runs unit tests rather
-//! than video.
+//! all survive the copy was the open question here. Real footage has since
+//! answered it — trimmed recordings play, seek, and keep their separate
+//! stems — though nothing asserts it automatically, because CI runs unit
+//! tests rather than video.
 //!
 //! ## The order of operations is the safety
 //!

@@ -111,3 +111,25 @@ windows = { version = "0.62", features = [
 # lldb, which we don't use on the Rust side.
 [profile.dev]
 debug = "line-tables-only"
+
+# The shipped binary. There was no release profile at all until now, so it was
+# built with symbols in and no cross-crate optimisation.
+#
+# Measured on the Linux build (stub recorder, so smaller than Windows but the
+# same crate graph): 25.6 MB -> 17.7 MB from `strip` alone, ~31%.
+#
+# The cost is stated rather than hidden: a stripped binary has no function
+# names in a panic backtrace. That is affordable here because `log.rs` is the
+# thing anyone actually reads when a recording goes wrong (§13) — the backtrace
+# was never the diagnostic. `panic = "abort"` is deliberately *not* set: it
+# would save a little more, but Tauri and wry both catch unwinds, and trading a
+# crash-on-panic for a few hundred KB is the wrong side of that bargain for an
+# app that is supposed to be recording your game.
+[profile.release]
+strip = true
+# One codegen unit and cross-crate LTO: slower to build in CI, smaller and
+# faster to run. The Windows bundle is dominated by libobs and ffmpeg
+# (~200 MB of the 248 MB install), so this is the smaller half of the problem
+# — but it is the half that costs nothing to fix.
+lto = true
+codegen-units = 1

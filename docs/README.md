@@ -24,7 +24,7 @@ flowchart TB
     F["frontend.md<br/><small>module ownership, views,<br/>IPC surface, theming</small>"]
     V["dev-portal.md<br/><small>how to drive the backend<br/>without League</small>"]
     C["ci-and-releases.md<br/><small>job graph, versioning,<br/>releases</small>"]
-    W["windows-verification.md<br/><small>the checklist that closes<br/>the unverified-capture gap</small>"]
+    W["windows-verification.md<br/><small>what was checked on real<br/>hardware, and what is still open</small>"]
     PD["product-design.md<br/><small>the product, and how it<br/>was actually built</small>"]
     DEV["../DEVELOPMENT.md<br/><small>constraints, decisions, risks</small>"]
 
