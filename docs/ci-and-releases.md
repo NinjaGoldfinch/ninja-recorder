@@ -87,12 +87,12 @@ binary, the installer filename and the About block.
 
 | Trigger | Version | Published as |
 |---|---|---|
-| push to `main` | `<declared>-alpha.<commits since newest stable tag>` | prerelease |
+| push to `main` | `<declared>-alpha.<commits since this version was declared>` | prerelease |
 | push of a `v*` tag | the tag, cross-checked against `package.json` | stable release |
 | manual dispatch | the alpha form | nothing, unless `publish_release` |
 
 Still a pure function of the commit: the base comes from a file, the counter
-from `git rev-list --count`. Simultaneous pushes cannot claim the same version
+from `git rev-list --count` against the commit that declared it. Simultaneous pushes cannot claim the same version
 and re-running a commit updates its own release.
 
 **Alphas are prereleases, and that is load-bearing.** GitHub excludes
