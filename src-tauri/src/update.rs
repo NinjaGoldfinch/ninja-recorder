@@ -40,6 +40,13 @@ pub enum UpdateStatus {
     /// `UpToDate`, because "you are current" and "this build will never tell
     /// you" deserve different words on screen.
     Unsupported,
+    /// Nothing has been checked yet.
+    ///
+    /// **Deliberately not `Unsupported`.** This used to share that variant,
+    /// which meant a perfectly ordinary production build said "Updates are
+    /// not available in this build" for the first thirty seconds after
+    /// launch — the most alarming possible wording for "hang on".
+    Checking,
     /// Checked, and the endpoint had nothing newer.
     UpToDate,
     #[serde(rename_all = "camelCase")]
@@ -63,8 +70,11 @@ pub enum UpdateStatus {
 /// What the background task in `lib.rs` found, before the gate is applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckResult {
-    /// The plugin is not registered in this build.
+    /// The plugin is not registered in this build. Set explicitly by
+    /// `wire_updates` when it declines to wire anything, never as a default.
     Unsupported,
+    /// The starting state: wired, but the first check has not answered yet.
+    Pending,
     NothingNewer,
     Found(UpdateOffer),
     Failed(String),
@@ -106,6 +116,7 @@ pub fn installable(state: &GameState, is_recording: bool) -> Result<(), String> 
 pub fn decide(found: &CheckResult, state: &GameState, is_recording: bool) -> UpdateStatus {
     match found {
         CheckResult::Unsupported => UpdateStatus::Unsupported,
+        CheckResult::Pending => UpdateStatus::Checking,
         CheckResult::NothingNewer => UpdateStatus::UpToDate,
         CheckResult::Failed(e) => UpdateStatus::Failed { error: e.clone() },
         CheckResult::Found(offer) => match installable(state, is_recording) {
@@ -195,6 +206,24 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// The bug this variant exists for: a production build reported
+    /// "not available in this build" until its first check landed.
+    #[test]
+    fn not_having_checked_yet_is_not_the_same_as_not_being_able_to() {
+        assert_eq!(
+            decide(&CheckResult::Pending, &GameState::Idle, false),
+            UpdateStatus::Checking
+        );
+        assert_ne!(
+            decide(&CheckResult::Pending, &GameState::Idle, false),
+            UpdateStatus::Unsupported
+        );
+        assert_eq!(
+            serde_json::to_value(UpdateStatus::Checking).unwrap()["kind"],
+            "checking"
+        );
     }
 
     #[test]

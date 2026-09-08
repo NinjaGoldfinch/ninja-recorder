@@ -288,18 +288,52 @@ async fn run_update_check(app: tauri::AppHandle) {
 async fn run_update_install(app: tauri::AppHandle) {
     use tauri_plugin_updater::UpdaterExt;
 
-    let finalize_app = app.clone();
+    let prep_app = app.clone();
     let finalized = tauri::async_runtime::spawn_blocking(move || {
-        let supervisor = {
-            let state = finalize_app.state::<AppState>();
-            Arc::clone(&state.supervisor)
+        let (supervisor, recorder) = {
+            let state = prep_app.state::<AppState>();
+            (
+                Arc::clone(&state.supervisor),
+                Arc::clone(&state.recorder),
+            )
         };
-        supervisor.finalize_for_shutdown()
+        let finalized = supervisor.finalize_for_shutdown();
+
+        // **The installer cannot overwrite a file another process has open,
+        // and the capture backend is another process.** libobs runs
+        // out-of-process (`extprocess_recorder.exe`, DEVELOPMENT.md §2.2),
+        // it comes up as soon as the League client appears, and it holds
+        // every DLL in the bundled `libobs/` resource folder open while it
+        // lives. NSIS then fails on the first one it tries to replace with
+        // "Error opening file for writing: …\libobs\avcodec-61.dll" and an
+        // Abort/Retry/Ignore box — which is the *good* outcome; Ignore would
+        // leave a new worker beside an old DLL.
+        //
+        // NSIS's own "close the running app" check cannot help: it keys off
+        // `mainBinaryName`, and the worker is a different executable it has
+        // never heard of.
+        //
+        // `release` is a no-op while recording, which is why the gate above
+        // has already established that nothing is.
+        match recorder.lock() {
+            Ok(mut backend) => backend.release(),
+            // Not fatal: the install may still succeed if the worker was
+            // never up. Worth a line, because if it *was* up this is the
+            // reason the installer is about to complain.
+            Err(e) => warn!("update", "could not release the capture backend: {e}"),
+        }
+        finalized
     })
     .await;
     if let Ok(true) = finalized {
         info!("update", "finalized an in-flight recording before updating");
     }
+
+    // Killing the worker is asynchronous on Windows: the IPC link's `Drop`
+    // asks it to go, and the handles it holds are released when the process
+    // actually exits, not when we stop waiting. The installer runs moments
+    // from now, so give it a beat.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     // Re-checked rather than cached from the background poll: `Update` owns
     // the download URL and its signature, and holding one for up to six hours
@@ -368,6 +402,12 @@ fn updates_enabled() -> bool {
 fn wire_updates(app: &tauri::AppHandle, ctx: &mut core::Ctx) {
     if !updates_enabled() {
         info!("update", "devtools build: updates are off");
+        // Said explicitly rather than left to the default. `Ctx::new` seeds
+        // `Pending` — "checking…" — because a production build has not
+        // checked yet at this point either, and reporting "not available in
+        // this build" for the first thirty seconds after every launch is the
+        // most alarming possible wording for "hang on".
+        ctx.set_update_check_result(update::CheckResult::Unsupported);
         return;
     }
 

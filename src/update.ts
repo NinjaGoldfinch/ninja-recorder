@@ -2,6 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 
 import { call } from "./bridge";
 import { el } from "./dom";
+import { onViewChange } from "./router";
 import { toast } from "./toast";
 import type { UpdateStatus } from "./types";
 
@@ -34,6 +35,19 @@ interface Els {
 
 let els: Els;
 let installing = false;
+let lastCheckedAt = 0;
+
+/**
+ * How recently a check has to have run for opening Settings not to trigger
+ * another.
+ *
+ * Opening Settings checks, because the background loop only runs every six
+ * hours and the panel would otherwise show an answer up to that stale — the
+ * exact situation that made a correct "Up to date." look like a broken
+ * updater. But Settings is one click from the library and gets opened
+ * repeatedly, so a bare "check on open" is a request per visit.
+ */
+const RECHECK_AFTER_MS = 60_000;
 
 export function initUpdate() {
   els = {
@@ -51,10 +65,23 @@ export function initUpdate() {
   // loop — far too slow to poll for. `.catch` because `listen` rejects
   // outside the Tauri webview, which `bridge.ts` deliberately supports.
   listen("update-status-changed", () => {
+    lastCheckedAt = Date.now();
     void refreshUpdateStatus();
   }).catch((err) =>
     console.warn("update-status-changed listener unavailable:", err),
   );
+
+  // The panel is only read when someone opens it, so that is when it is
+  // worth being right. The background loop runs every six hours and nothing
+  // else re-checked, which meant a correct "Up to date." from hours ago read
+  // as a broken updater.
+  onViewChange((view) => {
+    if (view !== "settings") return;
+    void refreshUpdateStatus();
+    if (installing) return;
+    if (Date.now() - lastCheckedAt < RECHECK_AFTER_MS) return;
+    void checkNow();
+  });
 
   void refreshUpdateStatus();
 }
@@ -125,6 +152,9 @@ function render(status: UpdateStatus) {
   els.check.disabled = false;
 
   switch (status.kind) {
+    case "checking":
+      els.text.textContent = "Checking\u2026";
+      break;
     case "unsupported":
       // Not "you are up to date": this build will never find out. A
       // devtools bundle and anything built off Windows both land here.
