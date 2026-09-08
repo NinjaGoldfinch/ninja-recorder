@@ -41,7 +41,7 @@
       "endpoints": [
         "https://github.com/NinjaGoldfinch/ninja-recorder/releases/latest/download/latest.json"
       ],
-      "pubkey": "REPLACE_ME_WITH_THE_MINISIGN_PUBLIC_KEY",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc2NjJDRkY2QjdCRTlBNUQKUldSZG1yNjM5czlpZHNBTFRqNHFTRkZpUW1zRm1LOHJzVU5NaytkbXFSMGFmNHNVSkNxQUxKckIK",
       "windows": {
         "installMode": "passive"
       }
