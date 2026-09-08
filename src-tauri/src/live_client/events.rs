@@ -1472,6 +1472,50 @@ mod tests {
         assert_eq!(counts.get("first_blood").copied().unwrap_or(0), 0);
     }
 
+    /// The scoreboard the library row draws, over the one payload known to
+    /// have come off a real client.
+    ///
+    /// `scoreboard_carries_every_player_with_their_items` covers the same
+    /// function against the hand-written fixture, which has four players,
+    /// no `summonerSpells` and no `fullRunes` — so it can prove the shape
+    /// degrades but not that the full one is right. #85 listed `itemID`,
+    /// `summonerSpells` and `fullRunes` as modelled from Riot's docs and
+    /// never seen; this is where that stops being true.
+    #[test]
+    fn the_real_payload_yields_the_scoreboard_the_row_draws() {
+        let board = scoreboard(&captured()).expect("the real payload has players");
+
+        // Five a side, which is what the row's team block draws.
+        assert_eq!(board.players.len(), 10);
+        assert_eq!(board.players.iter().filter(|p| p.team == "ORDER").count(), 5);
+        assert_eq!(board.players.iter().filter(|p| p.team == "CHAOS").count(), 5);
+        assert_eq!(board.our_team.as_deref(), Some("CHAOS"));
+
+        // The apostrophe survives, because the art layer looks the
+        // champion up by exactly this string — see #85's open question
+        // about `Kai'Sa`, `Nunu & Willump` and `Cho'Gath`.
+        assert!(board.players.iter().any(|p| p.champion == "Kai'Sa"));
+
+        let us = board.players.iter().find(|p| p.is_us).expect("we are in this game");
+        assert_eq!(us.champion, "Shyvana");
+        // `items[].itemID`, not the price or the count the parser used to
+        // be the only reader of. Slot 5 is empty in this game and slot 0
+        // was sold, so the ids are the ones that were there — nothing is
+        // zero-filled to make six.
+        assert_eq!(us.items, vec![3078, 1001, 1037, 1036, 3340]);
+        // `summonerSpells.summonerSpellOne/Two.displayName`. `Primal Smite`
+        // is Smite after an upgrade, which is the name Data Dragon has no
+        // entry for — see #110.
+        assert_eq!(us.spells, vec!["Primal Smite", "Flash"]);
+
+        // `fullRunes.keystone.id` and the two tree ids.
+        let runes = board.our_runes.as_ref().expect("the active player has a rune page");
+        assert_eq!(runes.keystone_id, 8005);
+        assert_eq!(runes.keystone, "Press the Attack");
+        assert_eq!(runes.primary_tree_id, 8000);
+        assert_eq!(runes.secondary_tree_id, 8300);
+    }
+
     /// `self_summary` against the same real payload.
     #[test]
     fn the_real_payload_summarises() {

@@ -96,8 +96,8 @@ The reasoning behind all of it is in
 One row per game. A library is scanned rather than browsed — the question is
 almost always "which game was that", answered by champion, result and roughly
 when — and a card grid answers that in two dimensions when one would do. Rows
-also leave somewhere for the scoreboard, items and team compositions to go
-without a second redesign (#85).
+also left somewhere for the scoreboard, items and team compositions to go
+without a second redesign (#85), which is where all three now are.
 
 **A stacked block on the left sets the row's height**: what the game was, when
 it was, which patch, how long it ran, and how it went. Four short lines rather
@@ -117,9 +117,36 @@ rather than widening the row.
 column at `1fr` stretched the champion cell across half the window and threw
 everything else at the right edge, so the row read as two unrelated clusters
 with a hole between them. With every data column capped they stay one group at
-the left, the actions stay pinned right, and the slack between them is where
-the scoreboard, items and team compositions land next — the row is already the
-shape it is growing into.
+the left, the actions stay pinned right, and the slack sits between them.
+
+The team compositions were once earmarked for that slack and took a column of
+their own instead. A fixed grid of squares dropped into a `1fr` track leaves
+the leftover width *inside* a data column, where it is invisible to read but
+real to every column added after it; slack that stays slack keeps the rule
+above true rather than nearly true.
+
+**The ten champions, five to a line, ours on top.** They are the fastest way
+to recognise a game the champion column cannot identify on its own — "the one
+against the Yasuo" is how people actually remember a match — and they come
+free: `scoreboard_json` has held all ten since the end-of-game scoreboard was
+persisted, so the block costs no column in the schema and no query.
+
+Which line is *ours* is a claim, and it is only made when the capture can back
+it. `our_team` is absent whenever the live poller never matched us in
+`allPlayers`; the halves still draw, grouped and in the order the game listed
+them, but neither is labelled, because a top line silently meaning "yours"
+would be a guess in a slot read as fact. The squares are smaller than the item
+strip on purpose — this is a block to scan, and ten boxes at item size
+out-weigh the champion, the KDA and the result the row is actually about.
+
+It is also the one block that *hides*, and only ever on window width: below
+about 1100px the row's other ten columns already need every pixel there is.
+It is the right one to drop, because every other block answers something about
+the row's own player — who they were, how they did, what they built — and this
+one is context around that, so losing it costs recognition rather than the
+ability to tell one row from another. Every row loses it at the same moment, so
+the list stays one shape, which is the entire reason a missing *value* renders
+as `—` instead of vanishing. That rule is about data, not window width.
 
 **The outcome is carried twice, in one place each.** The leading edge is the
 colour, with a wash of it fading out across the first few centimetres so the
@@ -211,10 +238,16 @@ renames it `Primal Smite` mid-game and Data Dragon has no such entry. See
 
 ### Art is asked for once per page, not once per icon
 
-A row carries a champion portrait, two summoner spells, two rune icons and
-seven item slots. Forty rows is therefore several hundred icons, and one IPC
-call each — every one a CDN round trip the first time — would be a library that
-renders over several seconds.
+A row carries a champion portrait, two summoner spells, two rune icons, seven
+item slots and ten more champion squares for the two team compositions. Forty
+rows is therefore several hundred icons, and one IPC call each — every one a
+CDN round trip the first time — would be a library that renders over several
+seconds.
+
+The team squares are the one set bounded by the *game* rather than by the
+library: there are about 170 champions, a square is around 7 KB, and a library
+of any size converges on the ones its owner actually meets. Ten times the names
+asked for is not ten times the disk.
 
 So `icons.ts` collects what the visible rows want, asks once (`resolve_icons`),
 and caches the answer for the session. Misses are cached too: a champion Data
@@ -238,6 +271,10 @@ The spell-and-rune block fills **down each column** rather than across each row:
 spells on the left, runes on the right, which is how every scoreboard in the
 game arranges them. The markup order is therefore load-bearing — spell 1, spell
 2, keystone, secondary tree.
+
+The team block fills the other way, across each row, for the same reason: a
+team is a line of five, so the line has to be what the eye picks up. Filling by
+column there would interleave the two sides.
 
 ### What a marker says
 

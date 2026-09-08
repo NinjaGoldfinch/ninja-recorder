@@ -1241,9 +1241,13 @@ button.armed {
  * at `1fr` stretched the champion cell across half the window and threw
  * everything else at the right edge, which read as two unrelated clusters
  * with a hole between them. Every data column now has a maximum, so they
- * stay a group at the left and the leftover width collects in one place —
- * which is also where the scoreboard, items and team compositions land
- * next (#85), so the row is already the shape it is growing into. */
+ * stay a group at the left and the leftover width collects in one place.
+ *
+ * The team compositions took a column of their own rather than the slack
+ * they were once earmarked for (#85): a fixed grid of squares dropped into
+ * a `1fr` track leaves the leftover width *inside* a data column, where it
+ * is invisible to read but real to every future column. Slack that stays
+ * slack keeps the rule above true rather than nearly true. */
 .vod-row {
   display: grid;
   grid-template-columns:
@@ -1254,11 +1258,12 @@ button.armed {
     minmax(4.5rem, 6rem)  /* CS + per minute */
     auto                  /* spells + runes */
     auto                  /* items */
+    auto                  /* both team compositions */
     minmax(0, 1fr)        /* slack — see above */
     auto                  /* size */
     auto;                 /* actions */
   align-items: center;
-  /* Tighter than the page's usual rhythm. Nine columns at `--sp-3` spend
+  /* Tighter than the page's usual rhythm. Ten columns at `--sp-3` spend
    * more than a hundred pixels on gaps, which at the 960px minimum window
    * is the difference between the items strip fitting and not. */
   gap: var(--sp-2);
@@ -1328,6 +1333,22 @@ button.armed {
 .vod-items {
   display: grid;
   grid-template-columns: repeat(7, 22px);
+  gap: 2px;
+}
+
+/* Both team compositions: five across the top, five across the bottom.
+ *
+ * Row-major, which is the default flow and deliberately the opposite of
+ * `.vod-perks` above — a team is a line of five, so the line has to be the
+ * thing the eye picks up. Filling by column would interleave the two
+ * sides.
+ *
+ * Smaller than the item squares, and not by accident: this is the block
+ * you scan rather than read, and ten boxes at item size would out-weigh
+ * the champion, the KDA and the result that the row is actually about. */
+.vod-teams {
+  display: grid;
+  grid-template-columns: repeat(5, 18px);
   gap: 2px;
 }
 
@@ -1689,6 +1710,30 @@ button.armed {
 }
 
 /* --- Narrow windows ---------------------------------------------- */
+
+/* The team block is the first thing to go when the window is too narrow
+ * to hold the row.
+ *
+ * At the 960px minimum the columns already sum to within about fifty
+ * pixels of the space there is, so the ten squares do not fit and
+ * something has to give. This is the right thing to drop: every other
+ * block answers something about the row's own player — who they were, how
+ * they did, what they built — and this one is context around that. Losing
+ * it costs recognition, not the ability to tell one row from another.
+ *
+ * Every row loses it at the same moment, so the list stays one shape,
+ * which is the whole reason a missing *value* renders as `—` rather than
+ * vanishing. The rule is about data, not about window width.
+ *
+ * The threshold is where the row's own tracks stop fitting, not a round
+ * number: the ten columns before it need about 875px, and the window has
+ * to carry the container's padding, the row's padding and ten gaps on top
+ * of that. Below roughly 1100px the squares are what no longer has room. */
+@media (max-width: 1100px) {
+  .vod-teams {
+    display: none;
+  }
+}
 
 @media (max-width: 760px) {
   .app-bar-inner {
