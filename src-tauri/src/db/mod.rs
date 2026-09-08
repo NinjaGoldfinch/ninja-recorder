@@ -867,6 +867,34 @@ impl Db {
     /// column says something else is a row that contradicts itself.
     ///
     /// Returns whether anything was written.
+    /// Replaces a recording's scoreboard, whatever it had before.
+    ///
+    /// The override half of #127. The live scoreboard is the only one that
+    /// exists during a game, but the LCU's is strictly better once it does:
+    /// champion **ids** rather than display names — so no `Mega Gnar` class
+    /// of bug — and final numbers rather than the last poll before the
+    /// endpoint went away.
+    ///
+    /// `cs` coalesces the *other* way round from `fill_scoreboard`: the LCU's
+    /// figure wins when it has one, and only falls back to what was already
+    /// there when it does not. A null must never erase a good live value.
+    pub fn replace_scoreboard(
+        &self,
+        recording_id: i64,
+        scoreboard_json: &str,
+        cs: Option<i64>,
+    ) -> Result<bool, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let changed = conn.execute(
+            "UPDATE recordings
+                SET scoreboard_json = ?2,
+                    cs = COALESCE(?3, cs)
+             WHERE id = ?1",
+            params![recording_id, scoreboard_json, cs],
+        )?;
+        Ok(changed > 0)
+    }
+
     pub fn fill_scoreboard(
         &self,
         recording_id: i64,
@@ -1870,6 +1898,47 @@ mod tests {
 
         db.replace_gold_samples(1, &[gold_sample(60.0, 100.0)]).unwrap();
         assert!(db.recordings_awaiting_summary(0).unwrap().is_empty());
+    }
+
+    /// The override in #127: the LCU's board replaces the live one, where
+    /// `fill_scoreboard` deliberately would not.
+    #[test]
+    fn replacing_a_scoreboard_overwrites_one_that_is_already_there() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/live.mp4".into(),
+            started_at: 1,
+            scoreboard_json: Some(r#"{"from":"live"}"#.into()),
+            cs: Some(100),
+            ..Default::default()
+        })
+        .unwrap();
+
+        // The fill-only writer refuses, which is what it is for.
+        assert!(!db.fill_scoreboard(1, r#"{"from":"lcu"}"#, Some(262)).unwrap());
+        assert!(db.replace_scoreboard(1, r#"{"from":"lcu"}"#, Some(262)).unwrap());
+
+        let row = db.get_recording(1).unwrap().unwrap();
+        assert_eq!(row.scoreboard_json.as_deref(), Some(r#"{"from":"lcu"}"#));
+        assert_eq!(row.cs, Some(262), "the settled figure wins over the live one");
+    }
+
+    /// `cs` coalesces the opposite way round from `fill_scoreboard`, and a
+    /// null must never erase a good live value.
+    #[test]
+    fn replacing_a_scoreboard_without_a_cs_keeps_the_one_already_there() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/live.mp4".into(),
+            started_at: 1,
+            scoreboard_json: Some(r#"{"from":"live"}"#.into()),
+            cs: Some(100),
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert!(db.replace_scoreboard(1, r#"{"from":"lcu"}"#, None).unwrap());
+        assert_eq!(db.get_recording(1).unwrap().unwrap().cs, Some(100));
     }
 
     /// The case #137 is about: complete in every other respect, no curve.

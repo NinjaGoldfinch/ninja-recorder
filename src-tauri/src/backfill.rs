@@ -34,8 +34,8 @@
 //! any question they already answer.
 
 use crate::db::{Db, MatchMetadata};
-use crate::lcu::{self, LcuHttpClient, LockfileInfo, ParticipantSummary, PlayedGame};
-use crate::live_client::{Scoreboard, ScoreboardPlayer, ScoreboardRunes};
+use crate::lcu::{self, LcuHttpClient, LockfileInfo, PlayedGame};
+use crate::live_client::Scoreboard;
 use crate::match_summary::to_metadata;
 use crate::{info, warn};
 use serde::Serialize;
@@ -276,13 +276,13 @@ async fn fill_scoreboard(
 
     let mut players = Vec::with_capacity(game.participants.len());
     for participant in &game.participants {
-        players.push(scoreboard_player(client, lockfile, participant).await);
+        players.push(crate::match_summary::scoreboard_player(client, lockfile, participant).await);
     }
 
     let us = game.participants.iter().find(|p| p.is_us);
     let scoreboard = Scoreboard {
         our_team: us.and_then(|p| p.team.clone()),
-        our_runes: us.and_then(runes_of),
+        our_runes: us.and_then(crate::match_summary::runes_of),
         players,
     };
 
@@ -303,45 +303,6 @@ async fn fill_scoreboard(
     }
 }
 
-async fn scoreboard_player(
-    client: &LcuHttpClient,
-    lockfile: &LockfileInfo,
-    participant: &ParticipantSummary,
-) -> ScoreboardPlayer {
-    ScoreboardPlayer {
-        // Best effort, like everywhere else this resolves a champion: a
-        // name it cannot find costs one label, and the row draws the
-        // portrait from the id-less name it does have elsewhere.
-        champion: lcu::champion_name(client, lockfile, participant.champion_id)
-            .await
-            .unwrap_or_default(),
-        team: participant.team.clone().unwrap_or_default(),
-        is_us: participant.is_us,
-        level: participant.level,
-        kills: participant.kills,
-        deaths: participant.deaths,
-        assists: participant.assists,
-        cs: participant.cs.unwrap_or(0),
-        items: participant.items.clone(),
-        // Match history has ids where the live path had names. Both find
-        // the art; neither is converted into the other, because that would
-        // need the CDN in a path that otherwise only talks to the client.
-        spells: Vec::new(),
-        spell_ids: participant.spell_ids.clone(),
-    }
-}
-
-/// Our rune page, if match history said anything about it. A page with no
-/// keystone is the shape of a response that did not carry perks, not a
-/// game played without one.
-fn runes_of(us: &ParticipantSummary) -> Option<ScoreboardRunes> {
-    Some(ScoreboardRunes {
-        keystone_id: us.keystone_id?,
-        keystone: String::new(),
-        primary_tree_id: us.primary_tree_id.unwrap_or(0),
-        secondary_tree_id: us.secondary_tree_id.unwrap_or(0),
-    })
-}
 
 #[cfg(test)]
 mod tests {

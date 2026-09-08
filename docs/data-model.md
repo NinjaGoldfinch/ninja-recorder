@@ -201,6 +201,23 @@ write anything when more than one game overlaps a recording. See
 [DEVELOPMENT.md §4.2](../DEVELOPMENT.md) and
 [recording-pipeline.md §4a](recording-pipeline.md).
 
+**The LCU's scoreboard replaces the live one** on the two paths that know a
+game id exactly — the deferred patch and the resume sweep. The live board is
+the only one that exists during a game, but the LCU's is better the moment it
+does: champion *ids* rather than display names, so nothing in the
+`Mega Gnar` class can reach it, and settled numbers rather than the last poll
+before the endpoint went away.
+
+Two guards, and both matter more than the feature:
+
+- **Empty participants writes nothing.** `fetch_participants` returns empty
+  when it could not find us in the document, and a scoreboard that cannot say
+  which half is ours renders with the teams inverted — strictly worse than the
+  live one it would replace.
+- **The backfill still only fills.** It matches recordings to games *on the
+  clock*, so a confident-looking single match is still a heuristic. Filling a
+  gap on a guess is fair; overwriting good data on one is not.
+
 **It also rewrites the gold series**, which is the one thing it recovers that
 is not a column on `recordings`. The curve is written by the deferred patch,
 which lives only in memory on a bounded retry — so a quit, a crash or an

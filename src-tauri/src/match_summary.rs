@@ -28,6 +28,7 @@
 //! carries champion, KDA and outcome from the live path — a missing queue
 //! id is not worth interrupting somebody's next game over.
 
+use crate::live_client::{Scoreboard, ScoreboardPlayer, ScoreboardRunes};
 use crate::{debug, info, warn};
 use crate::db::{Db, MatchMetadata, NewSample};
 use crate::lcu::{self, MatchDataError, MatchSummary};
@@ -173,6 +174,109 @@ fn outcome(win: bool) -> &'static str {
     }
 }
 
+/// Builds the LCU's version of a scoreboard and makes it the row's.
+///
+/// **The override in #127.** The live scoreboard is the only one that exists
+/// during a game, but the LCU's is better the moment it does: champion *ids*
+/// rather than display names — a transformed Gnar arrives as `Mega Gnar` on
+/// the live path, which is not a champion — and settled numbers rather than
+/// the last poll before the endpoint went away.
+///
+/// **Empty participants means write nothing.** `fetch_participants` returns
+/// that when it could not find us in the document, and a scoreboard that
+/// cannot say which half is ours renders with the teams inverted. That is
+/// strictly worse than the live one it would have replaced, so the guard
+/// matters more than the feature.
+///
+/// Best effort throughout, like the gold series beside it: a game the client
+/// has no document for — a custom, a Practice Tool run — simply keeps the
+/// scoreboard the live path wrote.
+async fn write_scoreboard(
+    db: &Db,
+    client: &lcu::LcuHttpClient,
+    lockfile: &lcu::LockfileInfo,
+    recording_id: i64,
+    game_id: i64,
+) -> bool {
+    let participants = match lcu::fetch_participants(client, game_id).await {
+        Ok(participants) => participants,
+        Err(e) => {
+            debug!("match-summary", "no participants for game {game_id}: {e}");
+            return false;
+        }
+    };
+    if participants.is_empty() {
+        return false;
+    }
+
+    let mut players = Vec::with_capacity(participants.len());
+    for participant in &participants {
+        players.push(scoreboard_player(client, lockfile, participant).await);
+    }
+    let us = participants.iter().find(|p| p.is_us);
+    let scoreboard = Scoreboard {
+        our_team: us.and_then(|p| p.team.clone()),
+        our_runes: us.and_then(runes_of),
+        players,
+    };
+
+    let json = match serde_json::to_string(&scoreboard) {
+        Ok(json) => json,
+        Err(e) => {
+            warn!("match-summary", "could not serialize a scoreboard for {recording_id}: {e}");
+            return false;
+        }
+    };
+    match db.replace_scoreboard(recording_id, &json, us.and_then(|p| p.cs)) {
+        Ok(written) => written,
+        Err(e) => {
+            warn!("match-summary", "could not write a scoreboard for {recording_id}: {e}");
+            false
+        }
+    }
+}
+
+pub(crate) async fn scoreboard_player(
+    client: &lcu::LcuHttpClient,
+    lockfile: &lcu::LockfileInfo,
+    participant: &lcu::ParticipantSummary,
+) -> ScoreboardPlayer {
+    ScoreboardPlayer {
+        // Best effort, like everywhere else this resolves a champion: a
+        // name it cannot find costs one label, and the row draws the
+        // portrait from the id-less name it does have elsewhere.
+        champion: lcu::champion_name(client, lockfile, participant.champion_id)
+            .await
+            .unwrap_or_default(),
+        team: participant.team.clone().unwrap_or_default(),
+        is_us: participant.is_us,
+        level: participant.level,
+        kills: participant.kills,
+        deaths: participant.deaths,
+        assists: participant.assists,
+        cs: participant.cs.unwrap_or(0),
+        items: participant.items.clone(),
+        // Match history has ids where the live path had names. Both find
+        // the art; neither is converted into the other, because that would
+        // need the CDN in a path that otherwise only talks to the client.
+        spells: Vec::new(),
+        spell_ids: participant.spell_ids.clone(),
+    }
+}
+
+/// Our rune page, if match history said anything about it. A page with no
+/// keystone is the shape of a response that did not carry perks, not a
+/// game played without one.
+pub(crate) fn runes_of(us: &lcu::ParticipantSummary) -> Option<ScoreboardRunes> {
+    Some(ScoreboardRunes {
+        keystone_id: us.keystone_id?,
+        keystone: String::new(),
+        primary_tree_id: us.primary_tree_id.unwrap_or(0),
+        secondary_tree_id: us.secondary_tree_id.unwrap_or(0),
+    })
+}
+
+
 /// How far back a resume sweep will look.
 ///
 /// Generous against the failure it exists for — the real window is the
@@ -235,6 +339,7 @@ pub async fn resume_pending(db: &Db, lockfile: &lcu::LockfileInfo, now_ms: i64) 
         // The gold series first, matching `patch`: it is the slower half and
         // the caller only learns "something changed" once.
         write_gold_series(db, &client, recording_id, game_id).await;
+        write_scoreboard(db, &client, lockfile, recording_id, game_id).await;
 
         match db.update_match_metadata(recording_id, &to_metadata(&summary, champion)) {
             Ok(0) => {}
@@ -311,6 +416,19 @@ pub async fn patch(db: &Db, request: &SummaryRequest) -> bool {
     // logged and swallowed: a game with no timeline still has a name, an
     // outcome and a queue, and those are worth more than a curve.
     write_gold_series(db, &client, request.recording_id, request.game_id).await;
+    // The LCU's scoreboard replaces the live one (#127). Champion *ids*
+    // rather than display names, and settled numbers rather than the last
+    // poll before the endpoint went away. Safe to overwrite here and not in
+    // the backfill: this path knows the game id exactly, from the gameflow
+    // session, so there is no chance of writing the wrong game's board.
+    write_scoreboard(
+        db,
+        &client,
+        &request.lockfile,
+        request.recording_id,
+        request.game_id,
+    )
+    .await;
 
     match db.update_match_metadata(request.recording_id, &to_metadata(&summary, champion)) {
         // The row was deleted between the finalize and now — retention
