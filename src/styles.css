@@ -1673,6 +1673,54 @@ button.armed {
   }
 }
 
+/* --- Updates ----------------------------------------------------- */
+
+/* The whole announcement that an update exists. A dot rather than a toast or
+ * a system notification, because CI publishes a release for every commit on
+ * main and the loud version would fire most days (DEVELOPMENT.md §14). */
+.icon-btn.has-badge {
+  position: relative;
+}
+
+.badge {
+  position: absolute;
+  top: 0.15rem;
+  right: 0.15rem;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background-color: var(--accent);
+  /* Ringed in the app bar's own ground, not the button's: without it the
+   * dot dissolves into the gear's strokes at this size. */
+  box-shadow: 0 0 0 2px var(--bg-app);
+}
+
+.about-update-actions {
+  display: inline-flex;
+  gap: var(--sp-2);
+  margin-left: var(--sp-2);
+  vertical-align: middle;
+}
+
+button.small {
+  padding: 0.25em 0.7em;
+  font-size: var(--fs-sm);
+}
+
+/* Reachable by a screen reader, invisible to everyone else. The badge is
+ * otherwise a coloured dot with no text at all. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* --- Toast ------------------------------------------------------- */
 
 .toast {

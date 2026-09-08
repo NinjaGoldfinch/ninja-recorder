@@ -53,10 +53,16 @@
         <button
           id="open-settings-btn"
           type="button"
-          class="icon-btn ghost"
+          class="icon-btn ghost has-badge"
           aria-label="Settings"
           title="Settings"
         >
+          <!-- The entire announcement that an update exists. Deliberately
+               not a toast or a notification: CI releases every commit on
+               main, so this would fire most days (DEVELOPMENT.md §14). -->
+          <span id="update-badge" class="badge" hidden>
+            <span class="visually-hidden">An update is available</span>
+          </span>
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none"
                stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
             <circle cx="12" cy="12" r="3.2" />
@@ -543,6 +549,20 @@
             <div>
               <dt>Last recording</dt>
               <dd id="about-last-finalized" class="mono">&#8212;</dd>
+            </div>
+            <div>
+              <dt>Updates</dt>
+              <dd>
+                <span id="about-update">Checking&#8230;</span>
+                <span class="about-update-actions">
+                  <button id="update-check" type="button" class="ghost small">
+                    Check now
+                  </button>
+                  <button id="update-install" type="button" class="primary small" hidden>
+                    Install and restart
+                  </button>
+                </span>
+              </dd>
             </div>
           </dl>
         </section>

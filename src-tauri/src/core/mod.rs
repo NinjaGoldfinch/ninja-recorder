@@ -34,6 +34,7 @@ use crate::lcu;
 use crate::recorder::audio::{AudioInputDevice, AudioPreset};
 use crate::recorder::{RecordConfig, Recorder};
 use crate::state_machine;
+use crate::update::{self, CheckResult, UpdateRequest, UpdateStatus};
 use crate::{audio_tracks, retention};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -71,6 +72,27 @@ pub struct Ctx {
     /// test` — which on a developer's Windows box would be an app that
     /// starts itself on login forever after.
     autostart: Option<Box<dyn Autostart>>,
+    /// The last thing the background update check found, or `Unsupported`
+    /// until something writes to it.
+    ///
+    /// A cell rather than a return value because the check is *async* and
+    /// every command here is not. Keeping the network half in `lib.rs` — the
+    /// one place that can hold an `AppHandle` — and leaving this side a plain
+    /// read is what lets `every_command_round_trips` exercise the update
+    /// commands without the test suite reaching GitHub.
+    ///
+    /// Only the raw finding lives here. Whether it is *installable* is
+    /// recomputed per read against live state, because that answer changes
+    /// while nothing here does (`crate::update::decide`).
+    update: Mutex<CheckResult>,
+    /// Asks the background half to check, or to install. Type-erased for the
+    /// same reason as `on_library_changed`.
+    ///
+    /// `None` — which is what `Ctx::new` leaves — means no updater in this
+    /// build, and `install_update` refuses loudly rather than pretending. The
+    /// unit tests rely on that: an `install_update` that worked under `cargo
+    /// test` would try to restart the test binary into an installer.
+    on_update_request: Option<Box<dyn Fn(UpdateRequest) + Send + Sync>>,
 }
 
 impl Ctx {
@@ -91,6 +113,8 @@ impl Ctx {
             ffmpeg,
             on_library_changed: None,
             autostart: None,
+            update: Mutex::new(CheckResult::Unsupported),
+            on_update_request: None,
         }
     }
 
@@ -106,6 +130,25 @@ impl Ctx {
     /// `AppHandle`, which cannot be named here.
     pub fn set_autostart(&mut self, autostart: Box<dyn Autostart>) {
         self.autostart = Some(autostart);
+    }
+
+    /// Called once from `lib.rs`'s `setup`, for the same reason as
+    /// `set_library_changed_notifier`.
+    pub fn set_update_requester(&mut self, request: Box<dyn Fn(UpdateRequest) + Send + Sync>) {
+        self.on_update_request = Some(request);
+    }
+
+    /// Records what a check found. Called from the background task in
+    /// `lib.rs`, never from a command — hence `&self` and the mutex.
+    pub fn set_update_check_result(&self, found: CheckResult) {
+        match self.update.lock() {
+            Ok(mut cell) => *cell = found,
+            // A poisoned lock here means a panic while holding it, which
+            // nothing in this path can do. Dropping the result loses one
+            // check; the next one is six hours away and the manual button
+            // is always there.
+            Err(e) => warn!("update", "could not record the check result: {e}"),
+        }
     }
 
     fn notify_library_changed(&self) {
@@ -571,6 +614,62 @@ pub fn set_autostart(ctx: &Ctx, enabled: bool) -> Result<AutostartStatus, String
         enabled: autostart.is_enabled()?,
         supported: true,
     })
+}
+
+// ---------------------------------------------------------------- updates
+
+/// Whether the app can safely exit into an installer right now, as the two
+/// halves that know see it.
+///
+/// A poisoned recorder lock counts as *recording*. It cannot actually happen
+/// — nothing in the recorder path panics while holding it — but the failure
+/// mode if it ever did is asymmetric: guessing "idle" wrong ends a game's
+/// capture, and guessing "busy" wrong costs a click.
+fn update_gate(ctx: &Ctx) -> Result<(), String> {
+    let busy = is_recording(ctx).unwrap_or(true);
+    update::installable(&ctx.supervisor.status().state, busy)
+}
+
+/// What the About block renders.
+///
+/// The installability half is recomputed here rather than stored with the
+/// check: the check runs every six hours, and whether a game is in progress
+/// changes rather more often than that.
+pub fn get_update_status(ctx: &Ctx) -> Result<UpdateStatus, String> {
+    let found = ctx.update.lock().map_err(|e| e.to_string())?.clone();
+    let busy = is_recording(ctx).unwrap_or(true);
+    Ok(update::decide(&found, &ctx.supervisor.status().state, busy))
+}
+
+/// Asks for a check now, rather than waiting for the six-hourly one.
+///
+/// Returns as soon as the request is handed over — the result arrives later,
+/// in the cell, and the frontend hears about it through the
+/// `update-status-changed` event. Nothing here blocks on the network.
+pub fn check_for_update(ctx: &Ctx) -> Result<(), String> {
+    let request = ctx
+        .on_update_request
+        .as_ref()
+        .ok_or("updates are not available in this build")?;
+    request(UpdateRequest::Check);
+    Ok(())
+}
+
+/// Downloads the offered installer and hands the machine over to it.
+///
+/// **This ends the process.** The gate is re-checked here and not merely in
+/// the UI, because the button was rendered at some earlier moment and a game
+/// can start between a glance and a click.
+pub fn install_update(ctx: &Ctx) -> Result<(), String> {
+    let request = ctx
+        .on_update_request
+        .as_ref()
+        .ok_or("updates are not available in this build")?;
+    if let Err(why) = update_gate(ctx) {
+        return Err(format!("not installing an update while {why}"));
+    }
+    request(UpdateRequest::Install);
+    Ok(())
 }
 
 /// The audio capture preset, read and written through `serde` rather than

@@ -63,6 +63,12 @@ tauri-plugin-notification = "2"
 # registry entry — not a `settings_kv` row — is the source of truth, so the
 # checkbox can't drift from what Windows will actually do (DEVELOPMENT.md §12).
 tauri-plugin-autostart = "2"
+# In-app updates (DEVELOPMENT.md §14). Windows-only in practice: `latest.json`
+# carries a `windows-x86_64` entry and nothing else, so a macOS build's check
+# simply finds nothing. Registered in `lib.rs` only when the `devtools` feature
+# is *off* — a dev bundle that updated itself would replace itself with the
+# production app.
+tauri-plugin-updater = "2"
 
 # Real capture backend. Fork of github.com/FFFFFFFXXXXXXX/libobs-recorder
 # that swaps the injection-based `game_capture` source for `window_capture`

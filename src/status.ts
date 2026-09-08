@@ -2,10 +2,12 @@ import { call } from "./bridge";
 import { el } from "./dom";
 import { formatTime } from "./format";
 import { refreshDiskUsage, refreshLibrary } from "./library";
+import { refreshUpdateStatus } from "./update";
 import type { GameState, LcuStatus, SupervisorStatus } from "./types";
 
-// There are no Tauri events on the Rust side — every backend→frontend
-// signal is pull-only — so the header's live state comes from a poll.
+// The two Tauri events the backend pushes (`library-changed`,
+// `update-status-changed`) are both once-in-a-while facts; nothing pushes the
+// header's live state, so that comes from a poll.
 //
 // A setTimeout chain rather than setInterval: `lcu_status` reads a lockfile
 // and makes two HTTPS round trips to the client, and a slow tick under
@@ -110,6 +112,13 @@ async function pollOnce(): Promise<GameState> {
   recordingElapsed = status.recording_elapsed_s;
 
   renderGame(status);
+
+  // Whether an offered update can be installed depends on this exact value,
+  // and the update check that computed it last runs every six hours. Without
+  // this the Install button would stay enabled through a whole game and only
+  // refuse at the click. Only on the edge: `get_update_status` is a mutex
+  // read, but so is this poll, and every tick would be waste.
+  if (changed) void refreshUpdateStatus();
 
   // A finished game should appear on its own. Derived from the two edges
   // already in the payload rather than polling `list_recordings`, which

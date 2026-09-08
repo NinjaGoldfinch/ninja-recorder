@@ -139,6 +139,7 @@ small to hide a bug. It is the trait boundary trick applied at function scale.
 | 11 | `.rofl` replay download alongside video | [DEVELOPMENT.md §8](../DEVELOPMENT.md#8-rofl-replays-designed-not-built) | not started |
 | 12 | Background operation: tray icon, close-to-tray, notifications, start-on-login, and the idle-cost work that made staying resident defensible | `tray.rs`, `notify.rs`, `launch.rs` | built, **unverified on Windows** |
 | 13 | Splitting the recorder into its own process, so the UI can exit and a webview crash can't take a recording with it | [DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave) | in progress |
+| 14 | In-app updates on Windows: a background check, a badge, and an install that refuses while a game is being recorded | `update.rs`, `src/update.ts` | built, **unverified on Windows** |
 
 ### Why that dependency order
 
@@ -198,6 +199,7 @@ timeline
     Sep 5  : App shell and theming redesign (unplanned)
            : Dev portal (unplanned)
            : Release pipeline rework
+    Sep 8  : Phase 14 — in-app updates (unplanned)
     open   : Phase 8 — hardware and Vanguard verification
 ```
 
@@ -279,6 +281,21 @@ shape as the retention decision in §2: pick the option that keeps the user's
 future choices open, and pay a little for it now. It also needed a second
 patch to the capture fork, which is the concrete cost of having treated the
 question as settled.
+
+### Shipping every commit made the updater a design problem, not a plumbing one
+
+Phase 7 decided that every commit on `main` publishes a release. That was the
+right call for getting builds into people's hands, and it quietly settled the
+shape of the updater built much later: with a new version most days, the
+obvious auto-updating, toast-on-every-release configuration would have been
+unusable. The feature is a dot on a button because the release cadence made
+anything louder into noise.
+
+The second constraint came from the product's own promise. An updater that
+restarts the app is a feature that can destroy a recording, which is the one
+thing this app exists not to do — so it asks, and it refuses while a game is
+in progress ([DEVELOPMENT.md §14](../DEVELOPMENT.md)). Neither of those is a
+technical difficulty; both are decisions the plan never anticipated needing.
 
 ### One phase is still open, and it is the honest gate
 

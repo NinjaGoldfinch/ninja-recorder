@@ -17,8 +17,9 @@ No OBS to install. No scenes to configure. No injection into the game, ever.
 > the per-application capture behind every preset that records "game audio" has
 > never run against a Vanguard-protected process, so if your game track comes
 > out silent, switch the preset to Desktop, which uses ordinary loopback; and
-> the tray, the close-button setting, start-on-login and the notifications are
-> **newer than any Windows testing**, so treat them as unproven there. See
+> the tray, the close-button setting, start-on-login, the notifications and
+> the in-app updater are **newer than any Windows testing**, so treat them as
+> unproven there. See
 > [docs/windows-verification.md](docs/windows-verification.md) for exactly
 > what those checks involve.
 
@@ -77,6 +78,13 @@ Grab the installer for your platform from
 
 Both are unsigned, so Windows SmartScreen and macOS Gatekeeper will warn on
 first run.
+
+After the first install, **Windows builds update themselves**: the app checks
+on launch and every six hours, puts a dot on the settings button, and installs
+when you click it in Settings → About — never on its own, and never while a
+game is being recorded. macOS builds do not update. See
+[DEVELOPMENT.md §14](DEVELOPMENT.md#14-updates) for why it asks rather than
+just doing it.
 
 ## Architecture in one picture
 

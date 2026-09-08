@@ -11,6 +11,7 @@ import { initSettings, syncSettingsFromPrefs } from "./settings";
 import { initStatus } from "./status";
 import { applyThemePref, initTheme } from "./theme";
 import { initToast } from "./toast";
+import { initUpdate } from "./update";
 
 window.addEventListener("DOMContentLoaded", () => {
   // The theme is already on <html> from the inline boot script; this adopts
@@ -32,6 +33,10 @@ window.addEventListener("DOMContentLoaded", () => {
   initSettings();
   initStatus();
   initDevPortal();
+  // After `initToast`: a *refused* install — a game started between the
+  // render and the click — is the one thing this reports loudly, and it
+  // reports it through the toast.
+  initUpdate();
 
   // After the views are registered, so a `#settings` start or a tray
   // "Settings" click has something to switch to.

@@ -1223,3 +1223,133 @@ capture shows it is needed (#69).
 - `launch.rs`'s unsupported-mode message, which runs in `run()` **before** `setup` and so before `log::init` — there is no file yet, and it exits immediately.
 - The two lines reporting that logging itself could not start. Saying so through the log would say nothing.
 - The `SchemaTooNew` block, which is a wall of actionable prose aimed at a person in a terminal. That one keeps its `eprintln!` *and* gets an `error!` line, so the fact is recorded and the explanation is still readable.
+
+## 14. Updates
+
+CI publishes an NSIS installer for every commit that lands on `main`
+([docs/ci-and-releases.md](docs/ci-and-releases.md)), and until now nothing
+told an installed build about any of them. `tauri-plugin-updater` closes that,
+but the obvious configuration of it is wrong for this app in three separate
+ways, and each one is a decision worth writing down.
+
+### It notifies; it does not auto-install
+
+**The NSIS updater exits the app and runs the installer.** That is not a
+detail of the implementation, it is what installing on Windows *is*: the
+running binary cannot replace itself, so the process ends and a separate
+installer takes over. Do that while a game is being captured and the recording
+in flight is gone — the one outcome this whole application exists to prevent.
+
+So `update::installable` is a gate, `core::install_update` refuses when it
+says no, and a person clicks the button. The three states that refuse are
+`WaitingForGame`, `Recording` and `Finalizing`, plus the recorder's own
+`is_recording()` — two sources rather than one, because they disagree for a
+moment around a start, and either saying yes is enough to refuse. A needless
+refusal costs one more click. A wrong permit costs the game.
+
+`WaitingForGame` is in that list even though nothing is recording yet: the
+game is loading and capture starts the moment Live Client Data answers.
+
+The gate is checked twice, in the frontend and again in `core::install_update`,
+because the button was rendered at some earlier moment and a game can start
+between a glance and a click. `run_update_install` then calls
+`Supervisor::finalize_for_shutdown` anyway — the same call, for the same
+reason, as `tray::request_quit`.
+
+An "install on quit" variant was considered and dropped. It needs no gate,
+because quitting has already stopped everything — but it turns Quit into a
+several-minute operation the user did not ask for, at the exact moment they
+wanted the app gone.
+
+### It is quiet, because the release cadence is loud
+
+Every commit on `main` mints a release and the minor version advances by one,
+so "a newer version exists" is true most days. A toast, a system notification
+or a modal on each of them is a thing the user learns to dismiss without
+reading — and the one time it matters, they dismiss that too.
+
+The entire announcement is therefore a dot on the settings button. The
+details, the changelog and the button live in Settings → About, which is where
+someone who wants to update is already going. The only interruption in the
+whole feature is a failed install, and that one is a toast because the user
+pressed a button and is owed an answer.
+
+The check runs 30 s after launch and every six hours after that. Late enough
+not to compete with the recorder backend coming up, the database opening or
+the first paint; slack enough that it is not re-discovering the same answer
+all day.
+
+### Windows only
+
+`latest.json` carries a `windows-x86_64` entry and nothing else, so a macOS
+build's check finds no platform entry and the About block says updates are not
+available in this build.
+
+That is deliberate rather than unfinished. macOS builds only ever exercise the
+stub recorder (§1.1), `.dmg` is not an updatable bundle format — the updater
+wants a `.app.tar.gz` — and covering it means a second bundle target and a
+second signing path on a runner GitHub bills at 10×, to keep a build that
+cannot record up to date.
+
+### The devtools bundle must never update itself
+
+A dev bundle that updated itself would download the *production* installer and
+replace itself with it. `tauri.devtools.conf.json` renames the product
+precisely so the two can coexist (§10), and this would undo that in one click.
+
+So `updates_enabled()` is false under `--features devtools`, and the update
+seam is never wired: `get_update_status` reports `Unsupported` and both other
+commands refuse. It also means `npm run tauri:dev` never has an updater, which
+is what you want locally.
+
+Note that it is a **runtime** `cfg!` and not a `#[cfg]` around the wiring.
+Compiling the wiring out under `devtools` would leave `CheckResult`'s variants
+and `Ctx`'s two update setters constructed by nothing — dead code, which the
+devtools clippy run fails the build over because it runs with `-D warnings`
+and without `--all-targets`. This way both configurations compile the same
+code and only the behaviour differs.
+
+### Where the code is, and why it is split there
+
+`update.rs` is pure: `decide` and `installable` read no clock, open no socket
+and name no `tauri` type. That is the half that can lose a VOD if it is wrong,
+so it is the half with the tests. The network half — `run_update_check`,
+`run_update_install` — lives in `lib.rs`, which is the only place that can
+hold an `AppHandle`.
+
+Between them sits a cell on `core::Ctx` and a single `UpdateRequest` closure,
+the same shape as `set_library_changed_notifier` (§12, "One notifier, one
+seam") rather than a trait, because a trait here would have to be `async` and
+this project has no `async-trait` dependency.
+
+That split buys something concrete beyond tidiness: all three commands are
+**synchronous**, and `every_command_round_trips` really does invoke every
+command in the dispatch table. With the seam unset — which is what `Ctx::new`
+leaves — the update commands answer "not available in this build", so the test
+suite never reaches GitHub and `install_update` can never restart the test
+binary into an installer.
+
+### The signing key is permanent
+
+Updates are verified with a minisign key pair. The public half is baked into
+every installer ever shipped; the private half lives in the
+`TAURI_SIGNING_PRIVATE_KEY` repository secret and signs each release.
+
+**Losing the private key strands every install in the field.** They will keep
+checking, keep downloading, and reject what they download forever, with no
+path forward but a manual reinstall. It is not rotatable after the fact,
+because the builds that would need to learn the new key are the builds that
+can no longer be updated. Back it up somewhere that is not this repository and
+not one laptop.
+
+One-time cost worth stating plainly: **the first release carrying the updater
+cannot update anything already installed.** Those builds have no updater in
+them. One more manual install, and it self-maintains after that.
+
+### Update signing is not code signing
+
+They are unrelated, and it would be easy to read the `.sig` files on a release
+as progress on the other. Update signatures let an installed build verify that
+what it downloaded came from us. Code signing is what stops SmartScreen
+warning on first run, and there is still no certificate configured — see the
+standing caveat block in `ci.yml`'s release notes.
