@@ -7,32 +7,16 @@ not for editing.
 
 No OBS to install. No scenes to configure. No injection into the game, ever.
 
-> **Status: works, on Windows, against real games.** Capture has been run
-> across many live Vanguard-protected games — the constraint the whole design
-> was built around ([DEVELOPMENT.md §1.1](DEVELOPMENT.md)) — with recording,
-> event markers, the VOD library, the review player, disk retention,
-> multi-track audio, the tray and the notifications all confirmed on real
-> hardware. Installers ship from the [Releases](../../releases) page.
->
-> Two things to know before you install. Builds are **unsigned**, so
-> SmartScreen warns on first run. And the **in-app updater has not yet
-> completed a real update** — it checks and offers correctly, but the install
-> half is the one part never exercised end to end
-> ([#118](../../issues/118)).
->
-> Measured on real hardware: **9 MB** idle RAM, a **64 MB** download and a
-> **248 MB** install. The RAM target was 100 MB and is met with room to
-> spare; the install target was 200 MB and is **not** met — most of the
-> difference is bundled libobs and ffmpeg. Recorded as a miss rather than a
-> rounded pass. See
-> [docs/windows-verification.md](docs/windows-verification.md).
+> **Working, on Windows, against real games.**
+> [Releases](../../releases) · [what has been verified, and what has
+> not](docs/windows-verification.md)
 
 ---
 
 ## What it does
 
 ```mermaid
-flowchart LR
+flowchart TB
     A["You launch<br/>League"] --> B["App detects the client<br/><small>lockfile</small>"]
     B --> C["Game starts<br/><small>gameflow phase</small>"]
     C --> D["Recording starts<br/><small>WGC capture, hardware encode,<br/>audio on separate tracks</small>"]
