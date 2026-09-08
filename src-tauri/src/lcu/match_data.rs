@@ -746,6 +746,28 @@ fn participants(me: &CurrentSummoner, game: &GameDto) -> Vec<ParticipantSummary>
 }
 
 /// Who was on our side in `game_id`, from the match-history document.
+/// Everyone in one game, ours flagged — the LCU's version of a scoreboard.
+///
+/// Mirrors `fetch_sides` deliberately: same document, same "find ourselves
+/// first" rule, same pure function underneath. Working out which of ten
+/// players is us is this module's job and must keep having exactly one
+/// answer, whichever caller is asking.
+///
+/// An empty result means we were not in the document. `participants` returns
+/// that rather than guessing, and callers must treat it as "write nothing" —
+/// a scoreboard that cannot say which half is ours is worse than the live one
+/// it would replace, because it renders with the teams the wrong way round.
+pub async fn fetch_participants(
+    http: &LcuHttpClient,
+    game_id: i64,
+) -> Result<Vec<ParticipantSummary>, MatchDataError> {
+    let me: CurrentSummoner = http.get_json("/lol-summoner/v1/current-summoner").await?;
+    let game: GameDto = http
+        .get_json(&format!("/lol-match-history/v1/games/{}", game_id))
+        .await?;
+    Ok(participants(&me, &game))
+}
+
 pub async fn fetch_sides(http: &LcuHttpClient, game_id: i64) -> Result<Sides, MatchDataError> {
     let me: CurrentSummoner = http.get_json("/lol-summoner/v1/current-summoner").await?;
     let game: GameDto = http
