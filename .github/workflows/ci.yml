@@ -355,9 +355,25 @@ jobs:
       #
       # NINJA_DEVTOOLS reaches vite through tauri's beforeBuildCommand, so
       # dev.html is emitted; --features devtools compiles the Rust side.
+      #
+      # `TAURI_SIGNING_PRIVATE_KEY` is what turns `createUpdaterArtifacts`
+      # into a signed `.sig` next to the installer, and the matching public
+      # key in `tauri.conf.json` is what every installed build checks it
+      # against. **The pair is permanent**: the public half is baked into
+      # every installer ever shipped, so losing the private half strands
+      # every install in the field on its current version
+      # (DEVELOPMENT.md §14).
+      #
+      # Harmless on the two entries that produce no updater artifact — the
+      # macOS bundle, which `latest.json` never lists, and the devtools
+      # bundle, which sets `createUpdaterArtifacts: false` in
+      # `tauri.devtools.conf.json` so it can never update itself into the
+      # production app.
       - name: Build app
         env:
           NINJA_DEVTOOLS: ${{ matrix.devtools && '1' || '' }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build -- --bundles ${{ matrix.bundles }} ${{ matrix.devtools && '--features devtools --config src-tauri/tauri.devtools.conf.json' || '' }}
 
       - name: Upload build artifact
@@ -445,7 +461,16 @@ jobs:
 
           Unsigned build: Windows SmartScreen and macOS Gatekeeper will both
           warn on first run (no code-signing certificate configured yet). See
-          the installer for your platform below.
+          the installer for your platform below. The `.sig` files attached
+          here are *update* signatures — they let an installed build verify
+          what it downloads — and are a different thing from code signing,
+          which would be what stops the warning.
+
+          Windows builds update themselves from here: the app checks on
+          launch and every six hours, shows a dot on the settings button, and
+          installs when you click, never while a game is being recorded. An
+          install from before that existed has to be updated by hand once
+          more. macOS builds do not update.
 
           macOS builds only exercise the stub recorder — real game capture is
           Windows-only (DEVELOPMENT.md §1.1). The Windows build includes the
@@ -462,6 +487,56 @@ jobs:
           echo "--- generated notes ---"
           cat notes.md
 
+      # The update manifest every installed build polls, written from the
+      # artifacts this run just produced rather than from a template — the
+      # signature has to be the one that goes with *this* installer.
+      #
+      # `windows-x86_64` is the only platform key, deliberately. macOS is the
+      # stub recorder and `.dmg` is not an updatable bundle format, so a macOS
+      # build's check finds no entry and reports "not available in this
+      # build" (DEVELOPMENT.md §14).
+      #
+      # The `url` is the **tagged** asset path, not `/releases/latest/`. The
+      # endpoint that fetches this file is allowed to float to the newest
+      # release; what it points *at* must not, or an installer download would
+      # silently follow the next release and stop matching the signature
+      # beside it.
+      - name: Build update manifest
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          setup=$(find artifacts/windows -name '*-setup.exe' | head -1)
+          if [ -z "$setup" ]; then
+            echo "::error::No NSIS installer in the Windows bundle" >&2
+            exit 1
+          fi
+          if [ ! -f "$setup.sig" ]; then
+            echo "::error::No signature beside $setup. Set the TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD repository secrets, and put the matching public key in src-tauri/tauri.conf.json under plugins.updater.pubkey (DEVELOPMENT.md 14)." >&2
+            exit 1
+          fi
+          node -e '
+            const fs = require("fs"), path = require("path");
+            const setup = process.argv[1];
+            const v = process.env.VERSION;
+            const base = `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/v${v}`;
+            fs.writeFileSync("latest.json", JSON.stringify({
+              version: v,
+              // The same changelog the release itself carries, so the two
+              // cannot disagree about what this version changed.
+              notes: fs.readFileSync("notes.md", "utf8"),
+              pub_date: new Date().toISOString(),
+              platforms: {
+                "windows-x86_64": {
+                  signature: fs.readFileSync(setup + ".sig", "utf8").trim(),
+                  url: `${base}/${encodeURIComponent(path.basename(setup))}`,
+                },
+              },
+            }, null, 2) + "\n");
+          ' "$setup"
+          echo "--- latest.json ---"
+          cat latest.json
+
       # Published, not drafted: the `needs` above already withhold this
       # step until the commit's tests pass, so a human clicking Publish
       # added latency rather than a check. `target_commitish` pins which
@@ -477,4 +552,6 @@ jobs:
           prerelease: false
           files: |
             artifacts/windows/**/*.exe
+            artifacts/windows/**/*.sig
             artifacts/macos/**/*.dmg
+            latest.json

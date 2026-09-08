@@ -222,6 +222,52 @@ one-time notice) is unit tested; presentation is not testable anywhere but here.
       own AUMID; confirm `ninja-recorder` and `ninja-recorder-dev` do not
       collide.
 
+### 5.0.4 In-app updates
+
+**Nothing about this is testable off Windows, and most of it is not testable
+without two releases.** The gate — whether an offered update may be installed —
+is pure and unit-tested (`update::decide`); everything below it is not. macOS
+builds have no entry in `latest.json` at all, so there is no second platform to
+cross-check against ([DEVELOPMENT.md §14](../DEVELOPMENT.md#14-updates)).
+
+Getting into position needs a version to update *from*: install a CI release,
+land another commit so a newer one publishes, then relaunch the old install.
+
+- [ ] `curl -L https://github.com/NinjaGoldfinch/ninja-recorder/releases/latest/download/latest.json`
+      returns a manifest whose `version` matches the newest release and whose
+      `url` points at that release's **tagged** asset, not `/latest/`.
+- [ ] About 30 s after launch, a dot appears on the settings button and
+      Settings → About names the newer version. **Nothing else happens** — no
+      toast, no Windows notification, no dialog. That is the design, not a
+      missing piece.
+- [ ] "Check now" produces the same answer without waiting.
+- [ ] **The gate.** Start a game. While the header reads Recording, the Install
+      button is disabled and the row says why. Confirm the same during
+      `Game starting…` and `Saving…` — all three refuse.
+- [ ] The button re-enables on its own once the game ends, **without**
+      reopening Settings or restarting the app. This is the `status.ts` edge
+      refresh; if it needs a reload, that hook is broken.
+- [ ] Install. The app exits, the NSIS installer runs *passively* (a progress
+      bar, no wizard to click through), and the app comes back. Settings →
+      About now shows the new version and offers nothing.
+- [ ] The install did **not** create a second entry in Apps & Features, a
+      second Start-menu shortcut, or a second install directory.
+- [ ] Start-on-login, the close-button setting, the audio preset and the
+      retention policy all survive the update — they live in `settings_kv` and
+      the `Run` key, neither of which the installer touches.
+- [ ] The VOD library survives it: recordings are still listed, and their files
+      still play.
+- [ ] **Install the devtools bundle and confirm it offers nothing at all.**
+      Settings → About must read "not available in this build". A dev bundle
+      that updated itself would replace itself with the production app, which
+      is exactly what renaming the product was meant to prevent.
+- [ ] Pull the network cable and press "Check now": the row reports the failure
+      in words and the app carries on recording normally.
+- [ ] Tamper check — needs a scratch release: replace the installer attached to
+      a release without updating `latest.json`, and confirm the download is
+      **rejected** rather than run. This is the only test that exercises the
+      signature at all.
+
 ### 5.1 Capture-backend lifecycle
 
 New with `prepare`/`release`; none of it can be exercised off Windows.

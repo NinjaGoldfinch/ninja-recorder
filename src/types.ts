@@ -247,3 +247,32 @@ export interface EnforcementReport {
   deleted: number[];
   freed_bytes: number;
 }
+
+/** Mirrors `update::UpdateOffer`. `notes` is remote text — it comes out of
+ *  `latest.json`, which CI writes from the release body — so it is escaped
+ *  wherever it is rendered. */
+export interface UpdateOffer {
+  version: string;
+  notes: string | null;
+  pub_date: string | null;
+}
+
+/** Mirrors `update::UpdateStatus`, an internally tagged Rust enum.
+ *
+ *  `unsupported` and `upToDate` are deliberately different states: "you are
+ *  current" and "this build will never tell you" want different words on
+ *  screen. A devtools bundle and a macOS build both report `unsupported`
+ *  — updates are Windows-only (DEVELOPMENT.md §14). */
+export type UpdateStatus =
+  | { kind: "unsupported" }
+  | { kind: "upToDate" }
+  | {
+      kind: "available";
+      offer: UpdateOffer;
+      /** False while a game is in progress. The button is disabled and
+       *  `blockedReason` says why — a greyed-out control with no reason is
+       *  the version of this that generates bug reports. */
+      installable: boolean;
+      blockedReason: string | null;
+    }
+  | { kind: "failed"; error: string };

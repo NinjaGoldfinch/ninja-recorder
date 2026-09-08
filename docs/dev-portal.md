@@ -169,6 +169,14 @@ What keeps the shared path from being reckless:
   (or `open_recordings_folder`) through the passthrough, because those are no
   longer registered individually. The IPC log still records the logical command
   name rather than `rpc`, so the Commands panel reads the same as before.
+- **The three update commands always refuse here.** The portal only exists in
+  a `--features devtools` build, and that is exactly the build where
+  `updates_enabled()` is false — a dev bundle that updated itself would
+  replace itself with the production app. So `get_update_status` reports
+  `unsupported` and the other two return "updates are not available in this
+  build". They are listed because they are production commands, not because
+  the portal can drive them
+  ([DEVELOPMENT.md §14](../DEVELOPMENT.md#14-updates)).
 - **Seeded placeholder files are sparse and will not decode.** The
   Review-ready preset copies `fixtures/sample.mp4` instead — a synthetic
   6-second clip checked in for this purpose (see `fixtures/README.md`). It has

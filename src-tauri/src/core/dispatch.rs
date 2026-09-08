@@ -194,6 +194,9 @@ dispatch_table! {
     ctx_async   backfill_match_metadata();
     ctx_async   resolve_icons(request: crate::ddragon::IconRequest);
     ctx_plain   game_state_status();
+    ctx_result  get_update_status();
+    ctx_result  check_for_update();
+    ctx_result  install_update();
 }
 
 #[cfg(test)]
@@ -242,6 +245,13 @@ mod tests {
             // up and the suite never reaches a CDN — this exercises the
             // argument mapping and nothing else.
             "resolve_icons" => json!({ "request": {} }),
+            // The three update commands take no arguments and reach no
+            // network here: the test `Ctx` leaves the update seam unset, so
+            // `check_for_update` and `install_update` both refuse with "not
+            // available in this build" and `get_update_status` reports
+            // `Unsupported`. That is deliberate — an `install_update` that
+            // worked under `cargo test` would restart the test binary into
+            // an installer.
             _ => json!({}),
         }
     }

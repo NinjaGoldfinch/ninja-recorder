@@ -21,6 +21,7 @@ flowchart TB
     REVIEW["review.ts<br/><small>owns: the player + timeline</small>"]
     SETTINGS["settings.ts<br/><small>owns: the settings form</small>"]
     TOAST["toast.ts<br/><small>owns: the transient message</small>"]
+    UPDATE["update.ts<br/><small>owns: the update row + badge</small>"]
     DESK["desktop.ts<br/><small>owns: the browser behaviours we suppress</small>"]
     BRIDGE["bridge.ts<br/><small>invoke + asset URLs</small>"]
     DOM["dom.ts<br/><small>el, escapeHtml, escapeAttr</small>"]
@@ -35,9 +36,11 @@ flowchart TB
     MAIN --> REVIEW
     MAIN --> SETTINGS
     MAIN --> TOAST
+    MAIN --> UPDATE
     MAIN --> DESK
     DESK --> BRIDGE
     STATUS --> LIB
+    STATUS --> UPDATE
     SETTINGS --> LIB
     SETTINGS --> THEME
     SETTINGS --> PREFS
@@ -47,6 +50,9 @@ flowchart TB
     SETTINGS --> BRIDGE
     STATUS --> BRIDGE
     PREFS --> BRIDGE
+    UPDATE --> BRIDGE
+    UPDATE --> TOAST
+    UPDATE --> DOM
     LIB --> FMT
     REVIEW --> FMT
     LIB --> DOM
@@ -317,6 +323,10 @@ flowchart LR
     S -->|"pull: lcu_status + game_state_status<br/>setTimeout chain, interval scales with state"| CMD
     L -->|"pull: list_recordings, get_disk_usage, …"| CMD
     SUP -->|"push: library-changed event"| M
+    UPD["update.ts"]
+    UPDBE["update check<br/><small>lib.rs, every 6h</small>"]
+    UPDBE -->|"push: update-status-changed"| UPD
+    S -->|"on a state change only"| UPD
     M --> L
 ```
 
@@ -334,10 +344,17 @@ rebuilds the whole grid with `innerHTML`, and `library-changed` already covers
 real changes. Skipping it leaves its timestamp stale on purpose, so the first
 poll after the window returns catches up at once.
 
-**Push for the library.** `library-changed` is the one backend→frontend event:
-the supervisor emits it after a finalize, and `set_retention_policy` after a
-deletion. Polling `list_recordings` instead would rebuild the grid every few
-seconds and fight scroll and focus.
+**Push for the library.** `library-changed` is one of two backend→frontend
+events: the supervisor emits it after a finalize, and `set_retention_policy`
+after a deletion. Polling `list_recordings` instead would rebuild the grid
+every few seconds and fight scroll and focus.
+
+**Push for updates.** `update-status-changed` is the other. The background
+check runs every six hours ([DEVELOPMENT.md §14](../DEVELOPMENT.md)), which is
+far too slow to poll for — but *whether the offered update can be installed*
+depends on game state, which changes constantly. So `status.ts` also nudges
+`update.ts` on a state **edge** and not every tick: without it the Install
+button would sit enabled through a whole game and only refuse at the click.
 
 ### Command surface
 
@@ -376,6 +393,9 @@ a shipped build.
 | `extract_audio_track` | path to a cached sidecar | review player, stem selection |
 | `lcu_status` | `LcuStatus` | header strip |
 | `game_state_status` | `SupervisorStatus` | header strip, About block |
+| `get_update_status` | `UpdateStatus` | settings → About, and the badge on the gear |
+| `check_for_update` | — | settings → About → "Check now" |
+| `install_update` | — | settings → About → "Install and restart"; ends the process |
 | `start_recording` / `stop_recording` / `is_recording` | — | registered but unreferenced by the main UI; the dev portal's Recorder panel drives them |
 
 **Start on login is the one setting that is not a pref.** It lives in the

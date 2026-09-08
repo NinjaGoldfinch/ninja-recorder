@@ -8,6 +8,7 @@ import type {
   RecordingRow,
   SampleRow,
   SupervisorStatus,
+  UpdateStatus,
 } from "./types";
 
 // Outside the Tauri webview there is no `invoke`, so every command
@@ -328,6 +329,15 @@ const MOCKS: Record<string, unknown> = {
     last_finalized: null,
     recording_elapsed_s: null,
   } satisfies SupervisorStatus,
+  // The interesting one to look at: an offer is the only state with a badge
+  // and a button. The three duller ones are a one-word edit away.
+  get_update_status: {
+    kind: "available",
+    offer: { version: "0.9.0", notes: "- fixed a thing", pub_date: null },
+    installable: true,
+    blockedReason: null,
+  } satisfies UpdateStatus,
+  check_for_update: null,
 };
 
 // Writes mutate the fixture array rather than no-op'ing, so pin and delete
@@ -359,6 +369,11 @@ async function mock<T>(
     case "set_ui_pref":
     case "open_recordings_folder":
       return undefined as T;
+    // Rejects rather than no-ops: outside the webview there is nothing to
+    // restart into, and a button that silently "worked" would be the one
+    // piece of this flow a browser session could not tell apart from real.
+    case "install_update":
+      throw new Error("updates are not available in this build");
   }
   if (command in MOCKS) return MOCKS[command] as T;
   throw new Error(`No dev fixture for invoke("${command}")`);

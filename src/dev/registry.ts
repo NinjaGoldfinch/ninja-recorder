@@ -535,6 +535,30 @@ export const COMMANDS: CommandSpec[] = [
     description: "Raw allgamedata fetch. Only reachable while a game is running.",
   },
 
+  // --- Updates ------------------------------------------------------
+  {
+    name: "get_update_status",
+    group: "Updates",
+    dev: false,
+    description:
+      "What the last background check found, with installability recomputed against live state. `unsupported` in a devtools build \u2014 this one \u2014 because the update seam is never wired there.",
+  },
+  {
+    name: "check_for_update",
+    group: "Updates",
+    dev: false,
+    description:
+      "Asks for a check now rather than waiting for the six-hourly one. Returns as soon as the request is handed over; the answer arrives on the `update-status-changed` event. Refuses in a devtools build.",
+  },
+  {
+    name: "install_update",
+    group: "Updates",
+    dev: false,
+    danger: true,
+    description:
+      "Downloads the offered installer and hands the machine over to it \u2014 this ends the process. Refuses while anything is being recorded, and refuses outright in a devtools build.",
+  },
+
   // --- Dev: fixtures -----------------------------------------------
   {
     name: "dev_fixtures_state",

@@ -148,8 +148,10 @@ sequenceDiagram
     Note over CI: nothing is rebuilt
     CI->>CI: git log since the newest tag → notes.md
     CI->>CI: append standing install caveats
+    CI->>CI: latest.json from the installer + its .sig
     CI->>G: publish release v<version>, creating the tag
     Note over G: the new tag becomes the base<br/>`version` counts from next time
+    Note over G: installed Windows builds poll<br/>releases/latest/download/latest.json
 ```
 
 **It publishes rather than drafts.** The `needs: [version, test, build]` gate
@@ -170,12 +172,67 @@ tag.
 **The devtools installer is never attached** to a release. See
 [dev-portal.md](dev-portal.md).
 
+## The update manifest
+
+Windows builds update themselves from these releases
+([DEVELOPMENT.md §14](../DEVELOPMENT.md)). What makes that work is one extra
+asset, `latest.json`, written by the `Build update manifest` step from the
+artifacts the run just produced:
+
+```json
+{
+  "version": "0.9.0",
+  "notes": "<the same changelog the release carries>",
+  "pub_date": "2026-09-08T01:20:53.897Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "<contents of the installer's .sig>",
+      "url": "https://github.com/…/releases/download/v0.9.0/…-setup.exe"
+    }
+  }
+}
+```
+
+Three things about it are load-bearing.
+
+**The endpoint floats; the URL inside does not.** Installed builds poll
+`releases/latest/download/latest.json`, which GitHub always resolves to the
+newest non-draft, non-prerelease release — so the endpoint in
+`tauri.conf.json` never needs rewriting. But the `url` *inside* the manifest
+is the tagged asset path. If it floated too, a download would follow the next
+release and stop matching the signature sitting beside it.
+
+**`windows-x86_64` is the only platform key.** macOS is the stub recorder and
+`.dmg` is not an updatable bundle format; a macOS build's check finds no entry
+and reports that updates are unavailable. That is the intended behaviour, not
+a gap.
+
+**The devtools bundle is excluded by config, not by omission.**
+`tauri.devtools.conf.json` sets `createUpdaterArtifacts: false`, so it neither
+signs nor emits a `.sig`. A dev bundle that updated itself would replace
+itself with the production app — the opposite of what renaming the product was
+for.
+
+The step fails loudly if the installer or its signature is missing, rather
+than publishing a release whose manifest points at nothing.
+
 ## Signing
 
-Neither build is code-signed — no certificate is configured. Windows
-SmartScreen and macOS Gatekeeper both warn on first run. The standing caveat
-block appended to every release's notes says so; keep it in sync with the real
-status.
+Two different things share the word, and only one of them is configured.
+
+**Update signing** — configured. `TAURI_SIGNING_PRIVATE_KEY` and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` are repository secrets; the matching
+public key is in `src-tauri/tauri.conf.json` under `plugins.updater.pubkey`,
+and every installed build checks each download against it. **The pair is
+permanent** — the public half ships inside every installer ever built, so
+losing the private half strands every install in the field
+([DEVELOPMENT.md §14](../DEVELOPMENT.md)).
+
+**Code signing** — not configured, no certificate. Windows SmartScreen and
+macOS Gatekeeper both warn on first run. The standing caveat block appended to
+every release's notes says so; keep it in sync with the real status. The
+`.sig` files attached to a release are update signatures and do nothing about
+this.
 
 ## macOS builds are a dev convenience
 

@@ -18,6 +18,7 @@ mod retention;
 mod state_machine;
 mod tray;
 mod trim;
+mod update;
 
 // No `use crate::{error, warn, info}` here, unlike every other module:
 // this file *is* the crate root, and `#[macro_export]` already puts the
@@ -34,6 +35,22 @@ use tauri::Manager;
 /// view listens for it and re-fetches; without it a recording only
 /// appeared after a manual Refresh.
 pub(crate) const LIBRARY_CHANGED_EVENT: &str = "library-changed";
+
+/// Emitted when the background update check has a new answer. The About
+/// block and the settings badge listen for it, which is what keeps the
+/// frontend from polling a question whose answer changes twice a day.
+pub(crate) const UPDATE_STATUS_EVENT: &str = "update-status-changed";
+
+/// How long after startup the first update check runs. Late enough that it
+/// is never competing with the recorder backend coming up, the database
+/// opening or the first paint — none of which should wait on a network
+/// round-trip to GitHub.
+const UPDATE_FIRST_CHECK_DELAY: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// And how often after that. Deliberately slack: CI publishes a release for
+/// every commit that lands on `main`, so "something newer exists" is true
+/// most days, and a tighter loop would only re-discover the same answer.
+const UPDATE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
 
 /// Tauri's managed state: a handle on the `core::Ctx` that actually holds
 /// everything.
@@ -201,6 +218,191 @@ impl core::Autostart for PluginAutostart {
     }
 }
 
+// ---------------------------------------------------------------- updates
+//
+// The network half of `crate::update`, which owns the decision half and its
+// tests. Everything here needs an `AppHandle`, so none of it can live in
+// `core` (see that module's header).
+
+/// Records an update result and tells the frontend to re-read it.
+///
+/// The two go together every time — a stored result nothing is told about is
+/// a status the About block shows six hours late.
+///
+/// `CheckResult::Failed` carries a **whole sentence**, because the frontend
+/// prints it verbatim. That is what lets a failed *install* and a failed
+/// *check* share one state without the UI having to guess which it is
+/// looking at.
+fn record_update_result(app: &tauri::AppHandle, found: update::CheckResult) {
+    use tauri::Emitter;
+    match &found {
+        update::CheckResult::Found(offer) => {
+            info!("update", "{} is available", offer.version)
+        }
+        update::CheckResult::Failed(e) => warn!("update", "{e}"),
+        _ => debug!("update", "no update available"),
+    }
+    app.state::<AppState>().set_update_check_result(found);
+    if let Err(e) = app.emit(UPDATE_STATUS_EVENT, ()) {
+        warn!("update", "failed to emit update-status-changed: {e}");
+    }
+}
+
+/// Runs one update check and records what it found.
+///
+/// Never returns a `Result`: nothing calls this that could act on one. A
+/// failed check is a *state* the About block renders, not an error to
+/// propagate — the user's network being down is not a bug.
+async fn run_update_check(app: tauri::AppHandle) {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let found = match app.updater() {
+        Err(e) => update::CheckResult::Failed(format!("Could not check for updates: {e}")),
+        Ok(updater) => match updater.check().await {
+            Ok(Some(u)) => update::CheckResult::Found(update::UpdateOffer {
+                version: u.version.clone(),
+                notes: u.body.clone(),
+                pub_date: u.date.map(|d| d.to_string()),
+            }),
+            Ok(None) => update::CheckResult::NothingNewer,
+            // Includes the ordinary "this platform has no entry in
+            // `latest.json`", which is exactly what a macOS build gets:
+            // updates are Windows-only (DEVELOPMENT.md §14).
+            Err(e) => update::CheckResult::Failed(format!("Could not check for updates: {e}")),
+        },
+    };
+
+    record_update_result(&app, found);
+}
+
+/// Downloads the offered installer and hands the machine over to it.
+///
+/// **This ends the process**, one way or another: on Windows the plugin spawns
+/// the NSIS installer and exits, and the `app.exit(0)` below is the fallback
+/// for a platform where it returns instead.
+///
+/// `core::install_update` has already checked that nothing is being recorded.
+/// The finalize here is the belt for the gap between that check and this
+/// moment — the same reasoning, and the same call, as `tray::request_quit`.
+async fn run_update_install(app: tauri::AppHandle) {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let finalize_app = app.clone();
+    let finalized = tauri::async_runtime::spawn_blocking(move || {
+        let supervisor = {
+            let state = finalize_app.state::<AppState>();
+            Arc::clone(&state.supervisor)
+        };
+        supervisor.finalize_for_shutdown()
+    })
+    .await;
+    if let Ok(true) = finalized {
+        info!("update", "finalized an in-flight recording before updating");
+    }
+
+    // Re-checked rather than cached from the background poll: `Update` owns
+    // the download URL and its signature, and holding one for up to six hours
+    // across a release means installing something the endpoint has since
+    // moved on from.
+    // Every path out of here that is *not* a successful install records a
+    // result and emits. The frontend put the row into "Downloading…" the
+    // moment the button was pressed, and it has no other way to learn that
+    // this did not happen — `install_update` returned the instant the request
+    // was handed over, long before any of this ran.
+    let offer = match app.updater() {
+        Ok(updater) => match updater.check().await {
+            Ok(Some(u)) => u,
+            Ok(None) => {
+                record_update_result(&app, update::CheckResult::NothingNewer);
+                return;
+            }
+            Err(e) => {
+                record_update_result(
+                    &app,
+                    update::CheckResult::Failed(format!(
+                        "Could not install the update: {e}"
+                    )),
+                );
+                return;
+            }
+        },
+        Err(e) => {
+            record_update_result(
+                &app,
+                update::CheckResult::Failed(format!("Could not install the update: {e}")),
+            );
+            return;
+        }
+    };
+
+    info!("update", "installing {}", offer.version);
+    if let Err(e) = offer.download_and_install(|_, _| {}, || {}).await {
+        // Left in whatever state it reached, but still running and still
+        // recording-capable — nothing here has touched the installed app yet.
+        record_update_result(
+            &app,
+            update::CheckResult::Failed(format!("Could not install the update: {e}")),
+        );
+        return;
+    }
+    app.exit(0);
+}
+
+/// Whether this build is allowed to update itself.
+///
+/// A **runtime** `cfg!` rather than a `#[cfg]` around the callers,
+/// deliberately. A devtools bundle must never update itself — it would replace
+/// itself with the production app, and `tauri.devtools.conf.json` renames the
+/// product precisely so the two can coexist — but compiling the update wiring
+/// out under `--features devtools` would leave `CheckResult`'s variants and
+/// `Ctx`'s two update setters constructed by nothing, which is dead code that
+/// `-D warnings` fails the devtools clippy run over (CLAUDE.md). This way both
+/// configurations compile the same code and only the behaviour differs.
+fn updates_enabled() -> bool {
+    !cfg!(feature = "devtools")
+}
+
+/// Wires the update seam onto `Ctx`. Must run *before* the `Ctx` is handed to
+/// `manage`, which is what takes the `&mut`.
+fn wire_updates(app: &tauri::AppHandle, ctx: &mut core::Ctx) {
+    if !updates_enabled() {
+        info!("update", "devtools build: updates are off");
+        return;
+    }
+
+    let request_handle = app.clone();
+    ctx.set_update_requester(Box::new(move |request| {
+        let app = request_handle.clone();
+        match request {
+            update::UpdateRequest::Check => {
+                tauri::async_runtime::spawn(run_update_check(app));
+            }
+            update::UpdateRequest::Install => {
+                tauri::async_runtime::spawn(run_update_install(app));
+            }
+        }
+    }));
+}
+
+/// Starts the six-hourly check.
+///
+/// Called *after* `manage`, not with `wire_updates`: `run_update_check` reads
+/// `AppState` back off the handle, and a task spawned before the state exists
+/// would be relying on its own start-up delay to paper over the ordering.
+fn spawn_update_poll(app: &tauri::AppHandle) {
+    if !updates_enabled() {
+        return;
+    }
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(UPDATE_FIRST_CHECK_DELAY).await;
+        loop {
+            run_update_check(handle.clone()).await;
+            tokio::time::sleep(UPDATE_CHECK_INTERVAL).await;
+        }
+    });
+}
+
 /// The main window's label. Matches `capabilities/default.json`'s
 /// `"windows": ["main"]`, which is what Tauri would have used implicitly when
 /// the window came from `tauri.conf.json`.
@@ -272,6 +474,10 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![launch::HIDDEN_FLAG]),
         ))
+        // Registered unconditionally; whether it is ever *used* is
+        // `updates_enabled`. The endpoint and the public key that verifies
+        // what it serves live in `tauri.conf.json` under `plugins.updater`.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             // First thing in setup, and deliberately before the recorder
             // backend and the database: a release build has no console
@@ -552,6 +758,7 @@ pub fn run() {
                 ffmpeg_path(app.handle()),
             );
             ctx.set_autostart(Box::new(PluginAutostart(app.handle().clone())));
+            wire_updates(app.handle(), &mut ctx);
             let notify_handle = app.handle().clone();
             ctx.set_library_changed_notifier(Box::new(move || {
                 use tauri::Emitter;
@@ -563,6 +770,10 @@ pub fn run() {
             app.manage(AppState(Arc::new(ctx)));
             #[cfg(feature = "devtools")]
             app.manage(dev::DevState::default());
+
+            // After `manage`, because the check reads `AppState` back off the
+            // handle to record what it found.
+            spawn_update_poll(app.handle());
 
             // Before the window: the tray is what makes a `--hidden` start
             // reachable at all, so it must exist even if window creation

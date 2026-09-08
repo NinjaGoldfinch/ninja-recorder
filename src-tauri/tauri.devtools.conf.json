@@ -3,6 +3,7 @@
   "productName": "ninja-recorder-dev",
   "mainBinaryName": "ninja-recorder-dev",
   "bundle": {
+    "createUpdaterArtifacts": false,
     "windows": {
       "nsis": {
         "compression": "none"
