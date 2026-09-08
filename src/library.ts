@@ -25,7 +25,12 @@ import { getPrefs } from "./prefs";
 import { currentView, onViewChange } from "./router";
 import { openReview } from "./review";
 import { toast } from "./toast";
-import type { DiskUsage, ReconcileReport, RecordingRow } from "./types";
+import type {
+  DiskUsage,
+  ReconcileReport,
+  RecordingRow,
+  ScoreboardPlayer,
+} from "./types";
 
 interface Els {
   grid: HTMLElement;
@@ -258,15 +263,17 @@ function paintArt(el: HTMLElement, row: RecordingRow) {
   for (const slot of el.querySelectorAll<HTMLElement>("[data-icon]")) {
     const { icon, key } = slot.dataset;
     const src =
-      icon === "item"
-        ? itemIcon(Number(key))
-        : icon === "spell"
-          ? spellIcon(String(key))
-          : icon === "spell-id"
-            ? spellIconById(Number(key))
-            : icon === "rune"
-              ? runeIcon(Number(key))
-              : null;
+      icon === "champion"
+        ? championIcon(String(key))
+        : icon === "item"
+          ? itemIcon(Number(key))
+          : icon === "spell"
+            ? spellIcon(String(key))
+            : icon === "spell-id"
+              ? spellIconById(Number(key))
+              : icon === "rune"
+                ? runeIcon(Number(key))
+                : null;
     if (src) slot.innerHTML = `<img src="${escapeAttr(src)}" alt="" loading="lazy" />`;
   }
 }
@@ -362,6 +369,70 @@ function loadout(row: RecordingRow): string {
       <span class="vod-items" aria-hidden="true">${items.join("")}</span>`;
 }
 
+/** Five a side, which is what the block draws whatever the board holds. */
+const TEAM_SIZE = 5;
+
+/**
+ * Both team compositions, ours on the top line.
+ *
+ * The ten champions are the fastest way to recognise a game that the
+ * champion column cannot give you — "the one against the Yasuo" is how
+ * people actually remember a match — and they are already in
+ * `scoreboard_json`, so this costs no column, no query and no migration.
+ *
+ * **Which line is ours is a claim, and it is only made when the capture
+ * can back it.** `our_team` is absent whenever the poller never matched us
+ * in `allPlayers`, and the rule there is already that the row says nothing
+ * about which half is which. So the halves still draw — grouped, in the
+ * order the game listed them — but nothing labels either one, because a
+ * top line silently meaning "yours" would be a guess in a slot read as
+ * fact.
+ *
+ * Empty slots are drawn rather than skipped, exactly as in `loadout`: a
+ * recording with no scoreboard keeps the same shape as one that has it.
+ */
+function teams(row: RecordingRow): string {
+  const board = parseScoreboard(row.scoreboard_json);
+  const players = board?.players ?? [];
+
+  const known = board?.our_team ?? null;
+  const lead = known ?? players[0]?.team ?? null;
+  let ours = players.filter((p) => p.team === lead);
+  let enemy = players.filter((p) => p.team !== lead);
+
+  // A board that lands everybody on one side is not one this app has
+  // written — both halves of `team` come from the same Rust struct — but
+  // splitting it where the game would still draws two fives rather than a
+  // ten and a gap.
+  if (players.length > 0 && (ours.length === 0 || enemy.length === 0)) {
+    ours = players.slice(0, TEAM_SIZE);
+    enemy = players.slice(TEAM_SIZE);
+  }
+
+  const line = (side: ScoreboardPlayer[], label: string | null) => {
+    const slots = side
+      .slice(0, TEAM_SIZE)
+      .map(
+        (p) =>
+          `<span class="vod-slot" data-icon="champion" data-key="${escapeAttr(p.champion)}"
+                 title="${escapeAttr(label === null ? p.champion : `${label}: ${p.champion}`)}"></span>`,
+      );
+    while (slots.length < TEAM_SIZE) {
+      slots.push(`<span class="vod-slot vod-slot-empty"></span>`);
+    }
+    return slots.join("");
+  };
+
+  // `aria-hidden` for the same reason the items and perks are: ten more
+  // names in the row's label would bury the champion, the result and the
+  // date that make the list navigable in the first place. The `title` on
+  // each square is what a pointer gets, as everywhere else on the row.
+  const oursLabel = known === null ? null : "Your team";
+  const enemyLabel = known === null ? null : "Enemy team";
+  return `
+      <span class="vod-teams" aria-hidden="true">${line(ours, oursLabel)}${line(enemy, enemyLabel)}</span>`;
+}
+
 function outcomeAttr(win: boolean | null): string {
   if (win === null) return "unknown";
   return win ? "win" : "loss";
@@ -444,6 +515,8 @@ function card(row: RecordingRow): string {
       </span>
 
       ${loadout(row)}
+
+      ${teams(row)}
 
       <span class="vod-slack" aria-hidden="true"></span>
 

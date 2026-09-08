@@ -588,11 +588,14 @@ not ship them.
 
 **Nothing is bundled.** Files are fetched the first time a champion appears
 and cached under `<app data>/ddragon/<version>/`, so the installer grows by
-zero bytes and the disk cost is only what the user actually played — a
-champion square is about 7 KB, so a library touching sixty of them stays under
-half a megabyte. `tauri.conf.json`'s asset-protocol scope covers that
-directory, so the webview loads them as local files rather than reaching the
-network itself.
+zero bytes and the disk cost is only what the user actually met — a champion
+square is about 7 KB. Drawing both team compositions on the row raised that
+ceiling from the champions someone *played* to the ones they were *in a game
+with*, which converges on most of the roster; at roughly 170 champions the
+whole set is still only about 1.2 MB, and it is bounded by the game rather
+than by how many recordings the library holds. `tauri.conf.json`'s
+asset-protocol scope covers that directory, so the webview loads them as local
+files rather than reaching the network itself.
 
 **Offline is the normal case here, not the edge case.** This is a local VOD
 library; people open it with League closed and sometimes with nothing
@@ -671,9 +674,10 @@ wants both the keystone and a tree crest, so all of it flattens into one id →
 path map. Items need no map at all: Data Dragon files them under the numeric id
 the game itself reports.
 
-**One request per page, not per icon.** A row carries up to twelve pieces of
-art and a library shows dozens of rows, so `resolve_icons` takes four lists and
-answers with four maps.
+**One request per page, not per icon.** A row carries up to twenty-two pieces
+of art — a portrait, two spells, two runes, seven items and the ten champions
+of the two team compositions — and a library shows dozens of rows, so
+`resolve_icons` takes four lists and answers with four maps.
 
 **Six icons in flight, not one and not all of them.** The first version
 resolved them strictly in series, on the reasoning that firing a cold cache at

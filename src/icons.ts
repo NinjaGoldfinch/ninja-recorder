@@ -82,6 +82,16 @@ function collect(rows: RecordingRow[]): Wanted {
     if (row.champion) wanted.champions.add(row.champion);
 
     const board = parseScoreboard(row.scoreboard_json);
+
+    // Every champion in the game, not only ours: the row draws both team
+    // compositions. This is the one set that is bounded by the *game*
+    // rather than by the library — there are about 170 champions, a square
+    // is around 7 KB, and a library of any size converges on the ones its
+    // owner actually meets. Ten times the names is not ten times the disk.
+    for (const player of board?.players ?? []) {
+      if (player.champion) wanted.champions.add(player.champion);
+    }
+
     const us = board?.players.find((p) => p.is_us);
     if (!us) continue;
 

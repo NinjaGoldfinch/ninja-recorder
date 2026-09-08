@@ -15,9 +15,12 @@
 //!
 //! Nothing is bundled. Files are fetched the first time a champion appears
 //! and cached under `<app data>/ddragon/<version>/`, so the installer grows
-//! by zero and the disk cost is what the user actually played — a champion
-//! square is about 7 KB, so a library touching sixty of them is under half a
-//! megabyte.
+//! by zero and the disk cost is what the user actually met — a champion
+//! square is about 7 KB. The library row draws both team compositions, so
+//! that is the champions someone was *in a game with* rather than the ones
+//! they played, and it converges on most of the roster: about 170 squares,
+//! near enough 1.2 MB, bounded by the game rather than by how many
+//! recordings there are. See DEVELOPMENT.md §5.3.
 //!
 //! ## Offline is the normal case, not the edge case
 //!
