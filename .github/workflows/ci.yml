@@ -304,7 +304,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: src-tauri/target/libobs
-          key: libobs-${{ runner.os }}-${{ steps.libobs-rev.outputs.rev }}-ffmpeg-epoch1
+          key: libobs-${{ runner.os }}-${{ steps.libobs-rev.outputs.rev }}-ffmpeg-epoch2
 
       # Builds the out-of-process libobs worker from our capture-backend
       # fork (github.com/NinjaGoldfinch/libobs-recorder — see
@@ -315,8 +315,8 @@ jobs:
       # graph, not a Cargo artifact-dependency — that requires nightly
       # Rust + the unstable `bindeps` flag, which would force the whole
       # project — including a dev box's `cargo check` — onto nightly just
-      # for a Windows-only optional binary. Unverified — see
-      # DEVELOPMENT.md §2.2's status note.
+      # for a Windows-only optional binary. The staged backend this produces
+      # has since been confirmed capturing real Vanguard-protected games.
       - name: Stage libobs capture backend
         if: matrix.platform == 'windows-latest' && steps.libobs-cache.outputs.cache-hit != 'true'
         shell: pwsh
@@ -334,6 +334,13 @@ jobs:
           Copy-Item "$($dllDir.FullName)/*" src-tauri/target/libobs -Recurse -Force
           Copy-Item ../libobs-recorder-build/target/release/extprocess_recorder.exe src-tauri/target/libobs/extprocess_recorder.exe -Force
 
+      # The **lgpl** build, not gpl. Every ffmpeg invocation this app makes is
+      # `-c copy` — the faststart remux (`recorder/libobs/mod.rs`) and stem
+      # extraction (`audio_tracks.rs`) are both stream copies, and libobs does
+      # all the encoding — so not one GPL-only encoder is ever reachable.
+      # Dropping x264/x265 and friends takes ~13% off a bundle that is a large
+      # share of the 248 MB install (docs/windows-verification.md §5).
+      #
       # ffmpeg.exe is bundled into the same `libobs` resource folder so
       # `LibObsRecorder::stop` (src-tauri/src/recorder/libobs/mod.rs) can
       # remux each recording to a seekable faststart MP4 after capture —
@@ -348,7 +355,7 @@ jobs:
         if: matrix.platform == 'windows-latest' && steps.libobs-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile ffmpeg.zip
+          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl.zip" -OutFile ffmpeg.zip
           Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-extracted
           $bin = Get-ChildItem ffmpeg-extracted -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
           New-Item -ItemType Directory -Force -Path src-tauri/target/libobs | Out-Null

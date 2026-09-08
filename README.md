@@ -139,7 +139,7 @@ Full detail, with the runtime sequence and every diagram:
 | [docs/frontend.md](docs/frontend.md) | Module ownership, views, IPC surface, theming |
 | [docs/dev-portal.md](docs/dev-portal.md) | Driving the backend without League running |
 | [docs/ci-and-releases.md](docs/ci-and-releases.md) | CI job graph, versioning, releases |
-| [docs/windows-verification.md](docs/windows-verification.md) | The hardware checklist that closes the unverified-capture gap |
+| [docs/windows-verification.md](docs/windows-verification.md) | What was checked on real hardware, and what is still open |
 | [docs/product-design.md](docs/product-design.md) | The product, the decisions behind it, and how it was actually built |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | The *why*: constraints, decisions, alternatives rejected, risks |
 

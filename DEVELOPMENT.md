@@ -747,12 +747,12 @@ screen.
 It is best effort throughout: a failed trim is logged and the recording stands
 as it was. A VOD with its loading screen still on it is a working VOD.
 
-What has *not* been established is whether multi-track audio, stream
-dispositions and the faststart index survive the copy. There is no ffmpeg on
-the machine this was written on and CI runs unit tests rather than video, so
-that wants confirming on real footage before it is trusted. `dev_trim_lead_in`
-runs the same path by hand, for recordings that predate this and for a file the
-finalize skipped.
+Whether multi-track audio, stream dispositions and the faststart index survive
+the copy was the open question here, and real footage has since answered it:
+trimmed recordings play, seek, and still carry their separate stems. It is
+borne out rather than proven — nothing asserts it automatically, because CI
+runs unit tests rather than video. `dev_trim_lead_in` runs the same path by
+hand, for recordings that predate this and for a file the finalize skipped.
 
 A recording whose live poller never came up has no alignment and no samples, so
 its window is the whole file — the honest outcome, since nothing knows where
@@ -877,7 +877,7 @@ Two changes leaked usefully out of the portal into the app proper. `Supervisor` 
 | Vanguard behavior changes re: WGC | WGC is a core OS compositor API used by Xbox Game Bar itself — lowest-risk capture path that exists. No fallback plan needed beyond display capture |
 | libobs Rust bindings immaturity | Using a patched fork of `libobs-recorder` (§2.1) rather than raw bindings — but it's still a young, single-maintainer ecosystem and now a fork we own the patch for. Budget time; fallback is a thin C shim over the (stable, C) libobs API. The trait keeps this contained |
 | Our `libobs-recorder` fork falls behind upstream | The patch is now two commits, not one (capture source + muxer settings, then multi-track audio §2.5), and the second one touches encoder/source lifetime rather than just settings — so a re-base is no longer free. Still small and self-contained; watch for upstream libobs version bumps we might want (new encoders, bug fixes) |
-| Per-app audio capture doesn't work for League | `wasapi_process_output_capture` needs Win10 2004+, is still flagged beta in OBS 30.x, and has never been tried against a Vanguard-protected process. Every preset naming "game audio" depends on it (§2.5). Fallback is the Desktop preset, which uses ordinary loopback — documented rather than automatic, so a silent game track is diagnosable |
+| ~~Per-app audio capture doesn't work for League~~ **closed** | `wasapi_process_output_capture` is beta in OBS 30.x and the presets naming "game audio" all depend on it (§2.5), so this was the audio risk worth naming. It works: game audio lands on its own track across real Vanguard-protected games. The Desktop preset remains the documented fallback if a driver stack ever refuses |
 | Stem playback drifts out of sync | The review player syncs a sidecar `<audio>` against the video by hand (§2.5). Bounded blast radius: playback only, over a file that already exists, fixed by reopening the VOD. Track 0 — the default — never uses this path |
 | YouTube quota audit friction | Ship upload as "bring your own consent" early; apply for quota increase well before it matters |
 | Disk-full during recording | Preflight free-space check at record start; stop gracefully + notify rather than corrupt |
