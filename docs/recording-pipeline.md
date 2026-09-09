@@ -208,6 +208,21 @@ the payload with it. `Stolen` and `KillStreak` additionally accept whichever
 spelling the client uses, since Riot has historically sent booleans in this
 API as the strings `"True"`/`"False"`.
 
+**What it drops is recoverable afterwards, and that is deliberate.** Dropping
+the entry is right while a game is running — #74 is what happens when one bad
+event takes the whole payload with it — but it used to leave nothing behind
+except a `debug!` line in a log nobody kept, so the shape that caused it was
+gone with the game. Fixture capture writes the raw payload
+([DEVELOPMENT.md §3.3](../DEVELOPMENT.md)), so re-parsing it reproduces the
+same failure exactly: `shapes::unreadable_events` re-runs the parse over every
+captured payload and reports each shape it could not read, with the JSON that
+broke it. See [dev-portal.md](dev-portal.md) for where that surfaces.
+
+That pairs with `shapes::unmodelled_events`, and the pair is the whole
+diagnosis: one lists events that parsed perfectly well and then classified to
+nothing, the other lists events that never parsed at all. The two failures look
+identical from the outside — no marker — and have completely different fixes.
+
 ### What each poll leaves behind
 
 Markers and samples are the *product* of a poll. They are not a record of

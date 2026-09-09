@@ -158,6 +158,7 @@ pub fn dev_shape_report() -> Result<ShapeReport, String> {
         scanned,
         unreadable,
         unmodelled_events: crate::live_client::shapes::unmodelled_events(&payloads),
+        unreadable_events: crate::live_client::shapes::unreadable_events(&payloads),
     })
 }
 
@@ -171,6 +172,10 @@ pub struct ShapeReport {
     /// available, so never silently skipped.
     pub unreadable: Vec<String>,
     pub unmodelled_events: Vec<crate::live_client::shapes::UnmodelledEvent>,
+    /// Events `lenient_events` dropped outright, with the JSON that broke
+    /// them. The other half of the diagnosis: `unmodelled_events` lists what
+    /// parsed and then classified to nothing, this lists what never parsed.
+    pub unreadable_events: Vec<crate::live_client::shapes::UnreadableEvent>,
 }
 
 /// Saves a payload as a fixture under the capture directory, so a
