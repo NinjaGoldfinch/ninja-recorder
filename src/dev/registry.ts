@@ -579,7 +579,7 @@ export const COMMANDS: CommandSpec[] = [
     group: "Dev · Fixtures",
     dev: true,
     description:
-      "Reads every captured payload back and reports what the parser did not understand \u2014 event names with no `classify_event` arm, and files that are not JSON at all. A report, not a validator: nothing here changes what the parser accepts. `HordeKill` sat in captures for months while Voidgrubs never became markers.",
+      "Reads every captured payload back and reports what the parser did not understand \u2014 event names with no `classify_event` arm, events that failed to deserialize at all (with the JSON that broke them), and files that are not JSON at all. A report, not a validator: nothing here changes what the parser accepts. `HordeKill` sat in captures for months while Voidgrubs never became markers.",
   },
   {
     name: "dev_fixture_read",
