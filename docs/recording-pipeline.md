@@ -208,6 +208,14 @@ the payload with it. `Stolen` and `KillStreak` additionally accept whichever
 spelling the client uses, since Riot has historically sent booleans in this
 API as the strings `"True"`/`"False"`.
 
+**That leniency is load-bearing right now, not defensive.** It was written
+from documentation, and the captured game confirms it: `Stolen` arrives as the
+string `"False"` six times in
+`fixtures/live-client/captured-allgamedata.json`. `flexible_bool` absorbs it,
+nothing fails, and nothing said so until `shapes::mistyped_fields` existed —
+which is the exact silent loss #113 was about. A field Riot spells that way
+*without* a lenient reader waiting costs the whole event instead.
+
 **What it drops is recoverable afterwards, and that is deliberate.** Dropping
 the entry is right while a game is running — #74 is what happens when one bad
 event takes the whole payload with it — but it used to leave nothing behind
@@ -222,6 +230,17 @@ That pairs with `shapes::unmodelled_events`, and the pair is the whole
 diagnosis: one lists events that parsed perfectly well and then classified to
 nothing, the other lists events that never parsed at all. The two failures look
 identical from the outside — no marker — and have completely different fixes.
+
+Two more sit alongside them. `shapes::mistyped_fields` reports a modelled field
+whose JSON type is not the one modelled, and marks whether a lenient reader
+absorbed it — a *tolerated* mismatch is a value silently lost rather than an
+event dropped, and it is invisible everywhere else. `shapes::unread_event_keys`
+reports keys on events that nothing reads, which is what a new field from Riot
+looks like. Both are scoped to the events array rather than the whole payload:
+the capture carries 171 distinct key paths and almost all of them are
+unmodelled on purpose, so the same check over `activePlayer` and `allPlayers`
+would be hundreds of lines nobody reads. Over events it reports nothing on the
+real capture, which is what makes a line worth acting on.
 
 ### What each poll leaves behind
 

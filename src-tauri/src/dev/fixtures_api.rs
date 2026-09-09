@@ -159,6 +159,8 @@ pub fn dev_shape_report() -> Result<ShapeReport, String> {
         unreadable,
         unmodelled_events: crate::live_client::shapes::unmodelled_events(&payloads),
         unreadable_events: crate::live_client::shapes::unreadable_events(&payloads),
+        mistyped_fields: crate::live_client::shapes::mistyped_fields(&payloads),
+        unread_event_keys: crate::live_client::shapes::unread_event_keys(&payloads),
     })
 }
 
@@ -176,6 +178,14 @@ pub struct ShapeReport {
     /// them. The other half of the diagnosis: `unmodelled_events` lists what
     /// parsed and then classified to nothing, this lists what never parsed.
     pub unreadable_events: Vec<crate::live_client::shapes::UnreadableEvent>,
+    /// Modelled fields that arrived as the wrong JSON type. The ones marked
+    /// `tolerated` are the point: a lenient reader absorbed them, nothing
+    /// failed, and the value was silently lost.
+    pub mistyped_fields: Vec<crate::live_client::shapes::MistypedField>,
+    /// Keys on events that nothing reads — a new field from Riot. Scoped to
+    /// events, where the real capture reports nothing, so a line here means
+    /// something.
+    pub unread_event_keys: Vec<crate::live_client::shapes::UnreadKey>,
 }
 
 /// Saves a payload as a fixture under the capture directory, so a
