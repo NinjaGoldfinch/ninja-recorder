@@ -297,6 +297,39 @@ stateDiagram-v2
     settings --> library: close (always returns to library)
 ```
 
+### The timeline stays above the fold
+
+The review view is a page that scrolls, but the ruler under the advantage
+curve is not optional furniture — it is how a position in the game is read off
+the timeline at all, and having to scroll to it defeats the widget.
+
+So the player is capped, and **the cap is a `max-width`, not a `max-height`**.
+`.player-wrap` takes the vertical space left over after the app bar, the view
+header and the whole timeline, and multiplies it by the recording's own aspect
+ratio; `review.ts` publishes that ratio as `--player-ratio` on `loadedmetadata`,
+falling back to the same 16/9 the video's `aspect-ratio` placeholder already
+uses so the two never disagree before metadata lands.
+
+Capping the height directly is the version that looks right and is wrong: the
+element keeps its full width, `object-fit: contain` letterboxes inside it, and
+resizing the window grows and shrinks black bars — which is why the original
+`max-height: 60vh` was removed ([DEVELOPMENT.md §5.1](../DEVELOPMENT.md)).
+Making the player narrower rather than shorter leaves nothing to letterbox.
+
+Two details that are load-bearing rather than tidy:
+
+- **`--player-chrome` is one number, and deliberately a little generous.** It
+  is a sum of measured heights, and the app bar's is the one most likely to
+  move. A rem too many costs a slightly smaller player; a rem too few puts the
+  ruler back under the fold.
+- **Fullscreen sets `max-width: none`.** The cap is about clearing a fold, and
+  fullscreen has neither a fold nor a timeline beneath it; left on, it would
+  clamp the video to a fraction of the screen.
+
+On a tall window the cap never binds — the content column's own width is the
+smaller of the two — so this changes nothing for anyone who was not scrolling
+in the first place.
+
 ### The player clips both ends
 
 A recording brackets the game: it starts on the loading screen — twenty
