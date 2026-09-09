@@ -136,7 +136,18 @@ async function load() {
   paint();
 }
 
+/**
+ * Which request the panel is currently waiting on.
+ *
+ * Two clicks in the list whose responses land out of order would otherwise
+ * leave the newer selection displaying the older recording's row, provenance
+ * and counts — which in a panel whose whole purpose is doubting a value is the
+ * worst failure available to it.
+ */
+let openToken = 0;
+
 async function open(id: number) {
+  const token = ++openToken;
   selected = id;
   report = null;
   reportError = null;
@@ -144,6 +155,9 @@ async function open(id: number) {
   const result = await tryCall<RecordingReport>("dev_recording_report", {
     recordingId: id,
   });
+  // A newer click has already taken over; this answer is about a recording
+  // nobody is looking at any more.
+  if (token !== openToken) return;
   if (result.ok) {
     report = result.value;
   } else {

@@ -145,7 +145,11 @@ function route() {
   // the portal *on* a recording rather than at an empty list.
   const [id, arg] = location.hash.replace(/^#\/?/, "").split("/");
   const panel = PANELS.find((p) => p.id === id) ?? PANELS[0];
-  if (arg) pendingPayload = arg;
+  // Always assigned, never only-on-present. `ctx.payload` clears on read, but
+  // a panel that never reads it leaves the value set — so `#/overview/12`,
+  // which falls back to the first panel and consumes nothing, would hand `12`
+  // to whichever panel is opened next.
+  pendingPayload = arg ?? null;
   void mountPanel(panel);
 }
 

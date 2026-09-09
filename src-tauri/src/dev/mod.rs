@@ -90,11 +90,19 @@ pub async fn dev_open_portal(
         existing.set_focus().map_err(|e| e.to_string())?;
         // Already open, so the fragment has to be pushed rather than built
         // into the URL. `hashchange` is what the portal's router listens on,
-        // and assigning the same value fires nothing — which is correct: the
-        // panel is already showing that recording.
+        // and assigning the same value fires nothing at all.
+        //
+        // That is *not* the same as "the panel is already showing that
+        // recording", which is what this used to assume. The Library panel's
+        // own list moves its selection without touching the hash, so the hash
+        // can name 12 while the panel shows 7 — and then this button would
+        // assign an identical value, fire nothing, and read as dead. The
+        // synthetic event forces the route in exactly that case.
         if !fragment.is_empty() {
             existing
-                .eval(format!("location.hash = '{fragment}'"))
+                .eval(format!(
+                    "if (location.hash === '{fragment}')                        window.dispatchEvent(new HashChangeEvent('hashchange'));                      else location.hash = '{fragment}';"
+                ))
                 .map_err(|e| e.to_string())?;
         }
         return Ok(());

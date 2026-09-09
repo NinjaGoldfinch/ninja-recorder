@@ -957,30 +957,6 @@ impl Db {
         Ok(())
     }
 
-    /// The game-time to video-time offset this recording's samples were
-    /// written with, if it has any.
-    ///
-    /// Recovered from a sample rather than recomputed. The timeline's
-    /// frames carry a game clock and have to land on the same video
-    /// positions the 1 Hz samples did, but the alignment that produced
-    /// those is gone by the time the timeline arrives — the API it came
-    /// from stops answering the moment the game ends. Reading it back off a
-    /// row that already went through it is that same alignment, not a
-    /// second one.
-    ///
-    /// `None` when the recording has no samples at all, which is what a
-    /// game whose live poller never came up looks like. The caller writes
-    /// no gold in that case: frames placed through a guessed offset would
-    /// draw the right curve at the wrong times.
-    /// Where the game last reported itself, in video time.
-    ///
-    /// The other end of `sample_alignment_offset`. Capture outlives the game
-    /// window — nothing stops it at the instant the game ends — and a window
-    /// that no longer exists captures as black under WGC, so this is where
-    /// the black begins (#120).
-    ///
-    /// `None` when there are no samples, which is the same answer as the head
-    /// end gives and means the same thing: nothing knows, so touch nothing.
     /// How many markers and gold-bearing samples one recording carries.
     ///
     /// Counted rather than fetched: the inspector wants to know whether a
@@ -992,6 +968,7 @@ impl Db {
     /// timeline at one frame a minute, against the live poller's 1 Hz — so
     /// "1500 samples, 0 with gold" is a diagnosis rather than a contradiction
     /// (#137).
+    ///
     /// Only the dev portal's inspector calls this, and clippy runs without
     /// `--all-targets`, so in a shipped build it is genuinely dead code
     /// (CLAUDE.md). Same shape as `command_names`'s allow.
@@ -1010,6 +987,15 @@ impl Db {
         .map_err(DbError::from)
     }
 
+    /// Where the game last reported itself, in video time.
+    ///
+    /// The other end of `sample_alignment_offset`. Capture outlives the game
+    /// window — nothing stops it at the instant the game ends — and a window
+    /// that no longer exists captures as black under WGC, so this is where
+    /// the black begins (#120).
+    ///
+    /// `None` when there are no samples, which is the same answer as the head
+    /// end gives and means the same thing: nothing knows, so touch nothing.
     pub fn last_sample_video_time_s(&self, recording_id: i64) -> Result<Option<f64>, DbError> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
@@ -1022,6 +1008,21 @@ impl Db {
         .map_err(DbError::from)
     }
 
+    /// The game-time to video-time offset this recording's samples were
+    /// written with, if it has any.
+    ///
+    /// Recovered from a sample rather than recomputed. The timeline's
+    /// frames carry a game clock and have to land on the same video
+    /// positions the 1 Hz samples did, but the alignment that produced
+    /// those is gone by the time the timeline arrives — the API it came
+    /// from stops answering the moment the game ends. Reading it back off a
+    /// row that already went through it is that same alignment, not a
+    /// second one.
+    ///
+    /// `None` when the recording has no samples at all, which is what a
+    /// game whose live poller never came up looks like. The caller writes
+    /// no gold in that case: frames placed through a guessed offset would
+    /// draw the right curve at the wrong times.
     pub fn sample_alignment_offset(&self, recording_id: i64) -> Result<Option<f64>, DbError> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
