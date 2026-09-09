@@ -14,6 +14,7 @@
 mod fixtures_api;
 mod info;
 mod log_api;
+mod recording_api;
 mod retention_api;
 mod seed;
 mod simulate;
@@ -27,6 +28,7 @@ mod trim;
 pub use fixtures_api::*;
 pub use info::*;
 pub use log_api::*;
+pub use recording_api::*;
 pub use retention_api::*;
 pub use seed::*;
 pub use simulate::*;

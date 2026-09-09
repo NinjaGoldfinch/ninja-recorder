@@ -275,6 +275,14 @@ export const COMMANDS: CommandSpec[] = [
     description: "Reveals one of the app's directories in the OS file manager.",
     args: [{ name: "which", kind: "string", default: "recordings", help: "recordings | app_data | fixtures | repo_fixtures" }],
   },
+  {
+    name: "dev_recording_report",
+    group: "Dev · Diagnostics",
+    dev: true,
+    description:
+      "One recording's whole story: the row, a named likely writer for every field that has more than one, marker and sample counts, the alignment offset, and the scoreboard and diagnostics parsed. Read-only \u2014 the actions that operate on a recording are their own commands.",
+    args: [{ name: "recordingId", kind: "number" }],
+  },
 
   // --- Dev: database ----------------------------------------------
   {
