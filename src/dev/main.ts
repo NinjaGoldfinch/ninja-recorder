@@ -22,6 +22,7 @@ import { recorderPanel } from "./panels/recorder";
 import { retentionPanel } from "./panels/retention";
 import { fixturesPanel } from "./panels/fixtures";
 import { diagnosticsPanel } from "./panels/diagnostics";
+import { libraryPanel } from "./panels/library";
 import { logPanel } from "./panels/log";
 
 export interface Panel {
@@ -56,6 +57,7 @@ const PANELS: Panel[] = [
   retentionPanel,
   fixturesPanel,
   commandsPanel,
+  libraryPanel,
   diagnosticsPanel,
   logPanel,
 ];
@@ -138,8 +140,12 @@ async function mountPanel(panel: Panel) {
 }
 
 function route() {
-  const id = location.hash.replace(/^#\/?/, "") || PANELS[0].id;
+  // `#/library/12` — a panel id, optionally followed by one segment that
+  // becomes the mount payload. That is what lets the main window's rows open
+  // the portal *on* a recording rather than at an empty list.
+  const [id, arg] = location.hash.replace(/^#\/?/, "").split("/");
   const panel = PANELS.find((p) => p.id === id) ?? PANELS[0];
+  if (arg) pendingPayload = arg;
   void mountPanel(panel);
 }
 

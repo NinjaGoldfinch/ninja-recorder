@@ -21,6 +21,7 @@ import {
   queueOrModeLabel,
   vodTitle,
 } from "./format";
+import { revealRowInspectors } from "./devportal";
 import { getPrefs } from "./prefs";
 import { currentView, onViewChange } from "./router";
 import { openReview } from "./review";
@@ -209,6 +210,10 @@ function render() {
   els.empty.hidden = true;
   els.grid.hidden = false;
   els.grid.innerHTML = rows.map(card).join("");
+  // The grid is rebuilt on every `library-changed`, and the devtools probe
+  // resolves once — so the reveal has to be re-applied here or the buttons
+  // appear on the first paint and vanish on the next.
+  revealRowInspectors();
   void fillInArt(rows);
 }
 
@@ -531,6 +536,14 @@ function card(row: RecordingRow): string {
         <button class="icon-btn danger" type="button" data-delete="${row.id}"
                 aria-label="Delete recording" title="Delete recording"
         >🗑</button>
+        <!-- Devtools only, revealed the same way the portal button is:
+             asked for, never configured. Rendered hidden rather than
+             conditionally built, so the row markup has one shape and the
+             reveal is a single class toggle after the probe answers. -->
+        <button class="icon-btn dev-only" type="button" data-inspect="${row.id}"
+                aria-label="Inspect in the dev portal"
+                title="Inspect in the dev portal" hidden
+        >🔎</button>
       </span>
     </article>`;
 }
@@ -553,6 +566,15 @@ function onGridClick(e: MouseEvent) {
 
   // Anything else inside the actions group must not fall through to
   // opening the VOD.
+  const inspect = target.closest<HTMLElement>("[data-inspect]");
+  if (inspect) {
+    // Opens the portal *on* this recording. The id goes over as a number and
+    // Rust builds the fragment, so nothing string-shaped reaches a URL.
+    void call("dev_open_portal", { recordingId: Number(inspect.dataset.inspect) }).catch(
+      (err) => console.warn("dev portal unavailable:", err),
+    );
+    return;
+  }
   if (target.closest(".vod-actions")) return;
 
   const card = target.closest<HTMLElement>(".vod-row");

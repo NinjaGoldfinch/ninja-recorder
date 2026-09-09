@@ -248,3 +248,28 @@ export interface RecordingDiagnostics {
   markers: number;
   samples: number;
 }
+
+/** Mirrors `dev::recording_api::Provenance`. `source` is null when nothing
+ *  wrote the field, which is its own answer — the panel must not invent a
+ *  plausible-looking writer for an empty value. */
+export interface Provenance {
+  field: string;
+  source: string | null;
+  note: string;
+}
+
+/** Mirrors `dev::recording_api::RecordingReport` — one recording from every
+ *  source that knows something about it (#99). `gold_samples` is counted
+ *  apart from `samples` because they come from different sources on
+ *  different schedules; plenty of samples and no gold is the #137
+ *  fingerprint rather than a contradiction. */
+export interface RecordingReport {
+  row: RecordingRow;
+  provenance: Provenance[];
+  markers: number;
+  samples: number;
+  gold_samples: number;
+  alignment_offset_s: number | null;
+  scoreboard: unknown | null;
+  diagnostics: unknown | null;
+}
