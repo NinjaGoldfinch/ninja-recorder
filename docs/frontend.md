@@ -525,6 +525,22 @@ depends on game state, which changes constantly. So `status.ts` also nudges
 `update.ts` on a state **edge** and not every tick: without it the Install
 button would sit enabled through a whole game and only refuse at the click.
 
+**The release notes are built as nodes, never as markup.** `latest.json` is
+fetched over HTTPS but is *not* covered by the update signature — only the
+installer it points at is — so everything in the notes is remote text the app
+did not write. `renderNotes` therefore drops the `## What's changed` heading,
+turns `- ` lines into a list, and makes a paragraph of anything else, with
+every string reaching the DOM through `textContent`.
+
+The one exception is emphasis, and it is an exception in *parsing*, not in
+trust. GitHub's generated notes end with `**Full changelog**: <url>`, which a
+pure-`textContent` paragraph rendered with its asterisks showing. `inlineNodes`
+splits those runs into `<strong>` elements built with `createElement` and
+filled with `textContent`, so nothing from the manifest is ever interpreted as
+HTML. Emphasis is the only inline syntax the notes contain, so it is the only
+one handled — an unclosed `**` matches nothing and the line shows as written,
+which is the same "shown rather than swallowed" rule the line types follow.
+
 ### Command surface
 
 The names and arguments below are the IPC contract and have not changed, but

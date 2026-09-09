@@ -122,12 +122,43 @@ export async function refreshUpdateStatus() {
 }
 
 /**
+ * The one piece of inline markdown the notes actually contain.
+ *
+ * GitHub's generated notes end with `**Full changelog**: <url>`, and a
+ * paragraph built with `textContent` renders that with its asterisks showing.
+ * Emphasis is the only inline syntax that appears, so it is the only one
+ * handled — anything else is left exactly as written rather than half-parsed.
+ *
+ * **Still nodes, never markup.** `<strong>` is built with `createElement` and
+ * filled with `textContent`, so the guarantee in `renderNotes` below is
+ * unchanged: nothing from the manifest is ever interpreted as HTML.
+ */
+function inlineNodes(line: string): Node[] {
+  const nodes: Node[] = [];
+  let last = 0;
+  // Non-greedy, and it cannot span lines — the caller has already split on
+  // them — so an unclosed `**` simply matches nothing and the line is shown
+  // as written.
+  for (const match of line.matchAll(/\*\*(.+?)\*\*/g)) {
+    const at = match.index ?? 0;
+    if (at > last) nodes.push(document.createTextNode(line.slice(last, at)));
+    const strong = document.createElement("strong");
+    strong.textContent = match[1];
+    nodes.push(strong);
+    last = at + match[0].length;
+  }
+  if (last < line.length) nodes.push(document.createTextNode(line.slice(last)));
+  return nodes;
+}
+
+/**
  * Renders the changelog as **text nodes**, never markup.
  *
  * `latest.json` is fetched over HTTPS but is not covered by the update
  * signature — only the installer it points at is — so everything in here is
  * remote text this app did not write. Building nodes rather than assigning
- * `innerHTML` means there is no escaping to get wrong.
+ * `innerHTML` means there is no escaping to get wrong, and `inlineNodes`
+ * above keeps that true while still rendering emphasis.
  *
  * The format CI writes is a `## What's changed` heading, `- ` bullets per
  * commit, and a trailing full-changelog line. The heading is dropped (the row
@@ -150,13 +181,13 @@ function renderNotes(notes: string | null) {
     if (line.startsWith("- ")) {
       list ??= els.notes.appendChild(document.createElement("ul"));
       const item = document.createElement("li");
-      item.textContent = line.slice(2);
+      item.append(...inlineNodes(line.slice(2)));
       list.appendChild(item);
       continue;
     }
     list = null;
     const para = document.createElement("p");
-    para.textContent = line;
+    para.append(...inlineNodes(line));
     els.notes.appendChild(para);
   }
   els.notes.hidden = false;
