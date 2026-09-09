@@ -378,6 +378,34 @@ flavour of the same one, and it is a thing you would go looking for by name.
 `(stolen)` survives on the three it can apply to, because a stolen Baron is the
 moment, not a detail.
 
+### An event carries two clocks, and both are shown
+
+Every marker stores `game_time_s` and `video_time_s`, and the event list and
+the timeline tooltip print both — the game clock first, the position in the
+recording after it in the subtler colour.
+
+They are not the same fact twice. **The game clock is what the event *is*:**
+Live Client Data's own number, recorded as the event arrived, and the one a
+person says out loud — "Baron at 24:30". **The video time is derived** —
+`game_time_s` mapped through whatever alignment was in force at the time, with
+a fallback for a marker seen before the game clock ever moved (see
+`PendingMarker::resolve`, and [recording-pipeline.md](recording-pipeline.md)
+for why the mapping happens at finalize rather than at ingest). It is the half
+that can be wrong.
+
+That is why both are shown rather than the more meaningful one alone. A
+recording brackets its game — it opens on the loading screen — so the two
+never agree, and the gap between them *is* the lead-in. It is also the only
+place a bad alignment is visible from the UI: a kill the list calls 24:30 that
+seeks to black is a story the two numbers tell together and neither tells
+alone. The Diagnostics panel names an unproven alignment
+([dev-portal.md](dev-portal.md)); this is what it looks like from the front.
+
+The game clock's colour is scoped to the list. The timeline tooltip is a fixed
+dark surface in both themes with a palette of its own, and the page's muted
+grey — chosen against a light background — disappears into it; scoped, the
+tooltip's copy simply inherits the tooltip's own text colour.
+
 ## Backend communication
 
 Two directions, deliberately asymmetric.
