@@ -942,6 +942,34 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+/* Two clocks per event, and they answer different questions: the game
+ * clock is what the event *is*, the video time is where this file keeps
+ * it. Tabular figures so the pair reads as two columns down the list
+ * rather than as a jitter of digits, and the game clock leads in the
+ * stronger colour because it is the one being looked for. */
+.marker-times {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: flex;
+  gap: var(--sp-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Scoped to the list on purpose. The timeline tooltip is a fixed dark
+ * surface in both themes with a palette of its own, and the page's muted
+ * grey — picked against a light background — disappears into it. Left
+ * unscoped, the game clock would be the one unreadable thing in the
+ * tooltip; scoped, it simply inherits the tooltip's own text colour. */
+.marker-list .marker-game-time {
+  color: var(--text-muted);
+}
+
+/* The wrapper already owns the push to the right edge; the rule above
+ * would otherwise spread the two numbers apart with a second `auto`. */
+.marker-times .hint {
+  margin-left: 0;
+}
+
 .marker-icon {
   flex-shrink: 0;
   filter: var(--marker-boost);
