@@ -400,12 +400,49 @@ button:disabled {
   flex-shrink: 0;
 }
 
+/* Everything above and below the player that has to stay on screen with
+ * it: the app bar, the container's top padding, the view header, and the
+ * whole timeline down past the ruler. One number, in one place, because
+ * the only reason it exists is to be adjusted when that furniture
+ * changes.
+ *
+ * Deliberately a little generous — it is a sum of measured heights, and
+ * the app bar's is the one most likely to move. Being a rem over costs a
+ * slightly smaller player; being a rem under puts the ruler back under the
+ * fold, which is the whole thing this exists to prevent. */
+.review-view {
+  --player-chrome: 18rem;
+}
+
 .player-wrap {
   position: relative;
   background-color: #000;
   border-radius: var(--r-lg);
   overflow: hidden;
   box-shadow: var(--shadow-2);
+
+  /* The player is capped by *height*, expressed as a width.
+   *
+   * A `max-height` on the video is the obvious way to do this and is the
+   * one thing that must not be used: the element keeps its full width,
+   * `object-fit: contain` letterboxes inside it, and the window grows and
+   * shrinks black bars as it is resized. That is exactly why the old
+   * `max-height: 60vh` was removed (DEVELOPMENT.md §5.1).
+   *
+   * Capping the wrapper's width instead makes the video narrower rather
+   * than shorter, so it keeps its own aspect ratio and there is nothing to
+   * letterbox. `--player-ratio` is the recording's real ratio, published
+   * from `review.ts` once metadata lands; the fallback matches the 16/9
+   * placeholder the video carries until then, so the two never disagree.
+   *
+   * `max()` is the floor: on a window too short for the arithmetic to
+   * leave anything, the player stops shrinking and the page scrolls the
+   * way it always did, rather than collapsing to nothing. */
+  max-width: max(
+    28rem,
+    calc((100vh - var(--player-chrome)) * var(--player-ratio, 1.7778))
+  );
+  margin-inline: auto;
 }
 
 #review-video {
@@ -439,6 +476,10 @@ button:disabled {
 .player-wrap:fullscreen {
   width: 100vw;
   height: 100vh;
+  /* The cap above is about clearing the fold on a page that scrolls.
+   * Fullscreen has no fold and no timeline under it, and leaving the cap
+   * on would clamp the width to a fraction of the screen. */
+  max-width: none;
   border-radius: 0;
 }
 

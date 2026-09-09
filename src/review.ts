@@ -187,6 +187,7 @@ export function initReview() {
   video?.addEventListener("loadedmetadata", () => {
     applyStartPosition();
     updatePlayhead();
+    publishPlayerRatio();
   });
 
   playPauseBtn?.addEventListener("click", togglePlay);
@@ -1028,6 +1029,29 @@ function bindScrubbing(track: HTMLElement, intercept?: (e: PointerEvent) => bool
   };
   track.addEventListener("pointerup", endScrub);
   track.addEventListener("pointercancel", endScrub);
+}
+
+/**
+ * Hands the recording's real aspect ratio to CSS as `--player-ratio`.
+ *
+ * `.player-wrap` caps the player by height, and it has to express that cap
+ * as a *width* — capping the height instead would letterbox inside a
+ * full-width element, which is the bug that removed the old
+ * `max-height: 60vh` (DEVELOPMENT.md §5.1). Turning a height budget into a
+ * width needs the ratio, and only the file knows it.
+ *
+ * Until this runs, the CSS fallback and the video's own `aspect-ratio`
+ * placeholder are both 16/9, so the cap is right for a 16/9 recording from
+ * the first paint and merely approximate for anything else, for as long as
+ * it takes metadata to land.
+ */
+function publishPlayerRatio() {
+  if (!video || !playerWrap) return;
+  const { videoWidth, videoHeight } = video;
+  // Zero on an audio-only or still-loading file; a zero here would collapse
+  // the player to the `max()` floor rather than leaving it as it was.
+  if (!videoWidth || !videoHeight) return;
+  playerWrap.style.setProperty("--player-ratio", String(videoWidth / videoHeight));
 }
 
 function showClusterTooltip(e: MouseEvent) {
