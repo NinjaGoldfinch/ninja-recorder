@@ -115,6 +115,64 @@ pub fn dev_fixture_read(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// What the parser did not understand about every captured payload.
+///
+/// Reads back what fixture capture already wrote (DEVELOPMENT.md §3.3) and
+/// reports event names with no `classify_event` arm. Nothing has ever read
+/// those files looking for trouble, so an unmodelled shape surfaced when a
+/// user noticed something missing — `HordeKill` sat in captures for months
+/// while Voidgrubs silently never became markers (#113).
+///
+/// **A report, not a validator.** Nothing here changes what the parser
+/// accepts; its leniency is deliberate (#74).
+///
+/// Payloads that fail to parse are counted rather than skipped silently: a
+/// file this cannot read is the single most interesting thing it could find,
+/// and dropping it would hide exactly the case worth knowing about.
+#[tauri::command]
+pub fn dev_shape_report() -> Result<ShapeReport, String> {
+    let mut payloads = Vec::new();
+    let mut scanned = 0usize;
+    let mut unreadable = Vec::new();
+
+    for dir in [crate::fixtures::base_dir(), super::info::repo_fixtures_dir()]
+        .into_iter()
+        .flatten()
+    {
+        let mut entries = Vec::new();
+        collect(&dir, "", &mut entries);
+        for entry in entries {
+            let path = dir.join(&entry.group).join(&entry.name);
+            let Ok(raw) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            scanned += 1;
+            match serde_json::from_str::<serde_json::Value>(&raw) {
+                Ok(value) => payloads.push(value),
+                Err(e) => unreadable.push(format!("{}: {e}", path.display())),
+            }
+        }
+    }
+
+    Ok(ShapeReport {
+        scanned,
+        unreadable,
+        unmodelled_events: crate::live_client::shapes::unmodelled_events(&payloads),
+    })
+}
+
+/// What `dev_shape_report` found.
+#[derive(serde::Serialize)]
+pub struct ShapeReport {
+    /// Payload files read. Zero means nothing has ever been captured, which
+    /// is a different answer from "nothing was wrong with them".
+    pub scanned: usize,
+    /// Files that are not JSON at all. The most interesting finding
+    /// available, so never silently skipped.
+    pub unreadable: Vec<String>,
+    pub unmodelled_events: Vec<crate::live_client::shapes::UnmodelledEvent>,
+}
+
 /// Saves a payload as a fixture under the capture directory, so a
 /// hand-edited snapshot can be replayed later.
 #[tauri::command]

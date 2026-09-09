@@ -567,6 +567,13 @@ export const COMMANDS: CommandSpec[] = [
     description: "Capture flag, both fixture roots, and every fixture found under them.",
   },
   {
+    name: "dev_shape_report",
+    group: "Dev · Fixtures",
+    dev: true,
+    description:
+      "Reads every captured payload back and reports what the parser did not understand \u2014 event names with no `classify_event` arm, and files that are not JSON at all. A report, not a validator: nothing here changes what the parser accepts. `HordeKill` sat in captures for months while Voidgrubs never became markers.",
+  },
+  {
     name: "dev_fixture_read",
     group: "Dev · Fixtures",
     dev: true,
