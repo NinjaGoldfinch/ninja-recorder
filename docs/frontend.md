@@ -194,6 +194,41 @@ scattering `??` through the row template:
 An unrecognised queue id shows as `Queue 1234` and an unrecognised mode
 shows as itself. Both are honest; neither invents a name.
 
+### Which blanks the backfill can fill, and which are blank forever
+
+A row made before the metadata pipeline shipped — or imported by `reconcile`
+from a folder the user pointed at — starts almost entirely `—`. The backfill
+(Settings → "Fill in missing match data"; mechanics in
+[data-model.md](data-model.md)) fills some of that from the client's match
+history. **It cannot fill all of it, and the difference is not arbitrary:** it
+is exactly the line between what the game *reported afterwards* and what only
+something watching *during* the game could have seen.
+
+| Blank on the row | The backfill | Why |
+|---|---|---|
+| Champion, result, KDA | fills | Straight off the match-history document |
+| Queue, role, patch | fills | Same document. `role` is Riot's own `lane`/`role` inference, not the live position — see the table above |
+| CS | fills, with the scoreboard | Written only when there was no scoreboard at all |
+| Items, spells, runes, the ten champions | fills | The scoreboard is rebuilt from the same document, so it arrives as champion *ids* rather than display names |
+| The gold curve | fills **only if the recording already has samples** | The curve has to be placed in the video, and the offset for that is read off an existing sample (`sample_alignment_offset`). A recording that never had a live poller has no offset, and a guessed one would draw the right curve at the wrong times |
+| Kill diff, CS diff curves | **never** | The advantage curve's other two metrics are the live poller's own arithmetic. Match history has no per-second series but gold |
+| The marker timeline | **never** | Live Client Data is gone the moment the game ends, and it was the only thing that saw the events. See [DEVELOPMENT.md §3.2](../DEVELOPMENT.md) |
+
+The last two are the ones worth knowing before running it. A backfilled
+recording gets a row that reads completely and a review view that is still
+half empty — the gold curve draws, the other two metrics say they have no
+data, and the timeline carries no glyphs at all. That is not a bug in the
+backfill; those recordings never held the events, and nothing can put them
+back.
+
+Two properties inherited from the mechanism, because they show up as
+surprises otherwise. **It only ever fills**, so a value already on the row
+survives a run — it matches recordings to games on the clock, and filling a
+gap on a heuristic is fair where overwriting good data on one is not. And it
+**refuses outright when more than one game overlaps** a recording, so a row in
+a back-to-back session can come back still blank; that is the refusal working,
+not a miss.
+
 ### The filter bar
 
 Five filters and a sort, all — with the stats bar above them — operating
