@@ -125,6 +125,12 @@ export function initLibrary() {
   // they carried `tabindex` before the first redesign but no key handler.
   els.grid.addEventListener("keydown", (e) => {
     if (e.key !== "Enter" && e.key !== " ") return;
+    // The actions are real buttons and are reachable by Tab — `:focus-within`
+    // is what makes them visible there. Enter on a focused button has to stay
+    // the button's: `preventDefault` below cancels its activation behaviour,
+    // so no `click` is ever synthesised, and the row would open the review
+    // view instead of pinning, deleting or inspecting.
+    if ((e.target as HTMLElement).closest("button")) return;
     const card = (e.target as HTMLElement).closest<HTMLElement>(".vod-row");
     if (!card) return;
     e.preventDefault();
