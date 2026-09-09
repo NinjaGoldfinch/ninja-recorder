@@ -243,6 +243,14 @@ body {
   color: var(--text-subtle);
 }
 
+/* The way out of a filter that matches nothing. Inside the empty state
+   rather than in the toolbar, because that is where a person is looking
+   when they need it, and a permanent Clear button in the bar would be
+   dead weight every other moment. */
+.empty-state button {
+  margin-top: var(--sp-4);
+}
+
 .retention-form {
   display: flex;
   flex-wrap: wrap;

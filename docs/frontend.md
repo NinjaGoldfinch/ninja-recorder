@@ -194,6 +194,58 @@ scattering `??` through the row template:
 An unrecognised queue id shows as `Queue 1234` and an unrecognised mode
 shows as itself. Both are honest; neither invents a name.
 
+### The filter bar
+
+Five filters and a sort, all — with the stats bar above them — operating
+client-side over the already-fetched row set. That is fine at solo-user
+library sizes and would need real pagination if that stops being true.
+Champion (a search box), result and pinned-only were there first; queue, role
+and patch complete the set #85 called for, and every one of them reads a
+column that already exists.
+
+| Filter | Reads | Built from |
+|---|---|---|
+| Champion | `vodTitle(row)` | free text |
+| Queue | `queueOrModeLabel(row)` | the rows in the library |
+| Role | `role` | the rows in the library |
+| Result | `win` | fixed: all / wins / losses |
+| Patch | `patchLabel(row.patch)` | the rows in the library |
+| Pinned only | `pinned` | a checkbox |
+
+**The three derived lists come from the data, not from a vocabulary.** Patch
+is open-ended and could not be enumerated ahead of time at all. Queue ids are
+a table `format.ts` only partly names — `Queue 1234` is a real label a
+hard-coded list would have no entry for. And a fixed list offers "Ranked Flex"
+to somebody who has never queued it, which is a control that can only ever
+empty the list. A facet with fewer than two things to choose between is
+`disabled` rather than hidden, so the bar keeps one shape as a library grows
+— unless it is the facet currently filtering, which is never disabled:
+retention or a delete can take the library down to the one value already
+selected, and greying the control there strands a selection with no way to
+undo it.
+
+They are derived from the **whole** library, not from what the other filters
+leave. Facets that narrow as you use their neighbours are how a person ends up
+holding a selection they can no longer see the way out of.
+
+**Queue filters on the label, not the id**, because the label is what the row
+shows — and it is the merged `queue`-then-`game_mode` chain, so a row with no
+queue id still files under what it says. Two ids that print the same name
+(1700 and 1710 are both "Arena") group together, which is the intent.
+
+**"Unknown" is a value you can filter *to*,** offered only when something is
+actually missing it. "Which of my games never got a role" is the question the
+`Unknown` on the row itself prompts, and the backfill leaves plenty of them —
+see [data-model.md](data-model.md) for what it can and cannot fill.
+
+**An empty result says which kind of empty it is.** "Nothing recorded yet" and
+"everything is filtered out" are different problems with different next steps,
+and the first message used to be the only one there was — which read as data
+loss the moment a filter matched nothing. The filtered case names the total it
+is hiding and carries the Clear filters button, which resets the five filters
+and deliberately leaves the sort alone: sort hides nothing, and resetting it
+would throw away an order the user chose.
+
 ## Views
 
 Three top-level sections in one document, toggled by `router.ts`. Before it
@@ -522,10 +574,6 @@ truth and wins any disagreement.
   Pausing cascades through the existing `play`/`pause` handlers, so the rAF
   playhead loop stops with it — and `resumeStem` hard-resyncs the stem on the
   way back, so it cannot return drifted.
-
-The library grid's filters, sort and stats bar all operate client-side over
-the already-fetched row set. That is fine at solo-user library sizes and would
-need real pagination if that stops being true.
 
 ## Escaping
 
