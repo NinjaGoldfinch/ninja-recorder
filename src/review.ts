@@ -1044,9 +1044,7 @@ function showClusterTooltip(e: MouseEvent) {
       (m) =>
         `<span class="tooltip-row"><span class="marker-icon">${
           markerStyle(m).icon
-        }</span>${escapeHtml(markerLabel(m))}<span class="hint">${formatTime(
-          m.video_time_s
-        )}</span></span>`
+        }</span>${escapeHtml(markerLabel(m))}${markerTimes(m)}</span>`
     )
     .join("");
   timelineTooltip.style.left = glyph.style.left;
@@ -1355,6 +1353,29 @@ function isElder(payload: Record<string, unknown>): boolean {
   return typeof type === "string" && type.trim().toLowerCase() === "elder";
 }
 
+/**
+ * Both clocks an event has, in the order they are wanted.
+ *
+ * The game clock is the one people say out loud — "Baron at 24:30" — and
+ * it is Live Client Data's own number, recorded as the event arrived. The
+ * video time is the derived half: `game_time_s` mapped through whatever
+ * alignment was in force at the time, with a fallback for a marker seen
+ * before the clock ever moved (`PendingMarker::resolve`). So the two are
+ * not the same fact twice. The game clock is what the event *is*; the
+ * video time is where this file happens to keep it, and it is the one that
+ * can be off when the alignment was never proven.
+ *
+ * Both are shown rather than one, because the pair is also the only place
+ * a bad alignment is visible: a kill the list calls 24:30 that seeks to
+ * black is a story the two numbers tell together and neither tells alone.
+ */
+function markerTimes(m: MarkerRow): string {
+  return `<span class="marker-times">
+      <span class="marker-game-time" title="Game clock">${formatTime(m.game_time_s)}</span>
+      <span class="hint" title="Position in the recording">${formatTime(m.video_time_s)}</span>
+    </span>`;
+}
+
 function renderMarkerList() {
   if (!markerListEl) return;
   if (currentMarkers.length === 0) {
@@ -1367,7 +1388,7 @@ function renderMarkerList() {
       return `<li data-time="${m.video_time_s}" style="--marker-color:${style.color}">
         <span class="marker-icon">${style.icon}</span>
         <span class="marker-label">${escapeHtml(markerLabel(m))}</span>
-        <span class="hint">${formatTime(m.video_time_s)}</span>
+        ${markerTimes(m)}
       </li>`;
     })
     .join("");
