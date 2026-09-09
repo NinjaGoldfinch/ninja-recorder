@@ -131,10 +131,23 @@
               aria-label="Search champion"
             />
           </div>
+          <!-- The three derived filters ship with only their "All" option;
+               `library.ts` fills the rest from the rows actually in the
+               library. Patch cannot be enumerated ahead of time and the
+               other two would otherwise offer choices that match nothing. -->
+          <select id="filter-queue" aria-label="Filter by queue" disabled>
+            <option value="all">All queues</option>
+          </select>
+          <select id="filter-role" aria-label="Filter by role" disabled>
+            <option value="all">All roles</option>
+          </select>
           <select id="filter-outcome" aria-label="Filter by result">
             <option value="all">All results</option>
             <option value="wins">Wins only</option>
             <option value="losses">Losses only</option>
+          </select>
+          <select id="filter-patch" aria-label="Filter by patch" disabled>
+            <option value="all">All patches</option>
           </select>
           <label class="checkbox-label">
             <input type="checkbox" id="filter-pinned" />
@@ -170,6 +183,16 @@
             file dropped into the recordings folder, via &#8220;Rescan
             folder&#8221; above.
           </p>
+        </div>
+        <!-- Distinct from the empty state above: "nothing recorded yet" and
+             "everything is filtered out" are different problems, and the
+             first message was the only one there used to be. -->
+        <div id="library-no-matches" class="empty-state" hidden>
+          <p class="empty-title">No recordings match these filters</p>
+          <p class="hint" id="no-matches-hint"></p>
+          <button id="clear-filters-btn" type="button" class="ghost">
+            Clear filters
+          </button>
         </div>
         <div id="library-grid" class="vod-list" role="list" hidden></div>
       </section>

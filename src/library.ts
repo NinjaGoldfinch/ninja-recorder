@@ -35,8 +35,14 @@ import type {
 interface Els {
   grid: HTMLElement;
   empty: HTMLElement;
+  noMatches: HTMLElement;
+  noMatchesHint: HTMLElement;
+  clearFilters: HTMLButtonElement;
   champion: HTMLInputElement;
   outcome: HTMLSelectElement;
+  queue: HTMLSelectElement;
+  role: HTMLSelectElement;
+  patch: HTMLSelectElement;
   pinned: HTMLInputElement;
   sort: HTMLSelectElement;
   refresh: HTMLButtonElement;
@@ -73,8 +79,14 @@ export function initLibrary() {
   els = {
     grid: el("#library-grid"),
     empty: el("#library-empty"),
+    noMatches: el("#library-no-matches"),
+    noMatchesHint: el("#no-matches-hint"),
+    clearFilters: el<HTMLButtonElement>("#clear-filters-btn"),
     champion: el<HTMLInputElement>("#filter-champion"),
     outcome: el<HTMLSelectElement>("#filter-outcome"),
+    queue: el<HTMLSelectElement>("#filter-queue"),
+    role: el<HTMLSelectElement>("#filter-role"),
+    patch: el<HTMLSelectElement>("#filter-patch"),
     pinned: el<HTMLInputElement>("#filter-pinned"),
     sort: el<HTMLSelectElement>("#sort-select"),
     refresh: el<HTMLButtonElement>("#refresh-btn"),
@@ -89,10 +101,18 @@ export function initLibrary() {
     statDiskSub: el("#stat-disk-sub"),
   };
 
+  facets = [
+    { select: els.queue, key: (row) => queueOrModeLabel(row), compare: byName },
+    { select: els.role, key: (row) => row.role, compare: byLane },
+    { select: els.patch, key: (row) => patchLabel(row.patch), compare: byPatchDesc },
+  ];
+
   els.champion.addEventListener("input", render);
   els.outcome.addEventListener("change", render);
   els.pinned.addEventListener("change", render);
   els.sort.addEventListener("change", render);
+  for (const facet of facets) facet.select.addEventListener("change", render);
+  els.clearFilters.addEventListener("click", clearFilters);
   els.refresh.addEventListener("click", () => {
     refreshLibrary();
     refreshDiskUsage();
@@ -126,9 +146,148 @@ function findRow(id: number): RecordingRow | undefined {
   return allRecordings.find((r) => r.id === id);
 }
 
+// --- The derived filters -------------------------------------------
+//
+// Queue, role and patch are built from the rows the library actually
+// holds rather than from a fixed vocabulary. Patch is open-ended and
+// could not be listed ahead of time at all; queue ids are a table this
+// app only partly names, so `Queue 1234` is a real label a hard-coded
+// list would have no entry for; and a fixed list offers "Ranked Flex" to
+// somebody who has never queued it, which is a control that can only ever
+// empty the list.
+//
+// They are derived from the *whole* library, not from what the other
+// filters leave. A facet that narrows as you use its neighbours is how a
+// person ends up with a selection they can no longer see the way out of.
+
+/** Every named value carries this prefix, so no label can collide with the
+ *  two reserved option values below. */
+const VALUE_PREFIX = "v:";
+/** No filtering on this facet. Shared with `#filter-outcome`'s own markup. */
+const ANY = "all";
+/** Rows whose column is empty — offered only when there are some. */
+const NONE = "none";
+
+interface Facet {
+  select: HTMLSelectElement;
+  /** Which bucket a row falls in, or null when its column is empty. */
+  key: (row: RecordingRow) => string | null;
+  /** Orders the named values. "Unknown" is appended after them regardless. */
+  compare: (a: string, b: string) => number;
+}
+
+// Built in `initLibrary`, once the elements exist.
+let facets: Facet[] = [];
+
+function byName(a: string, b: string): number {
+  return a.localeCompare(b);
+}
+
+// The order the game lists them in, not alphabetical: nobody scans a lane
+// picker for "Bottom, Jungle, Middle, Support, Top".
+const LANE_ORDER = ["Top", "Jungle", "Middle", "Bottom", "Support"];
+
+function byLane(a: string, b: string): number {
+  const ia = LANE_ORDER.indexOf(a);
+  const ib = LANE_ORDER.indexOf(b);
+  // `position()` only ever writes those five, but `role` is a TEXT column
+  // and the LCU is not guaranteed to stay its only writer. Anything else
+  // sorts after them rather than being dropped from the list.
+  if (ia === -1 && ib === -1) return byName(a, b);
+  if (ia === -1) return 1;
+  if (ib === -1) return -1;
+  return ia - ib;
+}
+
+/** `"15.10"` → `[15, 10]`, or null if it is not a run of numbers. */
+function patchParts(label: string): number[] | null {
+  const parts = label.split(".").map(Number);
+  return parts.every((n) => Number.isFinite(n)) ? parts : null;
+}
+
+// Newest first, compared component-wise as numbers — "15.9" sorts *older*
+// than "15.10", which is exactly what comparing them as strings gets
+// wrong. `patchLabel` passes a malformed patch through untouched, so a
+// label that is not a version still has to order somehow.
+function byPatchDesc(a: string, b: string): number {
+  const pa = patchParts(a);
+  const pb = patchParts(b);
+  if (pa === null || pb === null) return byName(a, b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pb[i] ?? 0) - (pa[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+/**
+ * Rebuilds the three derived filters from the rows now in the library,
+ * keeping each selection when the value it names is still present.
+ */
+function refreshFacets() {
+  for (const facet of facets) {
+    const values = new Set<string>();
+    let unknowns = false;
+    for (const row of allRecordings) {
+      const key = facet.key(row);
+      if (key === null) unknowns = true;
+      else values.add(key);
+    }
+    const named = [...values].sort(facet.compare);
+
+    const previous = facet.select.value;
+    // Option 0 is the "All …" one and lives in the markup, not the data.
+    while (facet.select.options.length > 1) facet.select.remove(1);
+    // `new Option` sets the label as a text node. `game_mode` reaches these
+    // labels straight from Live Client Data, so it is not built into HTML.
+    for (const value of named) {
+      facet.select.add(new Option(value, VALUE_PREFIX + value));
+    }
+    // "Unknown" is worth offering, and only when something is missing:
+    // "which of my games never got a role" is the question the `Unknown`
+    // on the row itself prompts, and the backfill leaves plenty of them.
+    if (unknowns) facet.select.add(new Option("Unknown", NONE));
+
+    // A selection whose value has left the library falls back to All
+    // rather than quietly filtering everything out. Assigning a value the
+    // select does not carry leaves `value` as the empty string.
+    facet.select.value = previous;
+    if (!facet.select.value) facet.select.value = ANY;
+
+    // One choice is no choice — a library of nothing but ARAM has no queue
+    // to pick between. But a facet that is *currently* filtering is never
+    // disabled: retention or a delete can take the library down to the one
+    // value already selected, and greying the control there would leave the
+    // selection with no way to undo it from the control that made it.
+    facet.select.disabled =
+      facet.select.options.length < 3 && facet.select.value === ANY;
+  }
+}
+
+function filtersActive(): boolean {
+  return (
+    els.champion.value.trim() !== "" ||
+    els.outcome.value !== ANY ||
+    els.pinned.checked ||
+    facets.some((facet) => facet.select.value !== ANY)
+  );
+}
+
+// Sort is deliberately left alone: it is not a filter, it hides nothing,
+// and resetting it would throw away an order the user chose.
+function clearFilters() {
+  els.champion.value = "";
+  els.outcome.value = ANY;
+  els.pinned.checked = false;
+  for (const facet of facets) facet.select.value = ANY;
+  render();
+}
+
+
 export async function refreshLibrary() {
   try {
     allRecordings = await call<RecordingRow[]>("list_recordings");
+    refreshFacets();
     render();
   } catch (err) {
     toast(`Failed to list recordings: ${err}`, "error");
@@ -171,6 +330,16 @@ function visibleRows(): RecordingRow[] {
     if (outcome === "wins" && row.win !== true) return false;
     if (outcome === "losses" && row.win !== false) return false;
     if (pinnedOnly && !row.pinned) return false;
+    for (const facet of facets) {
+      const selected = facet.select.value;
+      if (selected === ANY) continue;
+      const key = facet.key(row);
+      if (selected === NONE) {
+        if (key !== null) return false;
+      } else if (key === null || VALUE_PREFIX + key !== selected) {
+        return false;
+      }
+    }
     return true;
   });
 
@@ -200,13 +369,26 @@ function render() {
 
   disarmDelete();
   if (rows.length === 0) {
-    els.empty.hidden = false;
+    // "Nothing recorded yet" and "everything is filtered out" are different
+    // problems with different next steps, and the first message was the
+    // only one there used to be — which read as data loss the moment a
+    // filter matched nothing.
+    const filtered = filtersActive() && allRecordings.length > 0;
+    if (filtered) {
+      els.noMatchesHint.textContent =
+        allRecordings.length === 1
+          ? "The one recording in the library does not match."
+          : `${allRecordings.length} recordings in the library \u2014 none of them match.`;
+    }
+    els.empty.hidden = filtered;
+    els.noMatches.hidden = !filtered;
     els.grid.hidden = true;
     els.grid.innerHTML = "";
     return;
   }
 
   els.empty.hidden = true;
+  els.noMatches.hidden = true;
   els.grid.hidden = false;
   els.grid.innerHTML = rows.map(card).join("");
   void fillInArt(rows);
