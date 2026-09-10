@@ -842,3 +842,47 @@ table.grid .null { color: var(--faint); font-style: italic; }
 
 .toast.ok { border-left-color: var(--ok); }
 .toast.err { border-left-color: var(--danger); }
+
+/* --- Inspector tables -------------------------------------------- */
+
+/* The provenance and client-comparison tables. `table.grid` is for the
+ * Database panel's paged reads — sticky headers, no wrapping — which is the
+ * wrong shape here: these are a handful of rows whose last column is a
+ * sentence and wants to wrap. */
+.kv-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.kv-table th,
+.kv-table td {
+  padding: 0.35rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+
+.kv-table th {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.kv-table tr:last-child td {
+  border-bottom: none;
+}
+
+/* A disagreement is the one row worth finding at a glance, so it is the only
+ * one marked. Colour plus the ⚠ in the last cell, because colour alone is
+ * exactly what a red-green deficiency cannot read — the same rule the main
+ * window's row follows for win and loss. */
+.kv-table tr.verdict-differ {
+  background-color: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.kv-table tr.verdict-differ td {
+  color: var(--text);
+}

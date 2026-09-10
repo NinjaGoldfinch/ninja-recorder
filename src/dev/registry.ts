@@ -283,6 +283,14 @@ export const COMMANDS: CommandSpec[] = [
       "One recording's whole story: the row, a named likely writer for every field that has more than one, marker and sample counts, the alignment offset, and the scoreboard and diagnostics parsed. Read-only \u2014 the actions that operate on a recording are their own commands.",
     args: [{ name: "recordingId", kind: "number" }],
   },
+  {
+    name: "dev_recording_vs_lcu",
+    group: "Dev \u00b7 Diagnostics",
+    dev: true,
+    description:
+      "Asks the client about a recording's game and lays its answer beside the row's, field by field. The same one-shot `fetch_match_summary` the deferred patch uses \u2014 a disagreement here almost always means the wrong game id was matched. Read-only; `dev_patch_match_summary` is the one that acts on the answer.",
+    args: [{ name: "recordingId", kind: "number" }],
+  },
 
   // --- Dev: database ----------------------------------------------
   {

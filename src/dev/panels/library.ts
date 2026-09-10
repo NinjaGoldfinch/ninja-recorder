@@ -17,7 +17,13 @@
  */
 import type { Panel } from "../main";
 import { tryCall } from "../ipc";
-import type { Provenance, RecordingReport, RecordingRow } from "../types";
+import type {
+  FieldComparison,
+  LcuComparison,
+  Provenance,
+  RecordingReport,
+  RecordingRow,
+} from "../types";
 import { bytes, card, duration, escapeHtml, kv, output, panelHead, timestamp } from "../ui";
 
 let root: HTMLElement | null = null;
@@ -25,6 +31,13 @@ let rows: RecordingRow[] = [];
 let selected: number | null = null;
 let report: RecordingReport | null = null;
 let reportError: string | null = null;
+
+// The client's answer is fetched on demand, never with the report: it needs a
+// running League client, and a panel that failed to open without one would be
+// useless for the offline half of what it shows.
+let comparison: LcuComparison | null = null;
+let comparisonError: string | null = null;
+let asking = false;
 
 function title(row: RecordingRow): string {
   return row.champion ?? row.path.split(/[\\/]/).pop() ?? `recording ${row.id}`;
@@ -94,6 +107,77 @@ function counts(r: RecordingReport): string {
   );
 }
 
+/** What each verdict means, said once. */
+const VERDICT_NOTE: Record<string, string> = {
+  agree: "Both answered, and they match.",
+  differ: "Both answered, and they do not.",
+  only_stored: "Only the row has it — the client did not answer for this field.",
+  only_live: "Only the client has it — the row's column is empty.",
+  neither: "Neither knows.",
+};
+
+/**
+ * The row beside what the client says about the same game.
+ *
+ * Leads with the count of disagreements rather than making somebody scan for
+ * them, because a disagreement almost always means the wrong `game_id` was
+ * matched — which is exactly the thing that silently mislabels a library.
+ */
+function lcu(): string {
+  const button = `<button type="button" class="ghost" data-ask ${asking ? "disabled" : ""}>${
+    asking ? "Asking…" : comparison || comparisonError ? "Ask again" : "Ask the client"
+  }</button>`;
+
+  if (comparisonError !== null) {
+    return card("What the client says now", button + output(comparisonError, true));
+  }
+  if (comparison === null) {
+    return card(
+      "What the client says now",
+      button +
+        `<p class="hint">Fetches the same one-shot <code>fetch_match_summary</code> the deferred
+         patch uses and lays it beside the row. Needs the League client running, and the game
+         still in its match history.</p>`,
+    );
+  }
+
+  const c = comparison;
+  const rowsHtml = c.fields
+    .map((f: FieldComparison) => {
+      const dash = "<span class='hint'>—</span>";
+      const mark =
+        f.verdict === "differ" ? "&#9888;" : f.verdict === "agree" ? "&#10003;" : "";
+      return `<tr class="verdict-${escapeHtml(f.verdict)}">
+        <td><code>${escapeHtml(f.field)}</code></td>
+        <td>${f.stored === null ? dash : escapeHtml(f.stored)}</td>
+        <td>${f.live === null ? dash : escapeHtml(f.live)}</td>
+        <td class="hint">${mark} ${escapeHtml(VERDICT_NOTE[f.verdict] ?? f.verdict)}</td>
+      </tr>`;
+    })
+    .join("");
+
+  const verdict =
+    c.differing === 0
+      ? `<p class="hint">Nothing disagrees. Every field the client answered for matches the row.</p>`
+      : `<p><strong>${c.differing} field${c.differing === 1 ? "" : "s"} disagree${
+          c.differing === 1 ? "s" : ""
+        }.</strong> Two views of one match should never differ, so this most likely means the
+        wrong game was matched to this recording — worth checking before it mislabels the
+        library.</p>`;
+
+  return card(
+    "What the client says now",
+    button +
+      verdict +
+      `<table class="kv-table">
+        <thead><tr><th>Field</th><th>Row</th><th>Client</th><th></th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+      <p class="hint">Game <code>${c.game_id}</code>. Read-only — this writes nothing back.
+      <code>dev_patch_match_summary</code> is the one that acts on the answer.</p>`,
+  );
+}
+
 function detail(): string {
   if (selected === null) {
     return card("Recording", "<p class='hint'>Pick one on the left.</p>");
@@ -108,6 +192,7 @@ function detail(): string {
   return (
     card("Row", output(r.row)) +
     provenance(r) +
+    lcu() +
     counts(r) +
     card(
       "Scoreboard",
@@ -151,6 +236,12 @@ async function open(id: number) {
   selected = id;
   report = null;
   reportError = null;
+  // The client's answer is about one game. Left in place it would sit under
+  // the next recording opened, which in a panel built for doubting values is
+  // the worst thing it could do.
+  comparison = null;
+  comparisonError = null;
+  asking = false;
   paint();
   const result = await tryCall<RecordingReport>("dev_recording_report", {
     recordingId: id,
@@ -164,6 +255,38 @@ async function open(id: number) {
     // Shown rather than swallowed: "no recording 12" is the answer when a row
     // was deleted between listing it and opening it, and that is worth seeing.
     reportError = result.error;
+  }
+  paint();
+}
+
+/**
+ * Asks the client about the selected recording.
+ *
+ * Guarded by the same token as `open`, for the same reason: this one is a
+ * network round trip to a local process that may be busy, so an answer can
+ * easily land after somebody has moved on to another row.
+ */
+async function ask() {
+  const id = selected;
+  if (id === null || asking) return;
+  const token = openToken;
+
+  asking = true;
+  comparisonError = null;
+  paint();
+
+  const result = await tryCall<LcuComparison>("dev_recording_vs_lcu", { recordingId: id });
+  if (token !== openToken) return;
+
+  asking = false;
+  if (result.ok) {
+    comparison = result.value;
+  } else {
+    // Shown rather than swallowed: "League Client not running" and "this
+    // recording has no game id" are both answers, and both are the reason
+    // somebody opened this panel.
+    comparison = null;
+    comparisonError = result.error;
   }
   paint();
 }
@@ -190,6 +313,10 @@ export const libraryPanel: Panel = {
       const target = e.target as HTMLElement;
       if (target.closest("[data-reload]")) {
         void load();
+        return;
+      }
+      if (target.closest("[data-ask]")) {
+        void ask();
         return;
       }
       const open_ = target.closest<HTMLElement>("[data-open]");
