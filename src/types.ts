@@ -232,6 +232,10 @@ export interface BackfillReport {
    *  two fail independently — the timeline is a different endpoint, and a
    *  game can yield its metadata after its timeline has aged out. */
   gold_filled: number;
+  /** Rows that gained a scoreboard they did not have — every recording made
+   *  before the live capture existed. Separate for the same reason again:
+   *  a row can be patched without one, and often is. */
+  scoreboards: number;
 }
 
 export interface DiskUsage {

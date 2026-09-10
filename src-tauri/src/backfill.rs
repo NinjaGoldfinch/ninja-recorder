@@ -174,7 +174,36 @@ pub async fn run(db: &Db) -> Result<BackfillReport, String> {
     let candidates = db
         .recordings_missing_metadata()
         .map_err(|e| format!("could not read the library: {e}"))?;
+    run_for(db, candidates).await
+}
 
+/// The same pass, against one recording.
+///
+/// For the inspector (#99), where the question is about the row in front of
+/// you rather than the library. It goes through the *same* candidate query
+/// and the same loop rather than a path of its own, so a row the bulk run
+/// would skip is skipped here too and for the same reason — a second
+/// implementation would be a second set of rules to disagree with the first.
+///
+/// A recording that is not a candidate comes back with `scanned: 0`, which is
+/// the honest answer: there is nothing here the backfill can fill.
+///
+/// Only the dev portal's inspector calls this, and clippy runs without
+/// `--all-targets`, so in a shipped build it is genuinely dead code
+/// (CLAUDE.md).
+#[cfg_attr(not(feature = "devtools"), allow(dead_code))]
+pub async fn run_one(db: &Db, recording_id: i64) -> Result<BackfillReport, String> {
+    let candidates: Vec<Candidate> = db
+        .recordings_missing_metadata()
+        .map_err(|e| format!("could not read the library: {e}"))?
+        .into_iter()
+        .filter(|c| c.id == recording_id)
+        .collect();
+    run_for(db, candidates).await
+}
+
+/// The pass itself. One request for the history covers every candidate given.
+async fn run_for(db: &Db, candidates: Vec<Candidate>) -> Result<BackfillReport, String> {
     let mut report = BackfillReport {
         scanned: candidates.len(),
         ..Default::default()

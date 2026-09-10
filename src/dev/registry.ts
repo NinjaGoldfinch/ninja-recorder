@@ -291,6 +291,26 @@ export const COMMANDS: CommandSpec[] = [
       "Asks the client about a recording's game and lays its answer beside the row's, field by field. The same one-shot `fetch_match_summary` the deferred patch uses \u2014 a disagreement here almost always means the wrong game id was matched. Read-only; `dev_patch_match_summary` is the one that acts on the answer.",
     args: [{ name: "recordingId", kind: "number" }],
   },
+  {
+    name: "dev_backfill_recording",
+    group: "Dev \u00b7 Diagnostics",
+    dev: true,
+    danger: true,
+    description:
+      "Runs the backfill against one recording \u2014 the same candidate query, matching and refusals the whole-library pass uses, pointed at a single row. A row it has nothing to fill comes back with `scanned: 0` rather than an error.",
+    args: [{ name: "recordingId", kind: "number" }],
+  },
+  {
+    name: "dev_reveal_recording",
+    group: "Dev \u00b7 Diagnostics",
+    dev: true,
+    description:
+      "Opens a recording's file, or shows it in the OS file manager. Takes an id, not a path: the path comes off the row, so nothing the frontend holds decides which file is opened. Refuses a file that is no longer there.",
+    args: [
+      { name: "recordingId", kind: "number" },
+      { name: "which", kind: "string", default: "folder", help: "play | folder" },
+    ],
+  },
 
   // --- Dev: database ----------------------------------------------
   {
