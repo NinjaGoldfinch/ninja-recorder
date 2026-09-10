@@ -18,6 +18,7 @@
 import type { Panel } from "../main";
 import { tryCall } from "../ipc";
 import type {
+  BackfillReport,
   FieldComparison,
   LcuComparison,
   Provenance,
@@ -38,6 +39,13 @@ let reportError: string | null = null;
 let comparison: LcuComparison | null = null;
 let comparisonError: string | null = null;
 let asking = false;
+
+// The last action's result, shown until another recording is opened. Actions
+// are rare and deliberate, so the answer stays put rather than flashing a
+// toast that is gone before it has been read.
+let actionResult: string | null = null;
+let actionError: string | null = null;
+let running: string | null = null;
 
 function title(row: RecordingRow): string {
   return row.champion ?? row.path.split(/[\\/]/).pop() ?? `recording ${row.id}`;
@@ -178,6 +186,57 @@ function lcu(): string {
   );
 }
 
+/**
+ * The things you can do to this recording.
+ *
+ * **The report above stays a pure read; this block is the part that acts.**
+ * That split is the point rather than a layout choice — opening the inspector
+ * still cannot change what it describes, and only a press does.
+ *
+ * Every button is an existing command pointed at the row in front of you.
+ * None of them is a new answer to a question something else already answers,
+ * which is why #99 could describe this as wiring rather than a feature.
+ */
+function actions(r: RecordingReport): string {
+  const busy = running !== null;
+  const b = (action: string, label: string, extra = "") =>
+    `<button type="button" data-run="${action}" ${busy ? "disabled" : ""} ${extra}>${
+      running === action ? "Working…" : escapeHtml(label)
+    }</button>`;
+
+  // The patch needs a game to ask about. Without one there is nothing to
+  // re-run, and a disabled button that says why beats one that fails.
+  const hasGame = r.row.game_id !== null;
+
+  const result =
+    actionError !== null
+      ? output(actionError, true)
+      : actionResult !== null
+        ? output(actionResult)
+        : "";
+
+  return card(
+    "Act on it",
+    `<div class="row wrap">
+       ${b("patch", "Re-run the deferred patch", hasGame ? "" : "disabled")}
+       ${b("backfill", "Backfill this row")}
+       ${b("trim", "Trim the loading screen")}
+       ${b("play", "Open the file")}
+       ${b("folder", "Show in folder")}
+     </div>
+     ${
+       hasGame
+         ? ""
+         : `<p class="hint">The deferred patch is unavailable: this row has no
+            <code>game_id</code>, so there is no game to ask about. The backfill is the
+            one that works without one — it matches on the clock.</p>`
+     }
+     <p class="hint">These write. The report above does not, and re-reads itself once an
+     action finishes so what you are looking at is what the row now says.</p>
+     ${result}`,
+  );
+}
+
 function detail(): string {
   if (selected === null) {
     return card("Recording", "<p class='hint'>Pick one on the left.</p>");
@@ -193,6 +252,7 @@ function detail(): string {
     card("Row", output(r.row)) +
     provenance(r) +
     lcu() +
+    actions(r) +
     counts(r) +
     card(
       "Scoreboard",
@@ -242,6 +302,9 @@ async function open(id: number) {
   comparison = null;
   comparisonError = null;
   asking = false;
+  actionResult = null;
+  actionError = null;
+  running = null;
   paint();
   const result = await tryCall<RecordingReport>("dev_recording_report", {
     recordingId: id,
@@ -291,6 +354,80 @@ async function ask() {
   paint();
 }
 
+/**
+ * Runs one action against the selected recording, then re-reads the report.
+ *
+ * The re-read is the important half. Every one of these writes, and an
+ * inspector still showing the values from before the write would be worse
+ * than one that showed nothing — the whole panel exists to be trusted about
+ * what a row currently says.
+ */
+async function run(action: string) {
+  const id = selected;
+  if (id === null || running !== null || report === null) return;
+  const token = openToken;
+
+  running = action;
+  actionResult = null;
+  actionError = null;
+  paint();
+
+  // A custom game never reaches match history, so asking for it costs a
+  // request and a full retry cycle for a 404 that can never become a 200.
+  // Queue 0 is Riot's own id for a custom; an unknown queue is treated as
+  // not-custom, which is the same guess the finalize makes.
+  const isCustom = report.row.queue === 0;
+
+  const call = (): Promise<{ ok: boolean; value?: unknown; error?: string }> => {
+    switch (action) {
+      case "patch":
+        return tryCall<boolean>("dev_patch_match_summary", {
+          recordingId: id,
+          gameId: report!.row.game_id,
+          isCustom,
+        });
+      case "backfill":
+        return tryCall<BackfillReport>("dev_backfill_recording", { recordingId: id });
+      case "trim":
+        return tryCall<unknown>("dev_trim_lead_in", { recordingId: id });
+      case "play":
+        return tryCall<null>("dev_reveal_recording", { recordingId: id, which: "play" });
+      default:
+        return tryCall<null>("dev_reveal_recording", { recordingId: id, which: "folder" });
+    }
+  };
+
+  const result = await call();
+  if (token !== openToken) return;
+  running = null;
+
+  if (!result.ok) {
+    actionError = result.error ?? "failed";
+    paint();
+    return;
+  }
+
+  // `dev_patch_match_summary` answers with a bare boolean covering three
+  // different outcomes, so it is worth saying which in words rather than
+  // printing `false` and leaving the reader to guess.
+  actionResult =
+    action === "patch"
+      ? result.value === true
+        ? "Patched. The row below has been re-read."
+        : "Nothing was written. The client never produced stats for this game, the row is gone, or the retry schedule gave up — the Log panel distinguishes those."
+      : action === "play" || action === "folder"
+        ? "Handed to the OS."
+        : JSON.stringify(result.value, null, 2);
+
+  // The row may have changed under us; the comparison was about the old one.
+  comparison = null;
+  comparisonError = null;
+  const fresh = await tryCall<RecordingReport>("dev_recording_report", { recordingId: id });
+  if (token !== openToken) return;
+  if (fresh.ok) report = fresh.value;
+  paint();
+}
+
 export const libraryPanel: Panel = {
   id: "library",
   title: "Library",
@@ -317,6 +454,11 @@ export const libraryPanel: Panel = {
       }
       if (target.closest("[data-ask]")) {
         void ask();
+        return;
+      }
+      const runBtn = target.closest<HTMLElement>("[data-run]");
+      if (runBtn) {
+        void run(String(runBtn.dataset.run));
         return;
       }
       const open_ = target.closest<HTMLElement>("[data-open]");

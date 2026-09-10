@@ -886,3 +886,10 @@ table.grid .null { color: var(--faint); font-style: italic; }
 .kv-table tr.verdict-differ td {
   color: var(--text);
 }
+
+/* The inspector's action bar: five buttons that must not push the card
+   sideways on a narrow portal window. */
+.row.wrap {
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}

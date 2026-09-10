@@ -940,6 +940,8 @@ pub fn run() {
         dev::dev_shape_report,
         dev::dev_recording_report,
         dev::dev_recording_vs_lcu,
+        dev::dev_backfill_recording,
+        dev::dev_reveal_recording,
         dev::dev_fixture_read,
         dev::dev_fixture_write,
         dev::dev_set_fixture_recording,

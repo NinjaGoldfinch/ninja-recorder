@@ -279,6 +279,10 @@ export interface LcuComparison {
   differing: number;
 }
 
+// One definition, shared with the main window's Settings view — the two
+// read the same command and must not drift apart.
+export type { BackfillReport } from "../types";
+
 export interface RecordingReport {
   row: RecordingRow;
   provenance: Provenance[];

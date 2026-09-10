@@ -14,10 +14,12 @@
 //! panel that only showed values would leave the reader to remember all of
 //! that.
 //!
-//! Read-only. The actions #99 asks for already exist as their own commands —
-//! `dev_patch_match_summary`, `dev_trim_lead_in`, `dev_champion_name` — and
-//! keeping this a pure read means opening the inspector can never change what
-//! it is describing.
+//! **Read-only, and that is a property worth keeping rather than a stage it
+//! passed through.** The inspector does now act on a recording, but through
+//! `dev::recording_actions` — a separate module, so the split is visible in
+//! the file list and not just in a comment. Everything here reads. Opening the
+//! inspector still cannot change what it is describing; only pressing one of
+//! the buttons can.
 
 use crate::db::RecordingRow;
 
