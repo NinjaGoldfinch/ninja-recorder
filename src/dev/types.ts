@@ -263,6 +263,22 @@ export interface Provenance {
  *  apart from `samples` because they come from different sources on
  *  different schedules; plenty of samples and no gold is the #137
  *  fingerprint rather than a contradiction. */
+/** How a stored value and the client's current answer relate. */
+export type Verdict = "agree" | "differ" | "only_stored" | "only_live" | "neither";
+
+export interface FieldComparison {
+  field: string;
+  stored: string | null;
+  live: string | null;
+  verdict: Verdict;
+}
+
+export interface LcuComparison {
+  game_id: number;
+  fields: FieldComparison[];
+  differing: number;
+}
+
 export interface RecordingReport {
   row: RecordingRow;
   provenance: Provenance[];

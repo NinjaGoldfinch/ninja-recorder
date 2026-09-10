@@ -119,6 +119,162 @@ pub fn provenance_of(row: &RecordingRow) -> Vec<Provenance> {
     ]
 }
 
+/// How a stored value and the client's current answer relate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Verdict {
+    /// Both established it and they match.
+    Agree,
+    /// Both established it and they do not. The finding this whole thing
+    /// exists for.
+    Differ,
+    /// The row has it, the client did not answer. Not a disagreement: match
+    /// history ages out, and a custom game was never in it.
+    OnlyStored,
+    /// The client has it, the row's column is empty — what a deferred patch
+    /// that never landed looks like from the outside.
+    OnlyLive,
+    /// Neither knows. Says the gap is real rather than unasked.
+    Neither,
+}
+
+/// One field, as the row holds it and as the client reports it now.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct FieldComparison {
+    pub field: &'static str,
+    /// Rendered as text so one shape covers every column, and so the panel
+    /// never has to know a column's type to show it.
+    pub stored: Option<String>,
+    pub live: Option<String>,
+    pub verdict: Verdict,
+}
+
+fn verdict(stored: &Option<String>, live: &Option<String>) -> Verdict {
+    match (stored, live) {
+        (Some(a), Some(b)) if a == b => Verdict::Agree,
+        (Some(_), Some(_)) => Verdict::Differ,
+        (Some(_), None) => Verdict::OnlyStored,
+        (None, Some(_)) => Verdict::OnlyLive,
+        (None, None) => Verdict::Neither,
+    }
+}
+
+/// The row beside what the client says about the same game, field by field.
+///
+/// **Pure, and the only place the comparison lives.** The command below is a
+/// fetch and a call to this, so the rule about what counts as a disagreement
+/// is unit-tested rather than exercised by playing a game.
+///
+/// `champion` is the LCU's champion *id* already resolved to a name, because
+/// that is the only form comparable to what the column holds — the row stores
+/// `Wukong`, never `MonkeyKing` or `62` (DEVELOPMENT.md §3.1). A resolution
+/// that failed arrives as `None` and reads as "the client did not say",
+/// which is honest: an id we cannot name is not evidence of disagreement.
+///
+/// `kda` is compared as one field rather than three. It is written as a unit
+/// by both writers and `formatKda` already refuses to show a partial one, so
+/// three rows saying `Differ` about one event would overstate the finding.
+pub fn compare_with_summary(
+    row: &crate::db::RecordingRow,
+    summary: &crate::lcu::MatchSummary,
+    champion: Option<String>,
+) -> Vec<FieldComparison> {
+    let kda = |k: Option<i64>, d: Option<i64>, a: Option<i64>| match (k, d, a) {
+        (Some(k), Some(d), Some(a)) => Some(format!("{k}/{d}/{a}")),
+        _ => None,
+    };
+    let text = |v: &Option<String>| v.clone();
+    let num = |v: Option<i64>| v.map(|n| n.to_string());
+    let outcome = |v: Option<bool>| v.map(|w| if w { "Win" } else { "Loss" }.to_string());
+
+    let pairs: Vec<(&'static str, Option<String>, Option<String>)> = vec![
+        ("game_id", num(row.game_id), num(summary.game_id)),
+        ("champion", text(&row.champion), champion),
+        ("queue", num(row.queue), num(summary.queue_id)),
+        ("role", text(&row.role), summary.role.clone()),
+        ("patch", text(&row.patch), summary.patch.clone()),
+        ("win", outcome(row.win), outcome(summary.win)),
+        (
+            "kda",
+            kda(row.kda_k, row.kda_d, row.kda_a),
+            kda(summary.kills, summary.deaths, summary.assists),
+        ),
+    ];
+
+    pairs
+        .into_iter()
+        .map(|(field, stored, live)| FieldComparison {
+            verdict: verdict(&stored, &live),
+            field,
+            stored,
+            live,
+        })
+        .collect()
+}
+
+/// What the client says about a recording's game, right now.
+#[derive(serde::Serialize)]
+pub struct LcuComparison {
+    /// The game asked about, so the answer can never be read as being about
+    /// a different row than the one in front of you.
+    pub game_id: i64,
+    pub fields: Vec<FieldComparison>,
+    /// How many fields came back `Differ`, so the panel can lead with the
+    /// answer rather than making someone scan for it.
+    pub differing: usize,
+}
+
+/// Asks the client about a recording's game and lays its answer beside the
+/// row's, field by field.
+///
+/// **The same `fetch_match_summary` the deferred patch uses**, with no retry
+/// schedule — one shot, because this is a question somebody asked rather than
+/// a patch that has to land. A disagreement here almost always means the
+/// wrong `game_id` was matched, which is exactly the thing that silently
+/// mislabels a library (#99).
+///
+/// Read-only, like the report beside it: it writes nothing back, so asking
+/// can never change what it describes. `dev_patch_match_summary` is the one
+/// that acts on the answer.
+#[tauri::command]
+pub async fn dev_recording_vs_lcu(
+    state: tauri::State<'_, crate::AppState>,
+    recording_id: i64,
+) -> Result<LcuComparison, String> {
+    let row = state
+        .db
+        .get_recording(recording_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("no recording {recording_id}"))?;
+
+    // Without one there is nothing to ask about, and that is a finding in
+    // itself rather than an error to paper over: a row with no `game_id` was
+    // never matched to a game, so no amount of asking will describe it.
+    let game_id = row
+        .game_id
+        .ok_or_else(|| "this recording has no game id, so there is nothing to ask the client about".to_string())?;
+
+    let lockfile = crate::lcu::lockfile::discover()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "League Client not running (no lockfile found)".to_string())?;
+    let client = crate::lcu::LcuHttpClient::new(&lockfile).map_err(|e| e.to_string())?;
+
+    let summary = crate::lcu::fetch_match_summary(&client, game_id, false)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Resolved through the same path the patch uses, so the name compared is
+    // the one that would actually have been written.
+    let champion = match summary.champion_id {
+        Some(id) => crate::lcu::champion_name(&client, &lockfile, id).await,
+        None => None,
+    };
+
+    let fields = compare_with_summary(&row, &summary, champion);
+    let differing = fields.iter().filter(|f| f.verdict == Verdict::Differ).count();
+    Ok(LcuComparison { game_id, fields, differing })
+}
+
 /// Assembles the report. Thin: every hard question is answered by a query or
 /// by `provenance_of`.
 #[tauri::command]
@@ -233,5 +389,117 @@ mod tests {
         for expected in ["champion", "role", "patch", "queue", "game_id", "win"] {
             assert!(names.contains(&expected), "{expected} is missing");
         }
+    }
+
+    // --- the LCU comparison ------------------------------------------
+
+    fn summary() -> crate::lcu::MatchSummary {
+        crate::lcu::MatchSummary::default()
+    }
+
+    fn find<'a>(fields: &'a [FieldComparison], name: &str) -> &'a FieldComparison {
+        fields.iter().find(|f| f.field == name).expect("field is compared")
+    }
+
+    /// The finding the whole thing exists for: two sources that both answered
+    /// and answered differently, which almost always means the wrong game id
+    /// was matched.
+    #[test]
+    fn a_field_both_sources_answered_differently_is_a_disagreement() {
+        let mut row = row();
+        row.role = Some("Jungle".into());
+        let mut summary = summary();
+        summary.role = Some("Top".into());
+
+        let fields = compare_with_summary(&row, &summary, None);
+        let role = find(&fields, "role");
+        assert_eq!(role.verdict, Verdict::Differ);
+        assert_eq!(role.stored.as_deref(), Some("Jungle"));
+        assert_eq!(role.live.as_deref(), Some("Top"));
+    }
+
+    /// A gap on one side is not a disagreement, and the two directions mean
+    /// opposite things — one is a patch that never landed, the other is match
+    /// history having aged the game out.
+    #[test]
+    fn a_gap_on_one_side_is_not_a_disagreement() {
+        let mut stored_only = row();
+        stored_only.patch = Some("15.3.412".into());
+        let fields = compare_with_summary(&stored_only, &summary(), None);
+        assert_eq!(find(&fields, "patch").verdict, Verdict::OnlyStored);
+
+        let mut live_only = summary();
+        live_only.patch = Some("15.3.412".into());
+        let fields = compare_with_summary(&row(), &live_only, None);
+        assert_eq!(find(&fields, "patch").verdict, Verdict::OnlyLive);
+    }
+
+    /// Neither knowing is its own answer, not a silent pass.
+    #[test]
+    fn a_field_neither_source_knows_says_so() {
+        let fields = compare_with_summary(&row(), &summary(), None);
+        assert_eq!(find(&fields, "queue").verdict, Verdict::Neither);
+    }
+
+    /// KDA is one field, not three. Both writers write it as a unit, so
+    /// three rows saying `Differ` about one event would overstate it.
+    #[test]
+    fn kda_is_compared_as_one_field_and_needs_all_three() {
+        let mut row = row();
+        row.kda_k = Some(7);
+        row.kda_d = Some(2);
+        row.kda_a = Some(5);
+        let mut summary = summary();
+        summary.kills = Some(7);
+        summary.deaths = Some(3);
+        summary.assists = Some(5);
+
+        let fields = compare_with_summary(&row, &summary, None);
+        assert_eq!(fields.iter().filter(|f| f.field == "kda").count(), 1);
+        let kda = find(&fields, "kda");
+        assert_eq!(kda.verdict, Verdict::Differ);
+        assert_eq!(kda.stored.as_deref(), Some("7/2/5"));
+        assert_eq!(kda.live.as_deref(), Some("7/3/5"));
+
+        // A partial KDA is not half an answer — same rule `formatKda` applies.
+        let mut partial = row.clone();
+        partial.kda_d = None;
+        let fields = compare_with_summary(&partial, &summary, None);
+        assert_eq!(find(&fields, "kda").verdict, Verdict::OnlyLive);
+    }
+
+    /// The champion is compared as a *name*, because that is the only form
+    /// the column holds. An id the client could not name arrives as `None`
+    /// and reads as "the client did not say" — an unnameable id is not
+    /// evidence that the row is wrong.
+    #[test]
+    fn an_unresolvable_champion_id_is_not_a_disagreement() {
+        let mut row = row();
+        row.champion = Some("Wukong".into());
+        let mut summary = summary();
+        summary.champion_id = Some(62);
+
+        let fields = compare_with_summary(&row, &summary, None);
+        assert_eq!(find(&fields, "champion").verdict, Verdict::OnlyStored);
+
+        let fields = compare_with_summary(&row, &summary, Some("Wukong".into()));
+        assert_eq!(find(&fields, "champion").verdict, Verdict::Agree);
+    }
+
+    /// Agreement is the common case and has to be reported as such, or the
+    /// panel could not lead with a count of what differs.
+    #[test]
+    fn matching_values_agree() {
+        let mut row = row();
+        row.win = Some(true);
+        row.queue = Some(420);
+        let mut summary = summary();
+        summary.win = Some(true);
+        summary.queue_id = Some(420);
+
+        let fields = compare_with_summary(&row, &summary, None);
+        assert_eq!(find(&fields, "win").verdict, Verdict::Agree);
+        assert_eq!(find(&fields, "queue").verdict, Verdict::Agree);
+        assert_eq!(find(&fields, "win").stored.as_deref(), Some("Win"));
     }
 }
