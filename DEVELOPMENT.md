@@ -768,9 +768,18 @@ used to cost half an hour of a real game), and the gameflow phase trails the
 window closing too. A window that no longer exists captures as **black** under
 WGC, not as a frozen last frame, so every VOD ended on several seconds of it.
 
-The player's window is therefore `[game start − 1s, game end + 2s]`, and both
+The player's window is therefore `[game start − 1s, game end]`, and both
 numbers come from the same place: the last sample is the last thing the game
 reported. Playback stops there rather than running on.
+
+**The two ends do not get the same margin, and that is deliberate.** The tail
+carried two seconds for a while, so the 1 Hz sample cadence could not clip the
+final moment — and it still left VODs ending on black, because two seconds is
+not the whole gap. The ends are not worth the same: the head margin buys the
+opening of a game, while everything past the last report is the post-game end
+screen. Losing up to a second of that costs nothing anyone goes back for, and
+a VOD that ends on black is a defect people notice. So the tail margin is
+zero and the head margin stays.
 
 **Where this differs from the head, and why it has to.** The loading screen is
 bounded — it is always about twenty seconds, and being wrong about it costs a

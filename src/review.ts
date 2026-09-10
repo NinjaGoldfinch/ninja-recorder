@@ -472,16 +472,25 @@ const LEAD_IN_S = 1;
 const MIN_SKIP_S = 3;
 
 /**
- * How much to keep after the last thing the game reported.
+ * How much to keep after the last thing the game reported: nothing.
  *
  * Capture outlives the game window — nothing stops it at the instant the
  * game ends, because neither signal that ends a recording knows at that
  * instant (#119) — and a window that no longer exists captures as *black*
- * under WGC, not as a frozen last frame. This is the other end of
- * `LEAD_IN_S`: enough that the final moment is not clipped by the 1 Hz
- * sample cadence, not so much that the black is back.
+ * under WGC, not as a frozen last frame.
+ *
+ * **Deliberately not the mirror of `LEAD_IN_S`.** A margin was kept here so
+ * the final moment could not be clipped by the 1 Hz sample cadence, and two
+ * seconds was not enough to stop the VOD ending on black anyway. The two ends
+ * are not worth the same: the head margin buys the opening of a game, while
+ * everything after the last report is the post-game end screen. Losing up to
+ * a second of that costs nothing a person would go back for, and ending on
+ * black is a defect people actually notice.
+ *
+ * The guards below are untouched — a gap wider than `MAX_TAIL_CLIP_S` is
+ * still refused, so a stretch with no samples cannot cut real gameplay.
  */
-const TAIL_OUT_S = 2;
+const TAIL_OUT_S = 0;
 
 /**
  * Past this, the gap is not a post-game tail and clipping it would be a

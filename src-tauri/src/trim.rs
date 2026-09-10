@@ -61,12 +61,21 @@ const LEAD_IN_S: f64 = 1.0;
 /// Below this there is no loading screen worth the rewrite.
 const MIN_TRIM_S: f64 = 3.0;
 
-/// How much to keep after the last thing the game reported.
+/// How much to keep after the last thing the game reported: nothing.
 ///
 /// Matches `review.ts`'s window so a trimmed recording and an untrimmed one
-/// end in the same place. The samples are 1 Hz, so the alignment is only good
-/// to about a second; two gives the nexus falling somewhere to land.
-const TAIL_OUT_S: f64 = 2.0;
+/// end in the same place.
+///
+/// **Not the mirror of `LEAD_IN_S`, on purpose.** Two seconds were kept here
+/// so the 1 Hz sample cadence could not clip the final moment, and it still
+/// left the file ending on black. The ends are not worth the same: the head
+/// margin buys the opening of a game, while everything past the last report
+/// is the post-game end screen — losing up to a second of that costs nothing
+/// anyone goes back for, and a VOD ending on black is a defect people notice.
+///
+/// The refusals in `tail_point_s` are unchanged, so a gap too wide to be a
+/// post-game tail still cuts nothing.
+const TAIL_OUT_S: f64 = 0.0;
 
 /// Past this, the gap at the end is not a post-game tail and cutting it would
 /// be a guess. Matches `review.ts`.
@@ -398,18 +407,21 @@ mod tests {
     /// destroyed window captures as black (#119).
     #[test]
     fn the_tail_is_cut_when_there_is_a_real_one() {
-        // Game ends at 1500s in a 1520s file: 18s of black after the margin.
-        assert_eq!(tail_point_s(1500.0, 1520.0), Some(1502.0));
+        // Game ends at 1500s in a 1520s file: 20s of black, all of it cut.
+        // The cut lands on the last reported moment, with no margin after it.
+        assert_eq!(tail_point_s(1500.0, 1520.0), Some(1500.0));
     }
 
     /// Each refusal falls back to keeping the whole file, never to a guess —
     /// the same rule the head end applies.
     #[test]
     fn the_tail_is_left_alone_when_the_answer_is_not_measured() {
-        // Already at the end: nothing to remove.
-        assert_eq!(tail_point_s(1500.0, 1501.0), None);
-        // Below the rewrite threshold: not worth a gigabyte of I/O.
-        assert_eq!(tail_point_s(1500.0, 1504.0), None);
+        // Already at or past the end: nothing to remove.
+        assert_eq!(tail_point_s(1500.0, 1500.0), None);
+        // Below the rewrite threshold: not worth a gigabyte of I/O for two
+        // seconds. This is now the only thing keeping a short tail — the
+        // margin used to absorb it.
+        assert_eq!(tail_point_s(1500.0, 1502.0), None);
         // **Not a post-game tail.** A real one is 5-15s. A gap this wide
         // means something else — most likely a stretch of Live Client Data
         // the parser could not read, which keeps recording and produces no

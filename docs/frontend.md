@@ -355,7 +355,7 @@ the file rather than to a guess:
 | Condition | Why |
 |---|---|
 | No samples | A rescan import, or a game whose poller never came up. Nothing knows where its game ended |
-| Tail shorter than the margin | There is nothing to remove |
+| Tail shorter than `MIN_TRIM_S` (3 s) | Not worth rewriting a gigabyte for. The tail margin is zero (DEVELOPMENT.md §5.4), so this is the only thing that keeps a short one |
 | Gap wider than `MAX_TAIL_CLIP_S` (60 s) | Not a post-game tail. A stretch of unreadable Live Client Data responses keeps recording and produces *no samples*, so real gameplay would sit after the last one — cutting there would hide the game |
 
 Playback is stopped at the window end from both the rAF loop and
