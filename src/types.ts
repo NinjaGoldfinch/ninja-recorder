@@ -44,6 +44,14 @@ export interface RecordingRow {
   /// own because the row sorts on it and CS per minute wants it beside
   /// `duration_s`.
   cs: number | null;
+  /** The ladder this game was played at (migration 10). `null` on everything
+   *  that is not a ranked game, everything recorded before it, and any patch
+   *  that landed too late for the reading to still describe the game. */
+  tier: string | null;
+  /** `null` at Master and above, where divisions do not exist. */
+  division: string | null;
+  /** LP once the game settled. Not a change — nothing reports one. */
+  lp_after: number | null;
 }
 
 /** One capturable audio source. Mirrors Rust's `AudioSourceKind`. */

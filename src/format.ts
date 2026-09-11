@@ -193,3 +193,24 @@ export function kdaRatio(
 export function basename(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
 }
+
+/**
+ * `"Emerald III"`, or `"Master"` where divisions do not exist.
+ *
+ * Title case rather than the client's shouting — `EMERALD` is how the API
+ * spells it and not how anybody says it. Absent when the game had no ladder:
+ * a normal game has no rank, which is different from a rank we failed to read
+ * and different again from being unranked, and the row does not pretend to
+ * tell those apart because the column cannot.
+ */
+export function rankLabel(tier: string | null, division: string | null): string | null {
+  if (tier === null || tier.trim() === "") return null;
+  const name = tier.trim();
+  const pretty = name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
+  return division === null || division.trim() === "" ? pretty : `${pretty} ${division.trim()}`;
+}
+
+/** `"38 LP"`. Zero is a real standing, so it is shown rather than hidden. */
+export function lpLabel(lp: number | null): string | null {
+  return lp === null ? null : `${lp} LP`;
+}

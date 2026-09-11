@@ -1333,6 +1333,7 @@ button.armed {
     minmax(6rem, 12rem)   /* champion + role */
     minmax(6rem, 9rem)    /* KDA + ratio */
     minmax(4.5rem, 6rem)  /* CS + per minute */
+    minmax(5rem, 7rem)    /* rank + LP */
     auto                  /* spells + runes */
     auto                  /* items */
     auto                  /* both team compositions */
@@ -1340,7 +1341,7 @@ button.armed {
     auto                  /* size */
     auto;                 /* actions */
   align-items: center;
-  /* Tighter than the page's usual rhythm. Ten columns at `--sp-3` spend
+  /* Tighter than the page's usual rhythm. Eleven columns at `--sp-3` spend
    * more than a hundred pixels on gaps, which at the 960px minimum window
    * is the difference between the items strip fitting and not. */
   gap: var(--sp-2);
@@ -1894,10 +1895,15 @@ button.small {
  * vanishing. The rule is about data, not about window width.
  *
  * The threshold is where the row's own tracks stop fitting, not a round
- * number: the ten columns before it need about 875px, and the window has
- * to carry the container's padding, the row's padding and ten gaps on top
- * of that. Below roughly 1100px the squares are what no longer has room. */
-@media (max-width: 1100px) {
+ * number: the columns before it need about 965px, and the window has to
+ * carry the container's padding, the row's padding and the gaps on top of
+ * that. Below roughly 1200px the squares are what no longer has room.
+ *
+ * It moved out from 1100px when the rank column landed (#149): one more
+ * capped track plus its gap is about 90px, and the threshold has to move
+ * with it or the row starts overflowing instead of shedding the block it
+ * can most afford to lose. */
+@media (max-width: 1200px) {
   .vod-teams {
     display: none;
   }
