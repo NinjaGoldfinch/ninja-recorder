@@ -573,14 +573,10 @@ export const COMMANDS: CommandSpec[] = [
     description:
       "Runs the whole deferred patch against a real client and writes the result to an existing recording. May block for up to a minute — that is the real retry schedule.",
     args: [
-      { name: "recordingId", kind: "number", help: "The row to patch. Its queue/role/patch columns are overwritten." },
-      { name: "gameId", kind: "number", help: "Which game to ask the client about." },
-      {
-        name: "isCustom",
-        kind: "boolean",
-        default: false,
-        help: "Skips match history — a custom game never reaches it.",
-      },
+      { name: "recordingId", kind: "number" },
+      { name: "gameId", kind: "number" },
+      { name: "isCustom", kind: "boolean", default: false },
+      { name: "queueId", kind: "number", default: 420, help: "420 solo, 440 flex \u2014 gates the rank read" },
     ],
   },
   {

@@ -241,6 +241,27 @@ static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
         -- than inside a blob every query would have to parse.
         ALTER TABLE recordings ADD COLUMN cs INTEGER;
         ",
+    ), M::up(
+        "
+        -- What rank this game was played at (#149).
+        --
+        -- Real columns rather than a blob, on the `cs` precedent: they are
+        -- shown on the row and are the natural thing to filter a climb by.
+        -- `division` is NULL at Master and above, where divisions do not
+        -- exist, which is a real distinction rather than a gap.
+        ALTER TABLE recordings ADD COLUMN tier TEXT;
+        ALTER TABLE recordings ADD COLUMN division TEXT;
+
+        -- LP once the game had settled. Stored rather than a *change*,
+        -- because no endpoint reports one: the end-of-game block carries no
+        -- LP field at all (captured from a real ranked game and checked),
+        -- and both ranked endpoints answer with current state. Subtracting
+        -- two readings would misattribute a dodge, a remake, decay, a
+        -- promotion series or a game played on another device, and
+        -- DEVELOPMENT.md 5.2 settled that argument for the gold curve.
+        -- A delta column can be appended the day something reports one.
+        ALTER TABLE recordings ADD COLUMN lp_after INTEGER;
+        ",
     )];
     let count = migrations.len() as i64;
     (Migrations::new(migrations), count)
@@ -337,6 +358,15 @@ pub struct RecordingRow {
     /// Our own creep score. Also inside `scoreboard_json`; here as well
     /// because the row sorts on it.
     pub cs: Option<i64>,
+    /// The ladder this game was played at (#149). `None` on everything that
+    /// is not a ranked game, everything recorded before migration 10, and
+    /// any patch that landed too late to be sure the rank still described
+    /// this game — see `match_summary::RANK_FRESHNESS`.
+    pub tier: Option<String>,
+    /// `None` at Master and above, where divisions do not exist.
+    pub division: Option<String>,
+    /// LP once the game settled. Not a change: nothing reports one.
+    pub lp_after: Option<i64>,
 }
 
 /// The post-game columns `update_match_metadata` may fill in, once the LCU
@@ -431,6 +461,9 @@ fn row_to_recording(row: &rusqlite::Row) -> rusqlite::Result<RecordingRow> {
         diagnostics_json: row.get(17)?,
         scoreboard_json: row.get(18)?,
         cs: row.get(19)?,
+        tier: row.get(20)?,
+        division: row.get(21)?,
+        lp_after: row.get(22)?,
     })
 }
 
@@ -708,7 +741,8 @@ impl Db {
         let mut stmt = conn.prepare(
             "SELECT id, path, started_at, duration_s, game_id, queue, champion, role,
                     win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
-                    audio_tracks_json, game_mode, diagnostics_json, scoreboard_json, cs
+                    audio_tracks_json, game_mode, diagnostics_json, scoreboard_json, cs,
+                    tier, division, lp_after
              FROM recordings ORDER BY started_at DESC",
         )?;
         let rows = stmt.query_map([], row_to_recording)?;
@@ -908,6 +942,36 @@ impl Db {
                     cs = COALESCE(cs, ?3)
              WHERE id = ?1 AND scoreboard_json IS NULL",
             params![recording_id, scoreboard_json, cs],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Writes the rank a game was played at, **only when the row has none**.
+    ///
+    /// Fill-only, like `fill_scoreboard`, and for a sharper reason: the first
+    /// write is the one taken closest to the game, and every later one is
+    /// staler. A row that already has a rank has the better answer, so an
+    /// `UPDATE` that overwrote it would be a downgrade dressed as a repair.
+    ///
+    /// **Nothing else in the app writes these columns.** The backfill in
+    /// particular must not: it matches recordings to games on the clock and
+    /// the client only ever reports the rank held *now*, so filling an old
+    /// row would stamp this season's rank onto a game played in another one
+    /// — and it would look entirely plausible, which is the failure #56 was
+    /// built to refuse.
+    pub fn fill_ranked(
+        &self,
+        recording_id: i64,
+        tier: &str,
+        division: Option<&str>,
+        lp_after: i64,
+    ) -> Result<bool, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let changed = conn.execute(
+            "UPDATE recordings
+                SET tier = ?2, division = ?3, lp_after = ?4
+             WHERE id = ?1 AND tier IS NULL",
+            params![recording_id, tier, division, lp_after],
         )?;
         Ok(changed > 0)
     }
@@ -1136,7 +1200,8 @@ impl Db {
         conn.query_row(
             "SELECT id, path, started_at, duration_s, game_id, queue, champion, role,
                     win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
-                    audio_tracks_json, game_mode, diagnostics_json, scoreboard_json, cs
+                    audio_tracks_json, game_mode, diagnostics_json, scoreboard_json, cs,
+                    tier, division, lp_after
              FROM recordings WHERE id = ?1",
             [id],
             row_to_recording,
@@ -2159,4 +2224,73 @@ mod tests {
         assert_eq!(count, 0);
     }
 
+
+    /// `fill_ranked` fills and never overwrites.
+    ///
+    /// The first write is the one taken closest to the game; every later one
+    /// is staler, so a second call must lose.
+    #[test]
+    fn a_rank_is_written_once_and_never_replaced() {
+        let db = Db::open(Path::new(":memory:")).unwrap();
+        let id = db.insert_recording(&NewRecording {
+            path: "/a.mp4".into(),
+            started_at: 1,
+            ..Default::default()
+        }).unwrap();
+
+        assert!(db.fill_ranked(id, "EMERALD", Some("III"), 38).unwrap());
+        assert!(
+            !db.fill_ranked(id, "DIAMOND", Some("IV"), 5).unwrap(),
+            "a later, staler answer must not overwrite the first"
+        );
+
+        let row = db.get_recording(id).unwrap().unwrap();
+        assert_eq!(row.tier.as_deref(), Some("EMERALD"));
+        assert_eq!(row.division.as_deref(), Some("III"));
+        assert_eq!(row.lp_after, Some(38));
+    }
+
+    /// Master and above have no division, and NULL is how that is said.
+    #[test]
+    fn an_apex_rank_stores_no_division() {
+        let db = Db::open(Path::new(":memory:")).unwrap();
+        let id = db.insert_recording(&NewRecording {
+            path: "/a.mp4".into(),
+            started_at: 1,
+            ..Default::default()
+        }).unwrap();
+
+        db.fill_ranked(id, "MASTER", None, 412).unwrap();
+        let row = db.get_recording(id).unwrap().unwrap();
+        assert_eq!(row.tier.as_deref(), Some("MASTER"));
+        assert_eq!(row.division, None);
+    }
+
+    /// **The claim Decision 2 rests on.** The backfill writes through
+    /// `update_match_metadata`, which must not reach the rank columns — it
+    /// matches games on the clock and the client only reports the rank held
+    /// *now*, so filling an old row would stamp this season's rank onto a
+    /// game played in another one, and it would look entirely plausible.
+    #[test]
+    fn the_metadata_patch_cannot_touch_the_rank_columns() {
+        let db = Db::open(Path::new(":memory:")).unwrap();
+        let id = db.insert_recording(&NewRecording {
+            path: "/a.mp4".into(),
+            started_at: 1,
+            ..Default::default()
+        }).unwrap();
+        db.fill_ranked(id, "GOLD", Some("II"), 44).unwrap();
+
+        db.update_match_metadata(id, &MatchMetadata {
+            win: Some(true),
+            champion: Some("Viego".into()),
+            role: Some("Jungle".into()),
+            ..Default::default()
+        }).unwrap();
+
+        let row = db.get_recording(id).unwrap().unwrap();
+        assert_eq!(row.champion.as_deref(), Some("Viego"), "the patch still works");
+        assert_eq!(row.tier.as_deref(), Some("GOLD"), "and left the rank alone");
+        assert_eq!(row.lp_after, Some(44));
+    }
 }

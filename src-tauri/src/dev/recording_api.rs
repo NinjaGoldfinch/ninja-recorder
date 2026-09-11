@@ -345,6 +345,9 @@ mod tests {
             diagnostics_json: None,
             scoreboard_json: None,
             cs: None,
+            tier: None,
+            division: None,
+            lp_after: None,
         }
     }
 

@@ -75,6 +75,18 @@ pub struct RankedStats {
     pub queue_map: std::collections::HashMap<String, RankedEntry>,
 }
 
+/// The ranked ladder a queue id plays on, if it plays on one.
+///
+/// The eog block spells its queue this way too, so this is the only place a
+/// queue *id* has to be turned into one — nothing downstream carries both.
+pub fn queue_type_for(queue_id: i64) -> Option<&'static str> {
+    match queue_id {
+        420 => Some(SOLO),
+        440 => Some(FLEX),
+        _ => None,
+    }
+}
+
 /// A rank we are prepared to say something about.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Standing {
@@ -337,5 +349,17 @@ mod tests {
         ];
         let rank = lobby_rank(&lobby).unwrap();
         assert_eq!((rank.tier.as_str(), rank.division.as_deref()), ("GOLD", Some("IV")));
+    }
+
+    /// Only the two ranked queues have a ladder. Everything else — normals,
+    /// ARAM, Arena, a custom — has no rank to read, and guessing one would
+    /// put a standing on a game that never had one.
+    #[test]
+    fn only_the_ranked_queues_map_to_a_ladder() {
+        assert_eq!(queue_type_for(420), Some(SOLO));
+        assert_eq!(queue_type_for(440), Some(FLEX));
+        for other in [0, 400, 430, 450, 490, 700, 900, 1700, 1900] {
+            assert_eq!(queue_type_for(other), None, "queue {other} is not ranked");
+        }
     }
 }

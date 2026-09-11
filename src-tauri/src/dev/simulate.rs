@@ -422,6 +422,7 @@ pub async fn dev_patch_match_summary(
     recording_id: i64,
     game_id: i64,
     is_custom: bool,
+    queue_id: Option<i64>,
 ) -> Result<bool, String> {
     let ctx = state.clone_ctx();
     let lockfile = lcu::lockfile::discover()
@@ -434,6 +435,15 @@ pub async fn dev_patch_match_summary(
             recording_id,
             game_id,
             is_custom,
+            queue_id,
+            // Now, so the rank read is exercised rather than skipped: this
+            // command exists to drive the whole patch against a real client,
+            // and a timestamp from the row would make the freshness gate
+            // decline every time.
+            game_ended_at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0),
             lockfile,
             // Empty rather than read back off the row: this is the LCU
             // half under test, and a synthetic "live" summary would only

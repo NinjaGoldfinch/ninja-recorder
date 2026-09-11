@@ -54,6 +54,12 @@ pub struct SummaryRequest {
     /// between the game and this patch, and a fresh `discover` would then
     /// answer about a different process than the one that played the game.
     pub lockfile: lcu::LockfileInfo,
+    /// Riot's real queue id, from the gameflow session read during the game.
+    /// The only thing that can say whether this game had a ladder at all.
+    pub queue_id: Option<i64>,
+    /// When the game ended, in epoch milliseconds. The rank read is gated on
+    /// this rather than on which code path is asking — see `RANK_FRESHNESS`.
+    pub game_ended_at_ms: i64,
     /// What Live Client Data recorded, so a disagreement can be reported.
     /// Not used to *write* anything — the row already has these.
     pub live: LiveSummary,
@@ -284,6 +290,37 @@ pub(crate) fn runes_of(us: &lcu::ParticipantSummary) -> Option<ScoreboardRunes> 
 /// that the sweep never grows a tail of games the client has forgotten.
 pub const RESUME_WINDOW: Duration = Duration::from_secs(48 * 60 * 60);
 
+/// Wall clock, in one place, so the pure rule above stays pure.
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// How soon after a game a rank reading still describes *that game*.
+///
+/// **The one rule that keeps `tier` honest**, and it is about time rather
+/// than about which code path asked. The live patch runs seconds after a
+/// finalize, so it is always inside this. The resume sweep looks back
+/// `RESUME_WINDOW` — two days — and a rank read then is the rank held now,
+/// which for a game played yesterday is simply a different number.
+///
+/// Expressing it as a freshness window rather than "only the live path may
+/// write it" means a third caller cannot get it wrong by existing. Five
+/// minutes is comfortably longer than the patch's own sixty-second ceiling
+/// and comfortably shorter than another ranked game.
+pub const RANK_FRESHNESS: Duration = Duration::from_secs(5 * 60);
+
+/// Whether a rank read now would still describe a game that ended then.
+///
+/// Pure, because the rule is the whole of the decision and a clock read
+/// inside it would put it beyond a test.
+pub fn rank_still_describes(game_ended_at_ms: i64, now_ms: i64) -> bool {
+    let age = now_ms.saturating_sub(game_ended_at_ms);
+    (0..=RANK_FRESHNESS.as_millis() as i64).contains(&age)
+}
+
 /// Finishes the patches an app exit interrupted.
 ///
 /// **Single-shot, not the retry schedule.** `patch` retries because it runs
@@ -411,6 +448,11 @@ pub async fn patch(db: &Db, request: &SummaryRequest) -> bool {
         );
     }
 
+    // The rank this game was played at, while the reading still describes
+    // it. Best effort and last of the optional halves: a missing rank costs
+    // the row one line, and a wrong one is a claim about somebody's climb.
+    write_ranked_standing(db, &client, request, now_ms()).await;
+
     // Before the metadata write, because it is the slower half and the
     // caller only learns "something changed" once. Its own failures are
     // logged and swallowed: a game with no timeline still has a name, an
@@ -460,6 +502,81 @@ pub async fn patch(db: &Db, request: &SummaryRequest) -> bool {
 ///
 /// **Custom and practice games end here**, at the empty series: they never
 /// reach match history, so there is no timeline to ask for.
+/// Records the rank a game was played at, when the reading is still about it.
+///
+/// **Three ways it declines**, and each leaves the columns NULL rather than
+/// writing a guess:
+///
+/// - The queue has no ladder. Normals, ARAM and customs have no rank to read,
+///   and `queue_type_for` is the only place that decision is made.
+/// - The reading is no longer fresh (`rank_still_describes`). A resumed patch
+///   runs against a game hours old, and the client only ever reports the rank
+///   held *now*.
+/// - The player is unranked in that queue, which arrives as the `""`/`"NA"`
+///   sentinels and is normalised to absence by `standing`.
+///
+/// Fill-only at the database, so a later, staler answer cannot overwrite the
+/// one taken closest to the game.
+async fn write_ranked_standing(
+    db: &Db,
+    client: &lcu::LcuHttpClient,
+    request: &SummaryRequest,
+    now_ms: i64,
+) -> bool {
+    let Some(queue_id) = request.queue_id else {
+        return false;
+    };
+    let Some(queue_type) = lcu::ranked::queue_type_for(queue_id) else {
+        return false;
+    };
+    if !rank_still_describes(request.game_ended_at_ms, now_ms) {
+        debug!("match-summary",
+            "not reading a rank for recording {}: the game is older than the reading would describe",
+            request.recording_id
+        );
+        return false;
+    }
+
+    let stats: lcu::ranked::RankedStats = match client
+        .get_json("/lol-ranked/v1/current-ranked-stats")
+        .await
+    {
+        Ok(stats) => stats,
+        Err(e) => {
+            warn!("match-summary", "could not read the ranked standing: {e}");
+            return false;
+        }
+    };
+    let Some(standing) = stats.standing(queue_type) else {
+        info!("match-summary", "no standing in {queue_type} — unranked, or placements");
+        return false;
+    };
+
+    match db.fill_ranked(
+        request.recording_id,
+        &standing.tier,
+        standing.division.as_deref(),
+        standing.league_points,
+    ) {
+        Ok(true) => {
+            info!("match-summary", "recording {} was played at {} {} ({} LP)",
+                request.recording_id,
+                standing.tier,
+                standing.division.as_deref().unwrap_or(""),
+                standing.league_points
+            );
+            true
+        }
+        // Already holds one, which is the better answer: it was taken closer
+        // to the game than this one.
+        Ok(false) => false,
+        Err(e) => {
+            warn!("match-summary", "could not write the ranked standing: {e}");
+            false
+        }
+    }
+}
+
 pub(crate) async fn write_gold_series(
     db: &Db,
     client: &lcu::LcuHttpClient,
@@ -775,5 +892,51 @@ mod tests {
         assert_eq!(row.role.as_deref(), Some("Middle"));
         assert_eq!(row.champion.as_deref(), Some("Ahri"));
         assert!(row.pinned);
+    }
+
+    // --- the rank freshness rule ------------------------------------
+
+    const MIN: i64 = 60 * 1000;
+
+    /// The live patch: seconds after a finalize, comfortably inside.
+    #[test]
+    fn a_rank_read_right_after_the_game_describes_it() {
+        assert!(rank_still_describes(0, 0));
+        assert!(rank_still_describes(0, 30 * 1000));
+        assert!(rank_still_describes(0, RANK_FRESHNESS.as_millis() as i64));
+    }
+
+    /// The resume sweep, which looks back two days. A rank read then is the
+    /// rank held *now*, and for yesterday's game that is a different number
+    /// — the exact stale-label failure #56 refuses.
+    #[test]
+    fn a_rank_read_long_after_the_game_does_not() {
+        assert!(!rank_still_describes(0, 6 * MIN));
+        assert!(!rank_still_describes(0, 48 * 60 * MIN));
+        assert!(
+            !rank_still_describes(0, RESUME_WINDOW.as_millis() as i64),
+            "the whole resume window must fall outside"
+        );
+    }
+
+    /// A clock that has gone backwards is not a licence to write. Negative
+    /// age means the two readings disagree about when now is, and a rank is
+    /// not worth trusting a broken clock for.
+    #[test]
+    fn a_reading_from_before_the_game_is_refused() {
+        assert!(!rank_still_describes(10 * MIN, 0));
+    }
+
+    /// The rule is about elapsed time, not about which caller asked — so a
+    /// third caller cannot get it wrong by existing.
+    #[test]
+    fn the_rule_is_the_same_whoever_asks() {
+        let ended = 1_700_000_000_000;
+        for now in [ended, ended + MIN, ended + 5 * MIN] {
+            assert!(rank_still_describes(ended, now));
+        }
+        for now in [ended + 5 * MIN + 1, ended + 60 * MIN] {
+            assert!(!rank_still_describes(ended, now));
+        }
     }
 }
