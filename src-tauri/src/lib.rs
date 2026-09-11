@@ -945,6 +945,7 @@ pub fn run() {
         dev::dev_open_fixture,
         dev::dev_ranked_stats,
         dev::dev_lobby_rank,
+        dev::dev_lp_delta,
         dev::dev_event_capture_start,
         dev::dev_event_capture_stop,
         dev::dev_event_capture_status,

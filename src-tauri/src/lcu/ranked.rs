@@ -90,6 +90,13 @@ pub fn queue_type_for(queue_id: i64) -> Option<&'static str> {
 /// A rank we are prepared to say something about.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Standing {
+    /// Which ladder this is a standing on.
+    ///
+    /// Carried rather than inferred, because a standing separated from the
+    /// map it was keyed by has no other way to say — and comparing two of
+    /// them is exactly where that matters: solo and flex LP are different
+    /// numbers and differencing them would produce a figure about nothing.
+    pub queue_type: String,
     /// `"EMERALD"`, or `"MASTER"` for anything at or above it.
     pub tier: String,
     /// `None` at Master and above, where divisions do not exist.
@@ -110,12 +117,12 @@ impl RankedStats {
     /// Decision 3 says to exclude. They are normalised to `None` here, at the
     /// boundary, so nothing downstream has to remember.
     pub fn standing(&self, queue_type: &str) -> Option<Standing> {
-        standing_of(self.queue_map.get(queue_type)?)
+        standing_of(self.queue_map.get(queue_type)?, queue_type)
     }
 }
 
 /// Pure half, so the sentinel rules are testable without a document.
-pub fn standing_of(entry: &RankedEntry) -> Option<Standing> {
+pub fn standing_of(entry: &RankedEntry, queue_type: &str) -> Option<Standing> {
     let tier = entry.tier.trim().to_ascii_uppercase();
     if tier.is_empty() {
         return None;
@@ -142,6 +149,7 @@ pub fn standing_of(entry: &RankedEntry) -> Option<Standing> {
     };
 
     Some(Standing {
+        queue_type: queue_type.to_string(),
         tier,
         division,
         league_points: entry.league_points,
@@ -159,6 +167,69 @@ fn ladder_position(s: &Standing) -> (usize, usize, i64) {
         // the tier below, which is what the top index gives them.
         .unwrap_or(DIVISIONS.len());
     (s.rung, division, s.league_points)
+}
+
+/// LP in a division, and divisions in a tier. Riot's own structure.
+const LP_PER_DIVISION: i64 = 100;
+const DIVISIONS_PER_TIER: i64 = 4;
+
+/// Where a standing sits on the ladder as a single number, for measuring a
+/// **distance** rather than an order.
+///
+/// Note what this is not: `ladder_position` above orders standings and is all
+/// the median needs, which is exactly why the tier list could stop at Master.
+/// A delta needs to know *how far*, and that is a stronger claim — so this is
+/// a separate function with stricter refusals rather than a reuse of that one.
+///
+/// The arithmetic is not a weighting somebody chose. Four divisions of a
+/// hundred LP is how the ladder is built, so `GOLD IV 98` and `GOLD III 8`
+/// really are ten apart, and #85's rule against invented composite numbers is
+/// not engaged by measuring a structure that already exists.
+///
+/// `None` in the two cases where no honest number exists:
+///
+/// - **Master and above**, where LP is one unbounded pool rather than four
+///   hundred-point divisions. The model simply stops describing the ladder
+///   there, and a number derived from it would be wrong in a way only the
+///   players at the top would ever notice.
+/// - **A tier with no division**, below Master. `standing_of` drops a division
+///   it cannot recognise, and without one there is no telling which quarter of
+///   the tier this is — a quarter being four hundred LP of uncertainty.
+pub fn ladder_points(standing: &Standing) -> Option<i64> {
+    if standing.tier == "MASTER" {
+        return None;
+    }
+    let division = standing.division.as_deref()?;
+    let index = DIVISIONS.iter().position(|d| *d == division)? as i64;
+    let rung = standing.rung as i64;
+    Some(rung * DIVISIONS_PER_TIER * LP_PER_DIVISION + index * LP_PER_DIVISION + standing.league_points)
+}
+
+/// How much LP a game moved, from two standings taken either side of it.
+///
+/// **This is ours, not Riot's, and the distinction is the whole reason it is
+/// this careful.** Nothing the client sends reports a change; what makes this
+/// sound is not arithmetic but *position*: the app reads the ladder when a
+/// game starts and again when it ends, so the interval contains exactly one
+/// game. The confounders that sink a naive before-and-after — another game, a
+/// dodge, decay, a reading from a different day — are not mitigated here, they
+/// are absent, because there is no room for them between the two readings.
+///
+/// It refuses rather than guesses, and each refusal is a case where a number
+/// would be wrong rather than merely unknown:
+///
+/// - **Different ladders.** Solo and flex LP are unrelated numbers.
+/// - **Either end at Master or above**, or missing a division — see
+///   `ladder_points`. Crossing into Master is a change of scale, not a step.
+///
+/// Callers must still supply two readings that really do bracket one game;
+/// that part cannot be checked here, and `match_summary::rank_still_describes`
+/// is what bounds it.
+pub fn lp_delta(before: &Standing, after: &Standing) -> Option<i64> {
+    if before.queue_type != after.queue_type {
+        return None;
+    }
+    Some(ladder_points(after)? - ladder_points(before)?)
 }
 
 /// What a lobby's rank was, and how much of it was known.
@@ -219,11 +290,14 @@ mod tests {
     }
 
     fn at(tier: &str, division: &str, lp: i64) -> Option<Standing> {
-        standing_of(&RankedEntry {
-            tier: tier.into(),
-            division: division.into(),
-            league_points: lp,
-        })
+        standing_of(
+            &RankedEntry {
+                tier: tier.into(),
+                division: division.into(),
+                league_points: lp,
+            },
+            SOLO,
+        )
     }
 
     /// Against the real document: the ranked queue reads, and the two unranked
@@ -361,5 +435,92 @@ mod tests {
         for other in [0, 400, 430, 450, 490, 700, 900, 1700, 1900] {
             assert_eq!(queue_type_for(other), None, "queue {other} is not ranked");
         }
+    }
+
+    // --- the delta ----------------------------------------------------
+
+    fn solo(tier: &str, division: &str, lp: i64) -> Standing {
+        at(tier, division, lp).expect("a ranked standing")
+    }
+
+    fn flex(tier: &str, division: &str, lp: i64) -> Standing {
+        standing_of(
+            &RankedEntry { tier: tier.into(), division: division.into(), league_points: lp },
+            FLEX,
+        )
+        .expect("a ranked standing")
+    }
+
+    /// The ordinary case, and the one that needs no ladder at all.
+    #[test]
+    fn a_win_inside_one_division_is_the_lp_difference() {
+        assert_eq!(lp_delta(&solo("GOLD", "IV", 40), &solo("GOLD", "IV", 60)), Some(20));
+        assert_eq!(lp_delta(&solo("GOLD", "IV", 60), &solo("GOLD", "IV", 40)), Some(-20));
+        assert_eq!(lp_delta(&solo("GOLD", "IV", 40), &solo("GOLD", "IV", 40)), Some(0));
+    }
+
+    /// **The case the raw subtraction gets backwards.** Gold IV 98 to Gold
+    /// III 8 is a win worth ten LP; subtracting the two numbers says −90.
+    #[test]
+    fn a_promotion_across_a_division_is_a_gain_not_a_collapse() {
+        assert_eq!(lp_delta(&solo("GOLD", "IV", 98), &solo("GOLD", "III", 8)), Some(10));
+    }
+
+    /// And the same in reverse, which the raw subtraction reads as a gain.
+    #[test]
+    fn a_demotion_across_a_division_is_a_loss_not_a_windfall() {
+        assert_eq!(lp_delta(&solo("GOLD", "III", 8), &solo("GOLD", "IV", 92)), Some(-16));
+    }
+
+    /// A whole tier is four divisions, so crossing one is no different.
+    #[test]
+    fn a_promotion_across_a_tier_is_measured_the_same_way() {
+        assert_eq!(lp_delta(&solo("GOLD", "I", 99), &solo("PLATINUM", "IV", 9)), Some(10));
+        assert_eq!(lp_delta(&solo("PLATINUM", "IV", 9), &solo("GOLD", "I", 99)), Some(-10));
+    }
+
+    /// Distance across the whole ladder, so the tier and division weights
+    /// are pinned rather than merely exercised near one boundary.
+    #[test]
+    fn the_ladder_is_four_hundred_lp_a_tier() {
+        assert_eq!(ladder_points(&solo("IRON", "IV", 0)), Some(0));
+        assert_eq!(ladder_points(&solo("IRON", "I", 99)), Some(399));
+        assert_eq!(ladder_points(&solo("BRONZE", "IV", 0)), Some(400));
+        assert_eq!(lp_delta(&solo("IRON", "IV", 0), &solo("BRONZE", "IV", 0)), Some(400));
+    }
+
+    /// **Unavailable at the top, and that is a decision rather than a gap.**
+    /// Above Master LP is one unbounded pool, so the four-hundred-a-tier
+    /// model stops describing the ladder and any number from it would be
+    /// wrong in a way only those players would notice.
+    #[test]
+    fn nothing_is_measured_at_master_or_above() {
+        assert_eq!(ladder_points(&solo("MASTER", "I", 412)), None);
+        assert_eq!(lp_delta(&solo("DIAMOND", "I", 99), &solo("MASTER", "I", 0)), None);
+        assert_eq!(lp_delta(&solo("MASTER", "I", 0), &solo("MASTER", "I", 60)), None);
+        assert_eq!(lp_delta(&solo("MASTER", "I", 60), &solo("DIAMOND", "I", 75)), None);
+        // Grandmaster and Challenger collapse onto Master, so they are
+        // refused by the same rule rather than by three of them.
+        assert_eq!(lp_delta(&solo("DIAMOND", "I", 99), &solo("CHALLENGER", "I", 900)), None);
+    }
+
+    /// Solo and flex LP are unrelated numbers, and differencing them would
+    /// produce a figure about nothing.
+    #[test]
+    fn two_different_ladders_do_not_make_a_delta() {
+        assert_eq!(lp_delta(&solo("GOLD", "IV", 40), &flex("GOLD", "IV", 60)), None);
+        // Same ladder, still fine — the guard is the mismatch, not the field.
+        assert_eq!(lp_delta(&flex("GOLD", "IV", 40), &flex("GOLD", "IV", 60)), Some(20));
+    }
+
+    /// A tier whose division could not be read is four hundred LP of
+    /// uncertainty, which is not a base to measure from.
+    #[test]
+    fn a_standing_with_no_division_cannot_be_placed() {
+        let vague = solo("GOLD", "NA", 40);
+        assert_eq!(vague.division, None, "the sentinel really was dropped");
+        assert_eq!(ladder_points(&vague), None);
+        assert_eq!(lp_delta(&vague, &solo("GOLD", "II", 40)), None);
+        assert_eq!(lp_delta(&solo("GOLD", "II", 40), &vague), None);
     }
 }

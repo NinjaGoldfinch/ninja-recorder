@@ -300,6 +300,18 @@ export const COMMANDS: CommandSpec[] = [
     args: [{ name: "puuid", kind: "string", default: "", help: "blank = yourself" }],
   },
   {
+    name: "dev_lp_delta",
+    group: "Dev \u00b7 Diagnostics",
+    dev: true,
+    description:
+      "Measures an LP delta from two standings by hand \u2014 the bench for the one check that cannot be a unit test: whether the delta agrees with what the client's post-game screen showed. Reports the ladder positions as well as the answer, because a wrong delta is almost always a wrong position. Takes the client's own spelling.",
+    args: [
+      { name: "before", kind: "json", default: { tier: "GOLD", division: "IV", leaguePoints: 98 } },
+      { name: "after", kind: "json", default: { tier: "GOLD", division: "III", leaguePoints: 8 } },
+      { name: "queue", kind: "string", default: "RANKED_SOLO_5x5" },
+    ],
+  },
+  {
     name: "dev_lobby_rank",
     group: "Dev \u00b7 Diagnostics",
     dev: true,

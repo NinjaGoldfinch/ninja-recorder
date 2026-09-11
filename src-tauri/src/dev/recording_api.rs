@@ -604,3 +604,48 @@ pub async fn dev_lobby_rank(
         "min_known": ranked::MIN_KNOWN,
     }))
 }
+
+/// Measures an LP delta from two standings, by hand.
+///
+/// This is the bench for the one check that cannot be written as a unit test:
+/// #164's delta is only correct if it agrees with what the client's own
+/// post-game screen showed, and that comparison needs a human who saw both.
+/// Feed it the rank before a game and the rank after, and it reports the
+/// ladder positions it derived as well as the answer — a wrong delta is
+/// almost always a wrong *position*, and seeing both says which.
+///
+/// Takes the client's own spelling: `{ "tier": "GOLD", "division": "IV",
+/// "leaguePoints": 98 }`. The unranked sentinels work too, and are refused
+/// the same way the real path refuses them.
+#[tauri::command]
+pub fn dev_lp_delta(
+    before: crate::lcu::ranked::RankedEntry,
+    after: crate::lcu::ranked::RankedEntry,
+    queue: Option<String>,
+) -> serde_json::Value {
+    use crate::lcu::ranked;
+    let queue = queue.unwrap_or_else(|| ranked::SOLO.to_string());
+
+    let before = ranked::standing_of(&before, &queue);
+    let after = ranked::standing_of(&after, &queue);
+    let delta = match (&before, &after) {
+        (Some(b), Some(a)) => ranked::lp_delta(b, a),
+        _ => None,
+    };
+
+    serde_json::json!({
+        "queue": queue,
+        "before": before,
+        "after": after,
+        "before_points": before.as_ref().and_then(ranked::ladder_points),
+        "after_points": after.as_ref().and_then(ranked::ladder_points),
+        "delta": delta,
+        // Said in words, because every `null` above has a different cause and
+        // a probe that only returns `null` makes you guess which.
+        "note": match (&before, &after, delta) {
+            (_, _, Some(_)) => "measured",
+            (None, _, _) | (_, None, _) => "one end is not a ranked standing — unranked, in placements, or a tier nothing recognises",
+            _ => "no delta: Master and above have no divisions to measure across, a tier with no division cannot be placed, and two different ladders are not comparable",
+        },
+    })
+}
