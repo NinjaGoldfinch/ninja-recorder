@@ -352,6 +352,14 @@ pub struct Supervisor {
     /// finalize also sidesteps the race entirely — by then the request has
     /// long since resolved either way.
     pending_game: Mutex<lcu::GameIdentity>,
+    /// The ladder as it stood when this game started (#164).
+    ///
+    /// Read here rather than at finalize because that is the only moment it
+    /// is true: it is the *before* half of a measurement, and by the time the
+    /// game ends the number has already moved. Held beside `pending_game`
+    /// because it is resolved from the same session read and has the same
+    /// lifetime — one game's worth.
+    rank_before: Mutex<Option<lcu::ranked::Standing>>,
     last_finalized: Mutex<Option<FinalizedRecording>>,
     /// Set once at startup via `set_event_notifier`, rather
     /// than taken in `new`, so the unit tests below can still build a
@@ -399,6 +407,7 @@ impl Supervisor {
             recorder,
             recordings_dir,
             db,
+            rank_before: Mutex::new(None),
             gameflow_task: Mutex::new(None),
             live_client_task: Mutex::new(None),
             session: Mutex::new(None),
@@ -670,6 +679,35 @@ impl Supervisor {
                     "game identified: id={:?} queue={:?} custom={}",
                     identity.game_id, identity.queue_id, identity.is_custom
                 );
+                // The ladder this game starts from, if it has one. Best
+                // effort and after the identity is stored: a standing that
+                // cannot be read costs a delta, while the identity it is
+                // keyed by is what the whole row depends on.
+                if let Some(queue_type) = identity
+                    .queue_id
+                    .and_then(lcu::ranked::queue_type_for)
+                {
+                    match client
+                        .get_json::<lcu::ranked::RankedStats>(
+                            "/lol-ranked/v1/current-ranked-stats",
+                        )
+                        .await
+                    {
+                        Ok(stats) => {
+                            let standing = stats.standing(queue_type);
+                            info!("state_machine", "starting from {}",
+                                match &standing {
+                                    Some(s) => format!("{} {} ({} LP)",
+                                        s.tier, s.division.as_deref().unwrap_or(""), s.league_points),
+                                    None => "no standing in this queue — unranked, or placements".into(),
+                                }
+                            );
+                            *self.rank_before.lock().unwrap() = standing;
+                        }
+                        Err(e) => warn!("state_machine",
+                            "could not read the ladder this game starts from: {e}"),
+                    }
+                }
                 *self.pending_game.lock().unwrap() = identity;
             }
             Err(e) => warn!("state_machine", "could not identify the game: {e}"),
@@ -682,6 +720,10 @@ impl Supervisor {
             // A new game starts here, so whatever the last one resolved to
             // must not leak into this recording's row.
             *sup.pending_game.lock().unwrap() = lcu::GameIdentity::default();
+            // Same reason as the identity above: last game's standing must
+            // not become this game's *before*, which would measure the wrong
+            // interval entirely.
+            *sup.rank_before.lock().unwrap() = None;
             sup.fetch_game_identity().await;
 
             let client = match live_client::LiveClientDataClient::new() {
@@ -1057,6 +1099,7 @@ impl Supervisor {
                 // Now, because this runs from the finalize: the game has just
                 // ended, which is the whole reason a rank read here is about
                 // this game and the same read tomorrow would not be.
+                standing_before: self.rank_before.lock().unwrap().clone(),
                 game_ended_at_ms: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as i64)

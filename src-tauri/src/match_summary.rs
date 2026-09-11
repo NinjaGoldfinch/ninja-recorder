@@ -60,6 +60,16 @@ pub struct SummaryRequest {
     /// When the game ended, in epoch milliseconds. The rank read is gated on
     /// this rather than on which code path is asking — see `RANK_FRESHNESS`.
     pub game_ended_at_ms: i64,
+    /// The ladder as it stood when this game *started*, read by the
+    /// supervisor at `InProgress` (#164).
+    ///
+    /// The other end of the measurement, and the reason a delta is
+    /// defensible at all: the two readings bracket one game, so the interval
+    /// between them has no room for another game, a dodge or decay. `None`
+    /// whenever the app was not there to take it — a game already running
+    /// when the app started, an unranked queue, or a client that could not
+    /// be read — and a delta is then simply not measured.
+    pub standing_before: Option<lcu::ranked::Standing>,
     /// What Live Client Data recorded, so a disagreement can be reported.
     /// Not used to *write* anything — the row already has these.
     pub live: LiveSummary,
@@ -552,18 +562,33 @@ async fn write_ranked_standing(
         return false;
     };
 
+    // Measured only when the app was there for both ends. Every refusal
+    // inside `lp_delta` is a case where a number would have been *wrong*
+    // rather than merely unknown, so `None` here is a claim rather than a
+    // shrug.
+    let delta = request
+        .standing_before
+        .as_ref()
+        .and_then(|before| lcu::ranked::lp_delta(before, &standing));
+
     match db.fill_ranked(
         request.recording_id,
         &standing.tier,
         standing.division.as_deref(),
         standing.league_points,
+        request.standing_before.as_ref().map(|b| b.league_points),
+        delta,
     ) {
         Ok(true) => {
-            info!("match-summary", "recording {} was played at {} {} ({} LP)",
+            info!("match-summary", "recording {} was played at {} {} ({} LP){}",
                 request.recording_id,
                 standing.tier,
                 standing.division.as_deref().unwrap_or(""),
-                standing.league_points
+                standing.league_points,
+                match delta {
+                    Some(d) => format!(", {d:+} LP"),
+                    None => String::new(),
+                }
             );
             true
         }
