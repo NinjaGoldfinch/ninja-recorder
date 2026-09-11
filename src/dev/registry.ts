@@ -616,6 +616,33 @@ export const COMMANDS: CommandSpec[] = [
 
   // --- Dev: fixtures -----------------------------------------------
   {
+    name: "dev_event_capture_start",
+    group: "Dev \u00b7 Fixtures",
+    dev: true,
+    description:
+      "Records **every** LCU WebSocket event to a JSONL file, unfiltered. A URI filter presupposes knowing which endpoint carries what you are hunting; this exists for the case where nothing does. Stops itself at 64 MiB rather than rotating \u2014 for a probe the start of a session is usually the part being looked for.",
+  },
+  {
+    name: "dev_event_capture_stop",
+    group: "Dev \u00b7 Fixtures",
+    dev: true,
+    description: "Stops the running capture and reports what it wrote.",
+  },
+  {
+    name: "dev_event_capture_status",
+    group: "Dev \u00b7 Fixtures",
+    dev: true,
+    description: "Whether a capture is running, where it is writing, and how much it has written.",
+  },
+  {
+    name: "dev_event_uris",
+    group: "Dev \u00b7 Fixtures",
+    dev: true,
+    description:
+      "Which endpoints appeared in a capture, most frequent first. The half that makes a raw capture usable \u2014 a post-game window is thousands of frames across dozens of endpoints, and a list of URIs answers \"which of these could carry it\" in seconds where a 40 MB file does not.",
+    args: [{ name: "path", kind: "string", help: "a capture file from dev_event_capture_start" }],
+  },
+  {
     name: "dev_fixtures_state",
     group: "Dev · Fixtures",
     dev: true,

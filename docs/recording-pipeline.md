@@ -199,6 +199,8 @@ its normal 1 Hz rather than backing off — the exponential backoff exists for
 the long stretch between games, and applying it here would stretch five
 failures across fifteen seconds instead of five.
 
+The dev portal can also record that socket's whole output to disk without filtering (`dev::events`, [dev-portal.md](dev-portal.md)) — a second connection rather than a tap on this one, because this watch's lifetime belongs to the state machine and a debug tool has no business in the path that decides when recordings start.
+
 Underneath both, the event list is parsed **entry by entry**: an event whose
 shape we cannot read is dropped and the rest of the snapshot survives. The
 events array is the only part of `AllGameData` that both grows during a game

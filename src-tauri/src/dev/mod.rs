@@ -11,6 +11,7 @@
 //! client or need a library that only a real recording session produces.
 //! DEVELOPMENT.md §3.3 asked for a fixture replay mode; this is it.
 
+mod events;
 mod fixtures_api;
 mod info;
 mod log_api;
@@ -26,6 +27,7 @@ mod trim;
 // function *plus* hidden `__cmd__*` / `__tauri_command_name_*` items that
 // `generate_handler!` resolves through the same path, and naming only the
 // function leaves those behind in the submodule.
+pub use events::*;
 pub use fixtures_api::*;
 pub use info::*;
 pub use log_api::*;
