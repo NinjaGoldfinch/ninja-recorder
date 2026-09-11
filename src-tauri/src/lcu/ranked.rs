@@ -186,21 +186,38 @@ const DIVISIONS_PER_TIER: i64 = 4;
 /// really are ten apart, and #85's rule against invented composite numbers is
 /// not engaged by measuring a structure that already exists.
 ///
-/// `None` in the two cases where no honest number exists:
+/// **The scale runs continuously into Master**, which is what makes the apex
+/// measurable rather than a hole at the top:
 ///
-/// - **Master and above**, where LP is one unbounded pool rather than four
-///   hundred-point divisions. The model simply stops describing the ladder
-///   there, and a number derived from it would be wrong in a way only the
-///   players at the top would ever notice.
-/// - **A tier with no division**, below Master. `standing_of` drops a division
-///   it cannot recognise, and without one there is no telling which quarter of
-///   the tier this is — a quarter being four hundred LP of uncertainty.
+/// - Promotion out of Diamond I is *instant* at 100 LP — there is no
+///   placement cutoff to cross — so Diamond I 100 and Master 0 are the same
+///   position. The arithmetic reflects that with no special case: Master is
+///   simply rung 7 with nothing to add for a division.
+/// - Grandmaster and Challenger **change the label, not the number**. They are
+///   leaderboard cutoffs over one shared LP pool, so a Challenger on 900 LP
+///   and a Master on 900 LP sit in the same place. That is why they collapse
+///   onto Master's rung, and it is what lets a delta inside the apex work.
+///
+/// `None` only where no honest number exists: **a tier below Master with no
+/// division**. `standing_of` drops a division it cannot recognise, and without
+/// one there is no telling which quarter of the tier this is — four hundred LP
+/// of uncertainty.
+///
+/// One known imprecision, at one boundary. Demotion *out* of the apex places
+/// you at a fixed LP in Diamond I rather than continuing the scale downwards,
+/// so a game that drops you out of Master measures the position change
+/// honestly while not equalling the LP that game itself took. It is a movement
+/// on the ladder, which is what this claims to be, and the alternative — a
+/// NULL on every Master demotion — says less.
 pub fn ladder_points(standing: &Standing) -> Option<i64> {
-    if standing.tier == "MASTER" {
-        return None;
-    }
-    let division = standing.division.as_deref()?;
-    let index = DIVISIONS.iter().position(|d| *d == division)? as i64;
+    // No divisions at the apex, and none needed: `MASTER` is the top rung and
+    // its LP continues straight on from Diamond I 100.
+    let index = if standing.tier == "MASTER" {
+        0
+    } else {
+        let division = standing.division.as_deref()?;
+        DIVISIONS.iter().position(|d| *d == division)? as i64
+    };
     let rung = standing.rung as i64;
     Some(rung * DIVISIONS_PER_TIER * LP_PER_DIVISION + index * LP_PER_DIVISION + standing.league_points)
 }
@@ -219,8 +236,11 @@ pub fn ladder_points(standing: &Standing) -> Option<i64> {
 /// would be wrong rather than merely unknown:
 ///
 /// - **Different ladders.** Solo and flex LP are unrelated numbers.
-/// - **Either end at Master or above**, or missing a division — see
-///   `ladder_points`. Crossing into Master is a change of scale, not a step.
+/// - **Either end missing a division** below Master — see `ladder_points`.
+///
+/// Master and above are *not* refused: promotion out of Diamond I is instant
+/// at 100 LP and the apex tiers share one LP pool, so the scale is continuous
+/// all the way up.
 ///
 /// Callers must still supply two readings that really do bracket one game;
 /// that part cannot be checked here, and `match_summary::rank_still_describes`
@@ -489,19 +509,35 @@ mod tests {
         assert_eq!(lp_delta(&solo("IRON", "IV", 0), &solo("BRONZE", "IV", 0)), Some(400));
     }
 
-    /// **Unavailable at the top, and that is a decision rather than a gap.**
-    /// Above Master LP is one unbounded pool, so the four-hundred-a-tier
-    /// model stops describing the ladder and any number from it would be
-    /// wrong in a way only those players would notice.
+    /// **The scale runs straight into Master**, because promotion out of
+    /// Diamond I is instant at 100 LP — no placement cutoff to cross — so
+    /// Diamond I 100 and Master 0 are the same position.
     #[test]
-    fn nothing_is_measured_at_master_or_above() {
-        assert_eq!(ladder_points(&solo("MASTER", "I", 412)), None);
-        assert_eq!(lp_delta(&solo("DIAMOND", "I", 99), &solo("MASTER", "I", 0)), None);
-        assert_eq!(lp_delta(&solo("MASTER", "I", 0), &solo("MASTER", "I", 60)), None);
-        assert_eq!(lp_delta(&solo("MASTER", "I", 60), &solo("DIAMOND", "I", 75)), None);
-        // Grandmaster and Challenger collapse onto Master, so they are
-        // refused by the same rule rather than by three of them.
-        assert_eq!(lp_delta(&solo("DIAMOND", "I", 99), &solo("CHALLENGER", "I", 900)), None);
+    fn the_ladder_is_continuous_into_master() {
+        // Diamond is rung 6: 6 * 400 + 3 * 100 = 2700 at Diamond I 0.
+        assert_eq!(ladder_points(&solo("DIAMOND", "I", 100)), Some(2800));
+        assert_eq!(ladder_points(&solo("MASTER", "I", 0)), Some(2800));
+        // The case that prompted this: Diamond I 98 to Master 10 is +12.
+        assert_eq!(lp_delta(&solo("DIAMOND", "I", 98), &solo("MASTER", "I", 10)), Some(12));
+        // And back down, which measures the movement on the ladder.
+        assert_eq!(lp_delta(&solo("MASTER", "I", 10), &solo("DIAMOND", "I", 98)), Some(-12));
+    }
+
+    /// **Grandmaster and Challenger change the label, not the number.** They
+    /// are leaderboard cutoffs over one shared LP pool, so a Challenger on
+    /// 900 LP sits exactly where a Master on 900 LP does — which is what
+    /// makes a delta inside the apex meaningful.
+    #[test]
+    fn the_apex_tiers_share_one_lp_pool() {
+        assert_eq!(ladder_points(&solo("MASTER", "I", 900)), ladder_points(&solo("CHALLENGER", "I", 900)));
+        assert_eq!(ladder_points(&solo("GRANDMASTER", "I", 900)), ladder_points(&solo("MASTER", "I", 900)));
+
+        // A game played at Master that ends with a Challenger label moved the
+        // LP it moved, and nothing else.
+        assert_eq!(lp_delta(&solo("MASTER", "I", 880), &solo("CHALLENGER", "I", 900)), Some(20));
+        assert_eq!(lp_delta(&solo("MASTER", "I", 0), &solo("MASTER", "I", 60)), Some(60));
+        // Unbounded, so a large standing is not a special case.
+        assert_eq!(lp_delta(&solo("CHALLENGER", "I", 1500), &solo("CHALLENGER", "I", 1480)), Some(-20));
     }
 
     /// Solo and flex LP are unrelated numbers, and differencing them would
