@@ -505,3 +505,99 @@ mod tests {
         assert_eq!(find(&fields, "win").stored.as_deref(), Some("Win"));
     }
 }
+
+/// A player's ranked standing, as the client reports it right now.
+///
+/// The probe half of #149: `puuid` omitted asks about us
+/// (`current-ranked-stats`), and given one asks about anybody else
+/// (`ranked-stats/{puuid}`). Both return the same document, so one command
+/// covers the pair.
+///
+/// **Take the puuid from a match document, not from an alias lookup.**
+/// `/lol-summoner/v1/alias/lookup` answers with a *name-derived* UUID — a v5,
+/// hashed from the alias rather than assigned to an account — and the ranked
+/// ladder has nothing keyed by it. The lookup succeeds and this returns
+/// nothing, which looks identical to an unranked player and means something
+/// completely different.
+///
+/// Returns the raw document beside the parsed standings, because the whole
+/// point of a probe is seeing what actually arrived.
+#[tauri::command]
+pub async fn dev_ranked_stats(puuid: Option<String>) -> Result<serde_json::Value, String> {
+    let lockfile = crate::lcu::lockfile::discover()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "League Client not running (no lockfile found)".to_string())?;
+    let client = crate::lcu::LcuHttpClient::new(&lockfile).map_err(|e| e.to_string())?;
+
+    let path = match puuid.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        Some(puuid) => format!("/lol-ranked/v1/ranked-stats/{puuid}"),
+        None => "/lol-ranked/v1/current-ranked-stats".to_string(),
+    };
+
+    let raw: serde_json::Value = client.get_json(&path).await.map_err(|e| e.to_string())?;
+    let stats: crate::lcu::ranked::RankedStats =
+        serde_json::from_value(raw.clone()).map_err(|e| e.to_string())?;
+
+    Ok(serde_json::json!({
+        "asked": path,
+        "solo": stats.standing(crate::lcu::ranked::SOLO),
+        "flex": stats.standing(crate::lcu::ranked::FLEX),
+        "raw": raw,
+    }))
+}
+
+/// A whole lobby's rank, from the puuids of the players in it.
+///
+/// The probe for #149's Decision 3, against a real game rather than a
+/// constructed one. Take the puuids from a captured `eog-stats-block`
+/// (`teams[].players[].puuid`) — it carries all ten, and the deferred patch
+/// already fetches it, which is why the shipped feature will need no extra
+/// request to identify a lobby.
+///
+/// One request per player, run in sequence. Ten calls to a process on
+/// localhost is not worth a concurrency primitive, and a client mid-shutdown
+/// is happier with a queue than a burst.
+///
+/// **A player whose rank cannot be read is excluded, not counted low**, and
+/// the result says how many it knew. That is the whole difference between
+/// "Gold II" and "Gold II, 8 of 10" — one is a claim about a lobby, the other
+/// is a claim about eight people in it.
+#[tauri::command]
+pub async fn dev_lobby_rank(
+    puuids: Vec<String>,
+    queue: Option<String>,
+) -> Result<serde_json::Value, String> {
+    use crate::lcu::ranked;
+
+    let lockfile = crate::lcu::lockfile::discover()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "League Client not running (no lockfile found)".to_string())?;
+    let client = crate::lcu::LcuHttpClient::new(&lockfile).map_err(|e| e.to_string())?;
+    let queue = queue.unwrap_or_else(|| ranked::SOLO.to_string());
+
+    let mut standings = Vec::with_capacity(puuids.len());
+    let mut failed = Vec::new();
+    for puuid in &puuids {
+        let path = format!("/lol-ranked/v1/ranked-stats/{}", puuid.trim());
+        match client.get_json::<ranked::RankedStats>(&path).await {
+            Ok(stats) => standings.push(stats.standing(&queue)),
+            Err(e) => {
+                // A lookup that fails is a player we do not know about, which
+                // is the same as an unranked one for the median's purposes —
+                // but it is worth reporting separately, because a run where
+                // every lookup failed is a broken probe, not an unranked lobby.
+                failed.push(format!("{}: {e}", puuid.trim()));
+                standings.push(None);
+            }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "queue": queue,
+        "asked": puuids.len(),
+        "failed": failed,
+        "standings": standings,
+        "lobby_rank": ranked::lobby_rank(&standings),
+        "min_known": ranked::MIN_KNOWN,
+    }))
+}

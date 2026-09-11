@@ -115,6 +115,34 @@ pub fn dev_fixture_read(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// Opens a fixture in whatever the OS opens `.json` with, or shows it in the
+/// file manager.
+///
+/// The panel could already *read* a fixture into a textarea, which is the
+/// wrong tool the moment a file is large — the captured `eog-stats-block` is
+/// 99 KB of deeply nested JSON, and reading that in a 16-row textarea with no
+/// folding or search is not reading it at all.
+///
+/// **Confined by the same `checked_path` as `dev_fixture_read`.** It
+/// canonicalizes and requires the result to sit under one of the two fixture
+/// roots, so a traversal cannot reach a file the panel never listed.
+///
+/// "Default" means the OS association for the extension, which may be an
+/// editor, an IDE or a browser. Naming an application would mean guessing one
+/// per platform and being wrong on somebody's machine.
+#[tauri::command]
+pub fn dev_open_fixture(path: String, which: super::recording_actions::Reveal) -> Result<(), String> {
+    let path = checked_path(&path)?;
+    match which {
+        super::recording_actions::Reveal::Play => {
+            tauri_plugin_opener::open_path(&path, None::<&str>).map_err(|e| e.to_string())
+        }
+        super::recording_actions::Reveal::Folder => {
+            tauri_plugin_opener::reveal_item_in_dir(&path).map_err(|e| e.to_string())
+        }
+    }
+}
+
 /// What the parser did not understand about every captured payload.
 ///
 /// Reads back what fixture capture already wrote (DEVELOPMENT.md §3.3) and
