@@ -14,7 +14,7 @@
 mod fixtures_api;
 mod info;
 mod log_api;
-mod recording_actions;
+pub mod recording_actions;
 mod recording_api;
 mod retention_api;
 mod seed;

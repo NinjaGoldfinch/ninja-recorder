@@ -11,6 +11,11 @@ pub mod champions;
 pub mod client;
 pub mod gameflow;
 pub mod lockfile;
+/// Only the dev portal reaches this so far — the row columns it feeds land
+/// with migration 10 (#149). Clippy runs without `--all-targets`, so its
+/// own tests do not count as use (CLAUDE.md).
+#[cfg_attr(not(feature = "devtools"), allow(dead_code))]
+pub mod ranked;
 pub mod match_data;
 pub mod timeline;
 

@@ -292,6 +292,25 @@ export const COMMANDS: CommandSpec[] = [
     args: [{ name: "recordingId", kind: "number" }],
   },
   {
+    name: "dev_ranked_stats",
+    group: "Dev \u00b7 Diagnostics",
+    dev: true,
+    description:
+      "A player's ranked standing right now. Omit `puuid` to ask about yourself. **Take the puuid from a match document, never from an alias lookup** \u2014 that returns a name-derived v5 UUID the ranked ladder has nothing keyed by, so the lookup succeeds and this answers nothing, which looks exactly like an unranked player.",
+    args: [{ name: "puuid", kind: "string", default: "", help: "blank = yourself" }],
+  },
+  {
+    name: "dev_lobby_rank",
+    group: "Dev \u00b7 Diagnostics",
+    dev: true,
+    description:
+      "A whole lobby's rank from its puuids \u2014 the median standing, with a count of how many were known. Take the ten puuids from a captured `eog-stats-block` (`teams[].players[].puuid`). Players whose rank cannot be read are excluded rather than counted low.",
+    args: [
+      { name: "puuids", kind: "json", help: "[\"puuid\", …]" },
+      { name: "queue", kind: "string", default: "RANKED_SOLO_5x5" },
+    ],
+  },
+  {
     name: "dev_backfill_recording",
     group: "Dev \u00b7 Diagnostics",
     dev: true,
@@ -608,6 +627,17 @@ export const COMMANDS: CommandSpec[] = [
     dev: true,
     description:
       "Reads every captured payload back and reports what the parser did not understand \u2014 event names with no `classify_event` arm, events that failed to deserialize at all (with the JSON that broke them), fields that arrived as the wrong JSON type \u2014 including the ones a lenient reader silently absorbs \u2014 keys on events that nothing reads, and files that are not JSON at all. A report, not a validator: nothing here changes what the parser accepts. `HordeKill` sat in captures for months while Voidgrubs never became markers.",
+  },
+  {
+    name: "dev_open_fixture",
+    group: "Dev \u00b7 Fixtures",
+    dev: true,
+    description:
+      "Opens a fixture in whatever the OS opens `.json` with, or shows it in the file manager. Confined to the two fixture roots, like `dev_fixture_read` \u2014 the panel's textarea is the wrong tool for a 99 KB capture.",
+    args: [
+      { name: "path", kind: "string" },
+      { name: "which", kind: "string", default: "play", help: "play | folder" },
+    ],
   },
   {
     name: "dev_fixture_read",

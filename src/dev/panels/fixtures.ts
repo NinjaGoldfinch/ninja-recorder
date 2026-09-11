@@ -69,11 +69,17 @@ function draw() {
           `<textarea id="fixture-body" rows="16" spellcheck="false">${escapeHtml(
             openContents,
           )}</textarea>
-          <div class="row" style="margin-top:.6rem">
+          <div class="row wrap" style="margin-top:.6rem">
             <button type="button" class="primary" data-send>Send to the snapshot injector</button>
             <button type="button" data-save>Save a copy…</button>
+            <button type="button" class="ghost" data-open-file>Open in editor</button>
+            <button type="button" class="ghost" data-show-file>Show in folder</button>
             <button type="button" class="ghost" data-close>Close</button>
           </div>
+          <p class="hint-block">The textarea is fine for a small payload and useless for a large
+            one — the captured <code>eog-stats-block</code> is 99 KB of nested JSON. "Open in
+            editor" hands it to whatever the OS opens <code>.json</code> with, which has folding
+            and search.</p>
           <p class="hint-block">Saving writes into the capture folder, never over a repo fixture —
             checked-in fixtures are test inputs and should change through git, not through this
             page.</p>`,
@@ -140,6 +146,14 @@ export const fixturesPanel: Panel = {
 
       if (target.closest("[data-reveal]")) {
         const result = await tryCall("dev_open_data_dir", { which: "fixtures" });
+        if (!result.ok) toast(result.error, "err");
+        return;
+      }
+
+      if (target.closest("[data-open-file]") || target.closest("[data-show-file]")) {
+        if (!openPath) return;
+        const which = target.closest("[data-show-file]") ? "folder" : "play";
+        const result = await tryCall<null>("dev_open_fixture", { path: openPath, which });
         if (!result.ok) toast(result.error, "err");
         return;
       }

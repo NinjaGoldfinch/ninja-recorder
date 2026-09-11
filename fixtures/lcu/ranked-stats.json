@@ -1,0 +1,61 @@
+{
+  "_comment": "Trimmed from a real /lol-ranked/v1/ranked-stats response (#149). The queue list is cut to the four cases the parser has to tell apart, and the numbers are not anybody's real rank; every field name, and both empty-value sentinels, are exactly as the client sent them.",
+  "highestRankedEntry": {
+    "queueType": "RANKED_SOLO_5x5",
+    "tier": "EMERALD",
+    "division": "III",
+    "leaguePoints": 38,
+    "wins": 411,
+    "losses": 399,
+    "isProvisional": false,
+    "miniSeriesProgress": "",
+    "provisionalGameThreshold": 5,
+    "provisionalGamesRemaining": 0,
+    "ratedTier": "NONE",
+    "ratedRating": 0
+  },
+  "queueMap": {
+    "RANKED_SOLO_5x5": {
+      "queueType": "RANKED_SOLO_5x5",
+      "tier": "EMERALD",
+      "division": "III",
+      "leaguePoints": 38,
+      "wins": 411,
+      "losses": 399,
+      "isProvisional": false,
+      "miniSeriesProgress": "",
+      "provisionalGameThreshold": 5,
+      "provisionalGamesRemaining": 0,
+      "ratedTier": "NONE",
+      "ratedRating": 0
+    },
+    "RANKED_FLEX_SR": {
+      "queueType": "RANKED_FLEX_SR",
+      "tier": "",
+      "division": "NA",
+      "leaguePoints": 0,
+      "wins": 0,
+      "losses": 0,
+      "isProvisional": true,
+      "miniSeriesProgress": "",
+      "provisionalGameThreshold": 5,
+      "provisionalGamesRemaining": 5,
+      "ratedTier": "NONE",
+      "ratedRating": 0
+    },
+    "RANKED_TFT": {
+      "queueType": "RANKED_TFT",
+      "tier": "",
+      "division": "NA",
+      "leaguePoints": 0,
+      "wins": 0,
+      "losses": 0,
+      "isProvisional": true,
+      "miniSeriesProgress": "",
+      "provisionalGameThreshold": 5,
+      "provisionalGamesRemaining": 5,
+      "ratedTier": "NONE",
+      "ratedRating": 0
+    }
+  }
+}
