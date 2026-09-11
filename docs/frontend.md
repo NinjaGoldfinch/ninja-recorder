@@ -148,7 +148,10 @@ strip on purpose — this is a block to scan, and ten boxes at item size
 out-weigh the champion, the KDA and the result the row is actually about.
 
 It is also the one block that *hides*, and only ever on window width: below
-about 1100px the row's other ten columns already need every pixel there is.
+about 1200px the row's other eleven columns already need every pixel there is.
+That threshold moved out from 1100px when the rank column landed — one more
+capped track and its gap is about 90px, and the breakpoint has to move with it
+or the row overflows instead of shedding the block it can most afford to lose.
 It is the right one to drop, because every other block answers something about
 the row's own player — who they were, how they did, what they built — and this
 one is context around that, so losing it costs recognition rather than the
@@ -189,6 +192,7 @@ scattering `??` through the row template:
 | KDA (`formatKda`) | all three or nothing | A partial KDA reads as a real one. The ratio (`kdaRatio`) is a hover hint, not a fourth number in a column three numbers wide |
 | Role | Live Client Data's position → the LCU's inference → `Unknown` | The live value is what the game assigned; the LCU's `timeline.lane`/`role` is Riot working it out afterwards and confuses top with jungle, so it fills a gap rather than correcting one. `Unknown` is written out rather than left blank — a row that hides an empty slot is a different shape per recording |
 | Outcome | the leading accent, plus the word on the left block's last line | Undecided rows are excluded from the win-rate tile too, so an unknown never reads as a loss — it gets the neutral edge, no wash and no word. A Win/Loss badge used to sit in its own column and was dropped as redundant with the edge; the word moved into the sub-line rather than being dropped with it, because the accent alone is colour only |
+| Rank (`rankLabel`, `lpLabel`) | `tier` + `division` → `—` | The ladder a game was played at. `—` covers three different things the column cannot tell apart — a queue with no ladder, a player unranked in it, and a patch that landed too late for the reading to still describe the game — so the row does not pretend to. LP is shown only beside a tier, since a number with no scale is not a standing. Master and above have no division and are labelled with none |
 | When (`formatRelative`) | relative inside a week → absolute date | "6 weeks ago" is worse than a date at that distance: nobody counts weeks, and the date is what a person searches their memory by. The absolute form is on the `title` either way |
 
 An unrecognised queue id shows as `Queue 1234` and an unrecognised mode

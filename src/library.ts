@@ -18,7 +18,9 @@ import {
   patchLabel,
   formatSpan,
   kdaRatio,
+  lpLabel,
   queueOrModeLabel,
+  rankLabel,
   vodTitle,
 } from "./format";
 import { revealRowInspectors } from "./devportal";
@@ -642,6 +644,11 @@ function card(row: RecordingRow): string {
 
   const ratio = kdaRatio(row.kda_k, row.kda_d, row.kda_a);
   const patch = patchLabel(row.patch);
+  const rank = rankLabel(row.tier, row.division);
+  // Only beside a rank. LP with no tier is a number with no scale, and the
+  // column can be in that state: `fill_ranked` writes all three together,
+  // but a row from before migration 10 has neither.
+  const lp = rank === null ? null : lpLabel(row.lp_after);
 
   // Said once, in the left block, and shown once, as the leading accent.
   // The word is what makes the row readable without colour — green and red
@@ -705,6 +712,15 @@ function card(row: RecordingRow): string {
       <span class="vod-cell">
         <span class="vod-value">${cell(row.cs === null ? null : `${row.cs} cs`)}</span>
         <span class="vod-sub">${csPerMinute(row) ?? "&nbsp;"}</span>
+      </span>
+
+      <!-- The rank the game was played at. Dashed on everything that had no
+           ladder, like every other column: a row that hides the slot is a
+           different shape per recording, and most libraries hold a mix of
+           ranked and unranked games. -->
+      <span class="vod-cell">
+        <span class="vod-value">${cell(rank, rank === null ? null : "The rank this game was played at")}</span>
+        <span class="vod-sub">${lp === null ? "&nbsp;" : escapeHtml(lp)}</span>
       </span>
 
       ${loadout(row)}

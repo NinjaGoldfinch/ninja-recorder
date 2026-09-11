@@ -125,6 +125,12 @@ function row(
     // only one that ever renders.
     scoreboard_json: JSON.stringify(fixtureScoreboard(champion)),
     cs: champion === null ? null : 180 + id * 11,
+    // A ladder on most rows, and deliberately not on all of them: an
+    // unranked game and a ranked one have to look different in a
+    // browser-only session, or the empty case is the one nobody sees.
+    tier: champion === null ? null : id % 3 === 0 ? "MASTER" : "EMERALD",
+    division: champion === null || id % 3 === 0 ? null : "III",
+    lp_after: champion === null ? null : id % 3 === 0 ? 412 : 38,
     diagnostics_json: JSON.stringify({
       game_id: 5000 + id,
       queue_id: 420,
