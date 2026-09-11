@@ -348,6 +348,8 @@ mod tests {
             tier: None,
             division: None,
             lp_after: None,
+            lp_before: None,
+            lp_delta: None,
         }
     }
 

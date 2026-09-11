@@ -262,6 +262,24 @@ static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
         -- A delta column can be appended the day something reports one.
         ALTER TABLE recordings ADD COLUMN lp_after INTEGER;
         ",
+    ), M::up(
+        "
+        -- The other end of the measurement (#164).
+        --
+        -- `lp_before` is read when the game *starts*, which is the whole
+        -- reason a delta is defensible at all: the two readings bracket one
+        -- game, so there is no room between them for another game, a dodge
+        -- or decay. Nothing Riot sends reports a change; this measures one.
+        ALTER TABLE recordings ADD COLUMN lp_before INTEGER;
+
+        -- Stored rather than derived on read, so the guards are evaluated
+        -- once at the moment both readings are known good instead of being
+        -- re-litigated by every reader. NULL therefore means one specific
+        -- thing: nothing here could stand behind a number. It is *ours*
+        -- rather than Riot's, and an endpoint that ever reports a change
+        -- directly should win over it.
+        ALTER TABLE recordings ADD COLUMN lp_delta INTEGER;
+        ",
     )];
     let count = migrations.len() as i64;
     (Migrations::new(migrations), count)
@@ -365,8 +383,14 @@ pub struct RecordingRow {
     pub tier: Option<String>,
     /// `None` at Master and above, where divisions do not exist.
     pub division: Option<String>,
-    /// LP once the game settled. Not a change: nothing reports one.
+    /// LP once the game settled.
     pub lp_after: Option<i64>,
+    /// LP when the game started. The other end of the measurement.
+    pub lp_before: Option<i64>,
+    /// What the game moved, measured across those two readings (#164).
+    /// `None` wherever a number would have been wrong rather than merely
+    /// unknown — see `lcu::ranked::lp_delta`.
+    pub lp_delta: Option<i64>,
 }
 
 /// The post-game columns `update_match_metadata` may fill in, once the LCU
@@ -464,6 +488,8 @@ fn row_to_recording(row: &rusqlite::Row) -> rusqlite::Result<RecordingRow> {
         tier: row.get(20)?,
         division: row.get(21)?,
         lp_after: row.get(22)?,
+        lp_before: row.get(23)?,
+        lp_delta: row.get(24)?,
     })
 }
 
@@ -742,7 +768,7 @@ impl Db {
             "SELECT id, path, started_at, duration_s, game_id, queue, champion, role,
                     win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
                     audio_tracks_json, game_mode, diagnostics_json, scoreboard_json, cs,
-                    tier, division, lp_after
+                    tier, division, lp_after, lp_before, lp_delta
              FROM recordings ORDER BY started_at DESC",
         )?;
         let rows = stmt.query_map([], row_to_recording)?;
@@ -965,13 +991,16 @@ impl Db {
         tier: &str,
         division: Option<&str>,
         lp_after: i64,
+        lp_before: Option<i64>,
+        lp_delta: Option<i64>,
     ) -> Result<bool, DbError> {
         let conn = self.conn.lock().unwrap();
         let changed = conn.execute(
             "UPDATE recordings
-                SET tier = ?2, division = ?3, lp_after = ?4
+                SET tier = ?2, division = ?3, lp_after = ?4,
+                    lp_before = ?5, lp_delta = ?6
              WHERE id = ?1 AND tier IS NULL",
-            params![recording_id, tier, division, lp_after],
+            params![recording_id, tier, division, lp_after, lp_before, lp_delta],
         )?;
         Ok(changed > 0)
     }
@@ -1201,7 +1230,7 @@ impl Db {
             "SELECT id, path, started_at, duration_s, game_id, queue, champion, role,
                     win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
                     audio_tracks_json, game_mode, diagnostics_json, scoreboard_json, cs,
-                    tier, division, lp_after
+                    tier, division, lp_after, lp_before, lp_delta
              FROM recordings WHERE id = ?1",
             [id],
             row_to_recording,
@@ -2238,9 +2267,9 @@ mod tests {
             ..Default::default()
         }).unwrap();
 
-        assert!(db.fill_ranked(id, "EMERALD", Some("III"), 38).unwrap());
+        assert!(db.fill_ranked(id, "EMERALD", Some("III"), 38, Some(18), Some(20)).unwrap());
         assert!(
-            !db.fill_ranked(id, "DIAMOND", Some("IV"), 5).unwrap(),
+            !db.fill_ranked(id, "DIAMOND", Some("IV"), 5, Some(80), Some(-75)).unwrap(),
             "a later, staler answer must not overwrite the first"
         );
 
@@ -2248,6 +2277,49 @@ mod tests {
         assert_eq!(row.tier.as_deref(), Some("EMERALD"));
         assert_eq!(row.division.as_deref(), Some("III"));
         assert_eq!(row.lp_after, Some(38));
+    }
+
+    /// A measured game stores both ends and the movement between them, so a
+    /// reader never has to re-derive it — and a NULL delta beside a real
+    /// `lp_after` says the measurement was refused rather than forgotten.
+    #[test]
+    fn a_measured_game_stores_both_ends_and_the_movement() {
+        let db = Db::open(Path::new(":memory:")).unwrap();
+        let id = db.insert_recording(&NewRecording {
+            path: "/a.mp4".into(),
+            started_at: 1,
+            ..Default::default()
+        }).unwrap();
+
+        // Gold IV 98 → Gold III 8: a win worth ten, which the raw numbers
+        // would have called minus ninety.
+        db.fill_ranked(id, "GOLD", Some("III"), 8, Some(98), Some(10)).unwrap();
+
+        let row = db.get_recording(id).unwrap().unwrap();
+        assert_eq!(row.lp_before, Some(98));
+        assert_eq!(row.lp_after, Some(8));
+        assert_eq!(row.lp_delta, Some(10));
+    }
+
+    /// A game the app only saw the end of keeps its rank and measures
+    /// nothing. The columns are independent on purpose: a missing delta must
+    /// not cost the row the standing it does know.
+    #[test]
+    fn a_game_with_no_before_keeps_its_rank_and_no_delta() {
+        let db = Db::open(Path::new(":memory:")).unwrap();
+        let id = db.insert_recording(&NewRecording {
+            path: "/a.mp4".into(),
+            started_at: 1,
+            ..Default::default()
+        }).unwrap();
+
+        db.fill_ranked(id, "EMERALD", Some("III"), 38, None, None).unwrap();
+
+        let row = db.get_recording(id).unwrap().unwrap();
+        assert_eq!(row.tier.as_deref(), Some("EMERALD"));
+        assert_eq!(row.lp_after, Some(38));
+        assert_eq!(row.lp_before, None);
+        assert_eq!(row.lp_delta, None);
     }
 
     /// Master and above have no division, and NULL is how that is said.
@@ -2260,7 +2332,7 @@ mod tests {
             ..Default::default()
         }).unwrap();
 
-        db.fill_ranked(id, "MASTER", None, 412).unwrap();
+        db.fill_ranked(id, "MASTER", None, 412, None, None).unwrap();
         let row = db.get_recording(id).unwrap().unwrap();
         assert_eq!(row.tier.as_deref(), Some("MASTER"));
         assert_eq!(row.division, None);
@@ -2279,7 +2351,7 @@ mod tests {
             started_at: 1,
             ..Default::default()
         }).unwrap();
-        db.fill_ranked(id, "GOLD", Some("II"), 44).unwrap();
+        db.fill_ranked(id, "GOLD", Some("II"), 44, Some(24), Some(20)).unwrap();
 
         db.update_match_metadata(id, &MatchMetadata {
             win: Some(true),

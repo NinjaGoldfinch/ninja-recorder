@@ -436,6 +436,11 @@ pub async fn dev_patch_match_summary(
             game_id,
             is_custom,
             queue_id,
+            // Absent: this command drives the *post-game* half against a real
+            // client, and there is no game start for it to have bracketed. A
+            // delta is therefore not measured, which is the honest outcome
+            // rather than a gap to fill with a second reading taken now.
+            standing_before: None,
             // Now, so the rank read is exercised rather than skipped: this
             // command exists to drive the whole patch against a real client,
             // and a timestamp from the row would make the freshness gate

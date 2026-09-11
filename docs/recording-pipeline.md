@@ -244,6 +244,15 @@ unmodelled on purpose, so the same check over `activePlayer` and `allPlayers`
 would be hundreds of lines nobody reads. Over events it reports nothing on the
 real capture, which is what makes a line worth acting on.
 
+**The ladder is read when the game starts, not only when it ends.** The
+gameflow session resolved at `InProgress` is where `game_id` and `queue` come
+from, and — when the queue has a ladder — the standing at that moment is read
+alongside them and held for the finalize. That reading is the *before* half of
+#164's LP measurement, and game start is the only moment it is true: by the
+time the game ends the number has already moved. It is best effort and comes
+after the identity is stored, because a standing that cannot be read costs a
+delta while the identity it is keyed by is what the whole row depends on.
+
 ### What each poll leaves behind
 
 Markers and samples are the *product* of a poll. They are not a record of
