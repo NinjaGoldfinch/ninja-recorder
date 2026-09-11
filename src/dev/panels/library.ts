@@ -385,6 +385,10 @@ async function run(action: string) {
           recordingId: id,
           gameId: report!.row.game_id,
           isCustom,
+          // Gates the rank read. The row's own queue, so a re-run asks about
+          // the ladder the game was actually played on — and a non-ranked
+          // queue correctly reads no rank at all.
+          queueId: report!.row.queue,
         });
       case "backfill":
         return tryCall<BackfillReport>("dev_backfill_recording", { recordingId: id });

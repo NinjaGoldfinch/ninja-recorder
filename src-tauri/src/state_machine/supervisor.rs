@@ -1053,6 +1053,14 @@ impl Supervisor {
                 recording_id,
                 game_id,
                 is_custom: game.is_custom,
+                queue_id: game.queue_id,
+                // Now, because this runs from the finalize: the game has just
+                // ended, which is the whole reason a rank read here is about
+                // this game and the same read tomorrow would not be.
+                game_ended_at_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0),
                 lockfile,
                 live: live.clone(),
             });
