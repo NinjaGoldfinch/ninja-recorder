@@ -414,6 +414,32 @@ The team block fills the other way, across each row, for the same reason: a
 team is a line of five, so the line has to be what the eye picks up. Filling by
 column there would interleave the two sides.
 
+### The cluster tooltip stays inside the timeline
+
+Hovering a glyph lists the markers it collapsed. Two things keep that list from
+escaping the window, and neither can be expressed in CSS alone.
+
+**Horizontally it is clamped in pixels.** `left` used to be the glyph's own
+percentage, which with `translateX(-50%)` put half the box outside the track
+for any glyph near either end — and the page grew sideways to contain it, so
+the window became scrollable. `placeTooltip` clamps to the tooltip's offset
+parent instead, which needs the *rendered* width and therefore has to run after
+the content is in. A tooltip wider than the timeline is pinned left rather than
+centred, because the start of a marker list is the part worth reading.
+
+**Vertically it is capped and scrolls.** A dense teamfight clusters into a list
+long enough to run off the top of the window. Past the cap it scrolls rather
+than truncating: every marker in a cluster is one the user asked about by
+hovering it.
+
+That scroll costs something, and the cost is why `pointer-events` is
+conditional. The tooltip overlaps the top of the track, so making it hoverable
+unconditionally would put a dead strip over the glyphs beneath it. It takes the
+pointer **only when the content actually overflows** and there is a scrollbar
+worth reaching — and `hideClusterTooltip` then has to let the pointer move into
+it, since leaving the glyph is what normally dismisses it and the tooltip is not
+inside the glyph container.
+
 ### What a marker says
 
 Two shapes, and the split is about who the marker is *about*.

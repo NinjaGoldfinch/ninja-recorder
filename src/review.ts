@@ -274,6 +274,9 @@ export function initReview() {
 
   timelineGlyphs?.addEventListener("mouseover", showClusterTooltip);
   timelineGlyphs?.addEventListener("mouseout", hideClusterTooltip);
+  // The other half of that: once the pointer has been let into a scrollable
+  // tooltip, leaving it is what dismisses it.
+  timelineTooltip?.addEventListener("mouseleave", () => hideClusterTooltip());
 
   // Clustering is measured in pixels, so it has to be redone whenever the
   // track's width changes. The graph and ruler are laid out in percentages
@@ -1081,11 +1084,56 @@ function showClusterTooltip(e: MouseEvent) {
         }</span>${escapeHtml(markerLabel(m))}${markerTimes(m)}</span>`
     )
     .join("");
-  timelineTooltip.style.left = glyph.style.left;
+  // Unhidden before measuring: a `[hidden]` element has no width, and the
+  // clamp below needs the rendered one. Both happen in this handler, so the
+  // browser paints once and the uncorrected position is never on screen.
   timelineTooltip.hidden = false;
+  placeTooltip(timelineTooltip, glyph);
 }
 
-function hideClusterTooltip() {
+/**
+ * Puts the tooltip over its glyph without letting it leave the timeline.
+ *
+ * `left` used to be the glyph's own percentage, which with `translateX(-50%)`
+ * put half the box outside the track for any glyph near either end — and the
+ * page grew sideways to contain it, which is what made the window scrollable.
+ * Clamping needs the rendered width, so it cannot be expressed in CSS.
+ *
+ * The clamp is to the tooltip's offset parent, which is the timeline itself.
+ * A tooltip wider than the timeline is pinned to the left rather than
+ * centred — `max()` before `min()` — because the start of a marker list is
+ * the part worth reading.
+ */
+function placeTooltip(tooltip: HTMLElement, glyph: HTMLElement) {
+  const container = tooltip.offsetParent as HTMLElement | null;
+  const width = container?.clientWidth ?? 0;
+  if (width === 0) return;
+
+  const half = tooltip.offsetWidth / 2;
+  const wanted = (parseFloat(glyph.style.left) / 100) * width;
+  tooltip.style.left = `${Math.max(half, Math.min(wanted, width - half))}px`;
+
+  // Only a tooltip that actually overflows takes the pointer. It overlaps the
+  // top of the track, so making it hoverable unconditionally would put a dead
+  // strip over the glyphs underneath it.
+  const scrollable = tooltip.scrollHeight > tooltip.clientHeight;
+  tooltip.dataset.scrollable = String(scrollable);
+  if (scrollable) tooltip.scrollTop = 0;
+}
+
+function hideClusterTooltip(e?: MouseEvent) {
+  // A scrollable tooltip has to survive the pointer moving into it, or its
+  // scrollbar is unreachable — leaving the glyph is what normally dismisses
+  // it, and the tooltip is not inside the glyph container.
+  const into = e?.relatedTarget;
+  if (
+    timelineTooltip &&
+    into instanceof Node &&
+    timelineTooltip.dataset.scrollable === "true" &&
+    timelineTooltip.contains(into)
+  ) {
+    return;
+  }
   if (timelineTooltip) timelineTooltip.hidden = true;
 }
 
