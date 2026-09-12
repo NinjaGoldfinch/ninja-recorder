@@ -311,7 +311,13 @@ fn position(timeline: Option<&ParticipantTimeline>) -> Option<String> {
         ("TOP", _) => "Top",
         ("JUNGLE", _) => "Jungle",
         ("MIDDLE", _) | ("MID", _) => "Middle",
-        ("BOTTOM", "DUO_SUPPORT") | ("BOT", "DUO_SUPPORT") => "Support",
+        // **Both spellings.** This was written against `DUO_SUPPORT`, and a
+        // real capture shows the client now sending plain `SUPPORT` — so
+        // every support was falling through to the arm below and being
+        // labelled `Bottom`, in the `role` column as well as here. The old
+        // spelling stays because a response that still uses it must not
+        // regress.
+        ("BOTTOM", "SUPPORT" | "DUO_SUPPORT") | ("BOT", "SUPPORT" | "DUO_SUPPORT") => "Support",
         ("BOTTOM", _) | ("BOT", _) => "Bottom",
         _ => return None,
     };
@@ -685,7 +691,7 @@ fn split_sides(me: &CurrentSummoner, game: &GameDto) -> Result<Sides, MatchDataE
 /// The names are the caller's job: resolving one is a lookup against the
 /// client's asset store (`lcu::champions`), which is async and cached, and
 /// this stays a pure read of a document.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 pub struct ParticipantSummary {
     pub champion_id: i64,
     /// `"ORDER"` or `"CHAOS"`, or `None` for a side id we cannot name.
@@ -714,6 +720,52 @@ pub struct ParticipantSummary {
 /// before the live capture existed, or one whose poller never came up.
 /// Empty when we cannot find ourselves, because a scoreboard that cannot
 /// say which half is ours is not one worth storing.
+/// Throws away a set of positions that cannot describe a real game.
+///
+/// **Riot's `lane`/`role` pair is an inference, and it fails visibly.** A real
+/// captured game put a jungler with Smite and 154 camps at `BOTTOM`/`SUPPORT`
+/// and a bot-lane Ashe at `JUNGLE` — leaving one team holding two supports and
+/// the other two junglers. The `timeline` block it comes from arrives with
+/// every one of its per-minute delta maps empty, which is what a field the API
+/// has stopped maintaining looks like.
+///
+/// Five players share five positions, so **duplicates within a side are proof
+/// the inference is wrong**, not a close call. When that happens the whole
+/// side's positions are dropped rather than kept.
+///
+/// That trade is the point. A missing position empties the matchup, which
+/// announces itself; a *wrong* one picks the enemy in the wrong lane and shows
+/// a plausible opponent who is not the one you played. Nothing on the row looks
+/// broken in that case, and nobody re-checks a row that looks fine.
+///
+/// Live Client Data reports the position the game assigned and is unaffected —
+/// it wins wherever it exists (`match_summary::prefer_live_positions`). This
+/// only governs what the LCU may contribute when it is the only source left.
+fn discard_implausible_positions(summaries: &mut [ParticipantSummary]) {
+    let sides: Vec<Option<String>> = summaries
+        .iter()
+        .filter_map(|p| p.team.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .map(Some)
+        .collect();
+
+    for side in sides {
+        let named: Vec<&str> = summaries
+            .iter()
+            .filter(|p| p.team == side)
+            .filter_map(|p| p.position.as_deref())
+            .collect();
+        let distinct: std::collections::BTreeSet<&str> = named.iter().copied().collect();
+        if distinct.len() == named.len() {
+            continue;
+        }
+        for player in summaries.iter_mut().filter(|p| p.team == side) {
+            player.position = None;
+        }
+    }
+}
+
 fn participants(me: &CurrentSummoner, game: &GameDto) -> Vec<ParticipantSummary> {
     let Some(our_id) = game
         .participant_identities
@@ -724,7 +776,7 @@ fn participants(me: &CurrentSummoner, game: &GameDto) -> Vec<ParticipantSummary>
         return Vec::new();
     };
 
-    game.participants
+    let mut summaries: Vec<ParticipantSummary> = game.participants
         .iter()
         .map(|p| ParticipantSummary {
             champion_id: p.champion_id,
@@ -749,7 +801,10 @@ fn participants(me: &CurrentSummoner, game: &GameDto) -> Vec<ParticipantSummary>
             primary_tree_id: p.stats.perk_primary_style.filter(|id| *id > 0),
             secondary_tree_id: p.stats.perk_sub_style.filter(|id| *id > 0),
         })
-        .collect()
+        .collect();
+
+    discard_implausible_positions(&mut summaries);
+    summaries
 }
 
 /// Who was on our side in `game_id`, from the match-history document.
@@ -1274,5 +1329,117 @@ mod tests {
             ..Default::default()
         };
         assert!(summary.is_empty());
+    }
+
+    // --- position vocabulary and the plausibility guard ----------------
+
+    fn timeline_of(lane: &str, role: &str) -> ParticipantTimeline {
+        timeline(&format!(r#"{{"lane": "{lane}", "role": "{role}"}}"#))
+    }
+
+    /// **The client sends `SUPPORT`, not `DUO_SUPPORT`.** This was written
+    /// against the older spelling, so every support fell through to the
+    /// bottom-lane arm and was labelled `Bottom` — in the `role` column as
+    /// well as in the matchup. Confirmed against a real captured game.
+    #[test]
+    fn a_support_is_recognised_under_both_spellings() {
+        assert_eq!(position(Some(&timeline_of("BOTTOM", "SUPPORT"))).as_deref(), Some("Support"));
+        assert_eq!(position(Some(&timeline_of("BOTTOM", "DUO_SUPPORT"))).as_deref(), Some("Support"));
+        assert_eq!(position(Some(&timeline_of("BOT", "SUPPORT"))).as_deref(), Some("Support"));
+        // The carry spellings both still land on Bottom, which is the arm
+        // below and was never the problem.
+        assert_eq!(position(Some(&timeline_of("BOTTOM", "CARRY"))).as_deref(), Some("Bottom"));
+        assert_eq!(position(Some(&timeline_of("BOTTOM", "DUO_CARRY"))).as_deref(), Some("Bottom"));
+    }
+
+    fn with_positions(side: &str, pairs: &[(&str, &str)]) -> Vec<ParticipantSummary> {
+        pairs
+            .iter()
+            .map(|(lane, role)| ParticipantSummary {
+                team: Some(side.to_string()),
+                position: position(Some(&timeline_of(lane, role))),
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    /// **The real game that exposed this.** Riot put a jungler with Smite and
+    /// 154 camps at `BOTTOM`/`SUPPORT` and a bot-lane Ashe at `JUNGLE`,
+    /// leaving one side holding two supports and the other two junglers. Five
+    /// players share five positions, so a duplicate is proof the inference is
+    /// wrong rather than a close call — and the whole side is dropped.
+    #[test]
+    fn a_side_with_duplicate_positions_is_discarded_whole() {
+        // Team 100 as the client actually reported it.
+        let mut ours = with_positions(
+            "ORDER",
+            &[
+                ("JUNGLE", "NONE"),
+                ("BOTTOM", "SUPPORT"),
+                ("TOP", "SOLO"),
+                ("BOTTOM", "CARRY"),
+                ("BOTTOM", "SUPPORT"),
+            ],
+        );
+        assert!(ours.iter().any(|p| p.position.is_some()), "two supports before");
+        discard_implausible_positions(&mut ours);
+        assert!(
+            ours.iter().all(|p| p.position.is_none()),
+            "a side with two supports describes no real game"
+        );
+
+        // Team 200, which had two junglers.
+        let mut theirs = with_positions(
+            "CHAOS",
+            &[
+                ("TOP", "SOLO"),
+                ("JUNGLE", "NONE"),
+                ("MIDDLE", "SOLO"),
+                ("JUNGLE", "NONE"),
+                ("BOTTOM", "SOLO"),
+            ],
+        );
+        discard_implausible_positions(&mut theirs);
+        assert!(theirs.iter().all(|p| p.position.is_none()));
+    }
+
+    /// A coherent side is left exactly as it came — the guard must not cost
+    /// the matchup on games where the inference actually worked.
+    #[test]
+    fn a_coherent_side_keeps_its_positions() {
+        let mut side = with_positions(
+            "ORDER",
+            &[
+                ("TOP", "SOLO"),
+                ("JUNGLE", "NONE"),
+                ("MIDDLE", "SOLO"),
+                ("BOTTOM", "CARRY"),
+                ("BOTTOM", "SUPPORT"),
+            ],
+        );
+        discard_implausible_positions(&mut side);
+        let named: Vec<&str> = side.iter().filter_map(|p| p.position.as_deref()).collect();
+        assert_eq!(named, vec!["Top", "Jungle", "Middle", "Bottom", "Support"]);
+    }
+
+    /// One broken side does not cost the other one its positions: they are
+    /// separate inferences and only one of them has failed.
+    #[test]
+    fn one_broken_side_does_not_take_the_other_with_it() {
+        let mut both = with_positions(
+            "ORDER",
+            &[("TOP", "SOLO"), ("JUNGLE", "NONE"), ("MIDDLE", "SOLO"), ("BOTTOM", "CARRY"), ("BOTTOM", "SUPPORT")],
+        );
+        both.extend(with_positions("CHAOS", &[("JUNGLE", "NONE"), ("JUNGLE", "NONE")]));
+
+        discard_implausible_positions(&mut both);
+        assert!(
+            both.iter().filter(|p| p.team.as_deref() == Some("ORDER")).all(|p| p.position.is_some()),
+            "the coherent side survives"
+        );
+        assert!(
+            both.iter().filter(|p| p.team.as_deref() == Some("CHAOS")).all(|p| p.position.is_none()),
+            "the broken one does not"
+        );
     }
 }
