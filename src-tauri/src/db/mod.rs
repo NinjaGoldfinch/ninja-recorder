@@ -972,6 +972,37 @@ impl Db {
         Ok(changed > 0)
     }
 
+    /// Replaces `champion` with a name resolved from a champion **id**.
+    ///
+    /// **Separate from `update_match_metadata`, and that is the whole point.**
+    /// There, `champion` COALESCEs the other way so the existing value wins,
+    /// because two writers aiming at the same display name must not end up
+    /// disagreeing in the column. That reasoning assumed the live name might
+    /// be spelled differently. It can also be *a different champion*: Live
+    /// Client Data reports a possessed Viego as whoever he possessed, so a
+    /// game that ends mid-possession lands the wrong champion on the row.
+    ///
+    /// An id cannot be possessed. `championId` stays 234 throughout, so a
+    /// name resolved from it is right where the live name is wrong — and
+    /// identical where the live name is right, since the resolver produces
+    /// what Live Client Data writes (DEVELOPMENT.md §3.1).
+    ///
+    /// **Only the deferred patch may call this.** It knows the game by an
+    /// exact `game_id` taken from the gameflow session while the game ran.
+    /// The backfill matches recordings to games *on the clock*, so letting it
+    /// overwrite a champion would let a mismatched game rename a row that was
+    /// already correct — the failure #56 exists to refuse. That is why the
+    /// correction is a method of its own rather than a flipped `COALESCE` in
+    /// the shared one.
+    pub fn correct_champion(&self, recording_id: i64, champion: &str) -> Result<bool, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let changed = conn.execute(
+            "UPDATE recordings SET champion = ?2 WHERE id = ?1",
+            params![recording_id, champion],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// Writes the rank a game was played at, **only when the row has none**.
     ///
     /// Fill-only, like `fill_scoreboard`, and for a sharper reason: the first
@@ -1757,6 +1788,11 @@ mod tests {
     /// The live path wrote a display name; an id-derived one would be
     /// `MonkeyKing`, and one champion under two spellings splits its games
     /// in two everywhere the library sorts or filters.
+    ///
+    /// **This is what keeps the backfill from renaming a row.** It shares
+    /// this method and matches games on the clock, so a mismatch must not be
+    /// able to overwrite a champion. The deferred patch corrects one through
+    /// `correct_champion` instead, which the backfill never calls.
     #[test]
     fn a_champion_the_live_client_already_named_is_never_overwritten() {
         let db = Db::open_in_memory().unwrap();
@@ -2364,5 +2400,47 @@ mod tests {
         assert_eq!(row.champion.as_deref(), Some("Viego"), "the patch still works");
         assert_eq!(row.tier.as_deref(), Some("GOLD"), "and left the rank alone");
         assert_eq!(row.lp_after, Some(44));
+    }
+
+    /// **The Viego case.** Live Client Data reports a possessed Viego as
+    /// whoever he possessed, so a game ending mid-possession wrote the wrong
+    /// champion. The id the LCU answers with cannot be possessed, and the
+    /// deferred patch is allowed to correct the row from it.
+    #[test]
+    fn a_champion_the_game_got_wrong_is_corrected_from_the_id() {
+        let db = Db::open_in_memory().unwrap();
+        let id = a_finalized_row(&db);
+
+        // What the live path wrote while possessing a Vi.
+        db.correct_champion(id, "Vi").unwrap();
+        assert_eq!(db.get_recording(id).unwrap().unwrap().champion.as_deref(), Some("Vi"));
+
+        // What the client's own champion id resolves to.
+        assert!(db.correct_champion(id, "Viego").unwrap());
+        assert_eq!(db.get_recording(id).unwrap().unwrap().champion.as_deref(), Some("Viego"));
+    }
+
+    /// The correction is a method of its own precisely so the shared patch
+    /// stays incapable of it — the backfill goes through that one, and it
+    /// matches games on the clock rather than by id.
+    #[test]
+    fn the_shared_patch_still_cannot_rename_a_champion() {
+        let db = Db::open_in_memory().unwrap();
+        let id = a_finalized_row(&db);
+        db.correct_champion(id, "Viego").unwrap();
+
+        db.update_match_metadata(
+            id,
+            &MatchMetadata {
+                champion: Some("Vi".into()),
+                win: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let row = db.get_recording(id).unwrap().unwrap();
+        assert_eq!(row.champion.as_deref(), Some("Viego"), "the backfill's path must not rename");
+        assert_eq!(row.win, Some(true), "while still patching what it may");
     }
 }
