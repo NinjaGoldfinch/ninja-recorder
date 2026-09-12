@@ -537,6 +537,17 @@ pub struct ScoreboardPlayer {
     pub deaths: i64,
     pub assists: i64,
     pub cs: i64,
+    /// `Top` / `Jungle` / `Middle` / `Bottom` / `Support`, in the same words
+    /// the `role` column uses.
+    ///
+    /// Carried for every player, not just ours, because it is the only thing
+    /// that can say which of the five opponents was *the* opponent — the row
+    /// draws a matchup, and a lane opponent picked by list order would be a
+    /// guess dressed as a fact. `None` where the game said nothing, which is
+    /// every recording made before this field existed and any mode with no
+    /// positions to assign.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<String>,
     /// Item ids in slot order, trinket included. Empty slots are dropped
     /// rather than zero-filled: a zero is an item id that does not exist,
     /// and the row draws as many boxes as it wants regardless.
@@ -616,6 +627,7 @@ pub fn scoreboard(snapshot: &AllGameData) -> Option<Scoreboard> {
                     deaths: player.scores.deaths,
                     assists: player.scores.assists,
                     cs: player.scores.creep_score,
+                    position: live_position(&player.position),
                     items: items.into_iter().map(|(_, id)| id).collect(),
                     spells: [
                         player.summoner_spells.one.display_name.clone(),
@@ -1528,8 +1540,27 @@ mod tests {
         // about `Kai'Sa`, `Nunu & Willump` and `Cho'Gath`.
         assert!(board.players.iter().any(|p| p.champion == "Kai'Sa"));
 
+        // Positions, which are what let the row name a lane opponent rather
+        // than picking one by list order. Every player in a real game has
+        // one, and ours matches the `role` the same payload produces.
+        assert!(
+            board.players.iter().all(|p| p.position.is_some()),
+            "every player in a real game has a position: {:?}",
+            board.players.iter().map(|p| (&p.champion, &p.position)).collect::<Vec<_>>()
+        );
+
         let us = board.players.iter().find(|p| p.is_us).expect("we are in this game");
         assert_eq!(us.champion, "Shyvana");
+
+        // Exactly one opponent shares our position: that is the matchup, and
+        // it is a lookup rather than a guess.
+        let opponents: Vec<&ScoreboardPlayer> = board
+            .players
+            .iter()
+            .filter(|p| p.team != us.team && p.position == us.position)
+            .collect();
+        assert_eq!(opponents.len(), 1, "one lane opponent, got {opponents:?}");
+
         // `items[].itemID`, not the price or the count the parser used to
         // be the only reader of. Slot 5 is empty in this game and slot 0
         // was sold, so the ids are the ones that were there — nothing is

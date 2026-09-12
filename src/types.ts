@@ -179,6 +179,10 @@ export interface Scoreboard {
 }
 
 export interface ScoreboardPlayer {
+  /** `Top` / `Jungle` / `Middle` / `Bottom` / `Support`, absent where the
+   *  game said nothing. The only thing that can name a lane opponent — a
+   *  matchup picked by list order would be a guess dressed as a fact. */
+  position?: string | null;
   champion: string;
   /** "ORDER" or "CHAOS". */
   team: string;

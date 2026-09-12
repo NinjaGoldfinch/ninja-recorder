@@ -261,6 +261,7 @@ pub(crate) async fn scoreboard_player(
         deaths: participant.deaths,
         assists: participant.assists,
         cs: participant.cs.unwrap_or(0),
+        position: participant.position.clone(),
         items: participant.items.clone(),
         // Match history has ids where the live path had names. Both find
         // the art; neither is converted into the other, because that would

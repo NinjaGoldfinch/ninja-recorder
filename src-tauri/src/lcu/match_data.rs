@@ -698,6 +698,9 @@ pub struct ParticipantSummary {
     /// `None` when the response said nothing about minions at all, which
     /// is different from a game where nobody farmed.
     pub cs: Option<i64>,
+    /// Where this player played, in the same words `role` uses. The only
+    /// thing that can name a lane opponent — see `ScoreboardPlayer::position`.
+    pub position: Option<String>,
     pub items: Vec<i64>,
     pub spell_ids: Vec<i64>,
     pub keystone_id: Option<i64>,
@@ -726,6 +729,10 @@ fn participants(me: &CurrentSummoner, game: &GameDto) -> Vec<ParticipantSummary>
         .map(|p| ParticipantSummary {
             champion_id: p.champion_id,
             team: p.team_id.and_then(team_name),
+            // Riot's own `lane`/`role` pair, reduced by the same function
+            // that fills our `role` column — so the matchup and the row
+            // agree about what position means.
+            position: position(p.timeline.as_ref()),
             is_us: p.participant_id == our_id,
             level: p.stats.champ_level.unwrap_or(0),
             kills: p.stats.kills,

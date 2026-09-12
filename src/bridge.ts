@@ -196,6 +196,10 @@ function fixtureScoreboard(champion: string | null) {
       deaths: i === 0 ? 3 : (i + 1) % 7,
       assists: i === 0 ? 5 : (i * 3) % 11,
       cs: 120 + i * 17,
+      // Five positions a side, in cast order, so a browser-only session
+      // draws a real matchup — the block exists to be looked at, and a mock
+      // that never populates it is the one nobody checks.
+      position: ["Top", "Jungle", "Middle", "Bottom", "Support"][i % 5],
       items: items.slice(0, 4 + (i % 3)),
       spells: ["Flash", i % 2 === 0 ? "Ignite" : "Teleport"],
     })),

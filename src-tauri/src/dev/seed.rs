@@ -347,6 +347,12 @@ fn seeded_scoreboard(plan: &RecordingPlan) -> crate::live_client::Scoreboard {
                 deaths: if is_us { d } else { (i as i64 + 1) % 7 },
                 assists: if is_us { a } else { (i as i64 * 3) % 11 },
                 cs: 120 + (i as i64 * 17),
+                // Five positions per side, in the cast's order, so a seeded
+                // library draws a real matchup rather than an empty one —
+                // the block is meant to be exercised without playing a game.
+                position: Some(
+                    ["Top", "Jungle", "Middle", "Bottom", "Support"][i % 5].to_string(),
+                ),
                 items: ITEMS[..(4 + i % 3)].to_vec(),
                 spells: SPELLS.iter().map(|s| (*s).to_string()).collect(),
                 // Names, matching a live capture. The match-history rebuild
