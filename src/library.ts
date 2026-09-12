@@ -21,6 +21,7 @@ import {
   lpLabel,
   queueOrModeLabel,
   rankLabel,
+  vodHeading,
   vodTitle,
 } from "./format";
 import { revealRowInspectors } from "./devportal";
@@ -564,68 +565,75 @@ function loadout(row: RecordingRow): string {
       <span class="vod-items" aria-hidden="true">${items.join("")}</span>`;
 }
 
-/** Five a side, which is what the block draws whatever the board holds. */
-const TEAM_SIZE = 5;
-
 /**
- * Both team compositions, ours on the top line.
+ * The lane matchup: us against the one opponent who played our position.
  *
- * The ten champions are the fastest way to recognise a game that the
- * champion column cannot give you — "the one against the Yasuo" is how
- * people actually remember a match — and they are already in
- * `scoreboard_json`, so this costs no column, no query and no migration.
+ * **It replaced the ten team portraits**, and the trade is deliberate. Ten
+ * champions told you who was in the game; one told you who you actually
+ * played against, which is the thing a person is reconstructing when they
+ * scan a library — "the Darius game" is a matchup, not a lobby. The other
+ * nine are still in `scoreboard_json` for anything that wants them.
  *
- * **Which line is ours is a claim, and it is only made when the capture
- * can back it.** `our_team` is absent whenever the poller never matched us
- * in `allPlayers`, and the rule there is already that the row says nothing
- * about which half is which. So the halves still draw — grouped, in the
- * order the game listed them — but nothing labels either one, because a
- * top line silently meaning "yours" would be a guess in a slot read as
- * fact.
+ * **The opponent is looked up, never guessed.** Every player carries a
+ * `position`, so the enemy in our lane is a filter rather than an index into
+ * a list whose order nothing promises. Where the position is missing — every
+ * recording made before the field existed, and any mode with no positions to
+ * assign — there is no matchup and the block says so rather than showing an
+ * arbitrary enemy.
  *
- * Empty slots are drawn rather than skipped, exactly as in `loadout`: a
- * recording with no scoreboard keeps the same shape as one that has it.
+ * Drawn at a fixed width whatever it holds, so the columns either side of it
+ * land in the same place on every row.
  */
-function teams(row: RecordingRow): string {
+/**
+ * The one opponent who played our position, or null.
+ *
+ * A lookup rather than an index: every player carries a `position`, so the
+ * enemy in our lane is a filter over the board. Null where the position is
+ * missing — every recording made before the field existed, and any mode with
+ * no positions to assign — because an arbitrary enemy is worse than none.
+ *
+ * Exported shape kept to one function so the row, the heading and the
+ * accessible name cannot disagree about who the opponent was.
+ */
+export function laneOpponent(row: RecordingRow): ScoreboardPlayer | null {
   const board = parseScoreboard(row.scoreboard_json);
   const players = board?.players ?? [];
+  const us = players.find((p) => p.is_us) ?? null;
+  if (!us || !us.position) return null;
+  return players.find((p) => p.team !== us.team && p.position === us.position) ?? null;
+}
 
-  const known = board?.our_team ?? null;
-  const lead = known ?? players[0]?.team ?? null;
-  let ours = players.filter((p) => p.team === lead);
-  let enemy = players.filter((p) => p.team !== lead);
+function matchup(row: RecordingRow): string {
+  const them = laneOpponent(row);
 
-  // A board that lands everybody on one side is not one this app has
-  // written — both halves of `team` come from the same Rust struct — but
-  // splitting it where the game would still draws two fives rather than a
-  // ten and a gap.
-  if (players.length > 0 && (ours.length === 0 || enemy.length === 0)) {
-    ours = players.slice(0, TEAM_SIZE);
-    enemy = players.slice(TEAM_SIZE);
-  }
+  const empty = `<span class="vod-slot vod-slot-empty"></span>`;
+  const items = (them?.items ?? []).slice(0, 7).map(
+    (id) =>
+      `<span class="vod-slot" data-icon="item" data-key="${escapeAttr(String(id))}"
+             title="${escapeAttr(`Item ${id}`)}"></span>`,
+  );
+  while (items.length < 7) items.push(empty);
 
-  const line = (side: ScoreboardPlayer[], label: string | null) => {
-    const slots = side
-      .slice(0, TEAM_SIZE)
-      .map(
-        (p) =>
-          `<span class="vod-slot" data-icon="champion" data-key="${escapeAttr(p.champion)}"
-                 title="${escapeAttr(label === null ? p.champion : `${label}: ${p.champion}`)}"></span>`,
-      );
-    while (slots.length < TEAM_SIZE) {
-      slots.push(`<span class="vod-slot vod-slot-empty"></span>`);
-    }
-    return slots.join("");
-  };
+  const portrait = them
+    ? `<span class="vod-slot vod-versus-portrait" data-icon="champion"
+             data-key="${escapeAttr(them.champion)}"
+             title="${escapeAttr(them.champion)}"></span>`
+    : empty;
 
-  // `aria-hidden` for the same reason the items and perks are: ten more
-  // names in the row's label would bury the champion, the result and the
-  // date that make the list navigable in the first place. The `title` on
-  // each square is what a pointer gets, as everywhere else on the row.
-  const oursLabel = known === null ? null : "Your team";
-  const enemyLabel = known === null ? null : "Enemy team";
+  // Their line, in the same shape ours takes so the two read as a pair.
+  const kda = them ? `${them.kills} <span class="vod-slash">/</span> <span class="vod-deaths">${them.deaths}</span> <span class="vod-slash">/</span> ${them.assists}` : `<span class="vod-missing">—</span>`;
+  const cs = them ? `${them.cs} cs` : "";
+
   return `
-      <span class="vod-teams" aria-hidden="true">${line(ours, oursLabel)}${line(enemy, enemyLabel)}</span>`;
+      <span class="vod-versus" ${them ? "" : 'data-unknown="true"'}>
+        <span class="vod-versus-label" aria-hidden="true">vs</span>
+        ${portrait}
+        <span class="vod-cell vod-versus-line">
+          <span class="vod-value vod-kda">${kda}</span>
+          <span class="vod-sub">${cs === "" ? "&nbsp;" : escapeHtml(cs)}</span>
+        </span>
+        <span class="vod-items" aria-hidden="true">${items.join("")}</span>
+      </span>`;
 }
 
 function outcomeAttr(win: boolean | null): string {
@@ -658,7 +666,6 @@ function card(row: RecordingRow): string {
   // Absent when the result is unknown, which is unambiguous rather than a
   // gap: a word is on every decided row, so no word means undecided.
   const outcomeWord = row.win === null ? null : row.win ? "Win" : "Loss";
-  const outcome = outcomeWord ?? "Result unknown";
 
   // Every one of these can be absent, and a row that hides the slot when
   // it is reads as a different shape per recording — which is exactly what
@@ -683,7 +690,7 @@ function card(row: RecordingRow): string {
   return `
     <article class="vod-row" role="listitem" tabindex="0"
              data-id="${row.id}" data-outcome="${outcomeAttr(row.win)}"
-             aria-label="${escapeAttr(`${title} — ${outcome}`)}">
+             aria-label="${escapeAttr(vodHeading(row, laneOpponent(row)?.champion ?? null))}">
       <span class="vod-meta">
         <span class="vod-queue">${cell(queue)}</span>
         <time datetime="${new Date(row.started_at).toISOString()}"
@@ -725,7 +732,7 @@ function card(row: RecordingRow): string {
 
       ${loadout(row)}
 
-      ${teams(row)}
+      ${matchup(row)}
 
       <span class="vod-slack" aria-hidden="true"></span>
 

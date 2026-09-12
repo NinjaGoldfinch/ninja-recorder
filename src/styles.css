@@ -1326,6 +1326,9 @@ button.armed {
  * is invisible to read but real to every future column. Slack that stays
  * slack keeps the rule above true rather than nearly true. */
 .vod-row {
+  /* Portrait, "vs", their line, and seven item squares with their gaps. One
+   * number so the track and the block cannot disagree. */
+  --versus-w: 15.5rem;
   display: grid;
   grid-template-columns:
     minmax(8.5rem, 11rem) /* queue / when / patch / length · result */
@@ -1334,14 +1337,23 @@ button.armed {
     minmax(6rem, 9rem)    /* KDA + ratio */
     minmax(4.5rem, 6rem)  /* CS + per minute */
     minmax(5rem, 7rem)    /* rank + LP */
-    auto                  /* spells + runes */
-    auto                  /* items */
-    auto                  /* both team compositions */
+    38px                  /* spells + runes — two columns of 18px + 2px */
+    166px                 /* items — seven of 22px + six 2px gaps */
+    var(--versus-w)       /* the lane matchup */
     minmax(0, 1fr)        /* slack — see above */
     auto                  /* size */
     auto;                 /* actions */
   align-items: center;
-  /* Tighter than the page's usual rhythm. Eleven columns at `--sp-3` spend
+  /* The art tracks are stated rather than left `auto`, and that is the fix
+   * for rows that would not line up. `auto` sizes a track to *that row's*
+   * content, and every `.vod-row` is its own grid — so a row whose player
+   * sold an item, or whose scoreboard is missing, computed different track
+   * widths from the row above it and the whole list shifted about. The
+   * blocks are fixed grids of fixed squares internally, so the widths were
+   * never really variable; they only looked it. Column reads down the list
+   * now, which is the entire reason the row is a grid.
+   *
+   * Tighter than the page's usual rhythm. Eleven columns at `--sp-3` spend
    * more than a hundred pixels on gaps, which at the 960px minimum window
    * is the difference between the items strip fitting and not. */
   gap: var(--sp-2);
@@ -1424,10 +1436,42 @@ button.armed {
  * Smaller than the item squares, and not by accident: this is the block
  * you scan rather than read, and ten boxes at item size would out-weigh
  * the champion, the KDA and the result that the row is actually about. */
-.vod-teams {
-  display: grid;
-  grid-template-columns: repeat(5, 18px);
-  gap: 2px;
+/* The lane matchup, at one width whatever it holds — an unknown opponent
+ * takes exactly as much room as a known one, so the column does not move
+ * between rows. */
+.vod-versus {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: var(--versus-w);
+}
+
+.vod-versus-label {
+  flex-shrink: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-subtle);
+  font-variant: small-caps;
+}
+
+.vod-versus-portrait {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+}
+
+/* Narrower than our own KDA cell: this is the side being compared against,
+ * and giving it equal weight would make the row read as two players rather
+ * than as one player's game. */
+.vod-versus-line {
+  width: 4.5rem;
+  flex-shrink: 0;
+}
+
+/* An opponent nothing could name still draws its slots, for the same reason
+ * every other empty slot does: a row that collapses its gaps is a different
+ * shape per recording, which is precisely what stops a list being scannable. */
+.vod-versus[data-unknown="true"] {
+  opacity: 0.55;
 }
 
 .vod-slot {
@@ -1899,12 +1943,29 @@ button.small {
  * carry the container's padding, the row's padding and the gaps on top of
  * that. Below roughly 1200px the squares are what no longer has room.
  *
- * It moved out from 1100px when the rank column landed (#149): one more
- * capped track plus its gap is about 90px, and the threshold has to move
- * with it or the row starts overflowing instead of shedding the block it
- * can most afford to lose. */
+ * It sheds in two stages now that the block is a matchup rather than ten
+ * portraits, because the two halves are worth different amounts. The
+ * opponent's *build* is the wide part — seven squares and their gaps, 166px
+ * — and the least of what the block says; who you played against and how
+ * they did survives another 240px of narrowing. Dropping the whole thing at
+ * the first pinch would throw away the useful half to save the decorative
+ * one.
+ *
+ * The numbers are the row's own tracks, not round figures: with the build
+ * the row needs about 1430px, and without it about 1180px. */
+@media (max-width: 1440px) {
+  .vod-versus .vod-items {
+    display: none;
+  }
+
+  .vod-row {
+    /* Portrait, "vs" and their line — the build's 166px and one gap gone. */
+    --versus-w: 7.5rem;
+  }
+}
+
 @media (max-width: 1200px) {
-  .vod-teams {
+  .vod-versus {
     display: none;
   }
 }

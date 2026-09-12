@@ -133,49 +133,35 @@ the leftover width *inside* a data column, where it is invisible to read but
 real to every column added after it; slack that stays slack keeps the rule
 above true rather than nearly true.
 
-**The ten champions, five to a line, ours on top.** They are the fastest way
-to recognise a game the champion column cannot identify on its own — "the one
-against the Yasuo" is how people actually remember a match — and they come
-free: `scoreboard_json` has held all ten since the end-of-game scoreboard was
-persisted, so the block costs no column in the schema and no query.
+**The lane matchup, not the lobby.** The row shows the one opponent who
+played your position — their champion, their line and their build — where it
+used to show all ten portraits. Ten champions told you who was in the game;
+one tells you who you actually played against, which is what a person is
+reconstructing when they scan a library. "The Darius game" is a matchup, not a
+lobby. The other nine are still in `scoreboard_json` for anything that wants
+them.
 
-Which line is *ours* is a claim, and it is only made when the capture can back
-it. `our_team` is absent whenever the live poller never matched us in
-`allPlayers`; the halves still draw, grouped and in the order the game listed
-them, but neither is labelled, because a top line silently meaning "yours"
-would be a guess in a slot read as fact. The squares are smaller than the item
-strip on purpose — this is a block to scan, and ten boxes at item size
-out-weigh the champion, the KDA and the result the row is actually about.
+**The opponent is looked up, never guessed.** Every player on the board carries
+a `position`, so the enemy in our lane is a filter rather than an index into a
+list whose order nothing promises. Where the position is missing — every
+recording made before the field existed, and any mode with no positions to
+assign — there is no matchup, and the block dims rather than showing an
+arbitrary enemy. It still draws its slots, because a row that collapses its
+gaps is a different shape per recording.
 
-It is also the one block that *hides*, and only ever on window width: below
-about 1200px the row's other eleven columns already need every pixel there is.
-That threshold moved out from 1100px when the rank column landed — one more
-capped track and its gap is about 90px, and the breakpoint has to move with it
-or the row overflows instead of shedding the block it can most afford to lose.
-It is the right one to drop, because every other block answers something about
-the row's own player — who they were, how they did, what they built — and this
-one is context around that, so losing it costs recognition rather than the
-ability to tell one row from another. Every row loses it at the same moment, so
-the list stays one shape, which is the entire reason a missing *value* renders
-as `—` instead of vanishing. That rule is about data, not window width.
+**The art tracks are stated, not `auto`.** Every `.vod-row` is its own grid, so
+an `auto` track sizes to *that row's* content — and a row whose player sold an
+item, or whose scoreboard is missing, computed different widths from the row
+above it. The blocks are fixed grids of fixed squares internally, so the widths
+were never really variable; they only looked it. Stating them is what makes a
+column read down the list, which is the entire reason the row is a grid at all.
 
-**The outcome is carried twice, in one place each.** The leading edge is the
-colour, with a wash of it fading out across the first few centimetres so the
-edge reads as the row's state rather than as decoration beside it. The word
-sits on the last line of the left block — `31m 42s · Win` — where it costs no
-column, and is tinted to match, so colour and text each carry it once.
-
-Both channels matter. A badge in its own column repeated the edge and was
-dropped; the word was not, because green and red are exactly the pair a
-red-green deficiency cannot separate, and an accent alone would leave those
-users with no result at all. On an undecided row the word is simply absent,
-which is unambiguous rather than a gap: every decided row has one.
-
-**A row never hides an empty slot.** A missing value renders as `—` in the
-place it would have occupied, because a row that collapses its gaps is a
-different shape per recording, which is precisely what stops a list being
-scannable. That matters more now than it did with cards, and more again until
-#56's backfill has been run against an old library.
+**It sheds in two stages**, because its halves are worth different amounts. The
+opponent's build is the wide part — seven squares and their gaps, 166px — and
+the least of what the block says; who you played and how they did survives
+another 240px of narrowing. Below about 1440px the build goes, below about
+1200px the rest follows. The thresholds are the row's own tracks rather than
+round numbers: with the build it needs about 1430px, without it about 1180px.
 
 ### What a row says when the data is missing
 
@@ -188,6 +174,7 @@ scattering `??` through the row template:
 | Slot | Chain | Why it stops there |
 |---|---|---|
 | Title (`vodTitle`) | `champion` → game mode → filename | Never empty. The filename is untrusted input, so the caller still escapes it |
+| Heading (`vodHeading`) | `vodTitle` + ` vs <opponent>` + ` — Win`/`Loss` | The long form, for the review view's heading and the row's accessible name, where there is room for what actually identifies a game. Each half is added only when known, so it degrades through `Viego vs Darius`, `Viego — Win` and `Viego` rather than emitting `vs undefined`. An undecided game says nothing about a result, exactly as the row's own outcome word does |
 | Queue (`queueOrModeLabel`) | `queue` id → `game_mode` | `CLASSIC` renders as "Summoner's Rift", the *map*: the mode string cannot tell blind from draft from ranked, and naming one would be a guess in a slot read as fact |
 | KDA (`formatKda`) | all three or nothing | A partial KDA reads as a real one. The ratio (`kdaRatio`) is a hover hint, not a fourth number in a column three numbers wide |
 | Role | Live Client Data's position → the LCU's inference → `Unknown` | The live value is what the game assigned; the LCU's `timeline.lane`/`role` is Riot working it out afterwards and confuses top with jungle, so it fills a gap rather than correcting one. `Unknown` is written out rather than left blank — a row that hides an empty slot is a different shape per recording |

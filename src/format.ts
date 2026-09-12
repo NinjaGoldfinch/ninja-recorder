@@ -167,6 +167,32 @@ export function vodTitle(row: RecordingRow): string {
   return row.champion ?? gameModeLabel(row.game_mode) ?? basename(row.path);
 }
 
+/**
+ * The long form: `"Viego vs Darius — Win"`.
+ *
+ * For the review view's heading and the row's accessible name, where there is
+ * room for the thing that actually identifies a game. `vodTitle` stays the
+ * short form, because the row's champion cell is a column and a matchup would
+ * not fit in it.
+ *
+ * **Each half is added only when it is known**, so this degrades through
+ * `"Viego vs Darius"`, `"Viego — Win"` and `"Viego"` rather than emitting
+ * `"Viego vs undefined"`. The opponent comes from the caller, which is the
+ * only place that has parsed the scoreboard.
+ *
+ * The filename can reach this through `vodTitle`, so callers still escape it.
+ */
+export function vodHeading(
+  row: RecordingRow,
+  opponent: string | null = null,
+): string {
+  const base = opponent === null ? vodTitle(row) : `${vodTitle(row)} vs ${opponent}`;
+  // An undecided game says nothing rather than guessing, exactly as the row's
+  // own outcome word does — a heading is the last place to imply a result.
+  if (row.win === null) return base;
+  return `${base} — ${row.win ? "Win" : "Loss"}`;
+}
+
 // "7 / 2 / 5". All three or nothing: a partial KDA reads as a real one.
 export function formatKda(
   kills: number | null,
