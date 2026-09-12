@@ -253,6 +253,22 @@ time the game ends the number has already moved. It is best effort and comes
 after the identity is stored, because a standing that cannot be read costs a
 delta while the identity it is keyed by is what the whole row depends on.
 
+**Riot's `lane`/`role` pair is an inference, and it is measurably unreliable.**
+A captured ranked game put a jungler with Smite and 154 camps at
+`BOTTOM`/`SUPPORT` and a bot-lane Ashe at `JUNGLE`, leaving one side holding two
+supports and the other two junglers. The `timeline` block it comes from arrives
+with every per-minute delta map empty, which is what a field the API has stopped
+maintaining looks like.
+
+Two things follow. `position` accepts the client's current spelling as well as
+the old one — it sends `SUPPORT` where this was written for `DUO_SUPPORT`, so
+every support was falling through and being labelled `Bottom`, in the `role`
+column as well as in the matchup. And `discard_implausible_positions` drops a
+side's positions wholesale when two players share one: five players share five
+positions, so a duplicate is proof the inference is wrong rather than a close
+call. A missing position empties the matchup, which announces itself; a wrong
+one shows a plausible opponent who is not the one you played.
+
 ### What each poll leaves behind
 
 Markers and samples are the *product* of a poll. They are not a record of
