@@ -606,31 +606,41 @@ export function laneOpponent(row: RecordingRow): ScoreboardPlayer | null {
 function matchup(row: RecordingRow): string {
   const them = laneOpponent(row);
 
+  // No opponent is said in words, not drawn as an empty skeleton. A row of
+  // blank boxes beside a "vs" reads as art that failed to load — which is
+  // a bug report waiting to happen — where "no matchup" reads as what it is.
+  // The block keeps its width either way, so the columns do not move.
+  if (!them) {
+    return `
+      <span class="vod-versus" data-unknown="true">
+        <span class="vod-versus-label" aria-hidden="true">vs</span>
+        <span class="vod-sub">No matchup recorded</span>
+      </span>`;
+  }
+
   const empty = `<span class="vod-slot vod-slot-empty"></span>`;
-  const items = (them?.items ?? []).slice(0, 7).map(
+  const items = them.items.slice(0, 7).map(
     (id) =>
       `<span class="vod-slot" data-icon="item" data-key="${escapeAttr(String(id))}"
              title="${escapeAttr(`Item ${id}`)}"></span>`,
   );
   while (items.length < 7) items.push(empty);
 
-  const portrait = them
-    ? `<span class="vod-slot vod-versus-portrait" data-icon="champion"
-             data-key="${escapeAttr(them.champion)}"
-             title="${escapeAttr(them.champion)}"></span>`
-    : empty;
-
   // Their line, in the same shape ours takes so the two read as a pair.
-  const kda = them ? `${them.kills} <span class="vod-slash">/</span> <span class="vod-deaths">${them.deaths}</span> <span class="vod-slash">/</span> ${them.assists}` : `<span class="vod-missing">—</span>`;
-  const cs = them ? `${them.cs} cs` : "";
+  const kda =
+    `${them.kills} <span class="vod-slash">/</span>` +
+    ` <span class="vod-deaths">${them.deaths}</span>` +
+    ` <span class="vod-slash">/</span> ${them.assists}`;
 
   return `
-      <span class="vod-versus" ${them ? "" : 'data-unknown="true"'}>
+      <span class="vod-versus">
         <span class="vod-versus-label" aria-hidden="true">vs</span>
-        ${portrait}
+        <span class="vod-slot vod-versus-portrait" data-icon="champion"
+              data-key="${escapeAttr(them.champion)}"
+              title="${escapeAttr(them.champion)}"></span>
         <span class="vod-cell vod-versus-line">
           <span class="vod-value vod-kda">${kda}</span>
-          <span class="vod-sub">${cs === "" ? "&nbsp;" : escapeHtml(cs)}</span>
+          <span class="vod-sub">${escapeHtml(`${them.cs} cs`)}</span>
         </span>
         <span class="vod-items" aria-hidden="true">${items.join("")}</span>
       </span>`;

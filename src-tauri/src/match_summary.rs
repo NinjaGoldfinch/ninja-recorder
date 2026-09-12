@@ -190,6 +190,43 @@ fn outcome(win: bool) -> &'static str {
     }
 }
 
+/// Keeps positions the live capture established when the LCU has none.
+///
+/// Matched on **team and champion together**, because neither is unique
+/// alone: a blind-pick game can have the same champion on both sides. A
+/// player the old board cannot be matched to unambiguously keeps whatever
+/// the LCU gave, which is `None` — the same refusal everything else here
+/// makes rather than attaching a position to the wrong player.
+///
+/// Only fills. A position the LCU *did* establish is left alone, so this
+/// cannot undo a correction.
+fn carry_positions_across(db: &Db, recording_id: i64, players: &mut [ScoreboardPlayer]) {
+    if players.iter().all(|p| p.position.is_some()) {
+        return;
+    }
+    let Ok(Some(row)) = db.get_recording(recording_id) else {
+        return;
+    };
+    let Some(previous) = row
+        .scoreboard_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str::<Scoreboard>(json).ok())
+    else {
+        return;
+    };
+
+    for player in players.iter_mut().filter(|p| p.position.is_none()) {
+        let mut matches = previous
+            .players
+            .iter()
+            .filter(|old| old.team == player.team && old.champion == player.champion);
+        // Exactly one, or nothing: an ambiguous match is not a match.
+        if let (Some(old), None) = (matches.next(), matches.next()) {
+            player.position = old.position.clone();
+        }
+    }
+}
+
 /// Builds the LCU's version of a scoreboard and makes it the row's.
 ///
 /// **The override in #127.** The live scoreboard is the only one that exists
@@ -229,6 +266,19 @@ async fn write_scoreboard(
     for participant in &participants {
         players.push(scoreboard_player(client, lockfile, participant).await);
     }
+
+    // **A field the LCU could not establish must not erase one the live
+    // capture did** — the same rule `cs` already follows through this write,
+    // applied to the thing that was quietly losing it.
+    //
+    // `position` comes from Riot's `lane`/`role` pair here, which is an
+    // inference and is sometimes absent or a pair nothing recognises. Live
+    // Client Data reports the position the game assigned, and it is the
+    // better source. Replacing the whole scoreboard threw it away, and a row
+    // with no positions has no lane opponent — so the matchup silently
+    // emptied on every recording the deferred patch touched.
+    carry_positions_across(db, recording_id, &mut players);
+
     let us = participants.iter().find(|p| p.is_us);
     let scoreboard = Scoreboard {
         our_team: us.and_then(|p| p.team.clone()),
@@ -981,5 +1031,132 @@ mod tests {
         for now in [ended + 5 * MIN + 1, ended + 60 * MIN] {
             assert!(!rank_still_describes(ended, now));
         }
+    }
+
+    // --- positions surviving the LCU rebuild -------------------------
+
+    /// A row carrying a scoreboard, which is what the rebuild replaces.
+    fn a_row_with_scoreboard(db: &Db, players: &[ScoreboardPlayer]) -> i64 {
+        let id = db
+            .insert_recording(&crate::db::NewRecording {
+                path: "/a.mp4".into(),
+                started_at: 1,
+                ..Default::default()
+            })
+            .unwrap();
+        let board = Scoreboard {
+            our_team: Some("ORDER".into()),
+            our_runes: None,
+            players: players.to_vec(),
+        };
+        db.replace_scoreboard(id, &serde_json::to_string(&board).unwrap(), None)
+            .unwrap();
+        id
+    }
+
+    fn board_player(champion: &str, team: &str, position: Option<&str>) -> ScoreboardPlayer {
+        ScoreboardPlayer {
+            champion: champion.into(),
+            team: team.into(),
+            position: position.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    /// **The matchup bug.** The LCU rebuild takes `position` from Riot's
+    /// `lane`/`role` inference, which is sometimes absent — and replacing the
+    /// whole scoreboard then threw away the positions the live capture had,
+    /// leaving every patched recording with no lane opponent.
+    #[test]
+    fn a_position_the_lcu_lacks_is_kept_from_the_live_capture() {
+        let db = Db::open_in_memory().unwrap();
+        let id = a_row_with_scoreboard(
+            &db,
+            &[
+                board_player("Viego", "ORDER", Some("Jungle")),
+                board_player("Vi", "CHAOS", Some("Jungle")),
+            ],
+        );
+
+        let mut rebuilt = vec![
+            board_player("Viego", "ORDER", None),
+            board_player("Vi", "CHAOS", None),
+        ];
+        carry_positions_across(&db, id, &mut rebuilt);
+
+        assert_eq!(rebuilt[0].position.as_deref(), Some("Jungle"));
+        assert_eq!(rebuilt[1].position.as_deref(), Some("Jungle"));
+    }
+
+    /// It only fills. A position the LCU established is the newer answer and
+    /// must not be undone by the older board.
+    #[test]
+    fn a_position_the_lcu_established_is_left_alone() {
+        let db = Db::open_in_memory().unwrap();
+        let id = a_row_with_scoreboard(&db, &[board_player("Viego", "ORDER", Some("Top"))]);
+
+        let mut rebuilt = vec![board_player("Viego", "ORDER", Some("Jungle"))];
+        carry_positions_across(&db, id, &mut rebuilt);
+        assert_eq!(rebuilt[0].position.as_deref(), Some("Jungle"));
+    }
+
+    /// Team *and* champion, because neither is unique alone — a blind-pick
+    /// game can have the same champion on both sides, and carrying a
+    /// position across sides would put the wrong player in the lane.
+    #[test]
+    fn the_same_champion_on_both_sides_is_matched_by_side() {
+        let db = Db::open_in_memory().unwrap();
+        let id = a_row_with_scoreboard(
+            &db,
+            &[
+                board_player("Yasuo", "ORDER", Some("Middle")),
+                board_player("Yasuo", "CHAOS", Some("Top")),
+            ],
+        );
+
+        let mut rebuilt = vec![
+            board_player("Yasuo", "CHAOS", None),
+            board_player("Yasuo", "ORDER", None),
+        ];
+        carry_positions_across(&db, id, &mut rebuilt);
+        assert_eq!(rebuilt[0].position.as_deref(), Some("Top"), "the CHAOS one");
+        assert_eq!(rebuilt[1].position.as_deref(), Some("Middle"), "the ORDER one");
+    }
+
+    /// An ambiguous match is not a match. Attaching a position to the wrong
+    /// player is worse than leaving it absent, which is what every other
+    /// refusal in this file already says.
+    #[test]
+    fn an_ambiguous_match_carries_nothing() {
+        let db = Db::open_in_memory().unwrap();
+        let id = a_row_with_scoreboard(
+            &db,
+            &[
+                board_player("Yasuo", "ORDER", Some("Middle")),
+                board_player("Yasuo", "ORDER", Some("Top")),
+            ],
+        );
+
+        let mut rebuilt = vec![board_player("Yasuo", "ORDER", None)];
+        carry_positions_across(&db, id, &mut rebuilt);
+        assert_eq!(rebuilt[0].position, None);
+    }
+
+    /// A row that never had a scoreboard is not an error — a rebuild is
+    /// exactly what such a row is waiting for.
+    #[test]
+    fn a_row_with_no_previous_scoreboard_carries_nothing() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db
+            .insert_recording(&crate::db::NewRecording {
+                path: "/a.mp4".into(),
+                started_at: 1,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let mut rebuilt = vec![board_player("Viego", "ORDER", None)];
+        carry_positions_across(&db, id, &mut rebuilt);
+        assert_eq!(rebuilt[0].position, None);
     }
 }
