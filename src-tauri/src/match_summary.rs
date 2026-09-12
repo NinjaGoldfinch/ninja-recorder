@@ -190,20 +190,30 @@ fn outcome(win: bool) -> &'static str {
     }
 }
 
-/// Keeps positions the live capture established when the LCU has none.
+/// Gives the live capture's position back to a rebuilt scoreboard.
 ///
-/// Matched on **team and champion together**, because neither is unique
-/// alone: a blind-pick game can have the same champion on both sides. A
-/// player the old board cannot be matched to unambiguously keeps whatever
-/// the LCU gave, which is `None` — the same refusal everything else here
-/// makes rather than attaching a position to the wrong player.
+/// **The live value wins where both exist**, which is the rule `role` has
+/// followed all along and states in `update_match_metadata`: Live Client Data
+/// reports where we actually played, while the LCU's `timeline.lane`/`role` is
+/// Riot inferring it afterwards from where time was spent. *The inference is a
+/// fallback for a game the poller missed, never a correction.*
 ///
-/// Only fills. A position the LCU *did* establish is left alone, so this
-/// cannot undo a correction.
-fn carry_positions_across(db: &Db, recording_id: i64, players: &mut [ScoreboardPlayer]) {
-    if players.iter().all(|p| p.position.is_some()) {
-        return;
-    }
+/// Filling only the gaps was not enough, and the failure is quiet rather than
+/// obvious: an inference that confuses two lanes produces a *present but
+/// wrong* position, the matchup then picks the enemy in the wrong lane, and
+/// the row shows a plausible opponent who is not the one you played. An empty
+/// matchup announces itself; a wrong one does not.
+///
+/// Matched on **team and champion together**, because neither is unique alone:
+/// a blind-pick game can have the same champion on both sides. A player the
+/// old board cannot be matched to unambiguously keeps whatever the LCU gave —
+/// the same refusal everything else here makes rather than attaching a
+/// position to the wrong player.
+///
+/// Idempotent across re-runs. The carried value is written back into the
+/// board, so a second patch reads it as the previous board's answer and keeps
+/// it; the live position propagates rather than decaying to the inference.
+fn prefer_live_positions(db: &Db, recording_id: i64, players: &mut [ScoreboardPlayer]) {
     let Ok(Some(row)) = db.get_recording(recording_id) else {
         return;
     };
@@ -215,13 +225,19 @@ fn carry_positions_across(db: &Db, recording_id: i64, players: &mut [ScoreboardP
         return;
     };
 
-    for player in players.iter_mut().filter(|p| p.position.is_none()) {
+    for player in players.iter_mut() {
         let mut matches = previous
             .players
             .iter()
             .filter(|old| old.team == player.team && old.champion == player.champion);
         // Exactly one, or nothing: an ambiguous match is not a match.
-        if let (Some(old), None) = (matches.next(), matches.next()) {
+        let (Some(old), None) = (matches.next(), matches.next()) else {
+            continue;
+        };
+        // Only when the older board actually knew. A live capture that never
+        // saw a position must not erase an inference, which is the only thing
+        // left at that point.
+        if old.position.is_some() {
             player.position = old.position.clone();
         }
     }
@@ -277,7 +293,7 @@ async fn write_scoreboard(
     // better source. Replacing the whole scoreboard threw it away, and a row
     // with no positions has no lane opponent — so the matchup silently
     // emptied on every recording the deferred patch touched.
-    carry_positions_across(db, recording_id, &mut players);
+    prefer_live_positions(db, recording_id, &mut players);
 
     let us = participants.iter().find(|p| p.is_us);
     let scoreboard = Scoreboard {
@@ -1082,22 +1098,64 @@ mod tests {
             board_player("Viego", "ORDER", None),
             board_player("Vi", "CHAOS", None),
         ];
-        carry_positions_across(&db, id, &mut rebuilt);
+        prefer_live_positions(&db, id, &mut rebuilt);
 
         assert_eq!(rebuilt[0].position.as_deref(), Some("Jungle"));
         assert_eq!(rebuilt[1].position.as_deref(), Some("Jungle"));
     }
 
-    /// It only fills. A position the LCU established is the newer answer and
-    /// must not be undone by the older board.
+    /// **The live capture wins where both know.** Filling only the gaps left
+    /// the quieter half of the bug in place: Riot's inference can produce a
+    /// *present but wrong* position, the matchup then picks the enemy in the
+    /// wrong lane, and the row shows a plausible opponent who is not the one
+    /// you played. An empty matchup announces itself; a wrong one does not.
+    ///
+    /// This is the rule `role` already follows — the inference is a fallback
+    /// for a game the poller missed, never a correction.
     #[test]
-    fn a_position_the_lcu_established_is_left_alone() {
+    fn the_live_position_wins_over_the_lcus_inference() {
         let db = Db::open_in_memory().unwrap();
-        let id = a_row_with_scoreboard(&db, &[board_player("Viego", "ORDER", Some("Top"))]);
+        let id = a_row_with_scoreboard(&db, &[board_player("Viego", "ORDER", Some("Jungle"))]);
+
+        let mut rebuilt = vec![board_player("Viego", "ORDER", Some("Top"))];
+        prefer_live_positions(&db, id, &mut rebuilt);
+        assert_eq!(rebuilt[0].position.as_deref(), Some("Jungle"));
+    }
+
+    /// The other direction still holds: a live capture that never saw a
+    /// position must not erase the inference, which is all there is then.
+    #[test]
+    fn an_inference_survives_a_live_capture_that_knew_nothing() {
+        let db = Db::open_in_memory().unwrap();
+        let id = a_row_with_scoreboard(&db, &[board_player("Viego", "ORDER", None)]);
 
         let mut rebuilt = vec![board_player("Viego", "ORDER", Some("Jungle"))];
-        carry_positions_across(&db, id, &mut rebuilt);
+        prefer_live_positions(&db, id, &mut rebuilt);
         assert_eq!(rebuilt[0].position.as_deref(), Some("Jungle"));
+    }
+
+    /// Re-running the patch must not decay the answer back to the inference.
+    /// The carried value is written into the board, so the second run reads
+    /// it as the previous board's and keeps it.
+    #[test]
+    fn re_running_the_patch_keeps_the_live_position() {
+        let db = Db::open_in_memory().unwrap();
+        let id = a_row_with_scoreboard(&db, &[board_player("Viego", "ORDER", Some("Jungle"))]);
+
+        // First rebuild: the inference is overridden.
+        let mut first = vec![board_player("Viego", "ORDER", Some("Top"))];
+        prefer_live_positions(&db, id, &mut first);
+        let board = Scoreboard {
+            our_team: Some("ORDER".into()),
+            our_runes: None,
+            players: first,
+        };
+        db.replace_scoreboard(id, &serde_json::to_string(&board).unwrap(), None).unwrap();
+
+        // Second rebuild, against the board the first one wrote.
+        let mut second = vec![board_player("Viego", "ORDER", Some("Top"))];
+        prefer_live_positions(&db, id, &mut second);
+        assert_eq!(second[0].position.as_deref(), Some("Jungle"), "must not decay");
     }
 
     /// Team *and* champion, because neither is unique alone — a blind-pick
@@ -1118,7 +1176,7 @@ mod tests {
             board_player("Yasuo", "CHAOS", None),
             board_player("Yasuo", "ORDER", None),
         ];
-        carry_positions_across(&db, id, &mut rebuilt);
+        prefer_live_positions(&db, id, &mut rebuilt);
         assert_eq!(rebuilt[0].position.as_deref(), Some("Top"), "the CHAOS one");
         assert_eq!(rebuilt[1].position.as_deref(), Some("Middle"), "the ORDER one");
     }
@@ -1138,7 +1196,7 @@ mod tests {
         );
 
         let mut rebuilt = vec![board_player("Yasuo", "ORDER", None)];
-        carry_positions_across(&db, id, &mut rebuilt);
+        prefer_live_positions(&db, id, &mut rebuilt);
         assert_eq!(rebuilt[0].position, None);
     }
 
@@ -1156,7 +1214,7 @@ mod tests {
             .unwrap();
 
         let mut rebuilt = vec![board_player("Viego", "ORDER", None)];
-        carry_positions_across(&db, id, &mut rebuilt);
+        prefer_live_positions(&db, id, &mut rebuilt);
         assert_eq!(rebuilt[0].position, None);
     }
 }

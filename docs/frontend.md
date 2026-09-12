@@ -156,9 +156,17 @@ champion ids rather than display names, settled numbers rather than the last
 poll. It is *worse* at position: that comes from Riot's `lane`/`role` inference
 and is sometimes absent. Replacing the board wholesale therefore threw away the
 positions the live capture had, and every patched recording lost its matchup.
-`carry_positions_across` keeps them, matched on team **and** champion together
+`prefer_live_positions` keeps them, matched on team **and** champion together
 since neither is unique alone — a blind-pick game can have the same champion on
-both sides. It only fills, so a position the LCU did establish still wins.
+both sides.
+
+**The live value wins where both know**, which is the rule `role` has followed
+all along: the inference is a fallback for a game the poller missed, never a
+correction. Filling only the gaps left the quieter half of the bug in place —
+an inference that confuses two lanes produces a *present but wrong* position,
+the matchup then picks the enemy in the wrong lane, and the row shows a
+plausible opponent who is not the one you played. An empty matchup announces
+itself; a wrong one does not.
 
 **The art tracks are stated, not `auto`.** Every `.vod-row` is its own grid, so
 an `auto` track sizes to *that row's* content — and a row whose player sold an
