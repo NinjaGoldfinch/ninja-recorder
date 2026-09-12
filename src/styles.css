@@ -887,6 +887,18 @@ button:disabled {
 
 /* Also intentionally fixed rather than themed: the tooltip floats over the
  * graph in both modes and needs to stay readable against either. */
+/* The cluster tooltip.
+ *
+ * `left` is set in pixels by `showClusterTooltip`, not as the glyph's own
+ * percentage: with `translateX(-50%)` a glyph near either end put half the box
+ * outside the timeline, which the page then grew to contain — a tooltip that
+ * makes the window scroll sideways. The clamp needs the rendered width, so it
+ * can only be done after the content is in.
+ *
+ * Capped in height for the same reason in the other direction: a dense
+ * teamfight clusters into a list long enough to run off the top of the window.
+ * Past the cap it scrolls rather than being truncated — every marker in a
+ * cluster is one the user asked about by hovering it. */
 .timeline-tooltip {
   position: absolute;
   bottom: calc(100% - 1.2rem);
@@ -896,14 +908,24 @@ button:disabled {
   flex-direction: column;
   gap: 0.2rem;
   max-width: 22rem;
+  max-height: 14rem;
+  overflow-y: auto;
   padding: 0.4rem 0.6rem;
   border-radius: var(--r-sm);
   background-color: rgba(16, 13, 23, 0.94);
   color: #f2f2f2;
   font-size: 0.78rem;
   box-shadow: var(--shadow-2);
+  /* Transparent to the pointer by default, because it overlaps the top of
+   * the track and would otherwise make the glyphs beneath it unhoverable.
+   * `showClusterTooltip` turns this on only when the content actually
+   * overflows and there is a scrollbar worth reaching. */
   pointer-events: none;
   white-space: nowrap;
+}
+
+.timeline-tooltip[data-scrollable="true"] {
+  pointer-events: auto;
 }
 
 .timeline-tooltip .tooltip-row {
