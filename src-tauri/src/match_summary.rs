@@ -451,6 +451,23 @@ pub async fn patch(db: &Db, request: &SummaryRequest) -> bool {
         None => None,
     };
 
+    // An id cannot be possessed. Live Client Data reports a possessed Viego
+    // as whoever he possessed, so a game that ended mid-possession wrote the
+    // wrong champion during the game; the id the LCU answers with is right.
+    // Safe where the live name was already right, because the resolver
+    // produces the same display name it does.
+    //
+    // Only here, never in the backfill: this path knows the game by an exact
+    // id, and one that matched on the clock does not.
+    if let Some(name) = champion.as_deref() {
+        match db.correct_champion(request.recording_id, name) {
+            Ok(true) => debug!("match-summary",
+                "recording {} champion set from the client's id: {name}", request.recording_id),
+            Ok(false) => {}
+            Err(e) => warn!("match-summary", "could not correct the champion: {e}"),
+        }
+    }
+
     for note in disagreements(&request.live, &summary) {
         eprintln!(
             "[match-summary] game {} disagrees with what was recorded live — {note}. \

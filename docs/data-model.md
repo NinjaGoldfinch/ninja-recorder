@@ -182,6 +182,19 @@ role     = COALESCE(role, ?)
 champion = COALESCE(champion, ?)
 ```
 
+**`champion` has one exception, and it is not a flipped `COALESCE`.** Live
+Client Data reports a possessed Viego as whoever he possessed, so a game that
+ends mid-possession writes a real champion who is the wrong one — and no rename
+table can catch that, because the name it wrote is a genuine champion. An id
+cannot be possessed, so the deferred patch corrects the column from the id the
+client answers with, through `Db::correct_champion`.
+
+That correction is a separate method precisely so the shared patch stays
+incapable of it. The backfill goes through `update_match_metadata` and matches
+games *on the clock*; letting it rename a row would let a mismatched game
+overwrite a champion that was already right. **The exact-id path may correct;
+the heuristic path may only fill.**
+
 `role` is the same argument in a different place: Live Client Data reports the
 position the game assigned, and the LCU answers with `timeline.lane`/`role`,
 which is Riot inferring it afterwards from where a player spent time. The
