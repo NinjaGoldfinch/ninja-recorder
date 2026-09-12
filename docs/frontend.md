@@ -145,9 +145,20 @@ them.
 a `position`, so the enemy in our lane is a filter rather than an index into a
 list whose order nothing promises. Where the position is missing — every
 recording made before the field existed, and any mode with no positions to
-assign — there is no matchup, and the block dims rather than showing an
-arbitrary enemy. It still draws its slots, because a row that collapses its
-gaps is a different shape per recording.
+assign — there is no matchup, and the block **says so in words**. Seven blank
+boxes beside a "vs" read as art that failed to load, which is a bug report
+waiting to happen; "No matchup recorded" reads as what it is. The block keeps
+its width either way, so the columns on both sides stay put.
+
+**The position has to survive the LCU rebuild.** The deferred patch replaces the
+live scoreboard with the LCU's (#127), which is better at almost everything —
+champion ids rather than display names, settled numbers rather than the last
+poll. It is *worse* at position: that comes from Riot's `lane`/`role` inference
+and is sometimes absent. Replacing the board wholesale therefore threw away the
+positions the live capture had, and every patched recording lost its matchup.
+`carry_positions_across` keeps them, matched on team **and** champion together
+since neither is unique alone — a blind-pick game can have the same champion on
+both sides. It only fills, so a position the LCU did establish still wins.
 
 **The art tracks are stated, not `auto`.** Every `.vod-row` is its own grid, so
 an `auto` track sizes to *that row's* content — and a row whose player sold an

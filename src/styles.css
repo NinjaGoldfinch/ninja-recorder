@@ -1489,11 +1489,15 @@ button.armed {
   flex-shrink: 0;
 }
 
-/* An opponent nothing could name still draws its slots, for the same reason
- * every other empty slot does: a row that collapses its gaps is a different
- * shape per recording, which is precisely what stops a list being scannable. */
-.vod-versus[data-unknown="true"] {
-  opacity: 0.55;
+/* An opponent nothing could name says so in words rather than drawing seven
+ * blank boxes — that reads as art that failed to load, which is a bug report
+ * waiting to happen. The block keeps its width either way, so the columns on
+ * both sides stay where they are. */
+.vod-versus[data-unknown="true"] .vod-sub {
+  color: var(--text-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .vod-slot {
