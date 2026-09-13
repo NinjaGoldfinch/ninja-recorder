@@ -5,6 +5,7 @@
 //! metadata. `reconcile` (submodule) is what keeps the two in sync when a
 //! user touches the recordings folder directly.
 
+pub mod pool;
 pub mod reconcile;
 
 use crate::warn;

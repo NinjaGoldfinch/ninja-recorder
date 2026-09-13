@@ -7,6 +7,11 @@ pub mod audio;
 pub mod devices;
 #[cfg(target_os = "windows")]
 pub mod libobs;
+// The target backend (Option B). Empty until WS1 task 1.6; gated to Windows
+// for the same reason `libobs` is, so the Linux and macOS dev loops keep
+// compiling exactly what they compile today.
+#[cfg(target_os = "windows")]
+pub mod own;
 // Also compiled on Windows under `cfg(test)`: `state_machine::supervisor`'s
 // unit tests use `StubRecorder` as a platform-agnostic dummy `Recorder`
 // regardless of which real backend the current platform ships.
