@@ -1,0 +1,135 @@
+[package]
+name = "ninja-recorder"
+version = "0.8.0"
+description = "Lightweight League of Legends VOD recorder"
+authors = ["ninja"]
+edition = "2021"
+# GPL-2.0-only, not our choice of convenience: linking libobs (GPLv2) for
+# the capture backend obligates the whole distributed binary.
+# See DEVELOPMENT.md §2.1.
+license = "GPL-2.0-only"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "ninja_recorder_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+# Dev portal (dev.html + the `dev_*` commands in `src/dev/`). Off by
+# default so nothing in `src/dev/` — raw SQL execution, row inserts, DB
+# wipe, state-machine injection — is compiled into a shipped installer.
+# Enable for local work with `npm run tauri:dev`, which passes
+# `--features devtools`. Release workflows need no change.
+#
+# Pulls in tauri's own `devtools` feature, which is what puts the web
+# inspector in a *release* build. Debug builds always have it, so
+# `tauri:dev` never noticed it was missing — but the devtools installer is
+# a release build, which left the one bundle that exists for debugging as
+# the one bundle you could not debug: a portal that failed to load had no
+# way to say why.
+devtools = ["tauri/devtools"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# `tray-icon` is what makes `TrayIconBuilder` exist; it is off by default.
+# No `image-*` feature is needed because the tray reuses the already-decoded
+# `default_window_icon()` from the bundle rather than decoding a file.
+tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["time", "sync", "macros", "rt"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+native-tls = "0.2"
+futures-util = "0.3"
+base64 = "0.22"
+rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite_migration = "1"
+# Cross-platform free-disk-space query for the record-start preflight check
+# (DEVELOPMENT.md §6) — std has no such API.
+fs2 = "0.4"
+tauri-plugin-notification = "2"
+# Start-on-login. Windows is the one that matters (it writes the app's path
+# plus `--hidden` into `HKCU\...\Run`); the plugin covers macOS and Linux
+# too, which is what makes the flag testable in the macOS dev loop. The
+# registry entry — not a `settings_kv` row — is the source of truth, so the
+# checkbox can't drift from what Windows will actually do (DEVELOPMENT.md §12).
+tauri-plugin-autostart = "2"
+# In-app updates (DEVELOPMENT.md §14). Windows-only in practice: `latest.json`
+# carries a `windows-x86_64` entry and nothing else, so a macOS build's check
+# simply finds nothing. Registered in `lib.rs` only when the `devtools` feature
+# is *off* — a dev bundle that updated itself would replace itself with the
+# production app.
+tauri-plugin-updater = "2"
+
+# Real capture backend. Fork of github.com/FFFFFFFXXXXXXX/libobs-recorder
+# that swaps the injection-based `game_capture` source for `window_capture`
+# (Windows.Graphics.Capture) — see the fork's readme and DEVELOPMENT.md
+# §1.1/§2.2 for why upstream can't be used as-is. GPL-2.0, same as libobs
+# itself; this project is GPL-2.0 accordingly (README).
+[target.'cfg(target_os = "windows")'.dependencies]
+# Pinned to the `multi-track-audio` branch rather than the fork's default:
+# the multi-track patch (DEVELOPMENT.md §2.5) changes encoder and source
+# lifetimes inside libobs and has not been run on real Windows hardware yet,
+# so `master` stays the known-working backend until it has.
+libobs-recorder = { git = "https://github.com/NinjaGoldfinch/libobs-recorder.git", branch = "multi-track-audio" }
+# Win32_Media_Audio + the COM/property-store features are the microphone
+# picker (recorder/devices.rs): IMMDeviceEnumerator to list input endpoints,
+# IPropertyStore + PKEY_Device_FriendlyName for their display names. Done
+# here rather than through libobs so the picker still works when the capture
+# backend failed to initialize.
+#
+# `Win32_System_Variant` looks unused from our imports and is not: windows-rs
+# gates `IPropertyStore::GetValue` on it, because the method returns a
+# `PROPVARIANT`. Drop the feature and the method silently stops existing —
+# a "no method named GetValue" error at the call site, nowhere near here.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    # SetStdHandle, for pointing the libobs worker's inherited stderr at a
+    # file it can actually be read from (recorder/libobs/worker_log.rs).
+    "Win32_System_Console",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_Devices_FunctionDiscovery",
+] }
+
+# Full DWARF for our own crate is what fills `target/` — 30k codegen-unit
+# objects at ~500 KB of debug info each, ~8 GB before this. Line tables keep
+# file/line in backtraces and panics; the cost is no variable inspection in
+# lldb, which we don't use on the Rust side.
+[profile.dev]
+debug = "line-tables-only"
+
+# The shipped binary. There was no release profile at all until now, so it was
+# built with symbols in and no cross-crate optimisation.
+#
+# Measured on the Linux build (stub recorder, so smaller than Windows but the
+# same crate graph): 25.6 MB -> 17.7 MB from `strip` alone, ~31%.
+#
+# The cost is stated rather than hidden: a stripped binary has no function
+# names in a panic backtrace. That is affordable here because `log.rs` is the
+# thing anyone actually reads when a recording goes wrong (§13) — the backtrace
+# was never the diagnostic. `panic = "abort"` is deliberately *not* set: it
+# would save a little more, but Tauri and wry both catch unwinds, and trading a
+# crash-on-panic for a few hundred KB is the wrong side of that bargain for an
+# app that is supposed to be recording your game.
+[profile.release]
+strip = true
+# One codegen unit and cross-crate LTO: slower to build in CI, smaller and
+# faster to run. The Windows bundle is dominated by libobs and ffmpeg
+# (~200 MB of the 248 MB install), so this is the smaller half of the problem
+# — but it is the half that costs nothing to fix.
+lto = true
+codegen-units = 1

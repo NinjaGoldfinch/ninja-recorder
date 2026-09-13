@@ -1,0 +1,42 @@
+{
+  "activePlayer": {
+    "summonerName": "Ahri",
+    "riotIdGameName": "NinjaGoldfinch",
+    "riotIdTagLine": "OCENZ"
+  },
+  "allPlayers": [],
+  "events": {
+    "Events": [
+      { "EventID": 0, "EventName": "GameStart", "EventTime": 0.01 },
+      {
+        "EventID": 1,
+        "EventName": "ChampionKill",
+        "EventTime": 114.29,
+        "KillerName": "Ahri",
+        "VictimName": "Vex Bot",
+        "Assisters": []
+      },
+      {
+        "EventID": 2,
+        "EventName": "FirstBlood",
+        "EventTime": 114.29,
+        "Recipient": "Ahri"
+      },
+      {
+        "EventID": 3,
+        "EventName": "ChampionKill",
+        "EventTime": 201.11,
+        "KillerName": "Vex Bot",
+        "VictimName": "Ahri",
+        "Assisters": []
+      }
+    ]
+  },
+  "gameData": {
+    "gameMode": "PRACTICETOOL",
+    "gameTime": 201.6,
+    "mapName": "Map11",
+    "mapNumber": 11,
+    "mapTerrain": "Default"
+  }
+}

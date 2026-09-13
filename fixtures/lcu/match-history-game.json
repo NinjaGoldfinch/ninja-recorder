@@ -1,0 +1,170 @@
+{
+  "_comment": "Trimmed from a real /lol-match-history/v1/games/{id} response captured 2026-09-07 on patch 16.17. Three of the ten participants are kept: one ally, us (participantId 2), and one enemy. Player identifiers are replaced with synthetic ones — the real document carries ten people's Riot IDs, puuids and summoner ids, and none of that is needed to pin a shape. Everything structural is untouched: accountId is 0 for everyone, summonerName is empty, spell ids sit beside stats rather than inside it, and empty item slots are 0.",
+  "gameId": 700000001,
+  "gameCreation": 1788736773954,
+  "gameCreationDate": "2026-09-06T23:19:33.954Z",
+  "gameDuration": 1902,
+  "gameMode": "CLASSIC",
+  "gameType": "MATCHED_GAME",
+  "gameVersion": "16.17.810.4348",
+  "mapId": 11,
+  "platformId": "OC1",
+  "queueId": 420,
+  "seasonId": 0,
+  "endOfGameResult": "GameComplete",
+  "participantIdentities": [
+    {
+      "participantId": 1,
+      "player": {
+        "accountId": 0,
+        "currentAccountId": 0,
+        "currentPlatformId": "OC1",
+        "gameName": "AllyOne",
+        "matchHistoryUri": "",
+        "platformId": "OC1",
+        "profileIcon": 6417,
+        "puuid": "00000000-0000-5000-8000-000000000001",
+        "summonerId": 11111111,
+        "summonerName": "",
+        "tagLine": "OCE1"
+      }
+    },
+    {
+      "participantId": 2,
+      "player": {
+        "accountId": 0,
+        "currentAccountId": 0,
+        "currentPlatformId": "OC1",
+        "gameName": "TheRecordingPlayer",
+        "matchHistoryUri": "",
+        "platformId": "OC1",
+        "profileIcon": 7171,
+        "puuid": "00000000-0000-5000-8000-000000000002",
+        "summonerId": 22222222,
+        "summonerName": "",
+        "tagLine": "OCE2"
+      }
+    },
+    {
+      "participantId": 6,
+      "player": {
+        "accountId": 0,
+        "currentAccountId": 0,
+        "currentPlatformId": "OC1",
+        "gameName": "EnemyOne",
+        "matchHistoryUri": "",
+        "platformId": "OC1",
+        "profileIcon": 536,
+        "puuid": "00000000-0000-5000-8000-000000000006",
+        "summonerId": 66666666,
+        "summonerName": "",
+        "tagLine": "OCE6"
+      }
+    }
+  ],
+  "participants": [
+    {
+      "championId": 24,
+      "participantId": 1,
+      "teamId": 100,
+      "spell1Id": 14,
+      "spell2Id": 4,
+      "highestAchievedSeasonTier": "",
+      "stats": {
+        "assists": 8,
+        "champLevel": 18,
+        "deaths": 8,
+        "kills": 2,
+        "item0": 1055,
+        "item1": 3078,
+        "item2": 3111,
+        "item3": 1053,
+        "item4": 3091,
+        "item5": 1043,
+        "item6": 3340,
+        "neutralMinionsKilled": 4,
+        "totalMinionsKilled": 209,
+        "perk0": 8008,
+        "perkPrimaryStyle": 8000,
+        "perkSubStyle": 8400,
+        "roleBoundItem": 1220,
+        "win": true
+      },
+      "timeline": {
+        "participantId": 1,
+        "lane": "TOP",
+        "role": "SOLO"
+      }
+    },
+    {
+      "championId": 102,
+      "participantId": 2,
+      "teamId": 100,
+      "spell1Id": 11,
+      "spell2Id": 4,
+      "highestAchievedSeasonTier": "",
+      "stats": {
+        "assists": 5,
+        "champLevel": 18,
+        "deaths": 3,
+        "kills": 15,
+        "item0": 3111,
+        "item1": 3078,
+        "item2": 3161,
+        "item3": 1082,
+        "item4": 4633,
+        "item5": 6665,
+        "item6": 3364,
+        "neutralMinionsKilled": 239,
+        "totalMinionsKilled": 23,
+        "perk0": 8005,
+        "perkPrimaryStyle": 8000,
+        "perkSubStyle": 8300,
+        "roleBoundItem": 1209,
+        "win": true
+      },
+      "timeline": {
+        "participantId": 2,
+        "lane": "JUNGLE",
+        "role": "NONE"
+      }
+    },
+    {
+      "championId": 84,
+      "participantId": 6,
+      "teamId": 200,
+      "spell1Id": 4,
+      "spell2Id": 12,
+      "highestAchievedSeasonTier": "",
+      "stats": {
+        "assists": 3,
+        "champLevel": 17,
+        "deaths": 5,
+        "kills": 13,
+        "item0": 3146,
+        "item1": 3157,
+        "item2": 3020,
+        "item3": 0,
+        "item4": 4645,
+        "item5": 1052,
+        "item6": 3340,
+        "neutralMinionsKilled": 0,
+        "totalMinionsKilled": 207,
+        "perk0": 8010,
+        "perkPrimaryStyle": 8000,
+        "perkSubStyle": 8400,
+        "roleBoundItem": 1221,
+        "win": false
+      },
+      "timeline": {
+        "participantId": 6,
+        "lane": "TOP",
+        "role": "SOLO"
+      }
+    }
+  ],
+  "teams": [
+    { "teamId": 100, "win": "Win", "baronKills": 1, "dragonKills": 3, "towerKills": 10 },
+    { "teamId": 200, "win": "Fail", "baronKills": 0, "dragonKills": 2, "towerKills": 3 }
+  ]
+}

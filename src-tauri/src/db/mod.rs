@@ -1,0 +1,2446 @@
+//! SQLite-backed VOD library: `recordings` + `markers` tables, with
+//! migrations from the first schema onward. DEVELOPMENT.md §4.
+//!
+//! MP4s on disk are the source of truth for video; these rows are
+//! metadata. `reconcile` (submodule) is what keeps the two in sync when a
+//! user touches the recordings folder directly.
+
+pub mod reconcile;
+
+use crate::warn;
+use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite_migration::{Migrations, M};
+use crate::recorder::audio::AudioPreset;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::{LazyLock, Mutex};
+
+#[derive(Debug, thiserror::Error)]
+pub enum DbError {
+    #[error("sqlite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+    #[error("migration error: {0}")]
+    Migration(#[from] rusqlite_migration::Error),
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+    /// The file on disk is at a higher schema version than this build
+    /// knows about — it was written by a newer build (in practice: another
+    /// branch, or a downgrade). Migrations only run forward, so there is
+    /// nothing this build can do with it. Detected explicitly rather than
+    /// left to `rusqlite_migration`, whose `DatabaseTooFarAhead` surfaces
+    /// as an opaque nested enum with no room to say which file or what to
+    /// do about it.
+    #[error(
+        "database schema is v{found}, but this build only knows v{expected} —          it was created by a newer build of the app"
+    )]
+    SchemaTooNew { found: i64, expected: i64 },
+    /// A value we were asked to persist couldn't be turned into JSON. Only
+    /// reachable for the audio preset, and only if `serde_json` fails on a
+    /// type that derives `Serialize` — i.e. effectively never, but it isn't
+    /// worth an `unwrap` on the write path for a user preference.
+    #[error("could not encode a setting: {0}")]
+    Encode(String),
+}
+
+/// The migration list, paired with its own length. Bundled rather than
+/// kept as a separate constant so the "how many migrations does this build
+/// know about" number can't drift from the list it describes — that number
+/// is what `init` compares `PRAGMA user_version` against.
+/// `settings_kv` key holding the JSON `AudioPreset`. Lives in the same
+/// unseeded store as `theme` — a missing key means "use the default", which
+/// is what keeps adding a preference a zero-migration change.
+const AUDIO_PRESET_KEY: &str = "audio_preset";
+
+static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
+    let migrations = vec![M::up(
+        "
+        CREATE TABLE recordings (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            path        TEXT NOT NULL UNIQUE,
+            started_at  INTEGER NOT NULL, -- unix millis
+            duration_s  REAL,
+            game_id     INTEGER,
+            queue       INTEGER,
+            champion    TEXT,
+            role        TEXT,
+            win         INTEGER, -- 0/1, nullable (unknown until match data is fetched)
+            kda_k       INTEGER,
+            kda_d       INTEGER,
+            kda_a       INTEGER,
+            patch       TEXT,
+            pinned      INTEGER NOT NULL DEFAULT 0,
+            size_bytes  INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE markers (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            recording_id  INTEGER NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+            game_time_s   REAL NOT NULL,
+            video_time_s  REAL NOT NULL,
+            kind          TEXT NOT NULL, -- kill|death|assist|dragon|baron|herald|voidgrubs|turret|ace|first_blood|custom
+            payload_json  TEXT NOT NULL DEFAULT '{}'
+        );
+
+        CREATE INDEX idx_markers_recording_id ON markers(recording_id);
+        ",
+    ), M::up(
+        "
+        -- Single-row settings table (DEVELOPMENT.md §6). Defaults
+        -- to 50 GiB / 30 days rather than unlimited: disk retention is a
+        -- launch feature specifically because unbounded capture fills an
+        -- SSD in weeks, so it should protect the user out of the box, not
+        -- only once they find a settings screen.
+        CREATE TABLE settings (
+            id               INTEGER PRIMARY KEY CHECK (id = 1),
+            max_total_bytes  INTEGER DEFAULT 53687091200, -- 50 GiB
+            max_age_days     INTEGER DEFAULT 30
+        );
+
+        INSERT INTO settings (id) VALUES (1);
+        ",
+    ), M::up(
+        "
+        -- Per-poll time series behind the review timeline's advantage curve
+        -- (1 Hz, so ~2100 rows for a 35-minute game — trivial for SQLite;
+        -- downsampling happens at render time, not here).
+        --
+        -- The diffs are stored pre-signed from the recording player's point
+        -- of view (positive = their team ahead) with `our_team` alongside,
+        -- so the sign convention stays auditable rather than being an
+        -- unwritten frontend assumption. `our_team` is NULL when the active
+        -- player couldn't be matched in `allPlayers`; the UI renders that
+        -- as a team-side-unknown state instead of a possibly-inverted line.
+        --
+        -- `gold_diff_est` is an ESTIMATE. The Live Client Data API exposes
+        -- no per-player gold, so it's derived from summed item prices plus
+        -- our own unspent gold (see `live_client::events::team_diff`).
+        -- `kill_diff` and `cs_diff` are exact.
+        CREATE TABLE samples (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            recording_id   INTEGER NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+            game_time_s    REAL NOT NULL,
+            video_time_s   REAL NOT NULL,
+            our_team       TEXT,    -- ORDER|CHAOS, NULL if we couldn't be matched
+            gold_diff_est  REAL,    -- signed, + = our team ahead. Estimated.
+            kill_diff      INTEGER, -- signed, exact
+            cs_diff        INTEGER, -- signed, exact
+            our_gold       REAL,    -- activePlayer.currentGold, unspent
+            our_level      INTEGER
+        );
+
+        CREATE INDEX idx_samples_recording_id ON samples(recording_id);
+        ",
+    ), M::up(
+        "
+        -- Generic key/value store for UI preferences (theme, default sort).
+        -- Deliberately unseeded, unlike migration 2's single-row `settings`:
+        -- retention has to protect the user out of the box, but a missing UI
+        -- pref just means 'use the frontend default', which keeps adding a
+        -- new pref a zero-migration change.
+        CREATE TABLE settings_kv (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        ",
+    ), M::up(
+        "
+        -- Which audio source landed on which mp4 audio track, as the JSON
+        -- form of `recorder::audio::AudioLayout`: track 0 is the combined
+        -- mix, tracks after it are isolated stems (DEVELOPMENT.md §2.5).
+        --
+        -- Nullable, and that is the interesting case: every row that
+        -- predates this column, plus anything `reconcile` imports from a
+        -- file it did not record, genuinely has an unknown layout. NULL
+        -- means 'unknown', which the review player renders as no stem
+        -- picker rather than as a guess.
+        --
+        -- Stored as JSON rather than a child table because it is read-only,
+        -- always read whole, never queried by predicate, and at most six
+        -- rows long.
+        ALTER TABLE recordings ADD COLUMN audio_tracks_json TEXT;
+        ",
+    ), M::up(
+        "
+        -- The Live Client Data API's `gameData.gameMode` — \"CLASSIC\",
+        -- \"ARAM\", \"PRACTICETOOL\". Deliberately NOT folded into `queue`,
+        -- which is an INTEGER holding Riot's real queue id: the live API
+        -- never exposes a queue id, and the LCU never exposes a mode
+        -- string, so the two columns come from different sources and are
+        -- known at different times (mode during the game, queue only
+        -- post-game). Storing a made-up queue id for \"ARAM\" would put a
+        -- guess in a column the rest of the app treats as authoritative.
+        --
+        -- Nullable: rows predating this column, anything `reconcile`
+        -- imported, and any game where the poller never got a snapshot.
+        ALTER TABLE recordings ADD COLUMN game_mode TEXT;
+        ",
+    ), M::up(
+        "
+        -- What the app *observed* while making this recording, as opposed
+        -- to what the recording contains. How many Live Client Data polls
+        -- landed, whether we were ever found in `allPlayers`, the
+        -- alignment the markers were mapped through, which capture backend
+        -- was live.
+        --
+        -- None of it is derivable after the fact: the API is gone the
+        -- moment the game ends, and a recording whose champion came out
+        -- NULL or whose markers landed twenty seconds out otherwise leaves
+        -- nothing behind that says why.
+        --
+        -- JSON rather than a child table, for the same reasons as
+        -- `audio_tracks_json`: always read whole, never queried by
+        -- predicate, one per recording. A column also means retention and
+        -- `delete_recording` dispose of it with the row, with no cascade
+        -- to get wrong.
+        --
+        -- Nullable, and NULL for every row that predates this, everything
+        -- `reconcile` imported, and any finalize where serializing failed.
+        ALTER TABLE recordings ADD COLUMN diagnostics_json TEXT;
+        ",
+    ), M::up(
+        "
+        -- The gold series is Riot's own accounting now, not ours, so the
+        -- column stops claiming to be an estimate.
+        --
+        -- What it held was the summed price of the items each team was
+        -- carrying plus our own unspent gold, and that is not a gold
+        -- difference by any coefficient: the enemy's unspent gold is
+        -- invisible while ours is not, sold and consumed items subtract
+        -- from it but not from gold earned, and wards and trinkets price at
+        -- zero. See DEVELOPMENT.md 5 and `lcu::timeline`.
+        --
+        -- The existing values are cleared rather than carried across. Every
+        -- one of them is that estimate, and leaving them under a column now
+        -- named `gold_diff` would relabel a known-wrong number as Riot's.
+        -- NULL renders as 'no gold data for this recording', which is true;
+        -- a flat line near zero reads as 'you were even', which was the
+        -- bug. Nothing is lost that was worth keeping, and the backfill can
+        -- recover the real series for any game still in match history.
+        ALTER TABLE samples RENAME COLUMN gold_diff_est TO gold_diff;
+        UPDATE samples SET gold_diff = NULL;
+        ",
+    ), M::up(
+        "
+        -- The end-of-game scoreboard: all ten champions, their KDA and CS,
+        -- the items and spells they finished with, and our own rune page.
+        -- JSON rather than a child table for the same three reasons as
+        -- `audio_tracks_json` and `diagnostics_json` — always read whole,
+        -- never queried by predicate, one per recording — plus a fourth:
+        -- a column is disposed of with its row, so retention and
+        -- `delete_recording` need no cascade to get wrong.
+        --
+        -- Nothing filters or sorts on the other nine players. The five
+        -- filters the library offers (queue, role, result, patch,
+        -- champion) are all columns that already exist.
+        ALTER TABLE recordings ADD COLUMN scoreboard_json TEXT;
+
+        -- Our own creep score, which the scoreboard also carries. A real
+        -- column because it is shown on the row and is worth sorting by,
+        -- and because CS per minute needs it beside `duration_s` rather
+        -- than inside a blob every query would have to parse.
+        ALTER TABLE recordings ADD COLUMN cs INTEGER;
+        ",
+    ), M::up(
+        "
+        -- What rank this game was played at (#149).
+        --
+        -- Real columns rather than a blob, on the `cs` precedent: they are
+        -- shown on the row and are the natural thing to filter a climb by.
+        -- `division` is NULL at Master and above, where divisions do not
+        -- exist, which is a real distinction rather than a gap.
+        ALTER TABLE recordings ADD COLUMN tier TEXT;
+        ALTER TABLE recordings ADD COLUMN division TEXT;
+
+        -- LP once the game had settled. Stored rather than a *change*,
+        -- because no endpoint reports one: the end-of-game block carries no
+        -- LP field at all (captured from a real ranked game and checked),
+        -- and both ranked endpoints answer with current state. Subtracting
+        -- two readings would misattribute a dodge, a remake, decay, a
+        -- promotion series or a game played on another device, and
+        -- DEVELOPMENT.md 5.2 settled that argument for the gold curve.
+        -- A delta column can be appended the day something reports one.
+        ALTER TABLE recordings ADD COLUMN lp_after INTEGER;
+        ",
+    ), M::up(
+        "
+        -- The other end of the measurement (#164).
+        --
+        -- `lp_before` is read when the game *starts*, which is the whole
+        -- reason a delta is defensible at all: the two readings bracket one
+        -- game, so there is no room between them for another game, a dodge
+        -- or decay. Nothing Riot sends reports a change; this measures one.
+        ALTER TABLE recordings ADD COLUMN lp_before INTEGER;
+
+        -- Stored rather than derived on read, so the guards are evaluated
+        -- once at the moment both readings are known good instead of being
+        -- re-litigated by every reader. NULL therefore means one specific
+        -- thing: nothing here could stand behind a number. It is *ours*
+        -- rather than Riot's, and an endpoint that ever reports a change
+        -- directly should win over it.
+        ALTER TABLE recordings ADD COLUMN lp_delta INTEGER;
+        ",
+    )];
+    let count = migrations.len() as i64;
+    (Migrations::new(migrations), count)
+});
+
+#[derive(Debug, Clone, Default)]
+pub struct NewRecording {
+    pub path: String,
+    pub started_at: i64,
+    pub duration_s: Option<f64>,
+    pub game_id: Option<i64>,
+    pub queue: Option<i64>,
+    pub champion: Option<String>,
+    pub role: Option<String>,
+    pub win: Option<bool>,
+    pub kda_k: Option<i64>,
+    pub kda_d: Option<i64>,
+    pub kda_a: Option<i64>,
+    pub patch: Option<String>,
+    pub pinned: bool,
+    pub size_bytes: i64,
+    /// JSON `recorder::audio::AudioLayout`. `None` = unknown, and stays
+    /// unknown: the upsert COALESCEs rather than overwrites, so `reconcile`
+    /// passing `None` here can't erase a layout the recorder already wrote.
+    pub audio_tracks_json: Option<String>,
+    /// Live Client Data's `gameMode`. Not a queue id — see migration 6.
+    pub game_mode: Option<String>,
+    /// JSON `state_machine::supervisor::RecordingDiagnostics` — what was observed
+    /// while recording, not what the file contains. See migration 7.
+    /// COALESCEd on upsert like `audio_tracks_json`, so a `reconcile`
+    /// rescan cannot erase it.
+    pub diagnostics_json: Option<String>,
+    /// JSON `live_client::Scoreboard` — all ten champions as the game
+    /// ended. See migration 9. COALESCEd on upsert for the same reason.
+    pub scoreboard_json: Option<String>,
+    /// Our own creep score, also carried inside `scoreboard_json`. A
+    /// column of its own because the row sorts on it and CS per minute
+    /// wants it beside `duration_s`.
+    pub cs: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewMarker {
+    pub game_time_s: f64,
+    pub video_time_s: f64,
+    pub kind: String,
+    pub payload_json: String,
+}
+
+/// One 1 Hz sample of the team-advantage series. Every metric is optional
+/// because a poll can arrive before we've worked out which side we're on
+/// (or at all, if the active player never matches an `allPlayers` entry).
+#[derive(Debug, Clone, Default)]
+pub struct NewSample {
+    pub game_time_s: f64,
+    pub video_time_s: f64,
+    pub our_team: Option<String>,
+    pub gold_diff: Option<f64>,
+    pub kill_diff: Option<i64>,
+    pub cs_diff: Option<i64>,
+    pub our_gold: Option<f64>,
+    pub our_level: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RecordingRow {
+    pub id: i64,
+    pub path: String,
+    pub started_at: i64,
+    pub duration_s: Option<f64>,
+    pub game_id: Option<i64>,
+    pub queue: Option<i64>,
+    pub champion: Option<String>,
+    pub role: Option<String>,
+    pub win: Option<bool>,
+    pub kda_k: Option<i64>,
+    pub kda_d: Option<i64>,
+    pub kda_a: Option<i64>,
+    pub patch: Option<String>,
+    pub pinned: bool,
+    pub size_bytes: i64,
+    /// JSON `recorder::audio::AudioLayout`. `None` = unknown, which is the
+    /// right answer for a file we did not record.
+    pub audio_tracks_json: Option<String>,
+    /// Live Client Data's `gameMode`. The library card falls back to this
+    /// for its Queue label when `queue` is NULL — see migration 6.
+    pub game_mode: Option<String>,
+    /// JSON `state_machine::supervisor::RecordingDiagnostics`. `None` for anything
+    /// recorded before migration 7 and anything `reconcile` imported.
+    pub diagnostics_json: Option<String>,
+    /// JSON `live_client::Scoreboard`. `None` for a game whose poller
+    /// never saw a player list, and for anything `reconcile` imported.
+    pub scoreboard_json: Option<String>,
+    /// Our own creep score. Also inside `scoreboard_json`; here as well
+    /// because the row sorts on it.
+    pub cs: Option<i64>,
+    /// The ladder this game was played at (#149). `None` on everything that
+    /// is not a ranked game, everything recorded before migration 10, and
+    /// any patch that landed too late to be sure the rank still described
+    /// this game — see `match_summary::RANK_FRESHNESS`.
+    pub tier: Option<String>,
+    /// `None` at Master and above, where divisions do not exist.
+    pub division: Option<String>,
+    /// LP once the game settled.
+    pub lp_after: Option<i64>,
+    /// LP when the game started. The other end of the measurement.
+    pub lp_before: Option<i64>,
+    /// What the game moved, measured across those two readings (#164).
+    /// `None` wherever a number would have been wrong rather than merely
+    /// unknown — see `lcu::ranked::lp_delta`.
+    pub lp_delta: Option<i64>,
+}
+
+/// The post-game columns `update_match_metadata` may fill in, once the LCU
+/// has stats for a game that has already been finalized.
+///
+/// Separate from `NewRecording` because it is a strictly smaller thing: a
+/// row already exists, and everything absent from this struct — the path,
+/// the size, the pin, the duration, the audio layout, the live client's
+/// game mode — must survive the patch untouched.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MatchMetadata {
+    pub game_id: Option<i64>,
+    pub queue: Option<i64>,
+    /// Only written when the column is **NULL**, like `champion`.
+    ///
+    /// Live Client Data reports the position the game itself assigned;
+    /// the LCU answers with `timeline.lane`/`role`, which is Riot working
+    /// it out after the fact and is weakest exactly between top and
+    /// jungle. The inference fills a gap, it does not correct.
+    pub role: Option<String>,
+    pub patch: Option<String>,
+    pub win: Option<bool>,
+    pub kda_k: Option<i64>,
+    pub kda_d: Option<i64>,
+    pub kda_a: Option<i64>,
+    /// Only written when the column is **NULL**, unlike every other field
+    /// here.
+    ///
+    /// `champion` is sorted on, filtered on and used as the card title, so
+    /// the two paths that can write it have to agree byte for byte. Live
+    /// Client Data writes a display name (`Wukong`); resolving an id gives
+    /// the internal alias (`MonkeyKing`) unless it goes through the lookup
+    /// in #54. Overwriting a good name with a second source's spelling
+    /// would split one champion into two everywhere in the UI.
+    pub champion: Option<String>,
+}
+
+/// Disk retention policy (DEVELOPMENT.md §6): `None` means that
+/// dimension is unbounded. Mirrors the single-row `settings` table.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct RetentionPolicy {
+    pub max_total_bytes: Option<i64>,
+    pub max_age_days: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MarkerRow {
+    pub id: i64,
+    pub recording_id: i64,
+    pub game_time_s: f64,
+    pub video_time_s: f64,
+    pub kind: String,
+    pub payload_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SampleRow {
+    pub id: i64,
+    pub recording_id: i64,
+    pub game_time_s: f64,
+    pub video_time_s: f64,
+    pub our_team: Option<String>,
+    pub gold_diff: Option<f64>,
+    pub kill_diff: Option<i64>,
+    pub cs_diff: Option<i64>,
+    pub our_gold: Option<f64>,
+    pub our_level: Option<i64>,
+}
+
+/// Shared row mapper for the `recordings` SELECT list used by
+/// `list_recordings` and `get_recording` — the two must stay column-aligned,
+/// so they read the tuple in one place.
+fn row_to_recording(row: &rusqlite::Row) -> rusqlite::Result<RecordingRow> {
+    Ok(RecordingRow {
+        id: row.get(0)?,
+        path: row.get(1)?,
+        started_at: row.get(2)?,
+        duration_s: row.get(3)?,
+        game_id: row.get(4)?,
+        queue: row.get(5)?,
+        champion: row.get(6)?,
+        role: row.get(7)?,
+        win: row.get(8)?,
+        kda_k: row.get(9)?,
+        kda_d: row.get(10)?,
+        kda_a: row.get(11)?,
+        patch: row.get(12)?,
+        pinned: row.get(13)?,
+        size_bytes: row.get(14)?,
+        audio_tracks_json: row.get(15)?,
+        game_mode: row.get(16)?,
+        diagnostics_json: row.get(17)?,
+        scoreboard_json: row.get(18)?,
+        cs: row.get(19)?,
+        tier: row.get(20)?,
+        division: row.get(21)?,
+        lp_after: row.get(22)?,
+        lp_before: row.get(23)?,
+        lp_delta: row.get(24)?,
+    })
+}
+
+pub struct Db {
+    conn: Mutex<Connection>,
+}
+
+impl Db {
+    pub fn open(path: &Path) -> Result<Self, DbError> {
+        let mut conn = Connection::open(path)?;
+        Self::init(&mut conn)?;
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
+    }
+
+    /// `pub(crate)` rather than private: other modules' tests (e.g.
+    /// `state_machine::supervisor`) need this too, but it must never be
+    /// reachable outside `#[cfg(test)]` builds.
+    #[cfg(test)]
+    pub(crate) fn open_in_memory() -> Result<Self, DbError> {
+        let mut conn = Connection::open_in_memory()?;
+        Self::init(&mut conn)?;
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
+    }
+
+    /// Raw connection access for the dev portal's SQL console and table
+    /// browser (`dev::sql`). Deliberately feature-gated rather than
+    /// `pub(crate)` outright: everything reachable through this bypasses
+    /// the typed `NewRecording`/`NewMarker` API, the migrations, and the
+    /// `path` upsert rule above, so it must not exist at all in a shipped
+    /// build. Panics on a poisoned lock, matching every other method here.
+    #[cfg(feature = "devtools")]
+    pub(crate) fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.conn.lock().unwrap()
+    }
+
+    fn init(conn: &mut Connection) -> Result<(), DbError> {
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+
+        // `rusqlite_migration` would catch this too, but only as
+        // `MigrationDefinition(DatabaseTooFarAhead)` — which reaches the
+        // user as a Rust panic and a backtrace, from inside Tauri's setup
+        // hook. Checking first lets the failure carry both version numbers
+        // and lets `lib.rs` say what to do about it.
+        let (migrations, expected) = &*MIGRATIONS;
+        let found: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if found > *expected {
+            return Err(DbError::SchemaTooNew {
+                found,
+                expected: *expected,
+            });
+        }
+
+        migrations.to_latest(conn)?;
+        Ok(())
+    }
+
+    /// Upserts on `path` rather than a plain `INSERT`: `reconcile` (folder
+    /// scan, run at startup and on-demand) can't tell an in-progress
+    /// recording's not-yet-finalized file apart from a genuinely untracked
+    /// one, so it may already have imported this exact path as an
+    /// "unknown recording" by the time the real finalize gets here. A
+    /// plain `INSERT` would then fail the `UNIQUE` constraint on `path`
+    /// and silently drop the DB row (`stop_recording`'s `recording_id:
+    /// None` case) even though the recording itself succeeded. The real
+    /// finalize data should win over reconcile's guessed one either way.
+    pub fn insert_recording(&self, new: &NewRecording) -> Result<i64, DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "INSERT INTO recordings
+                (path, started_at, duration_s, game_id, queue, champion, role,
+                 win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
+                 audio_tracks_json, game_mode, diagnostics_json, scoreboard_json, cs)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+                     ?18, ?19)
+             ON CONFLICT(path) DO UPDATE SET
+                started_at = excluded.started_at,
+                duration_s = excluded.duration_s,
+                game_id    = excluded.game_id,
+                queue      = excluded.queue,
+                champion   = excluded.champion,
+                role       = excluded.role,
+                win        = excluded.win,
+                kda_k      = excluded.kda_k,
+                kda_d      = excluded.kda_d,
+                kda_a      = excluded.kda_a,
+                patch      = excluded.patch,
+                pinned     = excluded.pinned,
+                size_bytes = excluded.size_bytes,
+                -- COALESCE, not a plain overwrite: `reconcile` upserts on
+                -- `path` with an all-default row, so a rescan landing after
+                -- a finalize would otherwise erase the track layout and the
+                -- game mode the recorder just established. A NULL never
+                -- wins for either of these two.
+                audio_tracks_json =
+                    COALESCE(excluded.audio_tracks_json, recordings.audio_tracks_json),
+                game_mode =
+                    COALESCE(excluded.game_mode, recordings.game_mode),
+                diagnostics_json =
+                    COALESCE(excluded.diagnostics_json, recordings.diagnostics_json),
+                scoreboard_json =
+                    COALESCE(excluded.scoreboard_json, recordings.scoreboard_json),
+                cs = COALESCE(excluded.cs, recordings.cs)
+             RETURNING id",
+            params![
+                new.path,
+                new.started_at,
+                new.duration_s,
+                new.game_id,
+                new.queue,
+                new.champion,
+                new.role,
+                new.win,
+                new.kda_k,
+                new.kda_d,
+                new.kda_a,
+                new.patch,
+                new.pinned,
+                new.size_bytes,
+                new.audio_tracks_json,
+                new.game_mode,
+                new.diagnostics_json,
+                new.scoreboard_json,
+                new.cs,
+            ],
+            |row| row.get(0),
+        )
+        .map_err(DbError::from)
+    }
+
+    /// Patches the post-game columns of one existing row, and nothing
+    /// else.
+    ///
+    /// Deliberately **not** `insert_recording`. That method upserts on
+    /// `path` and takes `started_at`, `duration_s`, `pinned` and
+    /// `size_bytes` straight from `excluded` — so re-upserting a summary
+    /// would silently unpin the recording and zero its size. This is a
+    /// plain `UPDATE` of the columns the LCU actually answers for.
+    ///
+    /// Every field COALESCEs, so a `None` never erases what is already
+    /// there: the summary arrives seconds after the row, and the columns
+    /// it cannot fill were filled by Live Client Data during the game.
+    /// `champion` COALESCEs the *other way* — see `MatchMetadata`.
+    ///
+    /// Returns the number of rows changed. **Zero is a normal outcome, not
+    /// an error**: retention runs during the same finalize, and the user
+    /// can delete a card at any point, so the row can legitimately be gone
+    /// by the time the patch lands.
+    pub fn update_match_metadata(
+        &self,
+        recording_id: i64,
+        meta: &MatchMetadata,
+    ) -> Result<usize, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let changed = conn.execute(
+            "UPDATE recordings SET
+                game_id  = COALESCE(?2, game_id),
+                queue    = COALESCE(?3, queue),
+                -- The other way round, like `champion` below: the live
+                -- client reports where we actually played, and the LCU's
+                -- `timeline.lane`/`role` is Riot inferring it afterwards
+                -- from where we spent time. The inference is a fallback for
+                -- a game the poller missed, never a correction.
+                role     = COALESCE(role, ?4),
+                patch    = COALESCE(?5, patch),
+                win      = COALESCE(?6, win),
+                kda_k    = COALESCE(?7, kda_k),
+                kda_d    = COALESCE(?8, kda_d),
+                kda_a    = COALESCE(?9, kda_a),
+                -- Reversed on purpose: the existing value wins. See
+                -- `MatchMetadata::champion`.
+                champion = COALESCE(champion, ?10)
+             WHERE id = ?1",
+            params![
+                recording_id,
+                meta.game_id,
+                meta.queue,
+                meta.role,
+                meta.patch,
+                meta.win,
+                meta.kda_k,
+                meta.kda_d,
+                meta.kda_a,
+                meta.champion,
+            ],
+        )?;
+        Ok(changed)
+    }
+
+    /// Inserts all `markers` for `recording_id` in one transaction.
+    pub fn insert_markers(&self, recording_id: i64, markers: &[NewMarker]) -> Result<(), DbError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO markers (recording_id, game_time_s, video_time_s, kind, payload_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
+            for m in markers {
+                stmt.execute(params![
+                    recording_id,
+                    m.game_time_s,
+                    m.video_time_s,
+                    m.kind,
+                    m.payload_json
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Inserts all `samples` for `recording_id` in one transaction —
+    /// same shape as `insert_markers`, but this runs with ~2100 rows on a
+    /// normal game, so the single-transaction batching matters more here.
+    pub fn insert_samples(&self, recording_id: i64, samples: &[NewSample]) -> Result<(), DbError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO samples
+                    (recording_id, game_time_s, video_time_s, our_team,
+                     gold_diff, kill_diff, cs_diff, our_gold, our_level)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            )?;
+            for s in samples {
+                stmt.execute(params![
+                    recording_id,
+                    s.game_time_s,
+                    s.video_time_s,
+                    s.our_team,
+                    s.gold_diff,
+                    s.kill_diff,
+                    s.cs_diff,
+                    s.our_gold,
+                    s.our_level,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Advantage-curve samples for one recording, ordered by position in
+    /// the video — what the review timeline's graph plots.
+    pub fn get_samples(&self, recording_id: i64) -> Result<Vec<SampleRow>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, recording_id, game_time_s, video_time_s, our_team,
+                    gold_diff, kill_diff, cs_diff, our_gold, our_level
+             FROM samples WHERE recording_id = ?1 ORDER BY video_time_s ASC",
+        )?;
+        let rows = stmt.query_map([recording_id], |row| {
+            Ok(SampleRow {
+                id: row.get(0)?,
+                recording_id: row.get(1)?,
+                game_time_s: row.get(2)?,
+                video_time_s: row.get(3)?,
+                our_team: row.get(4)?,
+                gold_diff: row.get(5)?,
+                kill_diff: row.get(6)?,
+                cs_diff: row.get(7)?,
+                our_gold: row.get(8)?,
+                our_level: row.get(9)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+    }
+
+    pub fn list_recordings(&self) -> Result<Vec<RecordingRow>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, path, started_at, duration_s, game_id, queue, champion, role,
+                    win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
+                    audio_tracks_json, game_mode, diagnostics_json, scoreboard_json, cs,
+                    tier, division, lp_after, lp_before, lp_delta
+             FROM recordings ORDER BY started_at DESC",
+        )?;
+        let rows = stmt.query_map([], row_to_recording)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+    }
+
+    pub fn find_by_path(&self, path: &str) -> Result<Option<i64>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row("SELECT id FROM recordings WHERE path = ?1", [path], |r| {
+            r.get(0)
+        })
+        .optional()
+        .map_err(DbError::from)
+    }
+
+    /// Markers for one recording, ordered by position in the video —
+    /// what the review timeline renders.
+    pub fn get_markers(&self, recording_id: i64) -> Result<Vec<MarkerRow>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, recording_id, game_time_s, video_time_s, kind, payload_json
+             FROM markers WHERE recording_id = ?1 ORDER BY video_time_s ASC",
+        )?;
+        let rows = stmt.query_map([recording_id], |row| {
+            Ok(MarkerRow {
+                id: row.get(0)?,
+                recording_id: row.get(1)?,
+                game_time_s: row.get(2)?,
+                video_time_s: row.get(3)?,
+                kind: row.get(4)?,
+                payload_json: row.get(5)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+    }
+
+    pub fn delete_recording(&self, id: i64) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM recordings WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    pub fn set_pinned(&self, id: i64, pinned: bool) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE recordings SET pinned = ?1 WHERE id = ?2",
+            params![pinned, id],
+        )?;
+        Ok(())
+    }
+
+    /// Sum of `size_bytes` across every recording, pinned or not — this is
+    /// disk *usage*, which pinned files still count toward even though
+    /// they're exempt from retention deletion.
+    pub fn total_size_bytes(&self) -> Result<i64, DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row("SELECT COALESCE(SUM(size_bytes), 0) FROM recordings", [], |r| {
+            r.get(0)
+        })
+        .map_err(DbError::from)
+    }
+
+    pub fn get_retention_policy(&self) -> Result<RetentionPolicy, DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT max_total_bytes, max_age_days FROM settings WHERE id = 1",
+            [],
+            |row| {
+                Ok(RetentionPolicy {
+                    max_total_bytes: row.get(0)?,
+                    max_age_days: row.get(1)?,
+                })
+            },
+        )
+        .map_err(DbError::from)
+    }
+
+    pub fn set_retention_policy(&self, policy: &RetentionPolicy) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE settings SET max_total_bytes = ?1, max_age_days = ?2 WHERE id = 1",
+            params![policy.max_total_bytes, policy.max_age_days],
+        )?;
+        Ok(())
+    }
+
+    /// One recording by id. `find_by_path`'s counterpart — used by the
+    /// user-initiated delete, which needs the row's `path` and `size_bytes`
+    /// before it can remove the file.
+    /// Replaces this recording's gold-only samples with `samples`.
+    ///
+    /// The gold series arrives after the finalize has already written the
+    /// 1 Hz rows, at its own sparser cadence — one frame a minute against
+    /// one sample a second — so it comes in as rows of its own rather than
+    /// being interpolated onto the existing ones. The frontend builds each
+    /// metric's series by dropping the rows that are NULL for it, so the
+    /// two densities coexist without either knowing about the other.
+    ///
+    /// Deleting first makes the write idempotent: the patch can be run
+    /// again (`dev_patch_match_summary` does exactly that) and a second run
+    /// must replace the curve, not draw it twice. "Gold-only" is the
+    /// predicate because it is precisely the shape this method writes — the
+    /// live path never sets `gold_diff` and always sets the diffs when it
+    /// knows a side.
+    pub fn replace_gold_samples(
+        &self,
+        recording_id: i64,
+        samples: &[NewSample],
+    ) -> Result<(), DbError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM samples
+             WHERE recording_id = ?1
+               AND gold_diff IS NOT NULL
+               AND kill_diff IS NULL
+               AND cs_diff IS NULL",
+            [recording_id],
+        )?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO samples
+                    (recording_id, game_time_s, video_time_s, our_team,
+                     gold_diff, kill_diff, cs_diff, our_gold, our_level)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            )?;
+            for s in samples {
+                stmt.execute(params![
+                    recording_id,
+                    s.game_time_s,
+                    s.video_time_s,
+                    s.our_team,
+                    s.gold_diff,
+                    s.kill_diff,
+                    s.cs_diff,
+                    s.our_gold,
+                    s.our_level,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Fills in a recording's scoreboard, and nothing else.
+    ///
+    /// **Only when it has none.** A scoreboard captured live came from the
+    /// game itself; one rebuilt from match history is Riot's account of it
+    /// afterwards, and is missing what the live path had — spell names,
+    /// and the position the game assigned. The rebuild fills a gap, it
+    /// does not correct. Same rule, and the same reasoning, as `champion`
+    /// and `role`.
+    ///
+    /// `cs` moves with it and under the same condition, because they are
+    /// two views of one thing: a row whose scoreboard says 262 and whose
+    /// column says something else is a row that contradicts itself.
+    ///
+    /// Returns whether anything was written.
+    /// Replaces a recording's scoreboard, whatever it had before.
+    ///
+    /// The override half of #127. The live scoreboard is the only one that
+    /// exists during a game, but the LCU's is strictly better once it does:
+    /// champion **ids** rather than display names — so no `Mega Gnar` class
+    /// of bug — and final numbers rather than the last poll before the
+    /// endpoint went away.
+    ///
+    /// `cs` coalesces the *other* way round from `fill_scoreboard`: the LCU's
+    /// figure wins when it has one, and only falls back to what was already
+    /// there when it does not. A null must never erase a good live value.
+    pub fn replace_scoreboard(
+        &self,
+        recording_id: i64,
+        scoreboard_json: &str,
+        cs: Option<i64>,
+    ) -> Result<bool, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let changed = conn.execute(
+            "UPDATE recordings
+                SET scoreboard_json = ?2,
+                    cs = COALESCE(?3, cs)
+             WHERE id = ?1",
+            params![recording_id, scoreboard_json, cs],
+        )?;
+        Ok(changed > 0)
+    }
+
+    pub fn fill_scoreboard(
+        &self,
+        recording_id: i64,
+        scoreboard_json: &str,
+        cs: Option<i64>,
+    ) -> Result<bool, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let changed = conn.execute(
+            "UPDATE recordings
+                SET scoreboard_json = ?2,
+                    cs = COALESCE(cs, ?3)
+             WHERE id = ?1 AND scoreboard_json IS NULL",
+            params![recording_id, scoreboard_json, cs],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Replaces `champion` with a name resolved from a champion **id**.
+    ///
+    /// **Separate from `update_match_metadata`, and that is the whole point.**
+    /// There, `champion` COALESCEs the other way so the existing value wins,
+    /// because two writers aiming at the same display name must not end up
+    /// disagreeing in the column. That reasoning assumed the live name might
+    /// be spelled differently. It can also be *a different champion*: Live
+    /// Client Data reports a possessed Viego as whoever he possessed, so a
+    /// game that ends mid-possession lands the wrong champion on the row.
+    ///
+    /// An id cannot be possessed. `championId` stays 234 throughout, so a
+    /// name resolved from it is right where the live name is wrong — and
+    /// identical where the live name is right, since the resolver produces
+    /// what Live Client Data writes (DEVELOPMENT.md §3.1).
+    ///
+    /// **Only the deferred patch may call this.** It knows the game by an
+    /// exact `game_id` taken from the gameflow session while the game ran.
+    /// The backfill matches recordings to games *on the clock*, so letting it
+    /// overwrite a champion would let a mismatched game rename a row that was
+    /// already correct — the failure #56 exists to refuse. That is why the
+    /// correction is a method of its own rather than a flipped `COALESCE` in
+    /// the shared one.
+    pub fn correct_champion(&self, recording_id: i64, champion: &str) -> Result<bool, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let changed = conn.execute(
+            "UPDATE recordings SET champion = ?2 WHERE id = ?1",
+            params![recording_id, champion],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Writes the rank a game was played at, **only when the row has none**.
+    ///
+    /// Fill-only, like `fill_scoreboard`, and for a sharper reason: the first
+    /// write is the one taken closest to the game, and every later one is
+    /// staler. A row that already has a rank has the better answer, so an
+    /// `UPDATE` that overwrote it would be a downgrade dressed as a repair.
+    ///
+    /// **Nothing else in the app writes these columns.** The backfill in
+    /// particular must not: it matches recordings to games on the clock and
+    /// the client only ever reports the rank held *now*, so filling an old
+    /// row would stamp this season's rank onto a game played in another one
+    /// — and it would look entirely plausible, which is the failure #56 was
+    /// built to refuse.
+    pub fn fill_ranked(
+        &self,
+        recording_id: i64,
+        tier: &str,
+        division: Option<&str>,
+        lp_after: i64,
+        lp_before: Option<i64>,
+        lp_delta: Option<i64>,
+    ) -> Result<bool, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let changed = conn.execute(
+            "UPDATE recordings
+                SET tier = ?2, division = ?3, lp_after = ?4,
+                    lp_before = ?5, lp_delta = ?6
+             WHERE id = ?1 AND tier IS NULL",
+            params![recording_id, tier, division, lp_after, lp_before, lp_delta],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Rebases a recording's markers and samples after `removed_s` has been
+    /// cut off the front of its file, and records the new length.
+    ///
+    /// **One transaction, because a partial apply is the worst outcome
+    /// available here.** Markers shifted with samples left alone would put
+    /// every seek target out by the length of a loading screen, and it
+    /// would look exactly like a working recording — the failure this
+    /// codebase keeps refusing elsewhere.
+    ///
+    /// Clamped at zero: a marker for an event backdated to before the cut
+    /// belongs at the start of what is left, not at a negative time.
+    ///
+    /// `removed_s` is what actually came off, measured from the durations
+    /// either side — never what was asked for. A stream copy cuts on a
+    /// keyframe, so the two differ, and rebasing on the request would put
+    /// every marker out by that difference.
+    pub fn apply_trim(
+        &self,
+        recording_id: i64,
+        removed_s: f64,
+        new_duration_s: f64,
+        new_size_bytes: i64,
+    ) -> Result<(), DbError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        for table in ["markers", "samples"] {
+            tx.execute(
+                &format!(
+                    "UPDATE {table} SET video_time_s = MAX(video_time_s - ?2, 0)
+                     WHERE recording_id = ?1"
+                ),
+                params![recording_id, removed_s],
+            )?;
+        }
+        // `size_bytes` moves with the file or the library over-reports its
+        // own disk usage — and retention, which is driven by that total,
+        // would delete recordings to free space that was already freed.
+        tx.execute(
+            "UPDATE recordings SET duration_s = ?2, size_bytes = ?3 WHERE id = ?1",
+            params![recording_id, new_duration_s, new_size_bytes],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// How many markers and gold-bearing samples one recording carries.
+    ///
+    /// Counted rather than fetched: the inspector wants to know whether a
+    /// recording *has* a timeline, and reading fifteen hundred sample rows to
+    /// find out would be the expensive way to ask.
+    ///
+    /// Gold samples are counted separately from all samples because they come
+    /// from a different source on a different schedule — the LCU's match
+    /// timeline at one frame a minute, against the live poller's 1 Hz — so
+    /// "1500 samples, 0 with gold" is a diagnosis rather than a contradiction
+    /// (#137).
+    ///
+    /// Only the dev portal's inspector calls this, and clippy runs without
+    /// `--all-targets`, so in a shipped build it is genuinely dead code
+    /// (CLAUDE.md). Same shape as `command_names`'s allow.
+    #[cfg_attr(not(feature = "devtools"), allow(dead_code))]
+    pub fn recording_counts(&self, recording_id: i64) -> Result<(i64, i64, i64), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT
+               (SELECT COUNT(*) FROM markers WHERE recording_id = ?1),
+               (SELECT COUNT(*) FROM samples WHERE recording_id = ?1),
+               (SELECT COUNT(*) FROM samples
+                 WHERE recording_id = ?1 AND gold_diff IS NOT NULL)",
+            [recording_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(DbError::from)
+    }
+
+    /// Where the game last reported itself, in video time.
+    ///
+    /// The other end of `sample_alignment_offset`. Capture outlives the game
+    /// window — nothing stops it at the instant the game ends — and a window
+    /// that no longer exists captures as black under WGC, so this is where
+    /// the black begins (#120).
+    ///
+    /// `None` when there are no samples, which is the same answer as the head
+    /// end gives and means the same thing: nothing knows, so touch nothing.
+    pub fn last_sample_video_time_s(&self, recording_id: i64) -> Result<Option<f64>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT MAX(video_time_s) FROM samples WHERE recording_id = ?1",
+            [recording_id],
+            |row| row.get::<_, Option<f64>>(0),
+        )
+        .optional()
+        .map(Option::flatten)
+        .map_err(DbError::from)
+    }
+
+    /// The game-time to video-time offset this recording's samples were
+    /// written with, if it has any.
+    ///
+    /// Recovered from a sample rather than recomputed. The timeline's
+    /// frames carry a game clock and have to land on the same video
+    /// positions the 1 Hz samples did, but the alignment that produced
+    /// those is gone by the time the timeline arrives — the API it came
+    /// from stops answering the moment the game ends. Reading it back off a
+    /// row that already went through it is that same alignment, not a
+    /// second one.
+    ///
+    /// `None` when the recording has no samples at all, which is what a
+    /// game whose live poller never came up looks like. The caller writes
+    /// no gold in that case: frames placed through a guessed offset would
+    /// draw the right curve at the wrong times.
+    pub fn sample_alignment_offset(&self, recording_id: i64) -> Result<Option<f64>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT video_time_s - game_time_s FROM samples
+             WHERE recording_id = ?1 ORDER BY game_time_s LIMIT 1",
+            [recording_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(DbError::from)
+    }
+
+    /// Recordings missing anything the backfill can fill, newest first.
+    ///
+    /// **Every column it writes, not just two.** This asked for
+    /// `win IS NULL OR champion IS NULL` while the backfill was only #56's
+    /// metadata pass, and kept asking for it after the backfill learned to
+    /// rebuild scoreboards — so a library whose rows all had a champion and
+    /// a result selected nothing, and the button did nothing at all. A row
+    /// with a champion can still be missing its scoreboard, its role, or
+    /// its patch.
+    ///
+    /// The cost of casting wide is one pass over rows that turn out to be
+    /// unfillable — a custom game never gets a queue id or a patch from
+    /// match history, so it is selected every time and matched every time.
+    /// That is a request the pass already makes and a comparison against a
+    /// list already in hand, and it is much cheaper than the alternative
+    /// failure, which is a button that silently does nothing.
+    /// Recordings that were matched to a game but never finished being
+    /// patched, newest first.
+    ///
+    /// The deferred patch lives only in memory on a bounded retry, so an app
+    /// exit inside its window loses whatever it had not written yet — and the
+    /// row shows nothing to say so, because champion, KDA and outcome all
+    /// come from the live path at finalize (#137). This is how a restart
+    /// finds them again.
+    ///
+    /// **Bounded by age, deliberately.** The LCU only keeps recent games, so
+    /// a recording old enough to have fallen out of match history can never
+    /// be completed — and without a bound it would be retried on every single
+    /// client start, forever. `since_ms` is what stops the sweep growing a
+    /// permanent tail of work that cannot succeed. The backfill button
+    /// remains the unbounded, deliberate version of this.
+    ///
+    /// `game_id IS NOT NULL` for the same reason it appears in
+    /// `recordings_missing_metadata`: a recording that never reached match
+    /// history has nothing to ask for.
+    pub fn recordings_awaiting_summary(
+        &self,
+        since_ms: i64,
+    ) -> Result<Vec<(i64, i64)>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, game_id FROM recordings
+              WHERE game_id IS NOT NULL
+                AND started_at >= ?1
+                AND (role IS NULL OR patch IS NULL OR queue IS NULL OR win IS NULL
+                     OR NOT EXISTS (
+                         SELECT 1 FROM samples
+                          WHERE samples.recording_id = recordings.id
+                            AND samples.gold_diff IS NOT NULL
+                     ))
+              ORDER BY started_at DESC",
+        )?;
+        let rows = stmt.query_map([since_ms], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+    }
+
+    pub fn recordings_missing_metadata(&self) -> Result<Vec<crate::backfill::Candidate>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        // `needs_gold` is computed here rather than inferred from the other
+        // columns, because a recording can be complete in every other respect
+        // and still have no curve: the gold series is written by a deferred
+        // patch that lives only in memory, so an app restart inside its retry
+        // window loses it with nothing else to show for the gap
+        // (`match_summary::write_gold_series`).
+        //
+        // Deliberately narrow. "Has no gold samples" alone would select every
+        // custom game, practice-tool run and poller-less recording forever,
+        // since none of those can ever gain one — they would sit in the report
+        // as permanent unmatched noise. Requiring a `game_id` limits it to
+        // recordings that were matched to a real game and therefore *should*
+        // have a curve.
+        let mut stmt = conn.prepare(
+            "SELECT id, started_at, duration_s,
+                    game_id IS NOT NULL AND NOT EXISTS (
+                        SELECT 1 FROM samples
+                         WHERE samples.recording_id = recordings.id
+                           AND samples.gold_diff IS NOT NULL
+                    ) AS needs_gold
+               FROM recordings
+              WHERE win IS NULL OR champion IS NULL OR role IS NULL
+                 OR patch IS NULL OR queue IS NULL OR game_id IS NULL
+                 OR scoreboard_json IS NULL OR cs IS NULL
+                 OR needs_gold
+              ORDER BY started_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(crate::backfill::Candidate {
+                id: row.get(0)?,
+                started_at: row.get(1)?,
+                duration_s: row.get(2)?,
+                needs_gold: row.get(3)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+    }
+
+    pub fn get_recording(&self, id: i64) -> Result<Option<RecordingRow>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, path, started_at, duration_s, game_id, queue, champion, role,
+                    win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
+                    audio_tracks_json, game_mode, diagnostics_json, scoreboard_json, cs,
+                    tier, division, lp_after, lp_before, lp_delta
+             FROM recordings WHERE id = ?1",
+            [id],
+            row_to_recording,
+        )
+        .optional()
+        .map_err(DbError::from)
+    }
+
+    /// Every UI preference in one round trip — the frontend reads the whole
+    /// set once at boot, so N separate `get_ui_pref` calls would just be
+    /// N times the IPC for the same data.
+    pub fn get_ui_prefs(&self) -> Result<HashMap<String, String>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT key, value FROM settings_kv")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect::<Result<HashMap<_, _>, _>>()
+            .map_err(DbError::from)
+    }
+
+    pub fn set_ui_pref(&self, key: &str, value: &str) -> Result<(), DbError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO settings_kv (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    /// The audio capture preset, read through `serde` rather than as a raw
+    /// `settings_kv` string.
+    ///
+    /// Unlike `theme`, a value we can't parse here doesn't just look wrong —
+    /// it decides what gets recorded, including whether a microphone is
+    /// live. So the fallback is explicit and loud rather than silent: an
+    /// unreadable row records game audio only, which is the safe answer, and
+    /// says so on stderr.
+    pub fn get_audio_preset(&self) -> Result<AudioPreset, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings_kv WHERE key = ?1",
+                [AUDIO_PRESET_KEY],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        Ok(match raw {
+            None => AudioPreset::default(),
+            Some(json) => serde_json::from_str(&json).unwrap_or_else(|e| {
+                warn!(
+                    "db",
+                    "unreadable {AUDIO_PRESET_KEY} preference ({e}), recording game audio only: {json}"
+                );
+                AudioPreset::default()
+            }),
+        })
+    }
+
+    pub fn set_audio_preset(&self, preset: &AudioPreset) -> Result<(), DbError> {
+        let json = serde_json::to_string(preset).map_err(|e| DbError::Encode(e.to_string()))?;
+        self.set_ui_pref(AUDIO_PRESET_KEY, &json)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A database written by a *newer* build must be refused with a
+    /// diagnosable error rather than the library's opaque
+    /// `DatabaseTooFarAhead`. This is reachable just by switching to an
+    /// older branch, and before it was handled it aborted the whole app
+    /// from inside Tauri's setup hook.
+    #[test]
+    fn refuses_a_schema_from_a_newer_build() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        Db::init(&mut conn).unwrap();
+
+        let (_, expected) = &*MIGRATIONS;
+        let ahead = *expected + 1;
+        conn.pragma_update(None, "user_version", ahead).unwrap();
+
+        match Db::init(&mut conn) {
+            Err(DbError::SchemaTooNew { found, expected: known }) => {
+                assert_eq!(found, ahead);
+                assert_eq!(known, *expected);
+            }
+            other => panic!("expected SchemaTooNew, got {other:?}"),
+        }
+    }
+
+    /// The check is one-sided: an older file is exactly what migrations
+    /// are for, and must still be brought forward.
+    #[test]
+    fn still_migrates_a_database_from_an_older_build() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        Db::init(&mut conn).unwrap();
+
+        let (_, expected) = &*MIGRATIONS;
+        assert_eq!(
+            conn.query_row::<i64, _, _>("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap(),
+            *expected,
+            "a fresh database should land on the newest schema"
+        );
+
+        // Re-running against an already-current file is also a no-op.
+        Db::init(&mut conn).unwrap();
+    }
+
+    fn marker(kind: &str, game_time_s: f64) -> NewMarker {
+        NewMarker {
+            game_time_s,
+            video_time_s: game_time_s + 5.0,
+            kind: kind.to_string(),
+            payload_json: "{}".to_string(),
+        }
+    }
+
+    #[test]
+    fn insert_and_list_recording() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db
+            .insert_recording(&NewRecording {
+                path: "/recordings/one.mp4".into(),
+                started_at: 1000,
+                size_bytes: 12345,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let rows = db.list_recordings().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, id);
+        assert_eq!(rows[0].path, "/recordings/one.mp4");
+        assert_eq!(rows[0].size_bytes, 12345);
+        assert!(!rows[0].pinned);
+        assert_eq!(rows[0].champion, None);
+    }
+
+    #[test]
+    fn list_recordings_orders_newest_first() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/a.mp4".into(),
+            started_at: 100,
+            ..Default::default()
+        })
+        .unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/b.mp4".into(),
+            started_at: 200,
+            ..Default::default()
+        })
+        .unwrap();
+
+        let rows = db.list_recordings().unwrap();
+        assert_eq!(rows[0].path, "/b.mp4");
+        assert_eq!(rows[1].path, "/a.mp4");
+    }
+
+    /// Reconcile (folder-scan) and a recording's own finalize can both
+    /// try to insert the same path — reconcile can't distinguish a
+    /// not-yet-finalized in-progress file from a genuinely untracked one,
+    /// so it may import it first. The later insert must win with its
+    /// (more authoritative) data instead of erroring and losing the row
+    /// finalize needs to attach markers to.
+    #[test]
+    fn duplicate_path_upserts_instead_of_erroring() {
+        let db = Db::open_in_memory().unwrap();
+        let first_id = db
+            .insert_recording(&NewRecording {
+                path: "/dup.mp4".into(),
+                started_at: 1,
+                champion: None,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let second_id = db
+            .insert_recording(&NewRecording {
+                path: "/dup.mp4".into(),
+                started_at: 2,
+                champion: Some("Ahri".into()),
+                ..Default::default()
+            })
+            .unwrap();
+
+        assert_eq!(first_id, second_id, "upsert should keep the same row id");
+        let rows = db.list_recordings().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].started_at, 2);
+        assert_eq!(rows[0].champion, Some("Ahri".to_string()));
+    }
+
+    #[test]
+    fn insert_and_count_markers() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db
+            .insert_recording(&NewRecording {
+                path: "/game.mp4".into(),
+                started_at: 1,
+                ..Default::default()
+            })
+            .unwrap();
+
+        db.insert_markers(id, &[marker("kill", 10.0), marker("death", 20.0)])
+            .unwrap();
+
+        let conn = db.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM markers WHERE recording_id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn get_markers_returns_them_ordered_by_video_time() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db
+            .insert_recording(&NewRecording {
+                path: "/game.mp4".into(),
+                started_at: 1,
+                ..Default::default()
+            })
+            .unwrap();
+
+        // Inserted out of order — get_markers must sort them.
+        db.insert_markers(id, &[marker("death", 20.0), marker("kill", 10.0)])
+            .unwrap();
+
+        let markers = db.get_markers(id).unwrap();
+        assert_eq!(markers.len(), 2);
+        assert_eq!(markers[0].kind, "kill");
+        assert_eq!(markers[0].game_time_s, 10.0);
+        assert_eq!(markers[1].kind, "death");
+    }
+
+    #[test]
+    fn get_markers_for_recording_with_none_is_empty() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db
+            .insert_recording(&NewRecording {
+                path: "/quiet-game.mp4".into(),
+                started_at: 1,
+                ..Default::default()
+            })
+            .unwrap();
+
+        assert!(db.get_markers(id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn deleting_recording_cascades_to_its_markers() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db
+            .insert_recording(&NewRecording {
+                path: "/game.mp4".into(),
+                started_at: 1,
+                ..Default::default()
+            })
+            .unwrap();
+        db.insert_markers(id, &[marker("kill", 10.0)]).unwrap();
+
+        db.delete_recording(id).unwrap();
+
+        let conn = db.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM markers", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn find_by_path_distinguishes_present_and_absent() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/known.mp4".into(),
+            started_at: 1,
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert!(db.find_by_path("/known.mp4").unwrap().is_some());
+        assert!(db.find_by_path("/unknown.mp4").unwrap().is_none());
+    }
+
+    #[test]
+    fn get_recording_returns_the_whole_row_or_none() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db
+            .insert_recording(&NewRecording {
+                path: "/vod.mp4".into(),
+                started_at: 42,
+                champion: Some("Ahri".into()),
+                size_bytes: 1234,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let row = db.get_recording(id).unwrap().expect("row should exist");
+        assert_eq!(row.path, "/vod.mp4");
+        assert_eq!(row.champion.as_deref(), Some("Ahri"));
+        assert_eq!(row.size_bytes, 1234);
+
+        assert!(db.get_recording(id + 999).unwrap().is_none());
+    }
+
+    #[test]
+    fn ui_pref_round_trips_and_overwrites() {
+        let db = Db::open_in_memory().unwrap();
+
+        db.set_ui_pref("theme", "dark").unwrap();
+        let prefs = db.get_ui_prefs().unwrap();
+        assert_eq!(prefs.get("theme").map(String::as_str), Some("dark"));
+
+        // Upsert, not a second row — the frontend saves on every toggle.
+        db.set_ui_pref("theme", "light").unwrap();
+        let prefs = db.get_ui_prefs().unwrap();
+        assert_eq!(prefs.get("theme").map(String::as_str), Some("light"));
+        assert_eq!(prefs.len(), 1);
+    }
+
+    #[test]
+    fn missing_ui_pref_is_absent_not_an_error() {
+        let db = Db::open_in_memory().unwrap();
+        assert!(!db.get_ui_prefs().unwrap().contains_key("never-set"));
+    }
+
+    #[test]
+    fn get_ui_prefs_returns_every_pref_and_starts_empty() {
+        let db = Db::open_in_memory().unwrap();
+        // Migration 4 deliberately seeds nothing: a missing pref means
+        // "use the frontend default".
+        assert!(db.get_ui_prefs().unwrap().is_empty());
+
+        db.set_ui_pref("theme", "dark").unwrap();
+        db.set_ui_pref("defaultSort", "champion").unwrap();
+
+        let prefs = db.get_ui_prefs().unwrap();
+        assert_eq!(prefs.get("theme").map(String::as_str), Some("dark"));
+        assert_eq!(prefs.get("defaultSort").map(String::as_str), Some("champion"));
+    }
+
+    #[test]
+    fn audio_preset_defaults_to_game_when_unset() {
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(db.get_audio_preset().unwrap(), AudioPreset::Game);
+    }
+
+    #[test]
+    fn audio_preset_round_trips_through_settings_kv() {
+        let db = Db::open_in_memory().unwrap();
+        let preset = AudioPreset::GameMicDiscord {
+            mic_device_id: Some("{0.0.1.00000000}.{abc}".into()),
+        };
+        db.set_audio_preset(&preset).unwrap();
+        assert_eq!(db.get_audio_preset().unwrap(), preset);
+    }
+
+    /// A hand-edited or corrupt row must not decide to record a microphone,
+    /// and must not take the app down either — it falls back to the default.
+    #[test]
+    fn an_unparseable_audio_preset_falls_back_to_the_default() {
+        let db = Db::open_in_memory().unwrap();
+        db.set_ui_pref(AUDIO_PRESET_KEY, "{not json").unwrap();
+        assert_eq!(db.get_audio_preset().unwrap(), AudioPreset::Game);
+    }
+
+    #[test]
+    fn audio_tracks_json_round_trips_through_insert_and_list() {
+        let db = Db::open_in_memory().unwrap();
+        let layout = AudioPreset::GameMic { mic_device_id: None }.layout();
+        let json = serde_json::to_string(&layout).unwrap();
+
+        db.insert_recording(&NewRecording {
+            path: "/game.mp4".into(),
+            started_at: 1,
+            audio_tracks_json: Some(json.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let rows = db.list_recordings().unwrap();
+        assert_eq!(rows[0].audio_tracks_json.as_deref(), Some(json.as_str()));
+
+        let parsed: crate::recorder::audio::AudioLayout =
+            serde_json::from_str(rows[0].audio_tracks_json.as_ref().unwrap()).unwrap();
+        assert_eq!(parsed, layout);
+    }
+
+    /// `reconcile` upserts on `path` with an all-default row. If the upsert
+    /// overwrote instead of COALESCEing, a rescan landing after a finalize
+    /// would erase the track layout and the review player would lose its
+    /// stem picker for that VOD.
+    #[test]
+    fn a_rescan_upsert_cannot_erase_a_known_audio_layout() {
+        let db = Db::open_in_memory().unwrap();
+        let json = serde_json::to_string(&AudioPreset::GameMic { mic_device_id: None }.layout())
+            .unwrap();
+
+        let id = db
+            .insert_recording(&NewRecording {
+                path: "/game.mp4".into(),
+                started_at: 1,
+                audio_tracks_json: Some(json.clone()),
+                ..Default::default()
+            })
+            .unwrap();
+
+        // Exactly what reconcile writes for a file it re-imports.
+        let same_id = db
+            .insert_recording(&NewRecording {
+                path: "/game.mp4".into(),
+                started_at: 2,
+                ..Default::default()
+            })
+            .unwrap();
+
+        assert_eq!(same_id, id);
+        let row = db.get_recording(id).unwrap().unwrap();
+        assert_eq!(row.started_at, 2, "the rest of the row should still update");
+        assert_eq!(row.audio_tracks_json.as_deref(), Some(json.as_str()));
+    }
+
+    /// Same COALESCE, same reason: the game mode is captured live and a
+    /// rescan knows nothing about it, so an overwriting upsert would blank
+    /// the Queue label on every card the moment someone pressed Rescan.
+    #[test]
+    fn a_rescan_upsert_cannot_erase_a_known_game_mode() {
+        let db = Db::open_in_memory().unwrap();
+
+        let id = db
+            .insert_recording(&NewRecording {
+                path: "/game.mp4".into(),
+                started_at: 1,
+                game_mode: Some("ARAM".into()),
+                ..Default::default()
+            })
+            .unwrap();
+
+        db.insert_recording(&NewRecording {
+            path: "/game.mp4".into(),
+            started_at: 2,
+            ..Default::default()
+        })
+        .unwrap();
+
+        let row = db.get_recording(id).unwrap().unwrap();
+        assert_eq!(row.game_mode.as_deref(), Some("ARAM"));
+    }
+
+    // --- update_match_metadata -------------------------------------------
+
+    /// The row the LCU summary patch lands on: already finalized, already
+    /// carrying what Live Client Data established, already pinned by a
+    /// user who liked the game.
+    fn a_finalized_row(db: &Db) -> i64 {
+        db.insert_recording(&NewRecording {
+            path: "/game.mp4".into(),
+            started_at: 1,
+            duration_s: Some(1830.5),
+            champion: Some("Wukong".into()),
+            win: Some(true),
+            kda_k: Some(7),
+            kda_d: Some(2),
+            kda_a: Some(5),
+            game_mode: Some("CLASSIC".into()),
+            pinned: true,
+            size_bytes: 4_200_000_000,
+            audio_tracks_json: Some(r#"{"tracks":[]}"#.into()),
+            ..Default::default()
+        })
+        .unwrap()
+    }
+
+    /// The whole reason this isn't `insert_recording`: that method's
+    /// `ON CONFLICT(path)` takes `pinned`, `size_bytes`, `started_at` and
+    /// `duration_s` from `excluded`, so re-upserting a summary would unpin
+    /// the recording and zero its size.
+    #[test]
+    fn patching_a_summary_leaves_everything_it_does_not_own_alone() {
+        let db = Db::open_in_memory().unwrap();
+        let id = a_finalized_row(&db);
+
+        let changed = db
+            .update_match_metadata(
+                id,
+                &MatchMetadata {
+                    game_id: Some(5147823901),
+                    queue: Some(420),
+                    role: Some("Middle".into()),
+                    patch: Some("15.3.412.9873".into()),
+                    win: Some(true),
+                    kda_k: Some(7),
+                    kda_d: Some(2),
+                    kda_a: Some(5),
+                    champion: Some("MonkeyKing".into()),
+                },
+            )
+            .unwrap();
+        assert_eq!(changed, 1);
+
+        let row = db.get_recording(id).unwrap().unwrap();
+        assert!(row.pinned);
+        assert_eq!(row.size_bytes, 4_200_000_000);
+        assert_eq!(row.duration_s, Some(1830.5));
+        assert_eq!(row.started_at, 1);
+        assert_eq!(row.game_mode.as_deref(), Some("CLASSIC"));
+        assert_eq!(row.audio_tracks_json.as_deref(), Some(r#"{"tracks":[]}"#));
+        // And the columns it does own are now filled in.
+        assert_eq!(row.game_id, Some(5147823901));
+        assert_eq!(row.queue, Some(420));
+        assert_eq!(row.role.as_deref(), Some("Middle"));
+        assert_eq!(row.patch.as_deref(), Some("15.3.412.9873"));
+    }
+
+    /// `champion` COALESCEs the other way round from every other column.
+    /// The live path wrote a display name; an id-derived one would be
+    /// `MonkeyKing`, and one champion under two spellings splits its games
+    /// in two everywhere the library sorts or filters.
+    ///
+    /// **This is what keeps the backfill from renaming a row.** It shares
+    /// this method and matches games on the clock, so a mismatch must not be
+    /// able to overwrite a champion. The deferred patch corrects one through
+    /// `correct_champion` instead, which the backfill never calls.
+    #[test]
+    fn a_champion_the_live_client_already_named_is_never_overwritten() {
+        let db = Db::open_in_memory().unwrap();
+        let id = a_finalized_row(&db);
+
+        db.update_match_metadata(
+            id,
+            &MatchMetadata {
+                champion: Some("MonkeyKing".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            db.get_recording(id).unwrap().unwrap().champion.as_deref(),
+            Some("Wukong")
+        );
+    }
+
+    /// The other half of that rule: a game whose Live Client Data poller
+    /// never came up has no name at all, and then the LCU's is the only
+    /// one there is.
+    #[test]
+    fn a_null_champion_is_filled_in_by_the_patch() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db
+            .insert_recording(&NewRecording {
+                path: "/game.mp4".into(),
+                started_at: 1,
+                ..Default::default()
+            })
+            .unwrap();
+
+        db.update_match_metadata(
+            id,
+            &MatchMetadata {
+                champion: Some("Ahri".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            db.get_recording(id).unwrap().unwrap().champion.as_deref(),
+            Some("Ahri")
+        );
+    }
+
+    /// The summary answers for some columns and not others, and the ones
+    /// it can't answer for were filled in during the game. A `None` must
+    /// not erase them.
+    #[test]
+    fn a_field_the_summary_could_not_establish_does_not_null_the_column() {
+        let db = Db::open_in_memory().unwrap();
+        let id = a_finalized_row(&db);
+
+        db.update_match_metadata(
+            id,
+            &MatchMetadata {
+                queue: Some(420),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let row = db.get_recording(id).unwrap().unwrap();
+        assert_eq!(row.win, Some(true));
+        assert_eq!((row.kda_k, row.kda_d, row.kda_a), (Some(7), Some(2), Some(5)));
+    }
+
+    /// Retention runs during the same finalize, and the user can delete a
+    /// card at any point — so by the time a patch lands its row may be
+    /// gone. That is a no-op, not a failure worth surfacing.
+    #[test]
+    fn patching_a_row_that_no_longer_exists_changes_nothing_and_is_not_an_error() {
+        let db = Db::open_in_memory().unwrap();
+        let changed = db
+            .update_match_metadata(
+                404,
+                &MatchMetadata {
+                    queue: Some(420),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(changed, 0);
+    }
+
+    /// A row that predates migration 5, or any file `reconcile` imported,
+    /// genuinely has an unknown layout — NULL, not a guess.
+    #[test]
+    fn a_recording_with_no_known_audio_layout_reads_back_as_none() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db
+            .insert_recording(&NewRecording {
+                path: "/imported.mp4".into(),
+                started_at: 1,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(db.get_recording(id).unwrap().unwrap().audio_tracks_json.is_none());
+    }
+
+    #[test]
+    fn set_pinned_updates_the_row() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db
+            .insert_recording(&NewRecording {
+                path: "/game.mp4".into(),
+                started_at: 1,
+                ..Default::default()
+            })
+            .unwrap();
+
+        db.set_pinned(id, true).unwrap();
+        assert!(db.list_recordings().unwrap()[0].pinned);
+
+        db.set_pinned(id, false).unwrap();
+        assert!(!db.list_recordings().unwrap()[0].pinned);
+    }
+
+    #[test]
+    fn total_size_bytes_sums_across_recordings() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/a.mp4".into(),
+            started_at: 1,
+            size_bytes: 100,
+            ..Default::default()
+        })
+        .unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/b.mp4".into(),
+            started_at: 2,
+            size_bytes: 250,
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert_eq!(db.total_size_bytes().unwrap(), 350);
+    }
+
+    #[test]
+    fn retention_policy_defaults_and_round_trips() {
+        let db = Db::open_in_memory().unwrap();
+
+        // Seeded defaults from the migration — 50 GiB / 30 days, not
+        // unlimited (see the migration's comment for why).
+        let defaults = db.get_retention_policy().unwrap();
+        assert_eq!(defaults.max_total_bytes, Some(53_687_091_200));
+        assert_eq!(defaults.max_age_days, Some(30));
+
+        let updated = RetentionPolicy {
+            max_total_bytes: None,
+            max_age_days: Some(7),
+        };
+        db.set_retention_policy(&updated).unwrap();
+        assert_eq!(db.get_retention_policy().unwrap(), updated);
+    }
+
+    fn sample(video_time_s: f64, gold: f64, kills: i64) -> NewSample {
+        NewSample {
+            game_time_s: video_time_s - 5.0,
+            video_time_s,
+            our_team: Some("ORDER".into()),
+            gold_diff: Some(gold),
+            kill_diff: Some(kills),
+            cs_diff: Some(0),
+            our_gold: Some(450.0),
+            our_level: Some(11),
+        }
+    }
+
+    /// The bug this exists to stop coming back: the backfill selected rows
+    /// missing `win` or `champion` only, so a library where every row had
+    /// both — which is every library, once the live path is working —
+    /// selected nothing, and the button did nothing at all.
+    #[test]
+    fn a_row_with_a_champion_and_a_result_still_needs_its_scoreboard() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db
+            .insert_recording(&NewRecording {
+                path: "/labelled.mp4".into(),
+                started_at: 1,
+                champion: Some("Shyvana".into()),
+                win: Some(true),
+                role: Some("Jungle".into()),
+                patch: Some("16.17".into()),
+                queue: Some(420),
+                game_id: Some(7),
+                // Everything the LCU answers for, and no scoreboard.
+                ..Default::default()
+            })
+            .unwrap();
+
+        let candidates = db.recordings_missing_metadata().unwrap();
+        assert_eq!(candidates.len(), 1, "a missing scoreboard is worth a pass");
+        assert_eq!(candidates[0].id, id);
+    }
+
+    #[test]
+    fn a_row_with_everything_is_left_alone() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/complete.mp4".into(),
+            started_at: 1,
+            champion: Some("Shyvana".into()),
+            win: Some(true),
+            role: Some("Jungle".into()),
+            patch: Some("16.17".into()),
+            queue: Some(420),
+            game_id: Some(7),
+            scoreboard_json: Some("{}".into()),
+            cs: Some(262),
+            ..Default::default()
+        })
+        .unwrap();
+        // "Everything" now includes a gold curve. A recording matched to a
+        // game and missing one is a candidate, because the curve is written
+        // by a deferred patch that an app restart can lose (#137).
+        db.replace_gold_samples(1, &[gold_sample(60.0, 100.0)]).unwrap();
+
+        assert!(db.recordings_missing_metadata().unwrap().is_empty());
+    }
+
+    /// The window is what stops the resume sweep growing a permanent tail:
+    /// the LCU forgets old games, so a recording it can never complete must
+    /// drop out rather than be retried on every client start forever.
+    #[test]
+    fn the_resume_sweep_only_looks_at_recent_recordings() {
+        let db = Db::open_in_memory().unwrap();
+        for (path, started_at) in [("/new.mp4", 10_000i64), ("/old.mp4", 1_000i64)] {
+            db.insert_recording(&NewRecording {
+                path: path.into(),
+                started_at,
+                game_id: Some(7),
+                ..Default::default()
+            })
+            .unwrap();
+        }
+
+        let recent = db.recordings_awaiting_summary(5_000).unwrap();
+        assert_eq!(recent.len(), 1, "only the recording inside the window");
+        assert_eq!(recent[0].1, 7, "and it carries the game id to ask about");
+
+        assert_eq!(db.recordings_awaiting_summary(0).unwrap().len(), 2);
+    }
+
+    /// A recording that never reached match history has nothing to ask for,
+    /// so it must not sit in the sweep being retried at every client start.
+    #[test]
+    fn the_resume_sweep_skips_recordings_with_no_game_id() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/custom.mp4".into(),
+            started_at: 10_000,
+            game_id: None,
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert!(db.recordings_awaiting_summary(0).unwrap().is_empty());
+    }
+
+    /// A row that is complete *and* has its curve is finished, and the sweep
+    /// must stop offering it — otherwise every client start re-fetches every
+    /// game the user has ever recorded.
+    #[test]
+    fn the_resume_sweep_leaves_a_finished_recording_alone() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/done.mp4".into(),
+            started_at: 10_000,
+            game_id: Some(7),
+            win: Some(true),
+            role: Some("Jungle".into()),
+            patch: Some("16.17".into()),
+            queue: Some(420),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(db.recordings_awaiting_summary(0).unwrap().len(), 1, "no curve yet");
+
+        db.replace_gold_samples(1, &[gold_sample(60.0, 100.0)]).unwrap();
+        assert!(db.recordings_awaiting_summary(0).unwrap().is_empty());
+    }
+
+    /// The override in #127: the LCU's board replaces the live one, where
+    /// `fill_scoreboard` deliberately would not.
+    #[test]
+    fn replacing_a_scoreboard_overwrites_one_that_is_already_there() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/live.mp4".into(),
+            started_at: 1,
+            scoreboard_json: Some(r#"{"from":"live"}"#.into()),
+            cs: Some(100),
+            ..Default::default()
+        })
+        .unwrap();
+
+        // The fill-only writer refuses, which is what it is for.
+        assert!(!db.fill_scoreboard(1, r#"{"from":"lcu"}"#, Some(262)).unwrap());
+        assert!(db.replace_scoreboard(1, r#"{"from":"lcu"}"#, Some(262)).unwrap());
+
+        let row = db.get_recording(1).unwrap().unwrap();
+        assert_eq!(row.scoreboard_json.as_deref(), Some(r#"{"from":"lcu"}"#));
+        assert_eq!(row.cs, Some(262), "the settled figure wins over the live one");
+    }
+
+    /// `cs` coalesces the opposite way round from `fill_scoreboard`, and a
+    /// null must never erase a good live value.
+    #[test]
+    fn replacing_a_scoreboard_without_a_cs_keeps_the_one_already_there() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/live.mp4".into(),
+            started_at: 1,
+            scoreboard_json: Some(r#"{"from":"live"}"#.into()),
+            cs: Some(100),
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert!(db.replace_scoreboard(1, r#"{"from":"lcu"}"#, None).unwrap());
+        assert_eq!(db.get_recording(1).unwrap().unwrap().cs, Some(100));
+    }
+
+    /// The case #137 is about: complete in every other respect, no curve.
+    #[test]
+    fn a_row_matched_to_a_game_but_missing_its_gold_curve_is_a_candidate() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/no-curve.mp4".into(),
+            started_at: 1,
+            champion: Some("Shyvana".into()),
+            win: Some(true),
+            role: Some("Jungle".into()),
+            patch: Some("16.17".into()),
+            queue: Some(420),
+            game_id: Some(7),
+            scoreboard_json: Some("{}".into()),
+            cs: Some(262),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let candidates = db.recordings_missing_metadata().unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].needs_gold);
+    }
+
+    /// The narrowing that keeps the report honest. A recording with no
+    /// `game_id` never reached match history — a custom game, a practice-tool
+    /// run, or one whose poller never came up — so it can never gain a curve
+    /// and must not sit in the candidate list forever asking to be retried.
+    #[test]
+    fn a_recording_that_never_reached_match_history_is_not_asked_for_gold() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/practice.mp4".into(),
+            started_at: 1,
+            champion: Some("Shyvana".into()),
+            win: Some(true),
+            role: Some("Jungle".into()),
+            patch: Some("16.17".into()),
+            queue: Some(420),
+            game_id: None,
+            scoreboard_json: Some("{}".into()),
+            cs: Some(262),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let candidates = db.recordings_missing_metadata().unwrap();
+        // Selected for its missing `game_id`, but not asked for a curve.
+        assert_eq!(candidates.len(), 1);
+        assert!(!candidates[0].needs_gold);
+    }
+
+    fn gold_sample(game_time_s: f64, gold: f64) -> NewSample {
+        NewSample {
+            game_time_s,
+            video_time_s: game_time_s + 5.0,
+            our_team: Some("ORDER".into()),
+            gold_diff: Some(gold),
+            ..Default::default()
+        }
+    }
+
+    /// The patch can be run again — `dev_patch_match_summary` exists to do
+    /// exactly that — so a second run has to replace the curve rather than
+    /// draw a second one on top of it.
+    #[test]
+    fn replacing_the_gold_series_is_idempotent() {
+        let db = Db::open_in_memory().unwrap();
+        let id = recording_with_samples(&db, &[sample(10.0, 100.0, 1), sample(20.0, 200.0, 2)]);
+
+        for gold in [500.0, 900.0] {
+            db.replace_gold_samples(id, &[gold_sample(0.0, gold), gold_sample(60.0, gold)])
+                .unwrap();
+        }
+
+        let rows = db.get_samples(id).unwrap();
+        let gold_only: Vec<_> = rows.iter().filter(|r| r.kill_diff.is_none()).collect();
+        assert_eq!(gold_only.len(), 2, "the second run replaced the first");
+        assert!(gold_only.iter().all(|r| r.gold_diff == Some(900.0)));
+
+        // And the live 1 Hz rows are untouched by any of it.
+        assert_eq!(rows.iter().filter(|r| r.kill_diff.is_some()).count(), 2);
+    }
+
+    fn recording_with_samples(db: &Db, samples: &[NewSample]) -> i64 {
+        let id = db
+            .insert_recording(&NewRecording {
+                path: "/game.mp4".into(),
+                started_at: 1,
+                ..Default::default()
+            })
+            .unwrap();
+        db.insert_samples(id, samples).unwrap();
+        id
+    }
+
+    #[test]
+    fn get_samples_returns_them_ordered_by_video_time() {
+        let db = Db::open_in_memory().unwrap();
+        // Inserted out of order — get_samples must sort them, since the
+        // graph renderer walks the series assuming monotonic time.
+        let id = recording_with_samples(
+            &db,
+            &[sample(30.0, 900.0, 2), sample(10.0, 100.0, 0), sample(20.0, -400.0, -1)],
+        );
+
+        let rows = db.get_samples(id).unwrap();
+        let times: Vec<f64> = rows.iter().map(|r| r.video_time_s).collect();
+        assert_eq!(times, vec![10.0, 20.0, 30.0]);
+    }
+
+    /// Negative diffs are the whole point of the metric — a column typed or
+    /// bound wrongly would clamp "behind" to zero and the curve would only
+    /// ever show good news.
+    #[test]
+    fn sample_diffs_round_trip_with_their_sign_intact() {
+        let db = Db::open_in_memory().unwrap();
+        let id = recording_with_samples(&db, &[sample(10.0, -2750.5, -3)]);
+
+        let row = &db.get_samples(id).unwrap()[0];
+        assert_eq!(row.gold_diff, Some(-2750.5));
+        assert_eq!(row.kill_diff, Some(-3));
+        assert_eq!(row.our_team, Some("ORDER".to_string()));
+        assert_eq!(row.our_gold, Some(450.0));
+    }
+
+    /// A poll where the active player couldn't be matched in `allPlayers`
+    /// still gets a row, with the metrics NULL rather than a guessed side.
+    #[test]
+    fn sample_with_unknown_team_stores_nulls() {
+        let db = Db::open_in_memory().unwrap();
+        let id = recording_with_samples(
+            &db,
+            &[NewSample {
+                game_time_s: 5.0,
+                video_time_s: 10.0,
+                ..Default::default()
+            }],
+        );
+
+        let row = &db.get_samples(id).unwrap()[0];
+        assert_eq!(row.our_team, None);
+        assert_eq!(row.gold_diff, None);
+        assert_eq!(row.kill_diff, None);
+    }
+
+    #[test]
+    fn get_samples_for_recording_with_none_is_empty() {
+        let db = Db::open_in_memory().unwrap();
+        let id = recording_with_samples(&db, &[]);
+        assert!(db.get_samples(id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn deleting_recording_cascades_to_its_samples() {
+        let db = Db::open_in_memory().unwrap();
+        let id = recording_with_samples(&db, &[sample(10.0, 100.0, 1)]);
+
+        db.delete_recording(id).unwrap();
+
+        let conn = db.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM samples", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+
+    /// `fill_ranked` fills and never overwrites.
+    ///
+    /// The first write is the one taken closest to the game; every later one
+    /// is staler, so a second call must lose.
+    #[test]
+    fn a_rank_is_written_once_and_never_replaced() {
+        let db = Db::open(Path::new(":memory:")).unwrap();
+        let id = db.insert_recording(&NewRecording {
+            path: "/a.mp4".into(),
+            started_at: 1,
+            ..Default::default()
+        }).unwrap();
+
+        assert!(db.fill_ranked(id, "EMERALD", Some("III"), 38, Some(18), Some(20)).unwrap());
+        assert!(
+            !db.fill_ranked(id, "DIAMOND", Some("IV"), 5, Some(80), Some(-75)).unwrap(),
+            "a later, staler answer must not overwrite the first"
+        );
+
+        let row = db.get_recording(id).unwrap().unwrap();
+        assert_eq!(row.tier.as_deref(), Some("EMERALD"));
+        assert_eq!(row.division.as_deref(), Some("III"));
+        assert_eq!(row.lp_after, Some(38));
+    }
+
+    /// A measured game stores both ends and the movement between them, so a
+    /// reader never has to re-derive it — and a NULL delta beside a real
+    /// `lp_after` says the measurement was refused rather than forgotten.
+    #[test]
+    fn a_measured_game_stores_both_ends_and_the_movement() {
+        let db = Db::open(Path::new(":memory:")).unwrap();
+        let id = db.insert_recording(&NewRecording {
+            path: "/a.mp4".into(),
+            started_at: 1,
+            ..Default::default()
+        }).unwrap();
+
+        // Gold IV 98 → Gold III 8: a win worth ten, which the raw numbers
+        // would have called minus ninety.
+        db.fill_ranked(id, "GOLD", Some("III"), 8, Some(98), Some(10)).unwrap();
+
+        let row = db.get_recording(id).unwrap().unwrap();
+        assert_eq!(row.lp_before, Some(98));
+        assert_eq!(row.lp_after, Some(8));
+        assert_eq!(row.lp_delta, Some(10));
+    }
+
+    /// A game the app only saw the end of keeps its rank and measures
+    /// nothing. The columns are independent on purpose: a missing delta must
+    /// not cost the row the standing it does know.
+    #[test]
+    fn a_game_with_no_before_keeps_its_rank_and_no_delta() {
+        let db = Db::open(Path::new(":memory:")).unwrap();
+        let id = db.insert_recording(&NewRecording {
+            path: "/a.mp4".into(),
+            started_at: 1,
+            ..Default::default()
+        }).unwrap();
+
+        db.fill_ranked(id, "EMERALD", Some("III"), 38, None, None).unwrap();
+
+        let row = db.get_recording(id).unwrap().unwrap();
+        assert_eq!(row.tier.as_deref(), Some("EMERALD"));
+        assert_eq!(row.lp_after, Some(38));
+        assert_eq!(row.lp_before, None);
+        assert_eq!(row.lp_delta, None);
+    }
+
+    /// Master and above have no division, and NULL is how that is said.
+    #[test]
+    fn an_apex_rank_stores_no_division() {
+        let db = Db::open(Path::new(":memory:")).unwrap();
+        let id = db.insert_recording(&NewRecording {
+            path: "/a.mp4".into(),
+            started_at: 1,
+            ..Default::default()
+        }).unwrap();
+
+        db.fill_ranked(id, "MASTER", None, 412, None, None).unwrap();
+        let row = db.get_recording(id).unwrap().unwrap();
+        assert_eq!(row.tier.as_deref(), Some("MASTER"));
+        assert_eq!(row.division, None);
+    }
+
+    /// **The claim Decision 2 rests on.** The backfill writes through
+    /// `update_match_metadata`, which must not reach the rank columns — it
+    /// matches games on the clock and the client only reports the rank held
+    /// *now*, so filling an old row would stamp this season's rank onto a
+    /// game played in another one, and it would look entirely plausible.
+    #[test]
+    fn the_metadata_patch_cannot_touch_the_rank_columns() {
+        let db = Db::open(Path::new(":memory:")).unwrap();
+        let id = db.insert_recording(&NewRecording {
+            path: "/a.mp4".into(),
+            started_at: 1,
+            ..Default::default()
+        }).unwrap();
+        db.fill_ranked(id, "GOLD", Some("II"), 44, Some(24), Some(20)).unwrap();
+
+        db.update_match_metadata(id, &MatchMetadata {
+            win: Some(true),
+            champion: Some("Viego".into()),
+            role: Some("Jungle".into()),
+            ..Default::default()
+        }).unwrap();
+
+        let row = db.get_recording(id).unwrap().unwrap();
+        assert_eq!(row.champion.as_deref(), Some("Viego"), "the patch still works");
+        assert_eq!(row.tier.as_deref(), Some("GOLD"), "and left the rank alone");
+        assert_eq!(row.lp_after, Some(44));
+    }
+
+    /// **The Viego case.** Live Client Data reports a possessed Viego as
+    /// whoever he possessed, so a game ending mid-possession wrote the wrong
+    /// champion. The id the LCU answers with cannot be possessed, and the
+    /// deferred patch is allowed to correct the row from it.
+    #[test]
+    fn a_champion_the_game_got_wrong_is_corrected_from_the_id() {
+        let db = Db::open_in_memory().unwrap();
+        let id = a_finalized_row(&db);
+
+        // What the live path wrote while possessing a Vi.
+        db.correct_champion(id, "Vi").unwrap();
+        assert_eq!(db.get_recording(id).unwrap().unwrap().champion.as_deref(), Some("Vi"));
+
+        // What the client's own champion id resolves to.
+        assert!(db.correct_champion(id, "Viego").unwrap());
+        assert_eq!(db.get_recording(id).unwrap().unwrap().champion.as_deref(), Some("Viego"));
+    }
+
+    /// The correction is a method of its own precisely so the shared patch
+    /// stays incapable of it — the backfill goes through that one, and it
+    /// matches games on the clock rather than by id.
+    #[test]
+    fn the_shared_patch_still_cannot_rename_a_champion() {
+        let db = Db::open_in_memory().unwrap();
+        let id = a_finalized_row(&db);
+        db.correct_champion(id, "Viego").unwrap();
+
+        db.update_match_metadata(
+            id,
+            &MatchMetadata {
+                champion: Some("Vi".into()),
+                win: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let row = db.get_recording(id).unwrap().unwrap();
+        assert_eq!(row.champion.as_deref(), Some("Viego"), "the backfill's path must not rename");
+        assert_eq!(row.win, Some(true), "while still patching what it may");
+    }
+}
