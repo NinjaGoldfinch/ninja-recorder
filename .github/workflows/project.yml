@@ -1,0 +1,62 @@
+# Keep the project board in step with the repository.
+#
+# The board's own built-in workflows already handle everything that happens to an
+# item *once it is on the board* — closed issues move to Done, merged pull
+# requests move to Done, newly added items start at Todo. Those need no token and
+# no configuration, and they are why the board does not drift as work lands.
+#
+# What they do not do is put a *new* issue on the board in the first place.
+# GitHub's "Auto-add to project" built-in exists but is configured per-project in
+# the UI and cannot be committed, so it is invisible to review and easy to lose.
+# This workflow does the same job in a file.
+#
+# ## Setup, once
+#
+# `GITHUB_TOKEN` cannot write to a user-level project, so this needs a
+# fine-grained PAT with **read and write on Projects**, stored as the repository
+# secret `PROJECT_TOKEN`:
+#
+#     gh secret set PROJECT_TOKEN --repo NinjaGoldfinch/ninja-recorder-v2
+#
+# Until that secret exists this workflow no-ops rather than failing, so a fork or
+# a clone without it does not get a red X on every issue. The `if:` on the job is
+# what makes that true.
+name: Project
+
+on:
+  issues:
+    types: [opened, reopened, transferred]
+  pull_request_target:
+    types: [opened, reopened, ready_for_review]
+
+# Nothing here reads code from the pull request, and `pull_request_target` runs
+# against the base repository, so this stays read-only on contents.
+permissions:
+  contents: read
+
+jobs:
+  add-to-project:
+    name: Add to the ninja-recorder board
+    runs-on: ubuntu-latest
+    # Skips cleanly when the secret is absent rather than failing loudly on every
+    # issue. `secrets` is not allowed in a job-level `if`, so it goes through env.
+    if: ${{ github.repository == 'NinjaGoldfinch/ninja-recorder-v2' }}
+    steps:
+      - name: Check the token is configured
+        id: check
+        env:
+          TOKEN: ${{ secrets.PROJECT_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "PROJECT_TOKEN is not set — skipping. See the comment at the top of this file." >> "$GITHUB_STEP_SUMMARY"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Add
+        if: steps.check.outputs.ready == 'true'
+        uses: actions/add-to-project@v1.0.2
+        with:
+          project-url: https://github.com/users/NinjaGoldfinch/projects/4
+          github-token: ${{ secrets.PROJECT_TOKEN }}
