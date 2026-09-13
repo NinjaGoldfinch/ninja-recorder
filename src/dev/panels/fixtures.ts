@@ -7,10 +7,11 @@
  * the captured files listable, viewable, editable, and hands them to the
  * Simulate panel.
  */
-import type { Panel, PanelContext } from "../main";
+
 import { call, tryCall } from "../ipc";
-import { bytes, card, escapeHtml, output, panelHead, table, timestamp, toast } from "../ui";
+import type { Panel, PanelContext } from "../main";
 import type { FixturesState } from "../types";
+import { bytes, card, escapeHtml, output, panelHead, table, timestamp, toast } from "../ui";
 
 let root: HTMLElement | null = null;
 let ctx: PanelContext | null = null;

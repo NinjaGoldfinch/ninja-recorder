@@ -15,8 +15,9 @@
  * it — and `role`/`patch` are the certain ones, because only the deferred
  * patch writes them, which makes their absence evidence rather than a shrug.
  */
-import type { Panel } from "../main";
+
 import { tryCall } from "../ipc";
+import type { Panel } from "../main";
 import type {
   BackfillReport,
   FieldComparison,
@@ -153,8 +154,7 @@ function lcu(): string {
   const rowsHtml = c.fields
     .map((f: FieldComparison) => {
       const dash = "<span class='hint'>—</span>";
-      const mark =
-        f.verdict === "differ" ? "&#9888;" : f.verdict === "agree" ? "&#10003;" : "";
+      const mark = f.verdict === "differ" ? "&#9888;" : f.verdict === "agree" ? "&#10003;" : "";
       return `<tr class="verdict-${escapeHtml(f.verdict)}">
         <td><code>${escapeHtml(f.field)}</code></td>
         <td>${f.stored === null ? dash : escapeHtml(f.stored)}</td>
@@ -230,7 +230,7 @@ function actions(r: RecordingReport): string {
          : `<p class="hint">The deferred patch is unavailable: this row has no
             <code>game_id</code>, so there is no game to ask about. The backfill is the
             one that works without one — it matches on the clock.</p>`
-     }
+}
      <p class="hint">These write. The report above does not, and re-reads itself once an
      action finishes so what you are looking at is what the row now says.</p>
      ${result}`,

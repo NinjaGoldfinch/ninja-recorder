@@ -14,9 +14,9 @@
  * is far too much to hand a webview in one string, so `dev_read_log` does
  * the matching and returns a window.
  */
+
+import { clearLog, type LogEntry, logEntries, onLog, POLLED_COMMANDS, tryCall } from "../ipc";
 import type { Panel } from "../main";
-import { clearLog, logEntries, onLog, POLLED_COMMANDS, type LogEntry } from "../ipc";
-import { tryCall } from "../ipc";
 import type { LogFileInfo, LogPage } from "../types";
 import { bytes, clockTime, escapeHtml, output, panelHead, toast } from "../ui";
 
@@ -31,10 +31,10 @@ let source: Source = "backend";
 
 /** Every level, so an untouched panel shows the whole file. */
 const LEVELS = ["ERROR", "WARN", "INFO", "DEBUG"] as const;
-let levels = new Set<string>(LEVELS);
+const levels = new Set<string>(LEVELS);
 /** Tags to *hide*. The high-volume streams are off by default: at 1 Hz
  *  `live-poll` alone would bury a session's real errors. */
-let hiddenTags = new Set<string>(["live-poll", "libobs"]);
+const hiddenTags = new Set<string>(["live-poll", "libobs"]);
 let backendFile: string | null = null;
 let backendSearch = "";
 let page: LogPage | null = null;
@@ -178,7 +178,10 @@ function drawList(entries: readonly LogEntry[]) {
       const args = e.args ? JSON.stringify(e.args) : "";
       const detail =
         expanded === e.id
-          ? output(e.ok ? { args: e.args, result: e.result } : { args: e.args, error: e.error }, !e.ok)
+          ? output(
+              e.ok ? { args: e.args, result: e.result } : { args: e.args, error: e.error },
+              !e.ok,
+            )
           : "";
       return `<div class="log-entry ${e.ok ? "ok" : "err"}" data-id="${e.id}">
         <span class="t">${clockTime(e.at)}</span>

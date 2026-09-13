@@ -8,25 +8,18 @@
  * has never run against a real client. Everything on this page pushes
  * synthetic input through that real code path.
  */
-import type { Panel } from "../main";
+
 import { tryCall } from "../ipc";
+import type { Panel } from "../main";
 import {
-  card,
-  duration,
-  escapeHtml,
-  kv,
-  output,
-  panelHead,
-  toast,
-} from "../ui";
-import {
-  GAME_STATES,
   type DevSessionView,
   type DispatchReport,
   type FixturesState,
+  GAME_STATES,
   type InjectReport,
   type ReplayStatus,
 } from "../types";
+import { card, duration, escapeHtml, kv, output, panelHead, toast } from "../ui";
 
 /** The transitions that matter, in the order a real game hits them. */
 const EVENTS: Array<{ label: string; event: Record<string, unknown>; note: string }> = [
@@ -74,13 +67,42 @@ const EVENTS: Array<{ label: string; event: Record<string, unknown>; note: strin
 
 const DEFAULT_REPLAY_EVENTS = [
   { event_time: 92, event_name: "FirstBlood", Recipient: "Ahri" },
-  { event_time: 92, event_name: "ChampionKill", KillerName: "Ahri", VictimName: "Sylas", Assisters: [] },
-  { event_time: 260, event_name: "ChampionKill", KillerName: "Viego", VictimName: "Ahri", Assisters: [] },
+  {
+    event_time: 92,
+    event_name: "ChampionKill",
+    KillerName: "Ahri",
+    VictimName: "Sylas",
+    Assisters: [],
+  },
+  {
+    event_time: 260,
+    event_name: "ChampionKill",
+    KillerName: "Viego",
+    VictimName: "Ahri",
+    Assisters: [],
+  },
   { event_time: 420, event_name: "DragonKill", KillerName: "Ahri", DragonType: "Infernal" },
-  { event_time: 430, event_name: "ChampionKill", KillerName: "Ahri", VictimName: "Kai'Sa", Assisters: [] },
-  { event_time: 436, event_name: "ChampionKill", KillerName: "Ahri", VictimName: "Nami", Assisters: [] },
+  {
+    event_time: 430,
+    event_name: "ChampionKill",
+    KillerName: "Ahri",
+    VictimName: "Kai'Sa",
+    Assisters: [],
+  },
+  {
+    event_time: 436,
+    event_name: "ChampionKill",
+    KillerName: "Ahri",
+    VictimName: "Nami",
+    Assisters: [],
+  },
   { event_time: 441, event_name: "Ace", Acer: "Ahri", AcingTeam: "ORDER" },
-  { event_time: 700, event_name: "TurretKilled", KillerName: "Ahri", TurretKilled: "Turret_T2_C_05_A" },
+  {
+    event_time: 700,
+    event_name: "TurretKilled",
+    KillerName: "Ahri",
+    TurretKilled: "Turret_T2_C_05_A",
+  },
   { event_time: 980, event_name: "BaronKill", KillerName: "Ahri" },
 ];
 
@@ -131,8 +153,8 @@ function sessionSummary(): string {
 
 function draw() {
   if (!root) return;
-  const liveClientFixtures = (fixtures?.entries ?? []).filter((f) =>
-    f.group.includes("live-client") || f.name.includes("allgamedata"),
+  const liveClientFixtures = (fixtures?.entries ?? []).filter(
+    (f) => f.group.includes("live-client") || f.name.includes("allgamedata"),
   );
 
   root.innerHTML =
@@ -145,7 +167,10 @@ function draw() {
       <code>Recorder::start</code> and <code>Recorder::stop</code> included — and a finalize writes
       a real row and a real file.
     </div>` +
-    card("Current state", stateStrip() + `<div style="margin-top:.8rem">${sessionSummary()}</div>`) +
+    card(
+      "Current state",
+      stateStrip() + `<div style="margin-top:.8rem">${sessionSummary()}</div>`,
+    ) +
     card(
       "State events",
       `<div class="row">${EVENTS.map(
@@ -459,7 +484,9 @@ export const simulatePanel: Panel = {
         if (out) {
           // `null` is a real answer here — no such id, or the fetch failed —
           // so it has to render as something, not as an empty box.
-          const value = result.ok ? (result.value ?? "null — no name (see the Log panel)") : result.error;
+          const value = result.ok
+            ? (result.value ?? "null — no name (see the Log panel)")
+            : result.error;
           out.innerHTML = output(value, !result.ok);
         }
         return;

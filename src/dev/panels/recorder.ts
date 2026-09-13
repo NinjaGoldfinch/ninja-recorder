@@ -1,8 +1,9 @@
 /** Capture backend: identity, preflight, and a manual start/stop. */
-import type { Panel, PanelContext } from "../main";
+
 import { tryCall } from "../ipc";
-import { bytes, card, kv, output, panelHead, toast } from "../ui";
+import type { Panel, PanelContext } from "../main";
 import type { DevHealth } from "../types";
+import { bytes, card, kv, output, panelHead, toast } from "../ui";
 
 let root: HTMLElement | null = null;
 let ctx: PanelContext | null = null;
@@ -36,9 +37,7 @@ function draw() {
         ["Free space", bytes(health?.free_bytes)],
         [
           "Preflight",
-          lowSpace
-            ? "would REFUSE — under the 1 GiB minimum"
-            : "would allow — at least 1 GiB free",
+          lowSpace ? "would REFUSE — under the 1 GiB minimum" : "would allow — at least 1 GiB free",
         ],
       ]) +
         (env?.recorder_backend === "stub"
@@ -48,7 +47,7 @@ function draw() {
                env.sample_mp4_present
                  ? "It is present, so stub recordings are playable."
                  : "It is not checked in, so stub recordings will not play."
-             }</p>`
+}</p>`
           : ""),
     ) +
     card(

@@ -1,5 +1,21 @@
 import { call } from "./bridge";
+import { revealRowInspectors } from "./devportal";
 import { el, escapeAttr, escapeHtml } from "./dom";
+import {
+  formatBytes,
+  formatClock,
+  formatDateTime,
+  formatKda,
+  formatRelative,
+  formatSpan,
+  kdaRatio,
+  lpLabel,
+  patchLabel,
+  queueOrModeLabel,
+  rankLabel,
+  vodHeading,
+  vodTitle,
+} from "./format";
 import {
   championIcon,
   itemIcon,
@@ -9,32 +25,11 @@ import {
   spellIcon,
   spellIconById,
 } from "./icons";
-import {
-  formatBytes,
-  formatClock,
-  formatDateTime,
-  formatKda,
-  formatRelative,
-  patchLabel,
-  formatSpan,
-  kdaRatio,
-  lpLabel,
-  queueOrModeLabel,
-  rankLabel,
-  vodHeading,
-  vodTitle,
-} from "./format";
-import { revealRowInspectors } from "./devportal";
 import { getPrefs } from "./prefs";
-import { currentView, onViewChange } from "./router";
 import { openReview } from "./review";
+import { currentView, onViewChange } from "./router";
 import { toast } from "./toast";
-import type {
-  DiskUsage,
-  ReconcileReport,
-  RecordingRow,
-  ScoreboardPlayer,
-} from "./types";
+import type { DiskUsage, ReconcileReport, RecordingRow, ScoreboardPlayer } from "./types";
 
 interface Els {
   grid: HTMLElement;
@@ -269,8 +264,7 @@ function refreshFacets() {
     // disabled: retention or a delete can take the library down to the one
     // value already selected, and greying the control there would leave the
     // selection with no way to undo it from the control that made it.
-    facet.select.disabled =
-      facet.select.options.length < 3 && facet.select.value === ANY;
+    facet.select.disabled = facet.select.options.length < 3 && facet.select.value === ANY;
   }
 }
 
@@ -292,7 +286,6 @@ function clearFilters() {
   for (const facet of facets) facet.select.value = ANY;
   render();
 }
-
 
 export async function refreshLibrary() {
   try {
@@ -500,12 +493,8 @@ function renderStats(rows: RecordingRow[]) {
     timed.length === rows.length ? "" : `${rows.length - timed.length} unknown`;
 
   // `size_bytes` is NOT NULL DEFAULT 0, so no null handling here.
-  els.statDisk.textContent = formatBytes(
-    rows.reduce((total, r) => total + r.size_bytes, 0),
-  );
-  els.statDiskSub.textContent = usage
-    ? `${formatBytes(usage.free_bytes)} free`
-    : "";
+  els.statDisk.textContent = formatBytes(rows.reduce((total, r) => total + r.size_bytes, 0));
+  els.statDiskSub.textContent = usage ? `${formatBytes(usage.free_bytes)} free` : "";
 }
 
 /** "8.3 /min", or nothing when either half is missing. */
@@ -791,8 +780,8 @@ function onGridClick(e: MouseEvent) {
   if (inspect) {
     // Opens the portal *on* this recording. The id goes over as a number and
     // Rust builds the fragment, so nothing string-shaped reaches a URL.
-    void call("dev_open_portal", { recordingId: Number(inspect.dataset.inspect) }).catch(
-      (err) => console.warn("dev portal unavailable:", err),
+    void call("dev_open_portal", { recordingId: Number(inspect.dataset.inspect) }).catch((err) =>
+      console.warn("dev portal unavailable:", err),
     );
     return;
   }

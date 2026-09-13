@@ -82,12 +82,7 @@ function isUpdateChannel(value: unknown): value is UpdateChannelPref {
 }
 
 function isSort(value: unknown): value is SortKey {
-  return (
-    value === "newest" ||
-    value === "oldest" ||
-    value === "longest" ||
-    value === "champion"
-  );
+  return value === "newest" || value === "oldest" || value === "longest" || value === "champion";
 }
 
 function readCache<T>(key: string, guard: (v: unknown) => v is T, fallback: T): T {

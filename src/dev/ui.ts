@@ -43,7 +43,9 @@ export function kv(pairs: Array<[string, string | null | undefined]>, plain = fa
     .map(
       ([k, v]) =>
         `<dt>${escapeHtml(k)}</dt><dd class="${plain ? "plain" : ""}">${
-          v === null || v === undefined || v === "" ? `<span class="hint">—</span>` : escapeHtml(String(v))
+          v === null || v === undefined || v === ""
+            ? `<span class="hint">—</span>`
+            : escapeHtml(String(v))
         }</dd>`,
     )
     .join("")}</dl>`;
@@ -61,7 +63,7 @@ export function pill(label: string, value: string, tone: PillTone = "", live = f
 /** Pretty-prints any value. Errors render in the danger style. */
 export function output(value: unknown, isError = false): string {
   const text =
-    typeof value === "string" ? value : JSON.stringify(value, null, 2) ?? String(value);
+    typeof value === "string" ? value : (JSON.stringify(value, null, 2) ?? String(value));
   return `<pre class="output${isError ? " output-error" : ""}">${escapeHtml(text)}</pre>`;
 }
 
@@ -73,11 +75,7 @@ export interface TableOptions {
   emptyMessage?: string;
 }
 
-export function table(
-  columns: string[],
-  rows: unknown[][],
-  options: TableOptions = {},
-): string {
+export function table(columns: string[], rows: unknown[][], options: TableOptions = {}): string {
   if (rows.length === 0) {
     return `<p class="hint">${escapeHtml(options.emptyMessage ?? "No rows.")}</p>`;
   }

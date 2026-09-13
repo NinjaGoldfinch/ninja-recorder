@@ -11,8 +11,9 @@
  * fields. A row of eleven numbers is not an answer; "we were never found
  * in allPlayers, which is why this card has no champion" is.
  */
-import type { Panel } from "../main";
+
 import { tryCall } from "../ipc";
+import type { Panel } from "../main";
 import type { RecordingDiagnostics, RecordingRow } from "../types";
 import { card, duration, escapeHtml, kv, output, panelHead, timestamp, toast } from "../ui";
 
@@ -36,23 +37,33 @@ function concerns(row: RecordingRow, d: RecordingDiagnostics): string[] {
   const out: string[] = [];
 
   if (d.polls === 0) {
-    out.push("The Live Client Data poller never got a single snapshot, so there are no markers, no samples and no champion.");
+    out.push(
+      "The Live Client Data poller never got a single snapshot, so there are no markers, no samples and no champion.",
+    );
   } else if (!d.ever_matched) {
-    out.push("We were never found in allPlayers — which is exactly why this recording has no champion, no KDA and an empty advantage curve.");
+    out.push(
+      "We were never found in allPlayers — which is exactly why this recording has no champion, no KDA and an empty advantage curve.",
+    );
   }
 
   if (d.game_id === null) {
-    out.push("The client never said which game this was, so queue, role and patch can never be filled in for it.");
+    out.push(
+      "The client never said which game this was, so queue, role and patch can never be filled in for it.",
+    );
   }
 
   if (d.alignment_offset_s === null && d.polls > 0) {
-    out.push("The game clock was never seen to advance, so markers fall back to a 1:1 alignment and may sit in the wrong place.");
+    out.push(
+      "The game clock was never seen to advance, so markers fall back to a 1:1 alignment and may sit in the wrong place.",
+    );
   }
 
   // The #74 fingerprint: polling died well before the recorder did.
   const gap = pollingStoppedEarlyBy(row, d);
   if (gap !== null && gap > 10) {
-    out.push(`Polling stopped about ${gap.toFixed(0)}s before the recording did — the endpoint went away while the capture kept running.`);
+    out.push(
+      `Polling stopped about ${gap.toFixed(0)}s before the recording did — the endpoint went away while the capture kept running.`,
+    );
   }
 
   if (/fail/i.test(d.backend)) {
