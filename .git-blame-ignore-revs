@@ -1,0 +1,15 @@
+# Commits that changed formatting and nothing else. `git blame` skips them and
+# attributes each line to the commit that last changed its meaning.
+#
+# Turn it on once per clone — git does not read this file by default:
+#
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# GitHub's blame view reads it automatically and needs no configuration.
+#
+# Only add a commit here if it is genuinely behaviour-free. A commit that
+# reformatted *and* fixed something makes the fix invisible to blame forever,
+# which is worse than the noise it was meant to remove.
+
+# style: apply Biome formatting and import sorting
+ef099d638a964a89e4dbd31c8828e634b4d5bfed

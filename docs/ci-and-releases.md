@@ -14,7 +14,7 @@ is skipped until a commit reaches `main`.
 ```mermaid
 flowchart TB
     subgraph PR["Pull request"]
-        T1["<b>Test</b> (windows-latest)<br/>tsc --noEmit<br/>cargo test ×2<br/>cargo clippy ×2<br/><small>±devtools, no --all-targets</small>"]
+        T1["<b>Test</b> (windows-latest)<br/>biome ci · tsc --noEmit · vitest<br/>cargo deny check<br/>cargo test ×2<br/>cargo clippy ×2<br/><small>±devtools, no --all-targets</small>"]
     end
     subgraph MAIN["Push to main / manual dispatch"]
         T["<b>Test</b> (windows-latest)"]
@@ -33,15 +33,88 @@ flowchart TB
 
 ### What `test` runs
 
-`tsc --noEmit`, then the Rust half twice — with and without `--features
-devtools` — for both `cargo test` and `cargo clippy -- -D warnings`. An
-off-by-default feature is otherwise never compiled by CI, and a broken
-`#[cfg]` would stay green until someone opened the dev portal
+Nine steps, and the order is part of the design: the cheap gates run first, so
+a formatting mistake fails in seconds rather than after a four-minute compile.
+
+| # | Step | Gate | Added by |
+|---|---|---|---|
+| 1 | `npm ci` | — | v1 |
+| 2 | `npx biome ci .` | lint + format, one binary | WS5.4 |
+| 3 | `npx tsc --noEmit` | TypeScript types | v1 |
+| 4 | *(`npx svelte-check`)* | types `tsc` cannot see | **WS4.1 — commented** |
+| 5 | `npx vitest run` | frontend unit tests | WS5.5 |
+| 6 | `cargo deny check` | licences + advisories | WS5.3 |
+| 7 | *(`cargo run --bin gen-contract -- --check`)* | contract drift | **WS2.5 — commented** |
+| 8 | `cargo test`, `cargo test --features devtools` | Rust tests, both feature sets | v1 |
+| 9 | `cargo clippy -- -D warnings`, and again with `--features devtools` | Rust lints, both feature sets | v1 |
+
+Steps 4 and 7 are commented placeholders in `ci.yml`, sitting in their final
+position so that turning them on is uncommenting a block rather than deciding
+where it goes.
+
+**Why each of the new ones is there.**
+
+- **Biome** replaces nothing, because nothing existed. v1 shipped 12,797 lines
+  of TypeScript with no linter and no formatter. `ci` is the non-writing mode:
+  it reports what `npm run format` would change and fails instead of changing
+  it.
+- **`svelte-check`** is not optional once WS4 starts. `tsc` does not look
+  inside `.svelte` files at all, so without it the type gate silently narrows
+  to "whatever TypeScript is left" as the migration proceeds — the gate would
+  appear to keep passing while covering less each week.
+- **Vitest** likewise: 0 tests against 447 on the Rust side is most of why the
+  frontend is the half being replaced, and a strangler migration needs tests on
+  the code being strangled.
+- **cargo-deny** is the instrument of the v2.1 licence exit, not hygiene. See
+  [the licences and advisories gate](#licences-and-advisories) below.
+- **`gen-contract --check`** replaces `every_command_round_trips` in
+  `core/dispatch.rs` *and* the dev portal's drift banner. Both stay until it
+  exists; none of the three overlaps the others until then.
+
+The Rust half runs twice — with and without `--features devtools` — for both
+`cargo test` and `cargo clippy -- -D warnings`. An off-by-default feature is
+otherwise never compiled by CI, and a broken `#[cfg]` would stay green until
+someone opened the dev portal
 ([DEVELOPMENT.md §9](../DEVELOPMENT.md#9-development-workflow)).
 
 Clippy is **not** passed `--all-targets`, so the test targets are never
 compiled and anything only the tests call is dead code under `-D warnings`.
 A local run that adds `--all-targets` will not reproduce that failure.
+
+### The compiler is pinned
+
+`src-tauri/rust-toolchain.toml` names an exact stable version, and both
+`dtolnay/rust-toolchain` steps take **no version argument** so they read it.
+That missing argument is load-bearing: `@stable` would win, and the pin would
+be a file in the tree that looked like it was in force and was not.
+
+Two CI runs a week apart now use the same compiler, which is the whole point —
+a build that breaks on Tuesday and not on Monday has one candidate cause
+instead of two. Bump it in its own PR; new lints are the expected content of
+that diff.
+
+### Licences and advisories
+
+`cargo deny check` runs all four of cargo-deny's checks against
+[`src-tauri/deny.toml`](../src-tauri/deny.toml).
+
+The licence half is **the mechanism of the v2.1 relicence, not hygiene.** This
+project is GPL-2.0 because libobs is, and only because libobs is. Every licence
+not on the allow list fails, with exactly two GPL exceptions: this crate, and
+the libobs fork — one dependency that resolves to five crates
+(`libobs-recorder`, `intprocess-recorder`, `ipc-link`, `libobs-sys`,
+`build-helper`). WS8 deletes them as a block, and that deletion is what proves
+no other copyleft dependency arrived in the five months in between. **A third
+exception needs a conversation, not a commit.**
+
+The graph is pinned to `x86_64-pc-windows-msvc`, the only target that ships.
+Without that pin a developer on macOS and a CI run on Windows resolve different
+dependency graphs, and "cargo deny is green" would mean two different things
+depending on who said it.
+
+See [docs/provenance.md](provenance.md) for the debt the exceptions record —
+including that the fork is pinned to a *branch*, because it has no tags, which
+is why `[bans] wildcards` is `warn` rather than `deny` until WS1.7.
 
 ### Why pull requests don't build
 
@@ -75,6 +148,18 @@ compiles the non-Windows code paths any more** — `StubRecorder` and everything
 behind `cfg(not(target_os = "windows"))` are what make `cargo test` work on a
 dev box, and a break in them surfaces there rather than here. Accepted rather
 than overlooked: the dev loop hits it within seconds of the change.
+
+Windows is now the only platform in the whole workflow, which has one
+consequence worth stating for the gates above: **the Windows-only Rust code is
+the code CI compiles, and the Windows-only Rust code is also the only code a
+Linux or macOS dev box does not.** `recorder/devices.rs`, `recorder/libobs/`
+and anything else behind `cfg(target_os = "windows")` are checked here and
+nowhere else. A change to them that compiles locally has been checked by
+nothing.
+
+**Node is 22**, not 20: Vitest 5 refuses to start below 22.12, and Node 20 left
+maintenance in April 2026. Both jobs move together so there is one Node in this
+workflow rather than two.
 
 ## Version and channels
 
