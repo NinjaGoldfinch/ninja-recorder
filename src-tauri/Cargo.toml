@@ -50,7 +50,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "nat
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 native-tls = "0.2"
 futures-util = "0.3"
-base64 = "0.22"
+base64 = "0.23"
 rusqlite = { version = "0.32", features = ["bundled"] }
 rusqlite_migration = "1"
 # Cross-platform free-disk-space query for the record-start preflight check
