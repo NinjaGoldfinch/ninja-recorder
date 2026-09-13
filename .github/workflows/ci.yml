@@ -62,7 +62,7 @@ jobs:
     steps:
       # Full history and every tag: the distance below is measured against
       # them, and a shallow clone would silently under-count.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -172,14 +172,14 @@ jobs:
         platform: [windows-latest]
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # 22, not 20. Vitest 5 refuses to run on anything below 22.12
       # (`engines: ^22.12.0 || ^24 || >=26`), and Node 20 went out of
       # maintenance in April 2026. Both jobs move together so there is one
       # Node in this workflow rather than two.
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -302,14 +302,14 @@ jobs:
     needs: version
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # 22, not 20. Vitest 5 refuses to run on anything below 22.12
       # (`engines: ^22.12.0 || ^24 || >=26`), and Node 20 went out of
       # maintenance in April 2026. Both jobs move together so there is one
       # Node in this workflow rather than two.
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -385,7 +385,7 @@ jobs:
       - name: Cache libobs backend + ffmpeg
         if: matrix.platform == 'windows-latest'
         id: libobs-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: src-tauri/target/libobs
           key: libobs-${{ runner.os }}-${{ steps.libobs-rev.outputs.rev }}-ffmpeg-epoch2
@@ -531,7 +531,7 @@ jobs:
           npm run tauri build -- "${args[@]}"
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ninja-recorder${{ matrix.devtools && '-devtools' || '' }}-${{ matrix.platform }}-${{ github.sha }}
           path: src-tauri/target/release/bundle
@@ -578,12 +578,12 @@ jobs:
       # fetch-depth: 0 because the notes step below needs full history and
       # every tag to resolve the previous release and the commit range.
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Download Windows bundle
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ninja-recorder-windows-latest-${{ github.sha }}
           path: artifacts/windows
@@ -716,7 +716,7 @@ jobs:
       # added latency rather than a check. `target_commitish` pins which
       # commit the tag is created on.
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ needs.version.outputs.version }}
           target_commitish: ${{ github.sha }}
