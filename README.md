@@ -31,8 +31,8 @@ not here. This repository is the code; that one is the argument for it.
 
 ## Workstreams
 
-From the implementation plan's §1. Three of the eight have no dependency on
-anything and could start on day one.
+From the implementation plan's §1. WS0, WS2 and WS5 depend on nothing and could
+start on day one; WS1's spike could too.
 
 | | WS | What | Gated by | Effort |
 |---|---|---|---|---|
