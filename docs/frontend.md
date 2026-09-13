@@ -593,6 +593,17 @@ stay in the UI process; `dev_registered_commands` must stay direct because
 `devportal.ts` detects the portal's existence by watching that call *reject* in
 a shipped build.
 
+> **The `Returns` column is no longer the source of truth.** Since WS2.1 every
+> row of `dispatch_table!` declares its own return type, and the compiler checks
+> the declaration against the function — a wrong one is an `E0308` at the `?`,
+> not a silent disagreement. `core::dispatch::contract_manifest()` is where that
+> lives now, and WS2.5's generator emits the TypeScript from it.
+>
+> This table survives because it carries the one thing the manifest does not:
+> **which part of the UI uses each command.** Keep that column accurate. If the
+> `Returns` column and the manifest ever disagree, the manifest is right — and
+> WS2.5 deletes this column rather than fixing it.
+
 | Command | Returns | Used by |
 |---|---|---|
 | `list_recordings` | `Vec<RecordingRow>` | library grid |
