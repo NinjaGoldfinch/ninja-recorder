@@ -177,8 +177,12 @@ async fn pump(
 
     // The same WAMP-lite subscribe the gameflow watch uses, and the same
     // firehose — the difference is that nothing is filtered out here.
+    // `.into()` for the same reason as the gameflow watch: `Message::Text`
+    // carries `Utf8Bytes` since tokio-tungstenite 0.26.
     ws.send(Message::Text(
-        serde_json::to_string(&(5, "OnJsonApiEvent")).map_err(|e| e.to_string())?,
+        serde_json::to_string(&(5, "OnJsonApiEvent"))
+            .map_err(|e| e.to_string())?
+            .into(),
     ))
     .await
     .map_err(|e| e.to_string())?;
