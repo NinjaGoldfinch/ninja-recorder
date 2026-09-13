@@ -158,12 +158,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 22, not 20. Vitest 5 refuses to run on anything below 22.12
+      # (`engines: ^22.12.0 || ^24 || >=26`), and Node 20 went out of
+      # maintenance in April 2026. Both jobs move together so there is one
+      # Node in this workflow rather than two.
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
+      # No version argument, deliberately: that is what makes the action read
+      # `src-tauri/rust-toolchain.toml` instead of overriding it. `@stable`
+      # here would silently un-pin the compiler while the file sat in the tree
+      # looking like it was in force.
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -172,11 +180,47 @@ jobs:
         with:
           workspaces: src-tauri
 
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@cargo-deny
+
+      # The order below is the plan's §4.7, and it is an order rather than a
+      # list: the cheap gates run first so a formatting mistake fails in
+      # seconds instead of after a four-minute compile.
       - name: Install frontend dependencies
         run: npm ci
 
+      # Lint and format in one binary. `ci` is the non-writing mode — it
+      # reports what `npm run format` would change and fails rather than
+      # changing it.
+      - name: Lint and format check (Biome)
+        run: npx biome ci .
+
       - name: Type-check frontend
         run: npx tsc --noEmit
+
+      # WS4.1: uncomment when the first `.svelte` file lands. `tsc` does not
+      # see `.svelte` files at all, so without this the type gate silently
+      # narrows to "the TypeScript that is left".
+      # - name: Type-check Svelte
+      #   run: npx svelte-check --tsconfig ./tsconfig.json
+
+      - name: Frontend tests
+        run: npx vitest run
+
+      # Licences and advisories. This is the v2.1 licence exit's instrument,
+      # not hygiene: `deny.toml` allows GPL for exactly two named things, and
+      # deleting them is what proves no other copyleft crept in. See
+      # docs/provenance.md.
+      - name: Licences and advisories (cargo-deny)
+        working-directory: src-tauri
+        run: cargo deny check
+
+      # WS2.5: uncomment when the generator exists. It replaces
+      # `every_command_round_trips` in `core/dispatch.rs` and the dev portal's
+      # drift banner — both of which stay until it does.
+      # - name: Contract drift
+      #   working-directory: src-tauri
+      #   run: cargo run --bin gen-contract -- --check
 
       - name: Run Rust tests
         working-directory: src-tauri
@@ -244,12 +288,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 22, not 20. Vitest 5 refuses to run on anything below 22.12
+      # (`engines: ^22.12.0 || ^24 || >=26`), and Node 20 went out of
+      # maintenance in April 2026. Both jobs move together so there is one
+      # Node in this workflow rather than two.
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
+      # Same as `test`: no version argument, so `rust-toolchain.toml` is
+      # what decides. The shipped installer and the tests that cleared it
+      # have to be built by the same compiler for either result to mean
+      # anything.
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
