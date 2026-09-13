@@ -55,12 +55,28 @@ jobs:
       version: ${{ steps.pick.outputs.version }}
       channel: ${{ steps.pick.outputs.channel }}
       release: ${{ steps.pick.outputs.release }}
+      # Whether this repository holds a signing key, and therefore whether it is
+      # allowed to publish at all. Read here because `secrets` cannot be used in
+      # a job-level `if` — see the `release` job.
+      can_publish: ${{ steps.can_publish.outputs.can_publish }}
     steps:
       # Full history and every tag: the distance below is measured against
       # them, and a shallow clone would silently under-count.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Can this repository publish?
+        id: can_publish
+        env:
+          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -n "$SIGNING_KEY" ]; then
+            echo "can_publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "can_publish=false" >> "$GITHUB_OUTPUT"
+            echo "No TAURI_SIGNING_PRIVATE_KEY — building without publishing." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Pick version
         id: pick
@@ -503,7 +519,23 @@ jobs:
   # cross-run download dance and its `actions: read` token are both gone.
   release:
     name: Release
-    if: needs.version.outputs.release == 'true'
+    # Two conditions, and the second is a guard rather than policy.
+    #
+    # **Without it, the first push to main in a fresh clone publishes a
+    # release.** `version` sets `release=true` for any push to main, so merging
+    # a branch mints `<declared>-alpha.<n>`, builds two Windows bundles, and
+    # then fails partway through this job — *after* creating the GitHub Release
+    # — because the updater artifacts cannot be signed. That leaves a broken
+    # release to delete by hand, on a repository whose README says there are
+    # none.
+    #
+    # `can_publish` comes from the `version` job because **the `secrets` context
+    # is not available in a job-level `if`** — it has to be read inside a step
+    # and handed on as an output. The signing key doubles as the switch that
+    # says "this repository is allowed to publish": a fork has none and quietly
+    # builds without publishing, and this one starts publishing the moment the
+    # key is added, which is WS7's business and not before.
+    if: needs.version.outputs.release == 'true' && needs.version.outputs.can_publish == 'true'
     needs: [version, test, build]
     runs-on: ubuntu-latest
     permissions:
