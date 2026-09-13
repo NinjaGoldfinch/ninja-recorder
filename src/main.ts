@@ -1,12 +1,12 @@
 import { listen } from "@tauri-apps/api/event";
 
 import { initDesktop } from "./desktop";
-import { el } from "./dom";
 import { initDevPortal } from "./devportal";
+import { el } from "./dom";
 import { applyDefaultSort, initLibrary, refreshDiskUsage, refreshLibrary } from "./library";
 import { loadPrefs } from "./prefs";
-import { initRouting, registerView } from "./router";
 import { initReview } from "./review";
+import { initRouting, registerView } from "./router";
 import { initSettings, syncSettingsFromPrefs } from "./settings";
 import { initStatus } from "./status";
 import { applyThemePref, initTheme } from "./theme";

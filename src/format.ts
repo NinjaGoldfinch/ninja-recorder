@@ -23,9 +23,7 @@ export function formatClock(seconds: number): string {
   const m = Math.floor((seconds % 3600) / 60);
   const s = Math.floor(seconds % 60);
   if (h > 0) {
-    return `${h}:${m.toString().padStart(2, "0")}:${s
-      .toString()
-      .padStart(2, "0")}`;
+    return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
   }
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
@@ -182,10 +180,7 @@ export function vodTitle(row: RecordingRow): string {
  *
  * The filename can reach this through `vodTitle`, so callers still escape it.
  */
-export function vodHeading(
-  row: RecordingRow,
-  opponent: string | null = null,
-): string {
+export function vodHeading(row: RecordingRow, opponent: string | null = null): string {
   const base = opponent === null ? vodTitle(row) : `${vodTitle(row)} vs ${opponent}`;
   // An undecided game says nothing rather than guessing, exactly as the row's
   // own outcome word does — a heading is the last place to imply a result.

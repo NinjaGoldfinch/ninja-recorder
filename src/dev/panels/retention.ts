@@ -6,10 +6,11 @@
  * and takes an injected clock, so previewing — including at a fabricated
  * "now", to test an age rule without waiting days — costs nothing.
  */
-import type { Panel, PanelContext } from "../main";
+
 import { call, tryCall } from "../ipc";
-import { bytes, card, confirmDialog, output, panelHead, table, timestamp, toast } from "../ui";
+import type { Panel, PanelContext } from "../main";
 import type { DevHealth, RetentionPolicy, RetentionPreview } from "../types";
+import { bytes, card, confirmDialog, output, panelHead, table, timestamp, toast } from "../ui";
 
 const GIB = 1024 ** 3;
 const DAY = 24 * 60 * 60 * 1000;

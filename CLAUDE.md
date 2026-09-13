@@ -4,151 +4,238 @@ Guidance for Claude Code and anyone else working in this repo.
 
 ## The project
 
-`ninja-recorder` — a League of Legends VOD recorder. One Tauri v2 process:
-Rust core in `src-tauri/`, vanilla-TypeScript frontend in `src/`.
+`ninja-recorder-v2` — a League of Legends VOD recorder. **v2 is v1 with five
+things being changed underneath it, one workstream at a time**, not a rewrite:
+Tauri, Rust, SQLite, files-as-truth, H.264/AAC in fragmented MP4 and the
+`Recorder` trait all stay. The frontend, the IPC contract, the process model,
+the quality gates and the capture backend are what move.
+
+The plan is in a separate repository:
+[ninja-recorder-v2-plan](https://github.com/NinjaGoldfinch/ninja-recorder-v2-plan).
+Section numbers cited below (§3.1, §4.7, Appendix D) are that repository's
+implementation plan. [docs/provenance.md](docs/provenance.md) records what was
+copied from v1, from which commit, and what is owed because of it.
 
 Read [docs/architecture.md](docs/architecture.md) before making a change you
 can't fully see the blast radius of.
 
 ---
 
-## Documentation is part of the change
+## Module ownership — which process owns what
 
-**A behaviour change and the doc update that reflects it belong in the same
-commit.** A diagram that lies is worse than no diagram. Use this table to work
-out what to touch.
+This is §3.1's table, and it is the question to ask before putting code
+anywhere. **The daemon owns everything that must outlive the UI. The UI is
+disposable.** Killing it must not stop a recording or lose a marker.
 
-| If you change… | Update… |
+| Concern | Daemon | UI |
+|---|---|---|
+| Supervisor, state machine, LCU/Live Client watchers | owns | receives `state.changed` events |
+| `Recorder` and the capture backend | owns | **never links it** |
+| SQLite schema, migrations, every write | owns | own connection, `query_only = ON`, reads directly |
+| Tray icon, autostart Run key, update check + install | owns (needs the Win32 pump) | shows status from events; "Install" is an RPC |
+| Log file | owns `daemon.log` | owns `ui.log`; both under `app_data_dir()/logs/` |
+| Desktop notifications | owns | — |
+| `open_recordings_folder`, window management | — | owns |
+| Dev portal (`devtools` feature) | serves `dev_*` over the pipe | hosts `dev.html` |
+
+### Stub directories are empty on purpose
+
+Each carries a doc comment naming the workstream and tasks that fill it in.
+Adding code to one before its workstream starts is how two workstreams end up
+disagreeing about the same file.
+
+| Path | Owner |
 |---|---|
-| `src-tauri/src/state_machine/` | [docs/recording-pipeline.md](docs/recording-pipeline.md) — the state diagram, the transition table, the edge-case table |
-| `src-tauri/src/lcu/`, `src-tauri/src/live_client/` | [docs/recording-pipeline.md](docs/recording-pipeline.md) — the sequence diagram, signal cadences, the events→markers flowchart |
-| `src-tauri/src/recorder/` | [docs/architecture.md](docs/architecture.md) — the trait-boundary diagram; and DEVELOPMENT.md §2 if the *decision* changed |
-| A `db/mod.rs` migration, or any schema change | [docs/data-model.md](docs/data-model.md) — the ER diagram **and** the migration-history table |
-| `src-tauri/src/db/reconcile.rs` | [docs/data-model.md](docs/data-model.md) — the reconciliation flowchart |
-| `src-tauri/src/retention.rs` | [docs/data-model.md](docs/data-model.md) — the retention flowchart, and when enforcement runs |
-| The Tauri command list in `lib.rs` | [docs/frontend.md](docs/frontend.md) — the command table; and `src/dev/registry.ts` (see "drift" below) |
-| Anything in `src/` | [docs/frontend.md](docs/frontend.md) — the module graph, view diagram, or theming flow |
-| Anything in `src/dev/` or `src-tauri/src/dev/` | [docs/dev-portal.md](docs/dev-portal.md) — the panel table |
-| `.github/workflows/ci.yml` | [docs/ci-and-releases.md](docs/ci-and-releases.md) — the job graph and build flowchart |
-| Capture-backend status, or anything verified on real Windows hardware | [docs/windows-verification.md](docs/windows-verification.md), the README status blockquote, and DEVELOPMENT.md §2.2 / §3.4. **Not** `ci.yml`'s release notes — that block is deliberately one line about the unsigned binary and nothing else |
-| A *decision*, constraint, or trade-off | [DEVELOPMENT.md](DEVELOPMENT.md) — the "why" doc |
-| Scope: a feature shipped, dropped, or reordered | [docs/product-design.md](docs/product-design.md) — the phase table and implementation history |
+| `src-tauri/src/daemon/` (`mod`, `pump`, `rpc`, `snapshot`, `spawn`) | WS3 |
+| `src-tauri/src/contract/` (`mod`, `events`, `r#gen`) | WS2 |
+| `src-tauri/src/ui/` | WS3 |
+| `src-tauri/src/recorder/own/` | WS1 task 1.6 |
+| `src-tauri/src/db/pool.rs` | WS6 |
+| `src/lib/` (`contract/`, `transport/`, `stores/`, `styles/tokens.css`) | WS2 / WS4 |
 
-### Which document gets the change
-
-- **DEVELOPMENT.md** = *why*. Constraints, decisions, alternatives rejected,
-  risks. If someone might later ask "why is it like this?", the answer goes
-  here.
-- **docs/\*.md** = *what and how*. Diagrams, module maps, runtime flows,
-  schemas. If someone is trying to find or follow the code, it goes here.
-- **docs/product-design.md** = *the product and its build history*. What the
-  product is for, the decisions that shaped it, what each phase delivered, and
-  what the plan got wrong. Retrospective, not a spec.
-- **README.md** = *what it is and how to run it*. Keep it short; link out.
-
-Do not duplicate prose between them — link instead. Duplicated prose is
-duplicated maintenance, and one copy always goes stale first.
-
-### DEVELOPMENT.md section numbers are load-bearing
-
-Roughly 35 source comments cite `DEVELOPMENT.md §2.2`, `§3.4`, and so on. Add
-sections and rewrite their contents freely, but **do not renumber existing
-ones** without updating every citation:
-
-```bash
-grep -rn 'DEVELOPMENT.md §' src src-tauri
-```
-
-### Do not reintroduce phase numbers
-
-The build ran as eleven numbered phases and those numbers used to appear in
-source comments (`Phase 6`, `pending Phase 8`). They have all been rewritten to
-say what they mean, and the numbering now lives in one place:
-[docs/product-design.md](docs/product-design.md), which carries a mapping table
-for reading old commits and issues. New comments should describe behaviour and
-link to the document that explains it.
-
-### Diagrams
-
-Mermaid in fenced ```` ```mermaid ```` blocks. GitHub renders it natively, it
-diffs as text in review, and it needs no tooling. No image files, no external
-diagram editors.
+`src/lib/contract/` is **generated** once WS2.4 lands — committed and
+CI-checked, never hand-edited.
 
 ---
 
-## Working in this repo
+## The gates
 
-### Running the app
-
-```bash
-npm install
-npm run tauri:dev    # NOT `tauri dev` — the colon passes --features devtools
-```
-
-Without `--features devtools` the dev portal window and every `dev_*` command
-are absent, and most of the backend becomes undrivable without a real League
-client. See [docs/dev-portal.md](docs/dev-portal.md).
-
-### The Rust project is at `src-tauri/`, not the repo root
+CI runs these, in this order, and a change that only passes some of them fails.
 
 ```bash
+npm ci
+npx biome ci .                                        # lint + format
+npx tsc --noEmit                                      # types
+npx vitest run                                        # frontend tests
+cd src-tauri && cargo deny check                      # licences + advisories
 cd src-tauri && cargo test
 cd src-tauri && cargo test --features devtools
 cd src-tauri && cargo clippy --no-deps -- -D warnings
 cd src-tauri && cargo clippy --features devtools --no-deps -- -D warnings
 ```
 
-CI runs exactly these four — the Rust tests and clippy **both with and
-without** `--features devtools`, and clippy with `-D warnings`. A change that
-only compiles one way fails.
+Two more are commented placeholders in `ci.yml` until their workstream lands:
+`svelte-check` (WS4.1) and `cargo run --bin gen-contract -- --check` (WS2.5).
 
-**Clippy runs without `--all-targets`**, so it never compiles the test targets.
-A method only the tests call is dead code there, and `-D warnings` fails the
-build over it — either drop the method or mark it `#[cfg(test)]`. Running
-clippy with `--all-targets` locally compiles the tests, marks the method used,
-and hides that failure until CI.
+### Clippy runs without `--all-targets`, deliberately
 
-### Frontend checks
+So it never compiles the test targets. A method only the tests call is dead
+code there, and `-D warnings` fails the build over it — either drop the method
+or mark it `#[cfg(test)]`. Running clippy with `--all-targets` locally compiles
+the tests, marks the method used, and hides that failure until CI.
+
+The same applies to generated code: a `event_names()` used only by tests needs
+the `cfg_attr(not(...), allow(dead_code))` pattern `core::command_names()`
+already uses.
+
+### The toolchain is pinned
+
+`src-tauri/rust-toolchain.toml` names an exact version. CI uses
+`dtolnay/rust-toolchain` **with no version argument** so it reads the file —
+adding `@1.98.1` or leaving `@stable` to win would un-pin it while the file sat
+there looking like it was in force. Bump in its own PR; new lints are the
+expected content of that diff.
+
+### Edition 2024
+
+`unsafe_op_in_unsafe_fn` is deny-by-default. Wrap each operation in its own
+`unsafe { }` with a SAFETY comment, and give every `unsafe fn` a `# Safety`
+section. **No blanket `allow`, and no body-wide `unsafe {}` either** — the
+second one trips `unused_unsafe` as soon as anything inside it is already
+wrapped.
+
+`gen` is a reserved keyword, which is why `contract/r#gen.rs` is spelled that
+way.
+
+### cargo-deny is the licence exit, not hygiene
+
+`src-tauri/deny.toml` denies every licence not on its allow list, with **exactly
+two GPL exceptions**: this crate, and the libobs fork (one dependency, five
+crates). WS8 deletes them, and that deletion is what proves no other copyleft
+crept in. **Do not add a third without asking.** See
+[docs/provenance.md](docs/provenance.md).
+
+---
+
+## Documentation is part of the change
+
+**A behaviour change and the doc update that reflects it belong in the same
+commit.** A diagram that lies is worse than no diagram.
+
+| If you change… | Update… |
+|---|---|
+| `src-tauri/src/state_machine/` | [docs/recording-pipeline.md](docs/recording-pipeline.md) — the state diagram, the transition table, the edge-case table |
+| `src-tauri/src/lcu/`, `src-tauri/src/live_client/` | [docs/recording-pipeline.md](docs/recording-pipeline.md) — the sequence diagram, signal cadences, the events→markers flowchart |
+| `src-tauri/src/recorder/` | [docs/architecture.md](docs/architecture.md) — the trait-boundary diagram; and DEVELOPMENT.md §2 if the *decision* changed |
+| `src-tauri/src/daemon/`, `src-tauri/src/ui/` | [docs/architecture.md](docs/architecture.md) — the process split; and DEVELOPMENT.md §17 |
+| `src-tauri/src/contract/` | [docs/frontend.md](docs/frontend.md) — the command table; and DEVELOPMENT.md §17 |
+| A `db/mod.rs` migration, or any schema change | [docs/data-model.md](docs/data-model.md) — the ER diagram **and** the migration-history table |
+| `src-tauri/src/db/reconcile.rs` | [docs/data-model.md](docs/data-model.md) — the reconciliation flowchart |
+| `src-tauri/src/retention.rs` | [docs/data-model.md](docs/data-model.md) — the retention flowchart, and when enforcement runs |
+| Anything in `src/` or `src/lib/` | [docs/frontend.md](docs/frontend.md) — the module graph, view diagram, or theming flow |
+| Anything in `src/dev/` or `src-tauri/src/dev/` | [docs/dev-portal.md](docs/dev-portal.md) — the panel table |
+| `.github/workflows/ci.yml`, `biome.jsonc`, `deny.toml`, `vitest.config.ts` | [docs/ci-and-releases.md](docs/ci-and-releases.md) — the job graph and the gate list |
+| Anything verified on real Windows hardware, or a memory/size figure | [docs/windows-verification.md](docs/windows-verification.md) and [docs/measurement.md](docs/measurement.md) if the *method* changed |
+| A *decision*, constraint, or trade-off | [DEVELOPMENT.md](DEVELOPMENT.md) — the "why" doc |
+| Scope: a feature shipped, dropped, or reordered | [docs/product-design.md](docs/product-design.md) |
+
+### Which document gets the change
+
+- **DEVELOPMENT.md** = *why*. Constraints, decisions, alternatives rejected,
+  risks.
+- **docs/\*.md** = *what and how*. Diagrams, module maps, runtime flows,
+  schemas.
+- **docs/product-design.md** = *the product and its build history*.
+- **docs/provenance.md** = *where the code came from and what is owed*.
+- **README.md** = *what it is and how to run it*. Keep it short; link out.
+- **The [plan repository](https://github.com/NinjaGoldfinch/ninja-recorder-v2-plan)**
+  = *what v2 is going to be*. Do not copy its prose here; link to it.
+
+Do not duplicate prose between them. One copy always goes stale first.
+
+### DEVELOPMENT.md section numbers are load-bearing
+
+Roughly 35 source comments cite `DEVELOPMENT.md §2.2`, `§3.4`, and so on. **Add
+sections and rewrite their contents freely, but do not renumber existing ones**
+without updating every citation:
 
 ```bash
-npx tsc --noEmit
+grep -rn 'DEVELOPMENT.md §' src src-tauri
 ```
+
+This applies to `docs/*.md` too — see `windows-verification.md`, where WS0's
+new material is §5.2 rather than a second §5.0, because §5.0 was taken.
+
+v2 adds §16 (capture gate and Option B, measured), §17 (contract and transport)
+and §18 (licensing exit plan). Nothing above them moves.
+
+### Diagrams
+
+Mermaid in fenced ```` ```mermaid ```` blocks. GitHub renders it natively, it
+diffs as text in review, and it needs no tooling.
+
+### Do not reintroduce phase numbers
+
+The v1 build ran as eleven numbered phases and those numbers are gone from
+source comments. The mapping lives in
+[docs/product-design.md](docs/product-design.md). v2's workstream numbers
+(WS0–WS8) are fine in comments — they name work that has not happened yet,
+which is what a stub directory is for — but a comment that survives its
+workstream should be rewritten to say what it means.
+
+---
 
 ## Conventions that are easy to violate by accident
 
-- **Never inject into the game process.** WGC/display capture only. This is a
-  hard constraint, not a preference — see DEVELOPMENT.md §1.1.
+- **Never inject into the game process.** WGC/display capture only. A hard
+  constraint, not a preference — DEVELOPMENT.md §1.1. It is also the whole
+  shape of Option B, so "just hook it" is not a shortcut available anywhere.
+- **No `{@html}` on any recording-derived string.** `db::reconcile` imports
+  whatever video file the user drops into the folder, so a filename is
+  untrusted input. v1 guards it with `escapeHtml`/`escapeAttr`
+  ([docs/frontend.md](docs/frontend.md)); Svelte's default text interpolation
+  replaces both, and `{@html}` opts straight back out of the thing that made
+  the migration safe. Until WS4 lands, `escapeAttr` for attribute values and
+  `escapeHtml` for text nodes still apply.
 - **Pure decision + thin I/O wrapper.** `state_machine::machine`,
   `db::reconcile` and `retention::select_for_deletion` are pure and directly
   unit-tested; their wrappers are deliberately too small to hide a bug. Adding
   I/O or a clock read to a pure function removes its test coverage.
 - **Append migrations, never edit them.** Shipped builds have already run the
-  old ones.
-- **`escapeAttr` for attribute values, `escapeHtml` for text nodes.**
-  `reconcile` imports any video file the user drops in the folder, so
-  displayed recording names are not trusted input.
+  old ones. WS6 changes connection handling, not the schema.
+- **Every ffmpeg spawn goes through `lib.rs::ffmpeg_command`.** It sets
+  `CREATE_NO_WINDOW`, and the bundled binary is the **LGPL** build used only
+  with `-c copy` — which is what keeps it compatible with a proprietary
+  distribution after WS8. A second way to launch it would break both.
 - **Adding a command means two edits, not four.** Production commands live in
   `core/dispatch.rs`'s `dispatch_table!` and are reached through the single
-  `rpc` command, so add a row there and an entry in `src/dev/registry.ts`
-  (which carries help text and arg specs a macro can't generate). The Rust
-  name list is derived from the same macro, so it can't drift; the Commands
-  panel's banner now only catches TS drift, and still only once someone opens
-  it. `generate_handler!` still can't host a `#[cfg]`, so the two lists in
-  `lib.rs` remain — but they're `rpc` + `open_recordings_folder`, plus the
-  `dev_*` commands under `devtools`.
-- **The `rpc` passthrough owns argument parsing.** `#[tauri::command]` used to
-  generate camelCase→snake_case mapping; now `dispatch_table!` does. A wrong
-  name or type fails at *runtime*, so every command is exercised by
-  `every_command_round_trips` in `core/dispatch.rs` — keep it that way.
+  `rpc` command, so add a row there and an entry in `src/dev/registry.ts`.
+  WS2 deletes `registry.ts` and `every_command_round_trips` together, and not
+  before the generator exists.
+- **The `rpc` passthrough owns argument parsing.** A wrong name or type fails
+  at *runtime*, which is why every command is exercised by
+  `every_command_round_trips` in `core/dispatch.rs` — keep it that way until
+  `gen-contract --check` replaces it.
 - **Don't remove `theme.ts`'s matchMedia `change` listener.** It is the only
   thing making the "System" theme follow the OS, and no test covers it.
 - **Don't attach the devtools build to a release.** It carries raw SQL,
   arbitrary row writes, a DB wipe and state-machine injection.
+- **Don't estimate a measurement.** An empty cell in
+  `windows-verification.md` is a true statement; a plausible number is not.
+  Use [`scripts/measure.ps1`](scripts/measure.ps1).
+
+---
 
 ## Git
 
 Commit messages follow `type(scope): imperative summary` — e.g.
 `fix(lcu): show the Riot ID as the summoner name`.
+
+`.git-blame-ignore-revs` holds the Biome formatting commit. Configure it once:
+
+```bash
+git config blame.ignoreRevsFile .git-blame-ignore-revs
+```
 
 ### No AI attribution, and no session links — ever
 

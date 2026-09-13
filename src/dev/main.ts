@@ -10,20 +10,19 @@
  */
 import { listen } from "@tauri-apps/api/event";
 import { tryCall } from "./ipc";
-import { bytes, escapeHtml, pill, toast } from "./ui";
-import type { DevEnvInfo, DevHealth } from "./types";
-
-import { overviewPanel } from "./panels/overview";
 import { commandsPanel } from "./panels/commands";
 import { databasePanel } from "./panels/database";
-import { seedPanel } from "./panels/seed";
-import { simulatePanel } from "./panels/simulate";
-import { recorderPanel } from "./panels/recorder";
-import { retentionPanel } from "./panels/retention";
-import { fixturesPanel } from "./panels/fixtures";
 import { diagnosticsPanel } from "./panels/diagnostics";
+import { fixturesPanel } from "./panels/fixtures";
 import { libraryPanel } from "./panels/library";
 import { logPanel } from "./panels/log";
+import { overviewPanel } from "./panels/overview";
+import { recorderPanel } from "./panels/recorder";
+import { retentionPanel } from "./panels/retention";
+import { seedPanel } from "./panels/seed";
+import { simulatePanel } from "./panels/simulate";
+import type { DevEnvInfo, DevHealth } from "./types";
+import { bytes, escapeHtml, pill, toast } from "./ui";
 
 export interface Panel {
   id: string;

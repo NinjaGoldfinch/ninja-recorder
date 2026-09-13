@@ -1,0 +1,15 @@
+/*
+ * Design tokens — WS4 task 4.1.
+ *
+ * Empty on purpose. v1 has one 2,013-line global `src/styles.css`; v2 replaces
+ * it with tokens here plus component-scoped styles in each `.svelte` file.
+ *
+ * The tokens come out of `styles.css`'s existing custom properties rather than
+ * being invented: the theme switch in `theme.ts` already drives them, and
+ * `docs/frontend.md` documents the theming flow. Changing the values and
+ * changing the mechanism at the same time would make the visual diff
+ * unreadable.
+ *
+ * `styles.css` is deleted by WS4, not before — it is still the whole of the
+ * app's appearance.
+ */

@@ -151,12 +151,7 @@ export interface FinalizedRecording {
   markers: SessionMarker[];
 }
 
-export type GameState =
-  | "Idle"
-  | "ClientRunning"
-  | "WaitingForGame"
-  | "Recording"
-  | "Finalizing";
+export type GameState = "Idle" | "ClientRunning" | "WaitingForGame" | "Recording" | "Finalizing";
 
 export interface SupervisorStatus {
   state: GameState;

@@ -3,17 +3,16 @@ import { el, escapeAttr, escapeHtml } from "./dom";
 import { BYTES_PER_GB, formatBytes } from "./format";
 import { refreshDiskUsage, refreshLibrary } from "./library";
 import {
-  getPrefs,
-  savePref,
   type CloseActionPref,
+  getPrefs,
   type NotifyPrefKey,
   type SortKey,
+  savePref,
   type ThemePref,
 } from "./prefs";
 import { showView } from "./router";
 import { setThemePref } from "./theme";
 import { toast } from "./toast";
-import { syncChannelControl } from "./update";
 import type {
   AudioInputDevice,
   AudioPreset,
@@ -23,6 +22,7 @@ import type {
   EnforcementReport,
   RetentionPolicy,
 } from "./types";
+import { syncChannelControl } from "./update";
 
 interface Els {
   open: HTMLButtonElement;
@@ -126,9 +126,7 @@ export function initSettings() {
   });
 
   els.themeToggle.addEventListener("click", (e) => {
-    const button = (e.target as HTMLElement).closest<HTMLElement>(
-      "[data-theme-choice]",
-    );
+    const button = (e.target as HTMLElement).closest<HTMLElement>("[data-theme-choice]");
     if (!button) return;
     const choice = button.dataset.themeChoice as ThemePref;
     setThemePref(choice);
@@ -140,9 +138,7 @@ export function initSettings() {
   });
 
   els.audioPreset.addEventListener("click", (e) => {
-    const button = (e.target as HTMLElement).closest<HTMLElement>(
-      "[data-audio-preset]",
-    );
+    const button = (e.target as HTMLElement).closest<HTMLElement>("[data-audio-preset]");
     if (!button) return;
     void saveAudioPreset(button.dataset.audioPreset as AudioPresetKey);
   });
@@ -193,13 +189,8 @@ export function syncSettingsFromPrefs() {
 }
 
 function syncThemeToggle(active: ThemePref) {
-  for (const button of els.themeToggle.querySelectorAll<HTMLElement>(
-    "[data-theme-choice]",
-  )) {
-    button.setAttribute(
-      "aria-checked",
-      String(button.dataset.themeChoice === active),
-    );
+  for (const button of els.themeToggle.querySelectorAll<HTMLElement>("[data-theme-choice]")) {
+    button.setAttribute("aria-checked", String(button.dataset.themeChoice === active));
   }
 }
 
@@ -322,22 +313,15 @@ function applyAudioPreset(preset: AudioPreset) {
 }
 
 function syncAudioControls() {
-  for (const button of els.audioPreset.querySelectorAll<HTMLElement>(
-    "[data-audio-preset]",
-  )) {
-    button.setAttribute(
-      "aria-checked",
-      String(button.dataset.audioPreset === audioPreset),
-    );
+  for (const button of els.audioPreset.querySelectorAll<HTMLElement>("[data-audio-preset]")) {
+    button.setAttribute("aria-checked", String(button.dataset.audioPreset === audioPreset));
   }
 
   const usesMic = PRESETS_WITH_MIC.includes(audioPreset);
   els.audioMic.disabled = !usesMic;
 
   const labels = TRACK_LABELS[audioPreset];
-  els.audioPreview.textContent = labels
-    .map((label, i) => `Track ${i}: ${label}`)
-    .join(" \u00b7 ");
+  els.audioPreview.textContent = labels.map((label, i) => `Track ${i}: ${label}`).join(" \u00b7 ");
 }
 
 async function saveAudioPreset(key: AudioPresetKey) {
@@ -405,24 +389,19 @@ async function runBackfill() {
  * because refusing to guess is a decision, not a failure.
  */
 function backfillSummary(report: BackfillReport): string {
-  if (report.scanned === 0) return "Nothing to fill in — every recording already has its match data.";
+  if (report.scanned === 0)
+    return "Nothing to fill in — every recording already has its match data.";
 
   const parts = [
     `Checked ${report.scanned} recording${report.scanned === 1 ? "" : "s"} against ` +
       `${report.games_considered} game${report.games_considered === 1 ? "" : "s"} of match history.`,
   ];
-  parts.push(
-    report.patched > 0
-      ? `Filled in ${report.patched}.`
-      : "Nothing could be filled in.",
-  );
+  parts.push(report.patched > 0 ? `Filled in ${report.patched}.` : "Nothing could be filled in.");
   // Counted separately from `patched` because they fail independently: the
   // gold timeline is a different endpoint, and a game can still yield its
   // metadata after the timeline has aged out of the client's history.
   if (report.gold_filled > 0) {
-    parts.push(
-      `Recovered the gold curve for ${report.gold_filled}.`,
-    );
+    parts.push(`Recovered the gold curve for ${report.gold_filled}.`);
   }
   if (report.ambiguous > 0) {
     parts.push(
@@ -464,8 +443,7 @@ function applyPolicyToForm(policy: RetentionPolicy) {
 
   els.ageEnabled.checked = policy.max_age_days !== null;
   els.ageDays.disabled = policy.max_age_days === null;
-  els.ageDays.value =
-    policy.max_age_days !== null ? String(policy.max_age_days) : "";
+  els.ageDays.value = policy.max_age_days !== null ? String(policy.max_age_days) : "";
 }
 
 async function loadRetentionPolicy() {
@@ -528,7 +506,6 @@ async function saveRetentionPolicy(e: Event) {
     els.status.textContent = `Failed to save: ${err}`;
   }
 }
-
 
 // The master switch gates the rest in Rust, so the form should say so rather
 // than leaving three checkboxes that look live and do nothing.

@@ -168,7 +168,8 @@ export const COMMANDS: CommandSpec[] = [
     group: "Settings",
     dev: false,
     danger: true,
-    description: "Writes one UI preference. Unseeded store — a missing key means 'use the frontend default'.",
+    description:
+      "Writes one UI preference. Unseeded store — a missing key means 'use the frontend default'.",
     args: [
       { name: "key", kind: "string", default: "theme" },
       { name: "value", kind: "string", default: "dark" },
@@ -219,8 +220,7 @@ export const COMMANDS: CommandSpec[] = [
     name: "list_audio_inputs",
     group: "Audio",
     dev: false,
-    description:
-      "Audio input devices for the microphone picker, default first. Empty off Windows.",
+    description: "Audio input devices for the microphone picker, default first. Empty off Windows.",
   },
   {
     name: "extract_audio_track",
@@ -273,7 +273,14 @@ export const COMMANDS: CommandSpec[] = [
     group: "Dev · Diagnostics",
     dev: true,
     description: "Reveals one of the app's directories in the OS file manager.",
-    args: [{ name: "which", kind: "string", default: "recordings", help: "recordings | app_data | fixtures | repo_fixtures" }],
+    args: [
+      {
+        name: "which",
+        kind: "string",
+        default: "recordings",
+        help: "recordings | app_data | fixtures | repo_fixtures",
+      },
+    ],
   },
   {
     name: "dev_recording_report",
@@ -318,7 +325,7 @@ export const COMMANDS: CommandSpec[] = [
     description:
       "A whole lobby's rank from its puuids \u2014 the median standing, with a count of how many were known. Take the ten puuids from a captured `eog-stats-block` (`teams[].players[].puuid`). Players whose rank cannot be read are excluded rather than counted low.",
     args: [
-      { name: "puuids", kind: "json", help: "[\"puuid\", …]" },
+      { name: "puuids", kind: "json", help: '["puuid", …]' },
       { name: "queue", kind: "string", default: "RANKED_SOLO_5x5" },
     ],
   },
@@ -441,7 +448,12 @@ export const COMMANDS: CommandSpec[] = [
       "Dry run: exactly what enforcement would delete, and how many bytes it would free. Touches nothing.",
     args: [
       { name: "policy", kind: "json", optional: true, help: "omit to use the saved policy" },
-      { name: "nowMillis", kind: "number", optional: true, help: "override the clock to test age rules" },
+      {
+        name: "nowMillis",
+        kind: "number",
+        optional: true,
+        help: "override the clock to test age rules",
+      },
     ],
   },
 
@@ -451,8 +463,11 @@ export const COMMANDS: CommandSpec[] = [
     group: "Dev · Simulate",
     dev: true,
     danger: true,
-    description: "Feeds one event through the live supervisor. Really starts and stops the recorder.",
-    args: [{ name: "event", kind: "json", default: { kind: "gameflow_phase", phase: "InProgress" } }],
+    description:
+      "Feeds one event through the live supervisor. Really starts and stops the recorder.",
+    args: [
+      { name: "event", kind: "json", default: { kind: "gameflow_phase", phase: "InProgress" } },
+    ],
   },
   {
     name: "dev_inject_snapshot",
@@ -492,7 +507,7 @@ export const COMMANDS: CommandSpec[] = [
     group: "Dev · Tools",
     dev: true,
     description:
-      "The backend log files that exist, newest first, including the rotated ones. Reports the missing ones too — \"no log file\" and \"empty log file\" are different answers.",
+      'The backend log files that exist, newest first, including the rotated ones. Reports the missing ones too — "no log file" and "empty log file" are different answers.',
   },
   {
     name: "dev_read_log",
@@ -588,7 +603,12 @@ export const COMMANDS: CommandSpec[] = [
       { name: "recordingId", kind: "number" },
       { name: "gameId", kind: "number" },
       { name: "isCustom", kind: "boolean", default: false },
-      { name: "queueId", kind: "number", default: 420, help: "420 solo, 440 flex \u2014 gates the rank read" },
+      {
+        name: "queueId",
+        kind: "number",
+        default: 420,
+        help: "420 solo, 440 flex \u2014 gates the rank read",
+      },
     ],
   },
   {
@@ -647,7 +667,7 @@ export const COMMANDS: CommandSpec[] = [
     group: "Dev \u00b7 Fixtures",
     dev: true,
     description:
-      "Which endpoints appeared in a capture, most frequent first. The half that makes a raw capture usable \u2014 a post-game window is thousands of frames across dozens of endpoints, and a list of URIs answers \"which of these could carry it\" in seconds where a 40 MB file does not.",
+      'Which endpoints appeared in a capture, most frequent first. The half that makes a raw capture usable \u2014 a post-game window is thousands of frames across dozens of endpoints, and a list of URIs answers "which of these could carry it" in seconds where a 40 MB file does not.',
     args: [{ name: "path", kind: "string", help: "a capture file from dev_event_capture_start" }],
   },
   {

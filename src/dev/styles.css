@@ -256,21 +256,27 @@
   background-color: var(--ok-soft);
   color: var(--ok);
 }
-.pill-ok b { color: var(--ok); }
+.pill-ok b {
+  color: var(--ok);
+}
 
 .pill-warn {
   border-color: transparent;
   background-color: var(--warn-soft);
   color: var(--warn);
 }
-.pill-warn b { color: var(--warn); }
+.pill-warn b {
+  color: var(--warn);
+}
 
 .pill-danger {
   border-color: transparent;
   background-color: var(--danger-soft);
   color: var(--danger);
 }
-.pill-danger b { color: var(--danger); }
+.pill-danger b {
+  color: var(--danger);
+}
 
 .pill-live::before {
   content: "";
@@ -282,12 +288,19 @@
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.25; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pill-live::before { animation: none; }
+  .pill-live::before {
+    animation: none;
+  }
 }
 
 /* --- Panel scaffolding ------------------------------------------- */
@@ -360,9 +373,13 @@
   gap: 0.5rem;
 }
 
-.row-tight { gap: 0.35rem; }
+.row-tight {
+  gap: 0.35rem;
+}
 
-.spacer { flex: 1 1 auto; }
+.spacer {
+  flex: 1 1 auto;
+}
 
 .hint {
   font-size: 0.8rem;
@@ -415,9 +432,14 @@
   color: var(--text);
 }
 
-.mono { font-family: var(--mono); font-size: 0.78rem; }
+.mono {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
 
-.num { font-variant-numeric: tabular-nums; }
+.num {
+  font-variant-numeric: tabular-nums;
+}
 
 /* --- Definition lists (key/value readouts) ----------------------- */
 
@@ -457,7 +479,9 @@
   font-size: 0.85rem;
   font-weight: 500;
   cursor: pointer;
-  transition: border-color 0.15s, background-color 0.15s;
+  transition:
+    border-color 0.15s,
+    background-color 0.15s;
 }
 
 .dev-root button:hover:not(:disabled) {
@@ -609,15 +633,26 @@ table.grid td {
   text-overflow: ellipsis;
 }
 
-table.grid td.num { text-align: right; }
+table.grid td.num {
+  text-align: right;
+}
 
-table.grid tbody tr:last-child td { border-bottom: none; }
+table.grid tbody tr:last-child td {
+  border-bottom: none;
+}
 
-table.grid tbody tr.clickable { cursor: pointer; }
+table.grid tbody tr.clickable {
+  cursor: pointer;
+}
 
-table.grid tbody tr.clickable:hover { background-color: var(--accent-soft); }
+table.grid tbody tr.clickable:hover {
+  background-color: var(--accent-soft);
+}
 
-table.grid .null { color: var(--faint); font-style: italic; }
+table.grid .null {
+  color: var(--faint);
+  font-style: italic;
+}
 
 /* --- JSON / output ----------------------------------------------- */
 
@@ -690,7 +725,9 @@ table.grid .null { color: var(--faint); font-style: italic; }
   cursor: pointer;
 }
 
-.dev-root .cmd-item:hover { background-color: var(--accent-soft); }
+.dev-root .cmd-item:hover {
+  background-color: var(--accent-soft);
+}
 
 .dev-root .cmd-item.active {
   background-color: var(--accent-soft);
@@ -706,8 +743,12 @@ table.grid .null { color: var(--faint); font-style: italic; }
   flex-shrink: 0;
 }
 
-.dev-root .cmd-item.is-danger .dot { background-color: var(--danger); }
-.dev-root .cmd-item.is-dev .dot { background-color: var(--accent); }
+.dev-root .cmd-item.is-danger .dot {
+  background-color: var(--danger);
+}
+.dev-root .cmd-item.is-dev .dot {
+  background-color: var(--accent);
+}
 
 /* --- State machine diagram --------------------------------------- */
 
@@ -761,20 +802,38 @@ table.grid .null { color: var(--faint); font-style: italic; }
   cursor: pointer;
 }
 
-.log-entry:last-child { border-bottom: none; }
-.log-entry:hover { background-color: var(--accent-soft); }
-.log-entry .t { color: var(--faint); }
-.log-entry .ms { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
-.log-entry .st { text-align: right; }
-.log-entry.err .st { color: var(--danger); }
-.log-entry.ok .st { color: var(--ok); }
+.log-entry:last-child {
+  border-bottom: none;
+}
+.log-entry:hover {
+  background-color: var(--accent-soft);
+}
+.log-entry .t {
+  color: var(--faint);
+}
+.log-entry .ms {
+  text-align: right;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.log-entry .st {
+  text-align: right;
+}
+.log-entry.err .st {
+  color: var(--danger);
+}
+.log-entry.ok .st {
+  color: var(--ok);
+}
 .log-entry .args {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
 }
-.log-entry .name { color: var(--text); }
+.log-entry .name {
+  color: var(--text);
+}
 
 .dev-empty {
   padding: 3rem 1rem;
@@ -815,7 +874,9 @@ table.grid .null { color: var(--faint); font-style: italic; }
   color: var(--muted);
 }
 
-.modal .row { justify-content: flex-end; }
+.modal .row {
+  justify-content: flex-end;
+}
 
 /* --- Toast ------------------------------------------------------- */
 
@@ -840,8 +901,12 @@ table.grid .null { color: var(--faint); font-style: italic; }
   color: var(--text);
 }
 
-.toast.ok { border-left-color: var(--ok); }
-.toast.err { border-left-color: var(--danger); }
+.toast.ok {
+  border-left-color: var(--ok);
+}
+.toast.err {
+  border-left-color: var(--danger);
+}
 
 /* --- Inspector tables -------------------------------------------- */
 

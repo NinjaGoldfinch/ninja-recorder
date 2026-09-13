@@ -119,6 +119,11 @@ Manager that **no `extprocess_recorder.exe` exists at all** before the client
 starts, that one appears within a few seconds of it starting, and that it goes
 away again when the client closes.
 
+**The 9 MB above is a Working Set reading taken once, with the window closed.**
+That is one of six numbers it could have been, and not the one v2 is measured
+against. [§5.2](#52-memory-by-the-v2-method) below is the method that replaces
+it; this table and its figures are left exactly as they were recorded.
+
 ### 5.0 Launch modes
 
 The main window is created in Rust now rather than by `tauri.conf.json`, and
@@ -309,6 +314,48 @@ New with `prepare`/`release`; none of it can be exercised off Windows.
 - [ ] A machine where libobs fails to initialize surfaces
       `libobs (unavailable: …)` in the dev portal's health panel rather than
       failing at startup.
+
+### 5.2 Memory, by the v2 method
+
+Added by WS0 task 0.1. Nothing above is renumbered or rewritten — §5's original
+table stays as the record of what was measured in v1 and how.
+
+What it does not do is say which of several different numbers "9 MB" was.
+[docs/measurement.md](measurement.md) defines the one this project uses from
+here: **Private Bytes** as the headline, because it excludes shared pages and
+is the honest cost to the machine; **Working Set** recorded alongside it,
+because that is the column Task Manager shows a user; both **sampled at 1 Hz
+for 60 seconds** and reported as median with the range, because a single
+reading catches whatever the allocator was doing at the time.
+
+Fill the rows in with [`scripts/measure.ps1`](../scripts/measure.ps1), which
+emits the row itself so the transcription cannot introduce a typo:
+
+```powershell
+.\scripts\measure.ps1 -Label 'v1 0.8.0 - window closed' `
+    -InstallPath "$env:LOCALAPPDATA\ninja-recorder"
+```
+
+**Do not estimate a cell.** An empty row is a true statement about what has
+been measured; a plausible number in it is not. WS0.2 fills these three in on
+the Windows box.
+
+| State | Process | Private Bytes (median) | Private (min-max) | Working Set (median) | WS (min-max) | Install | Samples |
+|---|---|---|---|---|---|---|---|
+| v1 0.8.0 - window closed | ninja-recorder | | | | | | |
+| v1 0.8.0 - window open | ninja-recorder | | | | | | |
+| v1 0.8.0 - League client open | ninja-recorder | | | | | | |
+
+**Window closed is the row the [§1.2](../DEVELOPMENT.md) ceiling is about.** The
+other two are recorded so that the cost of the webview and the cost of a warm
+capture backend are each visible, rather than folded into one figure that
+describes neither.
+
+WS7.1 appends the v2.0.0 rows beneath these, in the four states the process
+split creates — daemon only, daemon + UI, daemon + League client, all three.
+**Daemon only is the one gated against C3**: it is what runs at login and what
+runs for the twenty-three hours a day nobody has the window open. The
+two-process total is recorded and not gated.
 
 ## 6. Open questions specific to the capture backend
 

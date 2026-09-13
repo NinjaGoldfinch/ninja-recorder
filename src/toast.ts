@@ -19,7 +19,10 @@ export function toast(message: string, kind: "info" | "error" = "info") {
   window.clearTimeout(timer);
   // Errors stay up longer: they're usually a sentence, and they're the ones
   // worth reading twice.
-  timer = window.setTimeout(() => {
-    if (node) node.hidden = true;
-  }, kind === "error" ? 8000 : 4000);
+  timer = window.setTimeout(
+    () => {
+      if (node) node.hidden = true;
+    },
+    kind === "error" ? 8000 : 4000,
+  );
 }

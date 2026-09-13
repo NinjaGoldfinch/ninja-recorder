@@ -51,55 +51,96 @@ mod imp {
         })
     }
 
+    /// # Safety
+    ///
+    /// Must be called on a thread that is not already in a single-threaded
+    /// apartment, and that thread must not be used for anything else COM
+    /// until this returns — it initializes MTA and uninitializes it again.
+    /// `list_audio_inputs` owns a scoped thread for exactly that reason.
     unsafe fn enumerate() -> Result<Vec<AudioInputDevice>, String> {
         // Not `?`-ed: S_FALSE means "already initialized on this thread",
         // which is a success. Only a real failure should stop us, and
         // `CoUninitialize` must still pair with any success.
-        let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
+        //
+        // SAFETY: called on a thread this function owns for its whole
+        // duration (the caller's contract above), so no other apartment
+        // choice is in force and nothing else on the thread is holding a
+        // COM pointer across the `CoUninitialize` below.
+        let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
         if hr.is_err() {
             return Err(format!("CoInitializeEx failed: {hr:?}"));
         }
-        let result = enumerate_inner();
-        CoUninitialize();
+        // SAFETY: COM is initialized on this thread and stays initialized
+        // until the `CoUninitialize` below, which runs after every
+        // interface pointer `enumerate_inner` created has been dropped —
+        // it returns plain `String`s, holding nothing.
+        let result = unsafe { enumerate_inner() };
+        // SAFETY: pairs with the successful `CoInitializeEx` above, on the
+        // same thread, with no live COM pointers outstanding.
+        unsafe { CoUninitialize() };
         result
     }
 
+    /// # Safety
+    ///
+    /// COM must be initialized on the calling thread, and must stay
+    /// initialized until every value this returns has been dropped.
     unsafe fn enumerate_inner() -> Result<Vec<AudioInputDevice>, String> {
+        // SAFETY: COM is initialized on this thread (the caller's
+        // contract), and `MMDeviceEnumerator`/`IMMDeviceEnumerator` are a
+        // matching CLSID/interface pair, so the returned pointer really is
+        // the interface the binding claims.
         let enumerator: IMMDeviceEnumerator =
-            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+            unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }
                 .map_err(|e| format!("could not create the device enumerator: {e}"))?;
 
         // OBS resolves a `device_id` of "default" for *input* via
         // eCommunications, not eConsole. Matching that here is what makes the
         // picker's "Windows default" entry mean the same device the recorder
         // will actually open.
-        let default_id = enumerator
-            .GetDefaultAudioEndpoint(eCapture, eCommunications)
+        //
+        // SAFETY, all three: `enumerator` is a live interface pointer on a
+        // thread with COM initialized, so is the `device` it returns, and
+        // `GetId` hands over a `CoTaskMemAlloc`-ed string — which is exactly
+        // what `take_pwstr` takes ownership of and frees.
+        let default_id = unsafe { enumerator.GetDefaultAudioEndpoint(eCapture, eCommunications) }
             .ok()
-            .and_then(|device| device.GetId().ok())
-            .and_then(|id| take_pwstr(id));
+            .and_then(|device| unsafe { device.GetId() }.ok())
+            .and_then(|id| unsafe { take_pwstr(id) });
 
-        let collection = enumerator
-            .EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)
+        // SAFETY: as above — a live interface pointer, COM initialized, and
+        // neither call takes ownership of anything we hold.
+        let collection = unsafe { enumerator.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE) }
             .map_err(|e| format!("could not enumerate audio inputs: {e}"))?;
-        let count = collection
-            .GetCount()
+        let count = unsafe { collection.GetCount() }
             .map_err(|e| format!("could not count audio inputs: {e}"))?;
 
         let mut devices = Vec::with_capacity(count as usize);
         for i in 0..count {
             // One unreadable endpoint shouldn't hide every other microphone.
-            let Ok(device) = collection.Item(i) else {
+            //
+            // SAFETY: `i` is below the count `collection` just reported, so
+            // the index is in range; COM is initialized for the whole loop.
+            let Ok(device) = (unsafe { collection.Item(i) }) else {
                 continue;
             };
-            let Some(id) = device.GetId().ok().and_then(|id| take_pwstr(id)) else {
-                continue;
-            };
-            let name = device
-                .OpenPropertyStore(STGM_READ)
+            // SAFETY: `device` is a live interface pointer, and `GetId`
+            // transfers ownership of a `CoTaskMemAlloc`-ed string to
+            // `take_pwstr`, which is what frees it.
+            let Some(id) = (unsafe { device.GetId() })
                 .ok()
-                .and_then(|store| store.GetValue(&PKEY_Device_FriendlyName).ok())
-                .and_then(|value| propvariant_string(value))
+                .and_then(|id| unsafe { take_pwstr(id) })
+            else {
+                continue;
+            };
+            // SAFETY, all three: `device` is live, so is the property store
+            // it opens, and `GetValue` fills a `PROPVARIANT` we then own
+            // outright and hand to `propvariant_string` — which is what
+            // clears it, so it is read and released exactly once.
+            let name = unsafe { device.OpenPropertyStore(STGM_READ) }
+                .ok()
+                .and_then(|store| unsafe { store.GetValue(&PKEY_Device_FriendlyName) }.ok())
+                .and_then(|value| unsafe { propvariant_string(value) })
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "Unknown input".to_string());
 
@@ -116,12 +157,22 @@ mod imp {
     /// `IMMDevice::GetId` and `PropVariantToStringAlloc` both allocate with
     /// `CoTaskMemAlloc` and hand over ownership, so skipping the free leaks
     /// once per device per refresh.
+    /// # Safety
+    ///
+    /// `ptr` must be null, or a `CoTaskMemAlloc`-ed, null-terminated wide
+    /// string whose ownership is being transferred to this function. It is
+    /// freed here, so no other copy of the pointer may be used afterwards.
     unsafe fn take_pwstr(ptr: PWSTR) -> Option<String> {
         if ptr.is_null() {
             return None;
         }
-        let out = PCWSTR(ptr.0).to_string().ok();
-        CoTaskMemFree(Some(ptr.0 as *const core::ffi::c_void));
+        // SAFETY: non-null by the check above, and null-terminated by the
+        // caller's contract, so the read stops inside the allocation.
+        let out = unsafe { PCWSTR(ptr.0).to_string() }.ok();
+        // SAFETY: `ptr` was `CoTaskMemAlloc`-ed and ownership was
+        // transferred to us, so this is the one and only free of it. The
+        // string above is already copied out.
+        unsafe { CoTaskMemFree(Some(ptr.0 as *const core::ffi::c_void)) };
         out
     }
 
@@ -132,11 +183,21 @@ mod imp {
     /// `PropVariantToStringAlloc` rather than reading the union directly
     /// means a device whose name isn't stored as `VT_LPWSTR` still converts
     /// instead of coming back empty.
+    /// # Safety
+    ///
+    /// `value` must be a fully initialized `PROPVARIANT` whose ownership is
+    /// being transferred to this function; it is cleared here, so no other
+    /// copy may be used or cleared afterwards.
     unsafe fn propvariant_string(mut value: PROPVARIANT) -> Option<String> {
-        let out = PropVariantToStringAlloc(&value)
+        // SAFETY: `value` is initialized by the caller's contract, and the
+        // string `PropVariantToStringAlloc` returns is `CoTaskMemAlloc`-ed
+        // and ours, which is exactly what `take_pwstr` frees.
+        let out = unsafe { PropVariantToStringAlloc(&value) }
             .ok()
-            .and_then(|p| take_pwstr(p));
-        let _ = PropVariantClear(&mut value);
+            .and_then(|p| unsafe { take_pwstr(p) });
+        // SAFETY: `value` is initialized and owned by us, and this is its
+        // only clear — the string above was copied out, not aliased.
+        let _ = unsafe { PropVariantClear(&mut value) };
         out
     }
 }

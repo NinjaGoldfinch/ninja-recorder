@@ -160,24 +160,23 @@ pub fn to_metadata(summary: &MatchSummary, champion: Option<String>) -> MatchMet
 /// compares fields both sources actually established.
 pub fn disagreements(live: &LiveSummary, summary: &MatchSummary) -> Vec<String> {
     let mut out = Vec::new();
-    if let (Some(live_win), Some(lcu_win)) = (live.win, summary.win) {
-        if live_win != lcu_win {
-            out.push(format!(
-                "outcome: the game reported {}, the client reports {}",
-                outcome(live_win),
-                outcome(lcu_win)
-            ));
-        }
+    if let (Some(live_win), Some(lcu_win)) = (live.win, summary.win)
+        && live_win != lcu_win
+    {
+        out.push(format!(
+            "outcome: the game reported {}, the client reports {}",
+            outcome(live_win),
+            outcome(lcu_win)
+        ));
     }
     if let (Some(live_kda), (Some(k), Some(d), Some(a))) =
         (live.kda, (summary.kills, summary.deaths, summary.assists))
+        && (live_kda.kills, live_kda.deaths, live_kda.assists) != (k, d, a)
     {
-        if (live_kda.kills, live_kda.deaths, live_kda.assists) != (k, d, a) {
-            out.push(format!(
-                "KDA: the game reported {}/{}/{}, the client reports {}/{}/{}",
-                live_kda.kills, live_kda.deaths, live_kda.assists, k, d, a
-            ));
-        }
+        out.push(format!(
+            "KDA: the game reported {}/{}/{}, the client reports {}/{}/{}",
+            live_kda.kills, live_kda.deaths, live_kda.assists, k, d, a
+        ));
     }
     out
 }

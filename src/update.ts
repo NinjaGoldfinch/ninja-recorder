@@ -81,9 +81,7 @@ export function initUpdate() {
   listen("update-status-changed", () => {
     lastCheckedAt = Date.now();
     void refreshUpdateStatus();
-  }).catch((err) =>
-    console.warn("update-status-changed listener unavailable:", err),
-  );
+  }).catch((err) => console.warn("update-status-changed listener unavailable:", err));
 
   // The panel is only read when someone opens it, so that is when it is
   // worth being right. The background loop runs every six hours and nothing

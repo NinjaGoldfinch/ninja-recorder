@@ -1,12 +1,18 @@
 mod audio_tracks;
 mod backfill;
+mod contract;
 mod core;
+// `pub` because `main.rs` dispatches on it before either side is built, and
+// the daemon's refusal is a value it returns rather than a string in
+// `launch.rs` — see `daemon::run`.
+pub mod daemon;
 mod db;
 mod ddragon;
 #[cfg(feature = "devtools")]
 mod dev;
 mod fixtures;
-mod launch;
+// `pub` for the same reason as `daemon`: `main.rs` reads the mode.
+pub mod launch;
 mod notify;
 mod lcu;
 mod live_client;
@@ -18,6 +24,7 @@ mod retention;
 mod state_machine;
 mod tray;
 mod trim;
+mod ui;
 mod update;
 
 // No `use crate::{error, warn, info}` here, unlike every other module:
@@ -519,14 +526,11 @@ pub(crate) fn create_main_window(app: &tauri::AppHandle, view: Option<&str>) -> 
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Only ever `Ui` or `UiHidden`: `main.rs` matches on the mode first and
+    // sends `Daemon` to `daemon::run`, which is the whole point of splitting
+    // the dispatch out of here. Read again rather than passed in so that the
+    // mobile entry point below still has one argument-free way in.
     let mode = launch::Launch::from_env();
-    if let Some(why) = mode.unsupported() {
-        // Deliberately not through the log facade: this runs before
-        // `setup`, so before `log::init`, and exits immediately. There is
-        // no file to write to yet.
-        eprintln!("[launch] {why}");
-        std::process::exit(2);
-    }
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -554,6 +558,17 @@ pub fn run() {
             // (`main.rs`), so until this runs, anything that goes wrong
             // goes nowhere. Failing to open the library is one of the
             // failures most worth having a record of.
+            // WS3: pipe name and mutex must be scoped by build identity.
+            //
+            // `app_data_dir()` is derived from `identifier` in
+            // `tauri.conf.json`, and `tauri.devtools.conf.json` overrides
+            // `productName` but *not* `identifier` — so a devtools build and a
+            // release build already share this directory, the database and the
+            // recordings folder. That is survivable for one process. It is not
+            // survivable for two: a dev daemon and a release daemon would bind
+            // the same pipe and hold the same single-instance mutex, and
+            // whichever started first would silently own the other's client.
+            // Scope both names by build identity when WS3 creates them.
             match app.path().app_data_dir() {
                 Ok(data_dir) => match log::init(&data_dir.join("logs")) {
                     Some(path) => info!("log", "logging to {}", path.display()),

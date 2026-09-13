@@ -1,0 +1,193 @@
+# cargo-deny: what this project is allowed to link, and what it is allowed to
+# be built out of.
+#
+# The licence half is not hygiene here — it is the mechanism of the v2.1
+# licence exit. This repository is GPL-2.0 because libobs is, and only because
+# libobs is (DEVELOPMENT.md §2.1). WS8 deletes libobs, and what proves no
+# other copyleft dependency crept in during the five months in between is this
+# file: GPL and AGPL are denied outright, with the exceptions listed and
+# counted below. The exit is then a deletion, not an audit.
+#
+# Run it the way CI does:
+#
+#     cd src-tauri && cargo deny check
+#
+# See docs/ci-and-releases.md for where it sits in the pipeline, and
+# docs/provenance.md for the debt the exceptions record.
+
+[graph]
+# The only target that ships. v1's CI is Windows-only for the same reason:
+# real capture is Windows-only (DEVELOPMENT.md §1.1), and a macOS `.dmg` that
+# could not record a game was removed rather than maintained.
+#
+# Pinning it also makes the answer the same everywhere. Without this, a
+# developer on macOS and a CI run on Windows resolve different graphs — the
+# gtk/webkit tree on one, `windows-sys` on the other — and "cargo deny is
+# green" would mean two different things depending on who said it.
+targets = [{ triple = "x86_64-pc-windows-msvc" }]
+# The dev portal is a real build configuration (`--features devtools`), so its
+# dependencies are real dependencies and have to pass the same check.
+all-features = true
+
+[licenses]
+# Every licence the shipped graph actually resolves to, and nothing
+# speculative — an allow list with entries the tree does not use stops being a
+# statement about the tree.
+allow = [
+    # The overwhelming majority of the graph, almost all of it dual
+    # MIT OR Apache-2.0.
+    "MIT",
+    "Apache-2.0",
+    # BSD family. `zerocopy` is 2-clause; `brotli`, `alloc-no-stdlib`,
+    # `num_enum` and `subtle` are 3-clause.
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    # `ring`, `untrusted`, `rustls`, `libloading`, `hyper-rustls` — the TLS
+    # stack under `reqwest`.
+    "ISC",
+    # `bytemuck`, `miniz_oxide`, `foldhash`, `raw-window-handle`, and the
+    # `objc2-*` family that comes in through `tao`/`muda` even on Windows.
+    "Zlib",
+    # The ICU crates under `idna`/`url`. Unicode-3.0 is the current form of
+    # the Unicode licence and is permissive.
+    "Unicode-3.0",
+    # Public-domain-equivalent, one crate each: `adler2` (0BSD), `dunce`
+    # (CC0-1.0 / MIT-0), `ryu` (BSL-1.0), and the `Unlicense` half of
+    # `memchr`, `aho-corasick`, `walkdir`, `byteorder`, `same-file`,
+    # `winapi-util`.
+    "0BSD",
+    "CC0-1.0",
+    "MIT-0",
+    "BSL-1.0",
+    "Unlicense",
+    # Weak, file-level copyleft — and the one entry on this list that is a
+    # judgement rather than a formality, so it is spelled out.
+    #
+    # Five crates, none of them ours and none of them modified: `cssparser`,
+    # `cssparser-macros`, `selectors` and `dtoa-short` arrive through Tauri's
+    # HTML/CSS handling, `option-ext` through `dirs-sys`. MPL-2.0's copyleft
+    # is per-file: it obliges source for *those files* if they are changed,
+    # and says nothing about the program that links them. So it survives the
+    # v2.1 relicence to a proprietary or source-available distribution, which
+    # GPL would not.
+    #
+    # The obligation it does carry is real: if any of these five is ever
+    # vendored and patched, that patch must be published. Nothing in this tree
+    # patches them today.
+    "MPL-2.0",
+]
+
+# **There is no `deny` list, and that is stronger rather than weaker.**
+#
+# The plan's §4.7 asks for `deny = ["GPL-*", "AGPL-*"]`. cargo-deny removed
+# that key in 0.18 (PR #611): `allow` is now the whole policy, and any licence
+# not on it fails. So GPL and AGPL are denied — along with SSPL, BUSL, CDDL,
+# EPL and everything else nobody has thought about yet, which a `deny` list
+# naming two families would have let through.
+#
+# The one thing the old key bought that this does not is a named, greppable
+# statement of intent about GPL specifically. That is what this comment is.
+
+# Both entries below are the licence exit, and both are deleted or rewritten
+# by WS8. **Do not add a third without asking** — the count is the
+# measurement, and an exception added quietly in the next five months is
+# exactly the failure this file exists to catch.
+[[licenses.exceptions]]
+# 1. This crate. GPL-2.0-only is inherited from libobs, not chosen
+#    (`Cargo.toml`'s `license` key says so, and DEVELOPMENT.md §2.1 says why).
+#    WS8 changes it in one tagged commit, after the audit.
+name = "ninja-recorder"
+allow = ["GPL-2.0-only"]
+
+# 2. The capture backend, which is one *dependency* resolving to five crates
+#    — all of them from the same fork of FFFFFFFXXXXXXX/libobs-recorder, all
+#    of them GPL-2.0 because libobs is:
+#
+#      libobs-recorder      the crate Cargo.toml names
+#      intprocess-recorder  the in-process half
+#      ipc-link             the protocol to `extprocess_recorder.exe`
+#      libobs-sys           the FFI bindings
+#      build-helper         its build script support
+#
+#    The plan calls for "exactly one named exception". That is one dependency;
+#    cargo-deny names crates, and this dependency is five of them. They are
+#    listed together, and WS8 deletes the whole block as a unit — the property
+#    the plan is asking for is preserved.
+#
+#    See docs/provenance.md for the WS1.7 debt: the fork has no tags, so
+#    `Cargo.toml` pins a branch and not a tag.
+[[licenses.exceptions]]
+name = "libobs-recorder"
+allow = ["GPL-2.0"]
+[[licenses.exceptions]]
+name = "intprocess-recorder"
+allow = ["GPL-2.0"]
+[[licenses.exceptions]]
+name = "ipc-link"
+allow = ["GPL-2.0"]
+[[licenses.exceptions]]
+name = "libobs-sys"
+allow = ["GPL-2.0"]
+[[licenses.exceptions]]
+name = "build-helper"
+allow = ["GPL-2.0"]
+
+[advisories]
+# RUSTSEC, on. The policy is `all` (the default): unmaintained and unsound
+# advisories fail, not just vulnerabilities.
+yanked = "deny"
+
+# Every entry here is argued for individually and none is a blanket. Switching
+# `unmaintained` to `"workspace"` would clear both of these in one line and is
+# deliberately not done — it would also silence the next one, which might be a
+# crate this project actually chose.
+ignore = [
+    # The `unic-*` family (`unic-char-property`, `unic-char-range`,
+    # `unic-common`, `unic-ucd-ident`, `unic-ucd-version`) is unmaintained.
+    # All five advisories say "no safe upgrade is available".
+    #
+    # Reached only as tauri -> tauri-utils -> urlpattern -> unic-ucd-ident.
+    # Nothing in this repository depends on them directly, nothing can drop
+    # them without dropping Tauri, and they are Unicode property tables — data
+    # crates with no I/O, no parsing of untrusted bytes and no unsafe surface,
+    # which is why "unmaintained" here is a maintenance signal rather than a
+    # security one.
+    #
+    # Revisit when Tauri moves off `urlpattern`; drop all five lines then.
+    "RUSTSEC-2025-0075", # unic-ucd-ident
+    "RUSTSEC-2025-0080", # unic-char-range
+    "RUSTSEC-2025-0081", # unic-char-property
+    "RUSTSEC-2025-0098", # unic-ucd-version
+    "RUSTSEC-2025-0100", # unic-common
+]
+
+[bans]
+# Duplicate versions are a fact of a Tauri graph — three `toml_edit`s, six
+# `windows-sys` — and failing on them would mean an ignore list longer than
+# the check.
+multiple-versions = "allow"
+
+# `warn`, not `deny`, for exactly one reason: a git dependency with no
+# `version` is a wildcard, and `libobs-recorder` is pinned to a branch because
+# the fork has no tags to pin to (docs/provenance.md, WS1.7).
+#
+# So this warns on the one thing already known and recorded, rather than
+# failing CI over it. **WS1.7 flips this to `deny`** once the fork is tagged —
+# that flip is part of what "no branch-pinned fork in Cargo.toml" in the §8
+# definition of done means, and leaving the key at `warn` afterwards would let
+# the next wildcard in unnoticed.
+wildcards = "warn"
+
+# The fork's five manifests say `license = "GPL-2.0"`, which is a deprecated
+# SPDX identifier (the current spellings are `GPL-2.0-only` and
+# `GPL-2.0-or-later`). cargo-deny warns about it on every run and still
+# matches the exceptions above. It is the fork's manifest, not ours, and WS8
+# deletes the dependency — so it is left alone rather than carried as a patch.
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# The capture backend. A branch pin, not a tag — WS1.7 debt, recorded in
+# docs/provenance.md. `Cargo.lock` pins the exact revision, so a build is
+# reproducible; what is not pinned is where `cargo update` would move it.
+allow-git = ["https://github.com/NinjaGoldfinch/libobs-recorder.git"]

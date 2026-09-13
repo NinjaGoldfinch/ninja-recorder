@@ -2,8 +2,8 @@ import { call } from "./bridge";
 import { el } from "./dom";
 import { formatTime } from "./format";
 import { refreshDiskUsage, refreshLibrary } from "./library";
-import { refreshUpdateStatus } from "./update";
 import type { GameState, LcuStatus, SupervisorStatus } from "./types";
+import { refreshUpdateStatus } from "./update";
 
 // The two Tauri events the backend pushes (`library-changed`,
 // `update-status-changed`) are both once-in-a-while facts; nothing pushes the
@@ -197,9 +197,7 @@ function renderGame(status: SupervisorStatus) {
   // A null recording_id means the file exists but its row never got
   // written — worth saying out loud rather than rendering as a blank.
   const idNote =
-    finalized.recording_id === null
-      ? "DB WRITE FAILED"
-      : `db id ${finalized.recording_id}`;
+    finalized.recording_id === null ? "DB WRITE FAILED" : `db id ${finalized.recording_id}`;
   els.aboutFinalized.textContent = `${finalized.path} (${finalized.markers.length} markers, ${idNote})`;
 }
 
