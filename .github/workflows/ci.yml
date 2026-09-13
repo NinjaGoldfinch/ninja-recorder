@@ -489,12 +489,46 @@ jobs:
       # it sets `createUpdaterArtifacts: false` in
       # `tauri.devtools.conf.json` so it can never update itself into the
       # production app.
+      # `tauri.conf.json` sets `createUpdaterArtifacts: true`, so `tauri build`
+      # signs the updater bundle — and fails outright when the key is empty:
+      #
+      #   failed to decode secret key: incorrect updater private key password:
+      #   Missing comment in secret key
+      #
+      # That is not a build failure, it is a "this repository cannot sign"
+      # failure, and it arrives eleven minutes into a Windows bundle. The
+      # devtools entry never hit it only because its own config turns updater
+      # artifacts off, for unrelated reasons.
+      #
+      # Without a key: build the installer, skip the updater artifacts. The
+      # bundle is still produced and still verifiable, which is the part worth
+      # having on a fork or a repository that has not been given the key yet.
+      # What is lost is the `.sig` and the updater zip — which an unsigned
+      # repository could not publish anyway, and `release` is gated on the same
+      # key, so the two stay consistent.
+      #
+      # The arguments are assembled in bash rather than templated into the
+      # `run:` line: the matrix decides three different things here, and
+      # generating shell source from `${{ }}` to express that is how a quoting
+      # bug ends up only reproducible on a Windows runner.
       - name: Build app
         env:
           NINJA_DEVTOOLS: ${{ matrix.devtools && '1' || '' }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run tauri build -- --bundles ${{ matrix.bundles }} ${{ matrix.devtools && '--features devtools --config src-tauri/tauri.devtools.conf.json' || '' }}
+          DEVTOOLS: ${{ matrix.devtools && '1' || '' }}
+          BUNDLES: ${{ matrix.bundles }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--bundles "$BUNDLES")
+          if [ -n "${DEVTOOLS:-}" ]; then
+            args+=(--features devtools --config src-tauri/tauri.devtools.conf.json)
+          elif [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "::notice::No TAURI_SIGNING_PRIVATE_KEY — building the installer without updater artifacts."
+            args+=(--config '{"bundle":{"createUpdaterArtifacts":false}}')
+          fi
+          npm run tauri build -- "${args[@]}"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
