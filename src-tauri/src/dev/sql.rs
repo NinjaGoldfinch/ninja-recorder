@@ -330,17 +330,17 @@ pub fn dev_reset_db(
     also_clear_files: bool,
 ) -> Result<ResetReport, String> {
     let mut files_deleted = 0usize;
-    if also_clear_files {
-        if let Ok(entries) = std::fs::read_dir(&state.recordings_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let is_video = path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .is_some_and(|e| matches!(e.to_lowercase().as_str(), "mp4" | "mkv"));
-                if is_video && std::fs::remove_file(&path).is_ok() {
-                    files_deleted += 1;
-                }
+    if also_clear_files
+        && let Ok(entries) = std::fs::read_dir(&state.recordings_dir)
+    {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let is_video = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| matches!(e.to_lowercase().as_str(), "mp4" | "mkv"));
+            if is_video && std::fs::remove_file(&path).is_ok() {
+                files_deleted += 1;
             }
         }
     }

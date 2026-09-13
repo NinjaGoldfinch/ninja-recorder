@@ -524,10 +524,10 @@ async fn fetch_eog(http: &LcuHttpClient, game_id: i64) -> Result<MatchSummary, M
     // not the one we asked about. A stale one from the previous game would
     // put the wrong result on this recording, which is the single worst
     // thing this feature can do.
-    if let Some(block_id) = block.game_id.filter(|id| *id > 0) {
-        if block_id != game_id {
-            return Err(MatchDataError::NotReady(game_id));
-        }
+    if let Some(block_id) = block.game_id.filter(|id| *id > 0)
+        && block_id != game_id
+    {
+        return Err(MatchDataError::NotReady(game_id));
     }
 
     let summary = extract_eog(&block);
