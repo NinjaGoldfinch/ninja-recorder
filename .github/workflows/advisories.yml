@@ -33,7 +33,7 @@ jobs:
     name: cargo deny check advisories
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # No version argument: reads src-tauri/rust-toolchain.toml, same as CI.
       - name: Setup Rust
@@ -52,7 +52,7 @@ jobs:
       # its automation.
       - name: Open an issue
         if: failure()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
