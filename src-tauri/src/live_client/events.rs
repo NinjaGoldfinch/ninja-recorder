@@ -507,7 +507,7 @@ fn live_position(position: &str) -> Option<String> {
 ///
 /// Our own CS is the exception and gets a real column, because it is shown
 /// on the row and is worth sorting by.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 pub struct Scoreboard {
     /// Both teams, in the order the response listed them.
     pub players: Vec<ScoreboardPlayer>,
@@ -522,7 +522,7 @@ pub struct Scoreboard {
     pub our_runes: Option<ScoreboardRunes>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 pub struct ScoreboardPlayer {
     pub champion: String,
     /// `"ORDER"` or `"CHAOS"`.
@@ -569,7 +569,7 @@ pub struct ScoreboardPlayer {
     pub spell_ids: Vec<i64>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 pub struct ScoreboardRunes {
     pub keystone_id: i64,
     pub keystone: String,
@@ -807,7 +807,7 @@ fn outcome(snapshot: &AllGameData) -> Option<bool> {
 
 // --- Markers -------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 pub enum MarkerKind {
     Kill,
@@ -848,13 +848,22 @@ impl MarkerKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ts_rs::TS)]
 pub struct Marker {
     pub kind: MarkerKind,
     pub game_time_s: f64,
     /// Structured detail specific to the marker kind (killer/victim/dragon
     /// type/etc.) — matches the `payload_json` column planned in
     /// DEVELOPMENT.md §4, so this serializes straight into the DB.
+    ///
+    /// `unknown` rather than `any` on the TypeScript side, and deliberately:
+    /// this really is an untyped blob today, and `unknown` forces a consumer
+    /// to narrow it before use where `any` would let a typo through silently.
+    ///
+    /// The shape it *should* have is a discriminated union keyed on `kind` —
+    /// `Kill { killer, victim }`, `Dragon { kind }`, and so on. That is a real
+    /// change to this type rather than an annotation, so it is not WS2.2's.
+    #[ts(type = "unknown")]
     pub payload: serde_json::Value,
 }
 

@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::async_runtime::JoinHandle;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 pub struct SessionMarker {
     #[serde(flatten)]
     pub marker: Marker,
@@ -148,14 +148,14 @@ pub enum SupervisorEvent {
 /// surfaced to the frontend via `game_state_status`. Also written to the
 /// SQLite VOD library (`db`) — `recording_id` is `None` only if that write
 /// itself failed, so the in-memory copy still isn't lost.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 pub struct FinalizedRecording {
     pub recording_id: Option<i64>,
     pub path: String,
     pub markers: Vec<SessionMarker>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 pub struct SupervisorStatus {
     pub state: GameState,
     pub last_finalized: Option<FinalizedRecording>,
@@ -179,7 +179,7 @@ pub struct SupervisorStatus {
 ///
 /// Deliberately not a copy of the row. Everything here is something the
 /// columns cannot say.
-#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct RecordingDiagnostics {
     /// What the gameflow session said, and `game_id: None` is itself the
     /// answer to "why is queue NULL".

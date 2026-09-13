@@ -593,6 +593,17 @@ stay in the UI process; `dev_registered_commands` must stay direct because
 `devportal.ts` detects the portal's existence by watching that call *reject* in
 a shipped build.
 
+> **`src/types.ts` is no longer the source of truth either.** Since WS2.2 all
+> 29 types crossing the boundary derive `ts_rs::TS` beside their serde derives,
+> and WS2.5's generator emits the TypeScript from those. The hand-written
+> interfaces in `src/types.ts` are what that replaces.
+>
+> They agree today — checked, not assumed: the generated `RecordingRow` uses
+> `number` for every `i64`, which is what this file has said since v1 and what
+> `JSON.parse` actually produces. ts-rs's *default* would have said `bigint`,
+> which JSON cannot carry at all; `contract::types::config()` is where that is
+> corrected and a test pins it.
+
 > **The `Returns` column is no longer the source of truth.** Since WS2.1 every
 > row of `dispatch_table!` declares its own return type, and the compiler checks
 > the declaration against the function — a wrong one is an `E0308` at the `?`,

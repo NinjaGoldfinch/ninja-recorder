@@ -13,7 +13,7 @@ use crate::db::{Db, DbError, RecordingRow, RetentionPolicy};
 use serde::Serialize;
 use std::path::Path;
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, ts_rs::TS)]
 pub struct EnforcementReport {
     pub deleted: Vec<i64>,
     pub freed_bytes: i64,

@@ -345,7 +345,7 @@ pub struct NewSample {
     pub our_level: Option<i64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ts_rs::TS)]
 pub struct RecordingRow {
     pub id: i64,
     pub path: String,
@@ -431,13 +431,13 @@ pub struct MatchMetadata {
 
 /// Disk retention policy (DEVELOPMENT.md §6): `None` means that
 /// dimension is unbounded. Mirrors the single-row `settings` table.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 pub struct RetentionPolicy {
     pub max_total_bytes: Option<i64>,
     pub max_age_days: Option<i64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ts_rs::TS)]
 pub struct MarkerRow {
     pub id: i64,
     pub recording_id: i64,
@@ -447,7 +447,7 @@ pub struct MarkerRow {
     pub payload_json: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ts_rs::TS)]
 pub struct SampleRow {
     pub id: i64,
     pub recording_id: i64,

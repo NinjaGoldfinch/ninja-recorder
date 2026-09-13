@@ -344,14 +344,14 @@ pub fn mark_notice_seen(ctx: &Ctx, key: &str) {
     }
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, ts_rs::TS)]
 pub struct DiskUsage {
     pub total_bytes: i64,
     pub recording_count: i64,
     pub free_bytes: i64,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, ts_rs::TS)]
 pub struct LcuStatus {
     pub connected: bool,
     pub phase: Option<String>,
@@ -560,7 +560,7 @@ pub trait Autostart: Send + Sync {
 }
 
 /// What the settings screen needs to render the start-on-login row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, ts_rs::TS)]
 pub struct AutostartStatus {
     /// The platform's answer, re-read after any change — never what was
     /// asked for.

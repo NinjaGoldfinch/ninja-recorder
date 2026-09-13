@@ -527,7 +527,7 @@ pub async fn rune_icon(dir: &Path, rune_id: i64) -> Option<PathBuf> {
 /// champion, and a library shows dozens of rows — one IPC call per icon
 /// would be hundreds. The frontend collects everything visible, asks once,
 /// and keys what comes back.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct IconRequest {
     #[serde(default)]
@@ -548,7 +548,7 @@ pub struct IconRequest {
 /// absent** rather than present-and-null: the caller's fallback is the
 /// text that was on the row before any of this existed, and a missing key
 /// says that more plainly than a null does.
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Serialize, ts_rs::TS)]
 pub struct IconSet {
     pub champions: HashMap<String, String>,
     pub items: HashMap<String, String>,

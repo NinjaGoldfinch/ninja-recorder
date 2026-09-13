@@ -66,7 +66,7 @@ impl Channel {
 
 /// A newer version the endpoint offered, flattened out of the plugin's own
 /// type so this module stays testable without one.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, ts_rs::TS)]
 pub struct UpdateOffer {
     pub version: String,
     /// The release notes, as `latest.json` carried them. Shown verbatim and
@@ -76,7 +76,7 @@ pub struct UpdateOffer {
 }
 
 /// What the About block renders, and the only thing the frontend ever sees.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, ts_rs::TS)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum UpdateStatus {
     /// No updater in this build at all: a devtools bundle, a `tauri:dev` run,
