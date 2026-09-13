@@ -1,5 +1,17 @@
 <#
 .NOTES
+    Most of this can be exercised without a Windows box. PowerShell 7 runs on
+    Linux and macOS, and `Get-Process`'s PrivateMemorySize64 and WorkingSet64
+    are both populated there, so the sampling loop, the aggregation, the
+    install-size branch, the error paths and the emitted row can all be run
+    for real:
+
+        pwsh -File ./scripts/measure.ps1 -ProcessName <something-running> `
+             -Label 'smoke test' -Seconds 4 -IntervalMs 500
+
+    What cannot: `-ArgumentFilter`, which needs Win32_Process via CIM. Off
+    Windows it finds nothing and the script says so.
+
     Deliberately ASCII-only, including the markdown row it emits. Windows
     PowerShell 5.1 reads a .ps1 as the ANSI code page unless the file carries a
     UTF-8 BOM, so a stray en dash in here is a mojibake bug waiting for the one
@@ -59,6 +71,9 @@
     .\scripts\measure.ps1 -Label 'v2.0.0 - daemon only' -ArgumentFilter '--daemon'
 #>
 [CmdletBinding()]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+    'PSAvoidUsingWriteHost', '',
+    Justification = 'The progress and summary lines are for a human at a console and are not data. The one thing that *is* data -- the markdown row -- goes to Write-Output, so it can still be piped or captured.')]
 param(
     [string] $ProcessName = 'ninja-recorder',
     [string] $ArgumentFilter,
@@ -83,7 +98,14 @@ function Format-Mb {
 function Get-Median {
     param([double[]] $Values)
     if ($Values.Count -eq 0) { return 0 }
-    $sorted = $Values | Sort-Object
+    # The `@()` is load-bearing. `Sort-Object` returns a bare [double] rather
+    # than an array when handed exactly one element, and under
+    # `Set-StrictMode -Version Latest` reading `.Count` off that is a
+    # terminating error -- so a one-sample run used to do all the sampling and
+    # then die on "The property 'Count' cannot be found on this object".
+    # Reachable with `-Seconds 1`, or on any machine slow enough that the loop
+    # gets around once.
+    $sorted = @($Values | Sort-Object)
     $mid = [int][math]::Floor($sorted.Count / 2)
     # Median rather than mean: one GC pause or one page-in should move the
     # answer by nothing, and with a mean it moves it by a little every time.
@@ -96,7 +118,7 @@ function Get-Median {
 # Resolved once, before sampling, rather than per sample: a process that exits
 # mid-run should make the run fail loudly, not silently halve the figure. A
 # process that *starts* mid-run is likewise not part of what was asked for.
-function Resolve-Targets {
+function Resolve-TargetProcess {
     $procs = @(Get-Process -Name $ProcessName -ErrorAction SilentlyContinue)
     if ($procs.Count -eq 0) {
         throw "No process named '$ProcessName' is running. Start it, put it in the state you are measuring, then run this again."
@@ -117,7 +139,13 @@ function Resolve-Targets {
     return $matched
 }
 
-$targets = Resolve-Targets
+# `@()` again, and for the sharper version of the same reason: `return`
+# unrolls a one-element array into a scalar, so a filter that matched exactly
+# one process would hand back a bare [Process] and `$targets.Count` below
+# would throw under StrictMode. One match is not the edge case -- it is the
+# headline case, since `-ArgumentFilter '--daemon'` is meant to find exactly
+# one daemon.
+$targets = @(Resolve-TargetProcess)
 Write-Host "Measuring $($targets.Count) process(es): $($targets.Id -join ', ')"
 Write-Host "Sampling for ${Seconds}s at every ${IntervalMs}ms. Leave the machine in the state you are measuring."
 

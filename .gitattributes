@@ -1,0 +1,25 @@
+# Line endings are LF in the working tree on every platform, not just the ones
+# that default to it.
+#
+# Without this, a Windows checkout applies `core.autocrlf=true` — which is the
+# default on the GitHub Actions Windows runner, the only runner this project
+# has — and every text file arrives with CRLF. Biome's formatter emits LF, so
+# `biome ci .` then reports "File content differs from formatting output" for
+# every file in the repository, including ones no commit has ever touched. The
+# failure looks like a formatting bug and is not one.
+#
+# Fixing it here rather than by setting Biome's `lineEnding` is deliberate: the
+# same transform reaches `rustfmt`, YAML, the shell in `ci.yml`'s `run:` blocks
+# and `scripts/*.mjs`. One rule covers all of them, and `.gitattributes`
+# overrides `core.autocrlf`, so it holds whatever a contributor has configured.
+#
+# Everything committed here is already LF, so this changes no stored blob —
+# only what lands in a working tree.
+* text=auto eol=lf
+
+# Binary. `text=auto` detects these anyway; naming them means a corrupt icon
+# can never be one heuristic away.
+*.png  binary
+*.ico  binary
+*.icns binary
+*.mp4  binary
