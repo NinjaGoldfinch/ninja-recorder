@@ -339,8 +339,7 @@ function showVideoError() {
       // this: many capture tools (ShadowPlay, some phones) default to it,
       // and WebView2 can't decode it without an extra Windows codec pack
       // that's not installed by default.
-      videoErrorText.textContent =
-        `This recording's video couldn't be played (${MEDIA_ERROR_LABELS[err!.code]}). The most common cause for an otherwise-valid mp4 is H.265/HEVC video — WebView2 needs the "HEVC Video Extensions" from the Microsoft Store to decode it at all, and playback can still be unreliable even then. Re-encoding to H.264 is the more reliable fix: "ffmpeg -i in.mp4 -c:v libx264 -c:a aac out.mp4".`;
+      videoErrorText.textContent = `This recording's video couldn't be played (${MEDIA_ERROR_LABELS[err!.code]}). The most common cause for an otherwise-valid mp4 is H.265/HEVC video — WebView2 needs the "HEVC Video Extensions" from the Microsoft Store to decode it at all, and playback can still be unreliable even then. Re-encoding to H.264 is the more reliable fix: "ffmpeg -i in.mp4 -c:v libx264 -c:a aac out.mp4".`;
     } else {
       videoErrorText.textContent = err
         ? `This recording's video couldn't be played (${MEDIA_ERROR_LABELS[err.code] ?? `error code ${err.code}`}).`
@@ -748,7 +747,7 @@ function renderGraph() {
     .map((p, i) => `${i === 0 ? "M" : "L"}${x(p.t).toFixed(2)} ${y(p.v).toFixed(2)}`)
     .join(" ");
   const area = `M${x(reduced[0].t).toFixed(2)} 50 ${line.slice(1)} L${x(
-    reduced[reduced.length - 1].t
+    reduced[reduced.length - 1].t,
   ).toFixed(2)} 50 Z`;
 
   timelineGraph.style.display = "";
@@ -766,7 +765,7 @@ function renderGraph() {
   const peak = reduced.reduce((a, p) => (Math.abs(p.v) > Math.abs(a) ? p.v : a), 0);
   setMetricSummary(
     `${meta.label} · ${meta.format(last)} at end · peak ${meta.format(peak)}`,
-    false
+    false,
   );
 }
 
@@ -833,13 +832,9 @@ function renderGlyphs() {
     .map((cluster, index) => {
       const lead = leadMarker(cluster);
       const style = markerStyle(lead);
-      const mean =
-        cluster.reduce((sum, m) => sum + m.video_time_s, 0) / cluster.length;
+      const mean = cluster.reduce((sum, m) => sum + m.video_time_s, 0) / cluster.length;
       const pct = windowFraction(mean) * 100;
-      const badge =
-        cluster.length > 1
-          ? `<span class="glyph-badge">${cluster.length}</span>`
-          : "";
+      const badge = cluster.length > 1 ? `<span class="glyph-badge">${cluster.length}</span>` : "";
       const label = cluster
         .map((m) => `${markerLabel(m)} at ${formatTime(m.video_time_s)}`)
         .join("; ");
@@ -886,13 +881,13 @@ function renderRuler() {
 
   // Minor ticks are a repeating gradient with a percentage period, so they
   // reflow with the container for free — no resize handling needed.
-  timelineRuler.style.setProperty("--minor-gap", `${((major / 4) / span) * 100}%`);
+  timelineRuler.style.setProperty("--minor-gap", `${(major / 4 / span) * 100}%`);
 
   const labels: string[] = [];
   for (let t = 0; t <= span; t += major) {
     const pct = (t / span) * 100;
     labels.push(
-      `<span class="ruler-label" style="left:${pct.toFixed(3)}%">${formatTime(t)}</span>`
+      `<span class="ruler-label" style="left:${pct.toFixed(3)}%">${formatTime(t)}</span>`,
     );
   }
   timelineRuler.innerHTML = labels.join("");
@@ -914,10 +909,7 @@ function updatePlayhead() {
   if (playerScrub) {
     playerScrub.setAttribute("aria-valuemax", total.toFixed(0));
     playerScrub.setAttribute("aria-valuenow", at.toFixed(0));
-    playerScrub.setAttribute(
-      "aria-valuetext",
-      `${formatTime(at)} of ${formatTime(total)}`
-    );
+    playerScrub.setAttribute("aria-valuetext", `${formatTime(at)} of ${formatTime(total)}`);
   }
   if (timeDisplay) {
     timeDisplay.textContent = `${formatTime(at)} / ${formatTime(total)}`;
@@ -1081,7 +1073,7 @@ function showClusterTooltip(e: MouseEvent) {
       (m) =>
         `<span class="tooltip-row"><span class="marker-icon">${
           markerStyle(m).icon
-        }</span>${escapeHtml(markerLabel(m))}${markerTimes(m)}</span>`
+        }</span>${escapeHtml(markerLabel(m))}${markerTimes(m)}</span>`,
     )
     .join("");
   // Unhidden before measuring: a `[hidden]` element has no width, and the

@@ -35,9 +35,16 @@ Until then this repository is GPL-2.0-only, for the reason
 `src-tauri/Cargo.toml` gives at its `license` key: linking libobs obligates the
 whole distributed binary.
 
-`deny.toml` encodes that state mechanically: GPL and AGPL are denied, with
-exactly one named exception for `libobs-recorder`. Deleting that exception is
-what proves the licence exit; it is not a formality.
+`deny.toml` encodes that state mechanically. It has no `deny` list — cargo-deny
+removed that key in 0.18 — so every licence not on its allow list fails, which
+covers GPL and AGPL and everything else nobody has thought about yet. Two GPL
+exceptions stand against it, and deleting them is what proves the licence exit;
+it is not a formality:
+
+1. **This crate.** `ninja-recorder`, GPL-2.0-only. WS8 rewrites it.
+2. **The capture backend.** One dependency, five crates — see below.
+
+**Do not add a third without asking.** The count is the measurement.
 
 ## Copied paths
 
@@ -77,6 +84,12 @@ about it.
 
 **Append, never renumber.** Roughly 35 source comments cite `DEVELOPMENT.md`
 section numbers. `grep -rn 'DEVELOPMENT.md §' src src-tauri` is the check.
+
+Two of them have been appended to since the import, and neither renumbers
+anything: `windows-verification.md` gains **§5.2** (the v2 measurement method's
+three empty rows — §5.0 was already "Launch modes", which is why it is not
+§5.0.5), and `ci-and-releases.md` gains the new gate list. `DEVELOPMENT.md` is
+untouched; v2's §16, §17 and §18 are WS1.5, WS2 and WS8's to write.
 
 ### Rewritten for v2, not carried
 
@@ -120,11 +133,36 @@ pinned is what `cargo update` would move to. The interim mitigation is that CI
 resolves and caches the revision explicitly (`Resolve libobs backend revision`
 in `ci.yml`).
 
-### WS1.7 — the GPL exception in `deny.toml`
+### WS1.7 — the GPL exceptions in `deny.toml`, and why there are five of them
 
-`libobs-recorder` is GPL-2.0 and is the single named exception in
-`deny.toml`'s `[licenses]` section. Do not add a second exception without
-asking: the count is the measurement.
+The plan asks for "exactly one named exception for `libobs-recorder`". That is
+one *dependency*. cargo-deny names *crates*, and this dependency resolves to
+five, all from the same fork and all GPL-2.0 because libobs is:
+
+| Crate | What it is |
+|---|---|
+| `libobs-recorder` | the crate `Cargo.toml` names |
+| `intprocess-recorder` | the in-process half |
+| `ipc-link` | the protocol to `extprocess_recorder.exe` |
+| `libobs-sys` | the FFI bindings |
+| `build-helper` | its build-script support |
+
+They are listed as one block in `deny.toml` and WS8 deletes the block as a
+unit, so the property the plan is asking for — the licence exit is a deletion,
+not an audit — is preserved exactly. What is not preserved is the number
+"one", which is why it is written down here.
+
+The five manifests also spell the licence `GPL-2.0`, a deprecated SPDX
+identifier. cargo-deny warns on every run and still matches the exceptions.
+It is the fork's manifest, not ours, and WS8 deletes the dependency, so it is
+left alone rather than carried as a patch.
+
+### WS1.7 — `[bans] wildcards` is `warn`, not `deny`
+
+A git dependency with no `version` key is a wildcard, and cargo-deny has no
+per-dependency allow for one. So the key is `warn` until the branch pin above
+becomes a tag pin, at which point WS1.7 flips it to `deny`. Leaving it at
+`warn` afterwards would let the next wildcard in unnoticed.
 
 ### ffmpeg
 

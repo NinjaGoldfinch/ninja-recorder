@@ -43,8 +43,13 @@ pub enum Launch {
     /// intended caller is autostart-on-login, which wants to sit in the tray
     /// costing nothing until asked for.
     UiHidden,
-    /// Headless recorder daemon. Reserved: recognised so the flag's meaning is
-    /// fixed now, but not yet implemented — see `Launch::unsupported`.
+    /// Headless recorder daemon.
+    ///
+    /// `main.rs` dispatches this straight to `daemon::run`, which is where
+    /// the "not built yet" answer now lives. It used to be a string here,
+    /// which meant the refusal and the thing that would replace it were in
+    /// different modules; WS3 fills in a function body instead of rerouting
+    /// a process.
     Daemon,
 }
 
@@ -84,21 +89,6 @@ impl Launch {
         matches!(self, Launch::Ui)
     }
 
-    /// The reason this mode can't run yet, if it can't.
-    ///
-    /// `Daemon` is parsed but unimplemented. Returning a message rather than
-    /// silently falling back to a normal window matters: autostart registers
-    /// `HIDDEN_FLAG` today and is the obvious caller to move onto `--daemon`
-    /// once it exists, and a build that quietly ignored the flag would look
-    /// like it worked while recording nothing in the background.
-    pub fn unsupported(self) -> Option<&'static str> {
-        match self {
-            Launch::Daemon => Some(
-                "--daemon is reserved for the headless recorder daemon, which is not built yet",
-            ),
-            _ => None,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -121,14 +111,17 @@ mod tests {
         );
     }
 
+    /// Parsing `--daemon` and *implementing* it are separate questions, and
+    /// this file only answers the first. A build that quietly read the flag
+    /// as a normal start would look like it worked while recording nothing
+    /// in the background, so the mode has to survive parsing distinctly;
+    /// whether it can then run is `daemon::run`'s answer.
     #[test]
-    fn daemon_is_recognised_but_reports_itself_unsupported() {
+    fn daemon_is_recognised_as_its_own_mode() {
         let mode = Launch::from_args(["--daemon"]);
         assert_eq!(mode, Launch::Daemon);
-        assert!(
-            mode.unsupported().is_some(),
-            "an unimplemented mode must say so rather than fall back to a window"
-        );
+        assert_ne!(mode, Launch::Ui, "the daemon must not fall back to a window");
+        assert!(!mode.creates_window());
     }
 
     #[test]
@@ -164,11 +157,5 @@ mod tests {
         assert_eq!(HIDDEN_FLAG, "--hidden");
         assert_eq!(DAEMON_FLAG, "--daemon");
         assert_eq!(Launch::from_args([HIDDEN_FLAG]), Launch::UiHidden);
-    }
-
-    #[test]
-    fn supported_modes_report_no_error() {
-        assert!(Launch::Ui.unsupported().is_none());
-        assert!(Launch::UiHidden.unsupported().is_none());
     }
 }

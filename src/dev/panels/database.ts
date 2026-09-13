@@ -6,10 +6,11 @@
  * frontend change — which matters given the TS types are hand-mirrored
  * and would otherwise be the thing that goes stale first.
  */
-import type { Panel, PanelContext } from "../main";
+
 import { call, tryCall } from "../ipc";
-import { card, confirmDialog, escapeHtml, output, panelHead, table, toast } from "../ui";
+import type { Panel, PanelContext } from "../main";
 import type { QueryResult, TableSchema } from "../types";
+import { card, confirmDialog, escapeHtml, output, panelHead, table, toast } from "../ui";
 
 let root: HTMLElement | null = null;
 let ctx: PanelContext | null = null;
@@ -24,10 +25,19 @@ let sqlResult: { value: unknown; error: boolean } | null = null;
 const LIMIT = 50;
 const SNIPPET_KEY = "ninja-dev-sql-snippets";
 const DEFAULT_SNIPPETS: Array<[string, string]> = [
-  ["Recordings with markers", "SELECT r.id, r.champion, COUNT(m.id) AS markers\nFROM recordings r LEFT JOIN markers m ON m.recording_id = r.id\nGROUP BY r.id ORDER BY markers DESC"],
+  [
+    "Recordings with markers",
+    "SELECT r.id, r.champion, COUNT(m.id) AS markers\nFROM recordings r LEFT JOIN markers m ON m.recording_id = r.id\nGROUP BY r.id ORDER BY markers DESC",
+  ],
   ["Marker kinds", "SELECT kind, COUNT(*) AS n FROM markers GROUP BY kind ORDER BY n DESC"],
-  ["Orphaned markers", "SELECT * FROM markers WHERE recording_id NOT IN (SELECT id FROM recordings)"],
-  ["Size by pinned", "SELECT pinned, COUNT(*) AS n, SUM(size_bytes) AS bytes FROM recordings GROUP BY pinned"],
+  [
+    "Orphaned markers",
+    "SELECT * FROM markers WHERE recording_id NOT IN (SELECT id FROM recordings)",
+  ],
+  [
+    "Size by pinned",
+    "SELECT pinned, COUNT(*) AS n, SUM(size_bytes) AS bytes FROM recordings GROUP BY pinned",
+  ],
 ];
 
 function schema(): TableSchema | undefined {
@@ -82,7 +92,7 @@ function editorHtml(): string {
                   ? `<label class="check"><input type="checkbox" data-delete-file checked /> also delete the file</label>`
                   : ""
               }`
-       }
+}
        <button type="button" class="ghost" data-cancel-edit>Close</button>
      </div>`,
   );
@@ -149,9 +159,7 @@ function draw() {
       `<div class="row" style="margin-bottom:.5rem">
         <select id="snippet-picker">
           <option value="">Snippets…</option>
-          ${snippets
-            .map((sn, i) => `<option value="${i}">${escapeHtml(sn[0])}</option>`)
-            .join("")}
+          ${snippets.map((sn, i) => `<option value="${i}">${escapeHtml(sn[0])}</option>`).join("")}
         </select>
         <button type="button" class="ghost tiny" data-save-snippet>Save current as snippet</button>
       </div>
@@ -352,7 +360,11 @@ export const databasePanel: Panel = {
             const newId = await call<number>("dev_insert_row", { table: activeTable, values });
             toast(`Inserted row ${newId}`, "ok");
           } else {
-            const changed = await call<number>("dev_update_row", { table: activeTable, id, values });
+            const changed = await call<number>("dev_update_row", {
+              table: activeTable,
+              id,
+              values,
+            });
             toast(`Updated ${changed} row(s)`, "ok");
           }
           editing = null;
@@ -418,9 +430,12 @@ export const databasePanel: Panel = {
         });
         if (!ok) return;
         try {
-          const report = await call<{ rows_deleted: number; files_deleted: number }>("dev_reset_db", {
-            alsoClearFiles,
-          });
+          const report = await call<{ rows_deleted: number; files_deleted: number }>(
+            "dev_reset_db",
+            {
+              alsoClearFiles,
+            },
+          );
           toast(
             `Reset: ${report.rows_deleted} row(s), ${report.files_deleted} file(s) removed`,
             "ok",

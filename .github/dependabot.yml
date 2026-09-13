@@ -1,0 +1,59 @@
+# Dependency updates.
+#
+# Grouped and monthly rather than individual and weekly, deliberately. This is a
+# part-time single-maintainer project with a pinned compiler and a licence exit
+# that depends on knowing exactly what is in the dependency graph — a stream of
+# one-crate bumps would be noise that gets rubber-stamped, which is worse than
+# no automation at all.
+#
+# What this is actually for: **`cargo deny check` only runs when someone
+# pushes.** Advisories arrive on their own schedule, and a dependency bump that
+# clears one should show up as a pull request rather than as a CI failure on
+# whatever unrelated change happens to land next. `advisories.yml` covers the
+# other half by running the check on a timer.
+version: 2
+updates:
+  # The workflows pin `actions/checkout@v4`, `Swatinem/rust-cache@v2`,
+  # `taiki-e/install-action`, `actions/add-to-project@v1.0.2`. A pinned action
+  # that is never bumped is a supply-chain risk that looks like good hygiene.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
+
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      # One PR for the whole Tauri family. They are released together and
+      # bumping one without the others is how a graph ends up with three
+      # `tauri-utils` versions.
+      tauri:
+        patterns: ["tauri", "tauri-*"]
+      rust-minor:
+        update-types: ["minor", "patch"]
+    ignore:
+      # Pinned to a branch of a fork; Dependabot cannot reason about it and
+      # WS1.7 replaces the pin with a tag. Until then, updating it is a manual
+      # decision — see docs/provenance.md.
+      - dependency-name: libobs-recorder
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      frontend:
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps"

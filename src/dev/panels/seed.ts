@@ -5,10 +5,11 @@
  * otherwise untestable without playing a real game on Windows, and the
  * descriptions say which behaviour it exists to exercise.
  */
-import type { Panel, PanelContext } from "../main";
+
 import { call, tryCall } from "../ipc";
-import { bytes, card, confirmDialog, escapeHtml, output, panelHead, toast } from "../ui";
+import type { Panel, PanelContext } from "../main";
 import type { DevEnvInfo, SeedReport } from "../types";
+import { bytes, card, confirmDialog, escapeHtml, output, panelHead, toast } from "../ui";
 
 interface SeedSpec {
   count: number;

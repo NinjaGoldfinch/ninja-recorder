@@ -220,10 +220,10 @@ async fn version(dir: &Path) -> Option<String> {
         .map(|t| SystemTime::now().duration_since(t).unwrap_or_default() < VERSION_TTL)
         .unwrap_or(false);
 
-    if fresh {
-        if let Some(cached) = cached {
-            return Some(cached);
-        }
+    if fresh
+        && let Some(cached) = cached
+    {
+        return Some(cached);
     }
 
     match fetch_latest_version().await {

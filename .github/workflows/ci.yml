@@ -55,12 +55,28 @@ jobs:
       version: ${{ steps.pick.outputs.version }}
       channel: ${{ steps.pick.outputs.channel }}
       release: ${{ steps.pick.outputs.release }}
+      # Whether this repository holds a signing key, and therefore whether it is
+      # allowed to publish at all. Read here because `secrets` cannot be used in
+      # a job-level `if` — see the `release` job.
+      can_publish: ${{ steps.can_publish.outputs.can_publish }}
     steps:
       # Full history and every tag: the distance below is measured against
       # them, and a shallow clone would silently under-count.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Can this repository publish?
+        id: can_publish
+        env:
+          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -n "$SIGNING_KEY" ]; then
+            echo "can_publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "can_publish=false" >> "$GITHUB_OUTPUT"
+            echo "No TAURI_SIGNING_PRIVATE_KEY — building without publishing." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Pick version
         id: pick
@@ -158,12 +174,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 22, not 20. Vitest 5 refuses to run on anything below 22.12
+      # (`engines: ^22.12.0 || ^24 || >=26`), and Node 20 went out of
+      # maintenance in April 2026. Both jobs move together so there is one
+      # Node in this workflow rather than two.
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
+      # No version argument, deliberately: that is what makes the action read
+      # `src-tauri/rust-toolchain.toml` instead of overriding it. `@stable`
+      # here would silently un-pin the compiler while the file sat in the tree
+      # looking like it was in force.
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -172,11 +196,47 @@ jobs:
         with:
           workspaces: src-tauri
 
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@cargo-deny
+
+      # The order below is the plan's §4.7, and it is an order rather than a
+      # list: the cheap gates run first so a formatting mistake fails in
+      # seconds instead of after a four-minute compile.
       - name: Install frontend dependencies
         run: npm ci
 
+      # Lint and format in one binary. `ci` is the non-writing mode — it
+      # reports what `npm run format` would change and fails rather than
+      # changing it.
+      - name: Lint and format check (Biome)
+        run: npx biome ci .
+
       - name: Type-check frontend
         run: npx tsc --noEmit
+
+      # WS4.1: uncomment when the first `.svelte` file lands. `tsc` does not
+      # see `.svelte` files at all, so without this the type gate silently
+      # narrows to "the TypeScript that is left".
+      # - name: Type-check Svelte
+      #   run: npx svelte-check --tsconfig ./tsconfig.json
+
+      - name: Frontend tests
+        run: npx vitest run
+
+      # Licences and advisories. This is the v2.1 licence exit's instrument,
+      # not hygiene: `deny.toml` allows GPL for exactly two named things, and
+      # deleting them is what proves no other copyleft crept in. See
+      # docs/provenance.md.
+      - name: Licences and advisories (cargo-deny)
+        working-directory: src-tauri
+        run: cargo deny check
+
+      # WS2.5: uncomment when the generator exists. It replaces
+      # `every_command_round_trips` in `core/dispatch.rs` and the dev portal's
+      # drift banner — both of which stay until it does.
+      # - name: Contract drift
+      #   working-directory: src-tauri
+      #   run: cargo run --bin gen-contract -- --check
 
       - name: Run Rust tests
         working-directory: src-tauri
@@ -244,12 +304,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 22, not 20. Vitest 5 refuses to run on anything below 22.12
+      # (`engines: ^22.12.0 || ^24 || >=26`), and Node 20 went out of
+      # maintenance in April 2026. Both jobs move together so there is one
+      # Node in this workflow rather than two.
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
+      # Same as `test`: no version argument, so `rust-toolchain.toml` is
+      # what decides. The shipped installer and the tests that cleared it
+      # have to be built by the same compiler for either result to mean
+      # anything.
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -451,7 +519,23 @@ jobs:
   # cross-run download dance and its `actions: read` token are both gone.
   release:
     name: Release
-    if: needs.version.outputs.release == 'true'
+    # Two conditions, and the second is a guard rather than policy.
+    #
+    # **Without it, the first push to main in a fresh clone publishes a
+    # release.** `version` sets `release=true` for any push to main, so merging
+    # a branch mints `<declared>-alpha.<n>`, builds two Windows bundles, and
+    # then fails partway through this job — *after* creating the GitHub Release
+    # — because the updater artifacts cannot be signed. That leaves a broken
+    # release to delete by hand, on a repository whose README says there are
+    # none.
+    #
+    # `can_publish` comes from the `version` job because **the `secrets` context
+    # is not available in a job-level `if`** — it has to be read inside a step
+    # and handed on as an output. The signing key doubles as the switch that
+    # says "this repository is allowed to publish": a fork has none and quietly
+    # builds without publishing, and this one starts publishing the moment the
+    # key is added, which is WS7's business and not before.
+    if: needs.version.outputs.release == 'true' && needs.version.outputs.can_publish == 'true'
     needs: [version, test, build]
     runs-on: ubuntu-latest
     permissions:

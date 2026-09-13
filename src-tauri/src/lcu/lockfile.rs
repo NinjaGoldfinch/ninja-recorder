@@ -130,10 +130,12 @@ fn windows_install_dir_from_installs_json() -> Option<PathBuf> {
     static CACHE: Mutex<Option<(Instant, Option<PathBuf>)>> = Mutex::new(None);
 
     let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((resolved_at, cached)) = cache.as_ref() {
-        if cached.is_some() || resolved_at.elapsed() < MISS_TTL {
-            return cached.clone();
-        }
+    // The parentheses are not optional: a `let` chain joins with `&&` only, so
+    // the `||` has to be bracketed into a single operand.
+    if let Some((resolved_at, cached)) = cache.as_ref()
+        && (cached.is_some() || resolved_at.elapsed() < MISS_TTL)
+    {
+        return cached.clone();
     }
 
     let fresh = read_windows_install_dir();

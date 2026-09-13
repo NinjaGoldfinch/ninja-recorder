@@ -1,0 +1,26 @@
+# The compiler this project is built with, pinned exactly.
+#
+# Not `channel = "stable"`. A floating channel means two CI runs a week apart
+# can use two different compilers, so a build that breaks on Tuesday and not on
+# Monday has two candidate causes and no way to tell them apart. Pinning moves
+# every new lint and every behaviour change into a dated, reviewable diff of
+# its own.
+#
+# CI uses `dtolnay/rust-toolchain` with **no version argument** so it reads this
+# file. Passing `@stable` there would silently win and put the pin back to
+# floating without changing anything visible in this file.
+#
+# Bump in its own PR. New lints are the expected content of that diff —
+# `-D warnings` means they are errors, so a bump that also carried a feature
+# would make "which change broke this" unanswerable again.
+#
+# 1.98.1 was stable on 2026-09-01 and is what the tree was moved to edition
+# 2024 under. Edition 2024 needs 1.85 or newer; this is the version the
+# `unsafe_op_in_unsafe_fn` and `static mut` work below was actually verified
+# against, not a floor.
+[toolchain]
+channel = "1.98.1"
+# `rustfmt` and `clippy` are gates, so they have to come with the toolchain
+# rather than be installed separately — a runner that skipped the install step
+# would otherwise skip the gate and still go green.
+components = ["rustfmt", "clippy"]

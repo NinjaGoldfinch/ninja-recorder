@@ -1,8 +1,9 @@
 /** Health dashboard: state machine, recorder, LCU, disk, paths. */
-import type { Panel, PanelContext } from "../main";
+
 import { tryCall } from "../ipc";
+import type { Panel, PanelContext } from "../main";
+import { type DevHealth, GAME_STATES, type LcuStatus } from "../types";
 import { bytes, card, duration, escapeHtml, kv, output, panelHead, timestamp, toast } from "../ui";
-import { GAME_STATES, type DevHealth, type LcuStatus } from "../types";
 
 let root: HTMLElement | null = null;
 let lastCtx: PanelContext | null = null;
@@ -64,7 +65,13 @@ function lcuCard(): string {
        state machine without a client.</p>`,
     );
   }
-  return card("League Client", kv([["Summoner", lcu.summoner], ["Phase", lcu.phase]]));
+  return card(
+    "League Client",
+    kv([
+      ["Summoner", lcu.summoner],
+      ["Phase", lcu.phase],
+    ]),
+  );
 }
 
 function paths(ctx: PanelContext): string {
@@ -166,12 +173,15 @@ function draw(health: DevHealth | null, ctx: PanelContext) {
       : `<p class="hint">Waiting for the first health poll…</p>`) +
     paths(ctx);
 
-  root.querySelector("[data-reveal]")?.closest(".row")?.addEventListener("click", async (e) => {
-    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-reveal]");
-    if (!btn) return;
-    const result = await tryCall("dev_open_data_dir", { which: btn.dataset.reveal });
-    if (!result.ok) toast(result.error, "err");
-  });
+  root
+    .querySelector("[data-reveal]")
+    ?.closest(".row")
+    ?.addEventListener("click", async (e) => {
+      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-reveal]");
+      if (!btn) return;
+      const result = await tryCall("dev_open_data_dir", { which: btn.dataset.reveal });
+      if (!result.ok) toast(result.error, "err");
+    });
 }
 
 export const overviewPanel: Panel = {

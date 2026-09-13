@@ -55,10 +55,7 @@ const DIRECT_COMMANDS = new Set([
   "dev_registered_commands",
 ]);
 
-export async function call<T>(
-  command: string,
-  args?: Record<string, unknown>,
-): Promise<T> {
+export async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (IN_TAURI) {
     if (DIRECT_COMMANDS.has(command)) return invoke<T>(command, args);
     // `args` is forwarded untouched, so the wire shape is unchanged: the
@@ -177,7 +174,17 @@ const LAYOUTS = {
  */
 function fixtureScoreboard(champion: string | null) {
   if (champion === null) return null;
-  const cast = ["Garen", "Blitzcrank", "Jinx", "Thresh", "Zed", "Lux", "Nautilus", "Akali", "Pantheon"];
+  const cast = [
+    "Garen",
+    "Blitzcrank",
+    "Jinx",
+    "Thresh",
+    "Zed",
+    "Lux",
+    "Nautilus",
+    "Akali",
+    "Pantheon",
+  ];
   const items = [3089, 3157, 3020, 3135, 3116, 3363];
   return {
     our_team: "ORDER",
@@ -254,10 +261,21 @@ const FIXTURE_ROWS: RecordingRow[] = [
 const LOADING_SCREEN_S = 20;
 
 const FIXTURE_MARKERS: MarkerRow[] = [
-  ["first_blood", 132], ["kill", 240], ["death", 415], ["dragon", 602],
-  ["assist", 745], ["kill", 760], ["multikill", 762], ["turret", 900],
-  ["death", 1105], ["voidgrubs", 1150], ["herald", 1180], ["baron", 1420], ["ace", 1444],
-  ["kill", 1460], ["inhibitor", 1600],
+  ["first_blood", 132],
+  ["kill", 240],
+  ["death", 415],
+  ["dragon", 602],
+  ["assist", 745],
+  ["kill", 760],
+  ["multikill", 762],
+  ["turret", 900],
+  ["death", 1105],
+  ["voidgrubs", 1150],
+  ["herald", 1180],
+  ["baron", 1420],
+  ["ace", 1444],
+  ["kill", 1460],
+  ["inhibitor", 1600],
 ].map(([kind, t], i) => ({
   id: i + 1,
   recording_id: 1,
@@ -370,10 +388,7 @@ const MOCKS: Record<string, unknown> = {
 // Writes mutate the fixture array rather than no-op'ing, so pin and delete
 // behave the way they will in the real app — a two-step delete that never
 // removes anything is not much of a test.
-async function mock<T>(
-  command: string,
-  args?: Record<string, unknown>,
-): Promise<T> {
+async function mock<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   switch (command) {
     case "list_recordings":
       return FIXTURE_ROWS as T;

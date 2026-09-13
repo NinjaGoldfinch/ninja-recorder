@@ -220,17 +220,17 @@ where
     }
 
     while let Some(msg) = ws.next().await {
-        if let Message::Text(text) = msg.map_err(Box::new)? {
-            if let Some(update) = parse_gameflow_event(&text) {
-                // De-duplicated like the polling path already does, so the
-                // initial read and a change event carrying the same phase
-                // do not both dispatch.
-                if last.as_ref() == Some(&update.phase) {
-                    continue;
-                }
-                last = Some(update.phase.clone());
-                on_update(update);
+        if let Message::Text(text) = msg.map_err(Box::new)?
+            && let Some(update) = parse_gameflow_event(&text)
+        {
+            // De-duplicated like the polling path already does, so the
+            // initial read and a change event carrying the same phase
+            // do not both dispatch.
+            if last.as_ref() == Some(&update.phase) {
+                continue;
             }
+            last = Some(update.phase.clone());
+            on_update(update);
         }
     }
 

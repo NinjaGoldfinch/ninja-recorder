@@ -1,0 +1,64 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.13/schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "files": {
+    "includes": [
+      "**",
+      "!dist",
+      "!src-tauri/target",
+      "!package-lock.json",
+      // Captured LCU and Live Client Data samples. The point of a fixture is
+      // that it is exactly what the API returned, so reformatting it would
+      // quietly destroy the thing it exists to be.
+      "!fixtures"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    // Wider than Biome's 80. The tree was written at roughly this width and
+    // the alternative was a reformat that rewrapped almost every line in
+    // `src/`, which would have buried the real diff for the length of WS4.
+    "lineWidth": 100
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "style": {
+        // The DOM code uses `!` deliberately: `document.querySelector` on a
+        // node `index.html` statically contains is not a maybe, and the
+        // alternative is a null check per element that can never fire.
+        "noNonNullAssertion": "off"
+      }
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "trailingCommas": "all",
+      "semicolons": "always"
+    }
+  },
+  "overrides": [
+    {
+      // **Dated debt, not a blanket — WS4.2 deletes this override.**
+      //
+      // These two files hold every remaining lint error in the tree: 8
+      // `useSemanticElements`, 4 `noSvgWithoutTitle`, 1 `useHeadingContent`,
+      // 1 `useMediaCaption` and 2 `noInnerDeclarations` (the inline
+      // anti-theme-flash script's `var`s).
+      //
+      // All of them are real. None of them can be fixed without editing the
+      // markup, which the v2 skeleton is not allowed to do and which
+      // Appendix D of the plan deletes outright when the Svelte views land.
+      // Fixing them now would mean rewriting markup twice and shipping an
+      // untested change to the release build in between.
+      //
+      // Formatting stays on for both files; only the linter is off.
+      "includes": ["index.html", "dev.html"],
+      "linter": { "enabled": false }
+    }
+  ]
+}

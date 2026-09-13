@@ -6,9 +6,10 @@
  * over `invoke` is reachable here, including the commands no other panel
  * bothers to surface.
  */
-import type { Panel, PanelContext } from "../main";
+
 import { call, tryCall } from "../ipc";
-import { COMMANDS, productionCommandNames, type ArgSpec, type CommandSpec } from "../registry";
+import type { Panel, PanelContext } from "../main";
+import { type ArgSpec, COMMANDS, type CommandSpec, productionCommandNames } from "../registry";
 import { card, escapeHtml, output, panelHead, toast } from "../ui";
 
 let root: HTMLElement | null = null;
@@ -23,7 +24,10 @@ function matching(): CommandSpec[] {
   const q = search.trim().toLowerCase();
   if (!q) return COMMANDS;
   return COMMANDS.filter(
-    (c) => c.name.includes(q) || c.group.toLowerCase().includes(q) || c.description.toLowerCase().includes(q),
+    (c) =>
+      c.name.includes(q) ||
+      c.group.toLowerCase().includes(q) ||
+      c.description.toLowerCase().includes(q),
   );
 }
 
@@ -31,7 +35,8 @@ function listHtml(): string {
   let group = "";
   return matching()
     .map((c) => {
-      const header = c.group !== group ? `<div class="dev-nav-group">${escapeHtml(c.group)}</div>` : "";
+      const header =
+        c.group !== group ? `<div class="dev-nav-group">${escapeHtml(c.group)}</div>` : "";
       group = c.group;
       const cls = [
         "cmd-item",
@@ -96,14 +101,14 @@ function detailHtml(): string {
          ? `<div class="warnbar warnbar-danger">This command writes, deletes, or otherwise
             changes state. It is not safely repeatable.</div>`
          : ""
-     }
+}
      ${
        args.length
          ? `<div class="field-grid" style="margin-top:.8rem">${args
              .map((a) => argField(a, saved[a.name]))
              .join("")}</div>`
          : `<p class="hint">No arguments.</p>`
-     }
+}
      <div class="row" style="margin-top:.9rem">
        <button type="button" class="primary" data-invoke>Invoke</button>
        ${result ? `<button type="button" class="ghost" data-copy>Copy response</button>` : ""}
@@ -204,7 +209,11 @@ async function invokeSelected() {
   const started = performance.now();
   try {
     const value = await call<unknown>(selected.name, Object.keys(args).length ? args : undefined);
-    result = { value: value ?? "(no value returned)", ms: performance.now() - started, error: false };
+    result = {
+      value: value ?? "(no value returned)",
+      ms: performance.now() - started,
+      error: false,
+    };
   } catch (err) {
     result = { value: String(err), ms: performance.now() - started, error: true };
   }

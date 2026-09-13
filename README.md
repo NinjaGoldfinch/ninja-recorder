@@ -1,131 +1,101 @@
-# ninja-recorder
+# ninja-recorder-v2
 
-A lightweight League of Legends VOD recorder for Windows. It records your
-games automatically, tags the timeline with in-game events — kills, deaths,
-dragons, barons, turrets — and gives you a review player built for improving,
-not for editing.
+A lightweight League of Legends VOD recorder for Windows — records your games
+automatically, tags the timeline with in-game events, and gives you a review
+player built for improving rather than editing. **v2 is not a rewrite of that
+app; it is the same app with five things changed underneath it.** The stack
+that works stays: Tauri, Rust, SQLite, files-as-truth, H.264/AAC in fragmented
+MP4, and the `Recorder` trait. What changes is the frontend (vanilla TypeScript
+to Svelte 5, by strangler), the IPC contract (two hand-maintained lists to one
+generated one), the process model (one Tauri process to a headless daemon plus
+a disposable UI), the quality gates (none on the frontend to five in CI), and
+the capture backend (embedded libobs to an own WGC/D3D11/Media Foundation
+backend) — that last one being what eventually lets the licence change.
 
-No OBS to install. No scenes to configure. No injection into the game, ever.
+> **Pre-alpha. v1-equivalent, gates only.**
+>
+> This repository is byte-for-byte v1 at `32dcd41` plus edition 2024, a pinned
+> toolchain, the quality gates, and empty directories for the workstreams that
+> have not started. **Nothing user-visible has changed yet.** For a working
+> build, use [ninja-recorder](https://github.com/NinjaGoldfinch/ninja-recorder).
+>
+> Provenance: [docs/provenance.md](docs/provenance.md) ·
+> Plan: [ninja-recorder-v2-plan](https://github.com/NinjaGoldfinch/ninja-recorder-v2-plan)
 
-> **Working, on Windows, against real games.**
-> [Releases](../../releases) · [what has been verified, and what has
-> not](docs/windows-verification.md)
+The design document, the implementation plan, the decision log and the
+workstream breakdowns all live in the
+**[planning repository](https://github.com/NinjaGoldfinch/ninja-recorder-v2-plan)**,
+not here. This repository is the code; that one is the argument for it.
 
 ---
 
-## What it does
+## Workstreams
 
-```mermaid
-flowchart TB
-    A["You launch<br/>League"] --> B["App detects the client<br/><small>lockfile</small>"]
-    B --> C["Game starts<br/><small>gameflow phase</small>"]
-    C --> D["Recording starts<br/><small>WGC capture, hardware encode,<br/>audio on separate tracks</small>"]
-    D --> E["Events become markers<br/><small>Live Client Data @ 1 Hz</small>"]
-    E --> F["Game ends"]
-    F --> G["Tagged VOD in<br/>your library"]
-    G --> H["Review player:<br/>jump to any death"]
-    style A fill:#e8f5e9,stroke:#2e7d32
-    style H fill:#ede7f6,stroke:#5e35b1
-```
+From the implementation plan's §1. WS0, WS2 and WS5 depend on nothing and could
+start on day one; WS1's spike could too.
 
-You do not press a button anywhere in that chain.
+| | WS | What | Gated by | Effort |
+|---|---|---|---|---|
+| [ ] | **WS0** | Baseline measurement — install size, idle RAM by Private Bytes | — | 1 wk, part-time |
+| [ ] | **WS1** | Capture backend: P0c go/no-go spike, then Option B; trimmed libobs as fallback | — (spike); gate (build) | 3 wk + 4 wk |
+| [ ] | **WS2** | Generated contract — commands *and* events declared once in Rust | — | 2–3 wk |
+| [ ] | **WS3** | Daemon / UI split over named-pipe JSON-RPC | WS2, WS6 | 3 wk |
+| [ ] | **WS4** | Svelte 5 strangler migration, player last as an imperative island | WS2 | 5–6 wk |
+| [ ] | **WS5** | Toolchain pin, edition 2024, Biome, Vitest, svelte-check, cargo-deny | — | 2 wk |
+| [ ] | **WS6** | SQLite WAL, `busy_timeout`, writer + reader pool, `query_only` UI connection | — | 1 wk |
+| [ ] | **WS7** | Measure against C3 and ship v2.0.0 | everything | 1 wk |
+| [ ] | **WS8** | Remove libobs, audit, relicense, ship v2.1.0 | one release of WS7 in the field | 1–2 wk |
 
-## Why
+Roughly five months of part-time work to v2.0.0, plus a short v2.1.0.
 
-- **Zero-config recording.** The League Client API tells the app when a game
-  starts. That's the whole trigger. Turn on start-on-login and it comes up in
-  the tray with your PC, so there is nothing to remember to launch.
-- **Event-tagged VODs.** Every kill, death, dragon, baron, herald and turret
-  becomes a marker on the timeline. Jump straight to your deaths. Clip the
-  teamfight. A per-second advantage curve sits under the markers.
-- **Separate audio tracks.** Pick what to capture — game only, game plus your
-  mic, game plus mic plus Discord, or the whole desktop. Track 0 is always the
-  combined mix, so the VOD just plays; the tracks after it are isolated stems,
-  so you can still pull your mic out of a game you recorded months ago. Your
-  microphone is only ever recorded on a preset that names it.
-- **Lightweight.** A Tauri shell (~10 MB, uses the OS webview) plus embedded
-  libobs. No Electron, no bundled Chromium. Idle RAM and install size are
-  tracked targets, not vibes.
-- **Vanguard-safe by design.** Capture is Windows Graphics Capture only. No
-  process injection, no API hooks, no memory reading. This is not a setting.
-- **It won't eat your SSD.** 1080p60 at 8 Mbps is ~3.5 GB/hour. Retention
-  ships on by default (50 GiB / 30 days), with pinning for the games you want
-  to keep and a preview of what a tightened policy would delete before you
-  save it.
+**Partly done, not ticked.** WS5 tasks 5.1–5.5 and 5.7 and WS0 tasks 0.1 and
+0.3 have landed; 5.6 waits on WS4.1 and WS0.2 waits on the Windows box. A box
+is ticked when its whole workstream is done, so that the table cannot quietly
+start meaning "some of it".
 
-## Install
+**The P0c gate, around week 4, is the only hard fork.** If per-application
+audio loopback cannot be made to work, isolated game audio is not achievable
+without libobs, and the licence goal has to be weighed against that product
+loss before anything downstream continues. Everything after it is sequenced so
+that the answer changes *which backend is linked into the daemon* and nothing
+else.
 
-**Windows only.** Grab the NSIS installer from
-[Releases](../../releases).
+## What v2 changes, and what it does not
 
-That is a constraint, not an omission: capture is built on
-Windows.Graphics.Capture, which is the only way to record a
-Vanguard-protected game without injecting into it. There is no build for
-another platform, and a stub one would not be able to record.
+| | v1 | v2 |
+|---|---|---|
+| Process model | one Tauri process | `--daemon` owns capture, DB writes, tray, updater; a disposable Tauri UI |
+| IPC | `invoke('rpc')` + two hand-written TypeScript lists | one Rust declaration, generated client, CI-checked |
+| Frontend | vanilla TS, 12,797 LOC, 0 tests | Svelte 5, tokens, Vitest, `svelte-check` |
+| Capture | embedded libobs (GPL, ~200 MB) | WGC → D3D11 → Media Foundation; libobs as fallback for one release |
+| SQLite | one `Mutex<Connection>` | WAL, `busy_timeout`, writer + reader pool, `query_only` reader |
+| Licence | GPL-2.0 | GPL-2.0 until libobs is gone, then changed at v2.1 |
 
-The installer is unsigned, so SmartScreen warns on first run.
-
-After the first install it **updates itself**: the app checks on launch and
-every six hours, puts a dot on the settings button, and installs when you
-click it in Settings → About — never on its own, and never while a game is
-being recorded. See [DEVELOPMENT.md §14](DEVELOPMENT.md#14-updates) for why it
-asks rather than just doing it.
-
-## Architecture in one picture
-
-```mermaid
-flowchart TB
-    subgraph L["League of Legends"]
-        LCU["LCU API<br/><small>lockfile auth</small>"]
-        LIVE["Live Client Data API<br/><small>port 2999</small>"]
-    end
-    subgraph App["ninja-recorder — one Tauri v2 process"]
-        subgraph Core["Rust core"]
-            SM["Game state machine<br/><small>pure transitions + async supervisor</small>"]
-            EV["Event → marker pipeline"]
-            REC["Recorder trait<br/><small>libobs (Windows) · stub (dev)</small>"]
-            DB["SQLite library<br/><small>+ retention policy</small>"]
-        end
-        UI["Webview frontend<br/><small>library · review player · settings</small>"]
-    end
-    MP4["MP4 files on disk"]
-
-    LCU -->|"phase changes"| SM
-    LIVE -->|"1 Hz snapshots"| EV
-    SM --> REC
-    EV --> DB
-    REC --> MP4
-    SM --> DB
-    DB <--> UI
-    MP4 -->|"asset protocol"| UI
-```
-
-- **Capture:** [libobs](https://github.com/obsproject/obs-studio) embedded as
-  a library — not OBS-the-app, nothing for the user to install — driven
-  programmatically. WGC window capture plus hardware encode (NVENC/AMF/QSV).
-- **Game detection:** the LCU's gameflow phase, over its WebSocket where
-  available, polling as a fallback.
-- **Events:** the Live Client Data API at `https://127.0.0.1:2999`, polled at
-  1 Hz during games.
-- **Storage:** MP4s on disk are the source of truth; SQLite holds match
-  metadata, markers and the advantage samples.
-
-Full detail, with the runtime sequence and every diagram:
-**[docs/](docs/)**.
+Unchanged: the state machine and supervisor, the `Recorder` trait, `core`'s
+command surface, the LCU and Live Client Data clients, all eleven migrations
+and the schema, retention, reconcile, backfill, match summary, trim, the
+version scheme, the alpha channel, the signed updater, and ffmpeg (LGPL static,
+`-c copy`, separate process). See the plan's §2.1.
 
 ## Documentation
 
 | Document | What it covers |
 |---|---|
+| [docs/provenance.md](docs/provenance.md) | Where this code came from, what is owed because of it, the licence exit |
+| [docs/measurement.md](docs/measurement.md) | How install size and memory are measured, so a figure means one thing |
+| [CLAUDE.md](CLAUDE.md) | Module ownership, the gates, the rules that are easy to break by accident |
 | [docs/architecture.md](docs/architecture.md) | Components, module map, the `Recorder` trait boundary |
-| [docs/recording-pipeline.md](docs/recording-pipeline.md) | The core workflow end to end: state machine, events → markers, finalize |
+| [docs/recording-pipeline.md](docs/recording-pipeline.md) | State machine, events → markers, finalize |
 | [docs/data-model.md](docs/data-model.md) | Schema, migrations, reconciliation, retention |
 | [docs/frontend.md](docs/frontend.md) | Module ownership, views, IPC surface, theming |
 | [docs/dev-portal.md](docs/dev-portal.md) | Driving the backend without League running |
-| [docs/ci-and-releases.md](docs/ci-and-releases.md) | CI job graph, versioning, releases |
+| [docs/ci-and-releases.md](docs/ci-and-releases.md) | CI job graph, the gates, versioning, releases |
 | [docs/windows-verification.md](docs/windows-verification.md) | What was checked on real hardware, and what is still open |
-| [docs/product-design.md](docs/product-design.md) | The product, the decisions behind it, and how it was actually built |
+| [docs/product-design.md](docs/product-design.md) | The product, its decisions, and how it was actually built |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | The *why*: constraints, decisions, alternatives rejected, risks |
+
+`DEVELOPMENT.md` and `docs/*.md` came across from v1 verbatim. **Append to
+them; never renumber.** Roughly 35 source comments cite their section numbers.
 
 ## Development
 
@@ -134,30 +104,39 @@ npm install
 npm run tauri:dev
 ```
 
-Prerequisites: Rust stable and Node.js.
+Prerequisites: Node.js 22 or newer, and the compiler in
+[`src-tauri/rust-toolchain.toml`](src-tauri/rust-toolchain.toml) — rustup reads
+it, so there is nothing to choose.
 
-**`tauri:dev`, not `tauri dev`** — the colon matters. It passes
-`--features devtools`, which compiles in the dev portal: a second window that
-seeds the library, drives the state machine without League running, dry-runs
-the retention policy and runs raw SQL. Most of the backend can only be
-exercised through it. See [docs/dev-portal.md](docs/dev-portal.md).
+**`tauri:dev`, not `tauri dev`** — the colon passes `--features devtools`,
+which compiles in the dev portal: a second window that seeds the library,
+drives the state machine without League running, dry-runs retention and runs
+raw SQL. Most of the backend can only be exercised through it.
 
-**The Rust project lives at `src-tauri/`, not the repo root.** Bare `cargo`
-commands must be run from there. These four are exactly what CI gates on:
+### The gates, as CI runs them
 
 ```bash
+npm ci
+npx biome ci .                                        # lint + format
+npx tsc --noEmit                                      # types
+npx vitest run                                        # frontend tests
+cd src-tauri && cargo deny check                      # licences + advisories
 cd src-tauri && cargo test
 cd src-tauri && cargo test --features devtools
 cd src-tauri && cargo clippy --no-deps -- -D warnings
 cd src-tauri && cargo clippy --features devtools --no-deps -- -D warnings
 ```
 
-Note the absent `--all-targets`: CI does not pass it, so clippy never compiles
-the test targets, and a method only the tests call counts as **dead code** that
-`-D warnings` fails the build over. Adding `--all-targets` locally compiles the
-tests, marks that method used, and hides the failure until CI.
+`npm run format` is the writing half of Biome; `npm run test:watch` is Vitest
+in watch mode.
 
-`npm run tauri:dev` handles that for you from the repo root.
+**Note the absent `--all-targets`.** CI does not pass it, so clippy never
+compiles the test targets, and a method only the tests call is dead code that
+`-D warnings` fails over. Running clippy with `--all-targets` locally compiles
+the tests, marks the method used, and hides the failure until CI. See
+[CLAUDE.md](CLAUDE.md).
+
+**The Rust project lives at `src-tauri/`, not the repo root.**
 
 ### Where work happens
 
@@ -168,34 +147,30 @@ tests, marks that method used, and hides the failure until CI.
 | Capture backend | Windows box, `cargo run` | seconds |
 | Full integration + Vanguard check | Windows, CI-built installer | occasional |
 
-Installers are produced by CI, never built locally and never cross-compiled —
-libobs linking, DLL bundling and installer generation from anywhere but
-Windows is a fight with no payoff.
+Installers are produced by CI, never built locally and never cross-compiled.
 
 ## Non-negotiable constraints
 
-1. **No injection.** OBS "Game Capture"–style hooking is permanently off the
-   table. Riot Vanguard is a kernel anti-cheat and DLL injection is exactly
-   what it exists to stop. WGC and display capture only.
+1. **No injection.** OBS "Game Capture"-style hooking is permanently off the
+   table. Vanguard is a kernel anti-cheat and DLL injection is what it exists
+   to stop. WGC and display capture only — and that constraint is what the
+   whole Option B design is built around, not something bolted onto it.
 2. **Official APIs only.** LCU and Live Client Data. No memory reading, no
    packet sniffing.
-3. **Lightweight is a feature.** Idle RAM and install size are measured
-   against targets, not asserted.
+3. **Lightweight is a feature**, and now a measured one: see
+   [docs/measurement.md](docs/measurement.md).
 
-Anything that would violate these is not a trade-off to weigh — it is out of
-scope. The reasoning is in
-[DEVELOPMENT.md §1](DEVELOPMENT.md#1-hard-constraints).
-
-## Not built
-
-- **YouTube upload.** Design notes exist ([DEVELOPMENT.md §7](DEVELOPMENT.md#7-youtube-upload-designed-not-built)),
-  including the quota reality that makes auto-upload a non-starter.
-- **`.rofl` replay download.** Also designed, not implemented
-  ([DEVELOPMENT.md §8](DEVELOPMENT.md#8-rofl-replays-designed-not-built)).
+The reasoning is in [DEVELOPMENT.md §1](DEVELOPMENT.md#1-hard-constraints).
 
 ## License
 
-GPL-2.0-only. The capture backend embeds
-[libobs](https://github.com/obsproject/obs-studio) (GPLv2), which obligates
-the whole distributed binary. That is inherited from the dependency, not a
-preference.
+**GPL-2.0-only**, inherited rather than chosen: the capture backend embeds
+[libobs](https://github.com/obsproject/obs-studio) (GPLv2), which obligates the
+whole distributed binary.
+
+Changing that is WS8 and happens at v2.1.0, after libobs is deleted and one
+release of v2.0.0 has been in the field — not before.
+[`src-tauri/deny.toml`](src-tauri/deny.toml) is what makes the exit mechanical:
+GPL is denied with exactly two named exceptions, this crate and the libobs
+fork, and deleting them is the proof. See
+[docs/provenance.md](docs/provenance.md).

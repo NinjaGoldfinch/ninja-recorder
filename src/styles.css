@@ -49,10 +49,8 @@
 
   --content-max: 1120px;
 
-  --font-sans: -apple-system, "Segoe UI Variable Text", "Segoe UI", system-ui,
-    sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono",
-    monospace;
+  --font-sans: -apple-system, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono", monospace;
 
   font-family: var(--font-sans);
   font-size: 16px;
@@ -107,11 +105,7 @@
    * on dark. */
   --marker-boost: none;
 
-  --glow: radial-gradient(
-    900px 380px at 50% -220px,
-    rgba(109, 63, 212, 0.13),
-    transparent 70%
-  );
+  --glow: radial-gradient(900px 380px at 50% -220px, rgba(109, 63, 212, 0.13), transparent 70%);
 }
 
 :root[data-theme="dark"] {
@@ -151,11 +145,7 @@
 
   --marker-boost: brightness(1.35) saturate(1.15);
 
-  --glow: radial-gradient(
-    900px 380px at 50% -220px,
-    rgba(168, 128, 255, 0.16),
-    transparent 70%
-  );
+  --glow: radial-gradient(900px 380px at 50% -220px, rgba(168, 128, 255, 0.16), transparent 70%);
 }
 
 /* ---------------------------------------------------------------------
@@ -277,7 +267,8 @@ select {
   color: var(--text);
   font-family: inherit;
   font-size: var(--fs-md);
-  transition: border-color var(--dur) var(--ease),
+  transition:
+    border-color var(--dur) var(--ease),
     box-shadow var(--dur) var(--ease);
 }
 
@@ -358,8 +349,10 @@ button {
   cursor: pointer;
   color: var(--text);
   background-color: var(--bg-surface);
-  transition: border-color var(--dur) var(--ease),
-    background-color var(--dur) var(--ease), color var(--dur) var(--ease);
+  transition:
+    border-color var(--dur) var(--ease),
+    background-color var(--dur) var(--ease),
+    color var(--dur) var(--ease);
 }
 
 button:hover:not(:disabled) {
@@ -438,10 +431,7 @@ button:disabled {
    * `max()` is the floor: on a window too short for the arithmetic to
    * leave anything, the player stops shrinking and the page scrolls the
    * way it always did, rather than collapsing to nothing. */
-  max-width: max(
-    28rem,
-    calc((100vh - var(--player-chrome)) * var(--player-ratio, 1.7778))
-  );
+  max-width: max(28rem, calc((100vh - var(--player-chrome)) * var(--player-ratio, 1.7778)));
   margin-inline: auto;
 }
 
@@ -1354,17 +1344,17 @@ button.armed {
   display: grid;
   grid-template-columns:
     minmax(8.5rem, 11rem) /* queue / when / patch / length · result */
-    auto                  /* portrait */
-    minmax(6rem, 12rem)   /* champion + role */
-    minmax(6rem, 9rem)    /* KDA + ratio */
-    minmax(4.5rem, 6rem)  /* CS + per minute */
-    minmax(5rem, 7rem)    /* rank + LP */
-    38px                  /* spells + runes — two columns of 18px + 2px */
-    166px                 /* items — seven of 22px + six 2px gaps */
-    var(--versus-w)       /* the lane matchup */
-    minmax(0, 1fr)        /* slack — see above */
-    auto                  /* size */
-    auto;                 /* actions */
+    auto /* portrait */
+    minmax(6rem, 12rem) /* champion + role */
+    minmax(6rem, 9rem) /* KDA + ratio */
+    minmax(4.5rem, 6rem) /* CS + per minute */
+    minmax(5rem, 7rem) /* rank + LP */
+    38px /* spells + runes — two columns of 18px + 2px */
+    166px /* items — seven of 22px + six 2px gaps */
+    var(--versus-w) /* the lane matchup */
+    minmax(0, 1fr) /* slack — see above */
+    auto /* size */
+    auto; /* actions */
   align-items: center;
   /* The art tracks are stated rather than left `auto`, and that is the fix
    * for rows that would not line up. `auto` sizes a track to *that row's*
@@ -1410,20 +1400,12 @@ button.armed {
  * the pair this encodes. Colour and text, one place each. */
 .vod-row[data-outcome="win"] {
   border-left-color: var(--win-fg);
-  background-image: linear-gradient(
-    to right,
-    var(--win-bg),
-    transparent 18rem
-  );
+  background-image: linear-gradient(to right, var(--win-bg), transparent 18rem);
 }
 
 .vod-row[data-outcome="loss"] {
   border-left-color: var(--loss-fg);
-  background-image: linear-gradient(
-    to right,
-    var(--loss-bg),
-    transparent 18rem
-  );
+  background-image: linear-gradient(to right, var(--loss-bg), transparent 18rem);
 }
 
 /* Spells and runes in a 2x2 block, items in a strip. Both are grids of
@@ -1629,8 +1611,6 @@ button.armed {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-
 
 /* A value the app does not have, said out loud rather than by leaving a
  * gap. A row that hides its empty slots is a different shape per
