@@ -246,11 +246,13 @@ impl Recorder for LibObsRecorder {
         // UI's own WebView2 `<video>` — unable to scrub it reliably. Only
         // worth fixing up now, on a clean stop; a stream-copy remux is
         // fast and lossless, just rewriting the container's index.
-        if let Some(ffmpeg_path) = &self.ffmpeg_path {
-            if let Err(e) = remux_faststart(ffmpeg_path, &path, audio.tracks.len()) {
-                warn!("recorder", "faststart remux failed, keeping original (unseekable) file: {e}"
-                );
-            }
+        if let Some(ffmpeg_path) = &self.ffmpeg_path
+            && let Err(e) = remux_faststart(ffmpeg_path, &path, audio.tracks.len())
+        {
+            warn!(
+                "recorder",
+                "faststart remux failed, keeping original (unseekable) file: {e}"
+            );
         }
 
         Ok(RecordingOutput { path, audio })
