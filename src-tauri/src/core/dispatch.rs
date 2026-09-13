@@ -19,6 +19,29 @@
 use super::Ctx;
 use serde_json::Value;
 
+/// One argument of one command, as the generator sees it.
+///
+/// `ty` is the Rust type spelled exactly as the table spells it. Mapping that
+/// onto TypeScript is WS2.5's job, not this module's.
+#[cfg_attr(not(test), allow(dead_code))]
+pub struct CommandArg {
+    pub name: &'static str,
+    pub ty: &'static str,
+}
+
+/// One command, as the generator sees it. Built by `dispatch_table!` from the
+/// same row that builds the `match` arm, so the two cannot disagree.
+#[cfg_attr(not(test), allow(dead_code))]
+pub struct CommandSpec {
+    pub name: &'static str,
+    /// Whether it has to be awaited. `dispatch_blocking` refuses these.
+    pub is_async: bool,
+    pub args: &'static [CommandArg],
+    /// The success type. See `contract_manifest` for why this is not the
+    /// `Result`.
+    pub returns: &'static str,
+}
+
 /// Expands one table row into its `match` arm.
 ///
 /// The leading token picks the shape, because the commands are not uniform:
@@ -26,43 +49,51 @@ use serde_json::Value;
 /// no context at all, and three are async — two of those with a context and
 /// one without.
 macro_rules! invoke_one {
-    (ctx_result $name:ident, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {
-        serde_json::to_value(super::$name($ctx, $($a.$arg,)*)?).map_err(|e| e.to_string())
-    };
-    (ctx_plain $name:ident, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {
-        serde_json::to_value(super::$name($ctx, $($a.$arg,)*)).map_err(|e| e.to_string())
-    };
-    (bare_result $name:ident, $ctx:expr_2021, $a:expr_2021,) => {
-        serde_json::to_value(super::$name()?).map_err(|e| e.to_string())
-    };
-    (bare_async $name:ident, $ctx:expr_2021, $a:expr_2021,) => {
-        serde_json::to_value(super::$name().await).map_err(|e| e.to_string())
-    };
-    (ctx_async $name:ident, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {
-        serde_json::to_value(super::$name($ctx, $($a.$arg,)*).await?).map_err(|e| e.to_string())
-    };
+    (ctx_result $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {{
+        let out: $ret = super::$name($ctx, $($a.$arg,)*)?;
+        serde_json::to_value(out).map_err(|e| e.to_string())
+    }};
+    (ctx_plain $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {{
+        let out: $ret = super::$name($ctx, $($a.$arg,)*);
+        serde_json::to_value(out).map_err(|e| e.to_string())
+    }};
+    (bare_result $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021,) => {{
+        let out: $ret = super::$name()?;
+        serde_json::to_value(out).map_err(|e| e.to_string())
+    }};
+    (bare_async $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021,) => {{
+        let out: $ret = super::$name().await;
+        serde_json::to_value(out).map_err(|e| e.to_string())
+    }};
+    (ctx_async $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {{
+        let out: $ret = super::$name($ctx, $($a.$arg,)*).await?;
+        serde_json::to_value(out).map_err(|e| e.to_string())
+    }};
 }
 
 /// The same rows, for the synchronous entry point. An async command has no
 /// blocking form, so it reports that rather than being silently unreachable.
 macro_rules! invoke_one_blocking {
-    (ctx_result $name:ident, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {
-        serde_json::to_value(super::$name($ctx, $($a.$arg,)*)?).map_err(|e| e.to_string())
-    };
-    (ctx_plain $name:ident, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {
-        serde_json::to_value(super::$name($ctx, $($a.$arg,)*)).map_err(|e| e.to_string())
-    };
-    (bare_result $name:ident, $ctx:expr_2021, $a:expr_2021,) => {
-        serde_json::to_value(super::$name()?).map_err(|e| e.to_string())
-    };
-    (bare_async $name:ident, $ctx:expr_2021, $a:expr_2021,) => {
+    (ctx_result $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {{
+        let out: $ret = super::$name($ctx, $($a.$arg,)*)?;
+        serde_json::to_value(out).map_err(|e| e.to_string())
+    }};
+    (ctx_plain $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {{
+        let out: $ret = super::$name($ctx, $($a.$arg,)*);
+        serde_json::to_value(out).map_err(|e| e.to_string())
+    }};
+    (bare_result $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021,) => {{
+        let out: $ret = super::$name()?;
+        serde_json::to_value(out).map_err(|e| e.to_string())
+    }};
+    (bare_async $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021,) => {
         Err(format!("{} is async and must go through dispatch()", stringify!($name)))
     };
     // Reads the parsed arguments before refusing. This arm does not invoke
     // anything, and the first async command to take an argument made the
     // generated `Args` field dead code here — which `-D warnings` fails on,
     // from inside a macro, pointing at the table rather than the command.
-    (ctx_async $name:ident, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {{
+    (ctx_async $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {{
         $( let _ = &$a.$arg; )*
         Err(format!("{} is async and must go through dispatch()", stringify!($name)))
     }};
@@ -75,7 +106,7 @@ macro_rules! is_async_arm {
 }
 
 macro_rules! dispatch_table {
-    ($( $kind:ident $name:ident ( $($arg:ident : $ty:ty),* $(,)? ) ; )*) => {
+    ($( $kind:ident $name:ident ( $($arg:ident : $ty:ty),* $(,)? ) -> $ret:ty ; )*) => {
         /// Every command this dispatcher answers to, in table order.
         ///
         /// The dev portal's drift banner reads this instead of a hand-written
@@ -90,6 +121,51 @@ macro_rules! dispatch_table {
         #[cfg_attr(not(feature = "devtools"), allow(dead_code))]
         pub fn command_names() -> &'static [&'static str] {
             &[ $( stringify!($name), )* ]
+        }
+
+        /// The command surface as *data*: every name, whether it must be
+        /// awaited, its arguments, and what it puts on the wire.
+        ///
+        /// This is the half of the contract that a generator can read.
+        /// `command_names` gives the names and nothing else, which is enough
+        /// for the dev portal's drift banner and not enough to emit a typed
+        /// TypeScript client — that needs the arguments and the return type
+        /// too, which until now existed only in `core`'s function signatures
+        /// where nothing outside Rust could reach them.
+        ///
+        /// **`returns` is the success type, not the `Result`.** The error half
+        /// is the transport's business: every command that can fail returns
+        /// `Result<T, String>`, `dispatch` unwraps it with `?`, and only `T`
+        /// is ever serialized. A client sees `T` or an RPC error, never a
+        /// serialized `Result`.
+        ///
+        /// The strings come from `stringify!`, which preserves the source text
+        /// — `Vec<crate::db::RecordingRow>` arrives exactly as the table spells
+        /// it, not re-printed from the token tree. So the table's spelling *is*
+        /// the contract's spelling, which is why every type in it is written as
+        /// an absolute `crate::` path: a generator reading this has no module
+        /// context to resolve `super::` or a bare `DiskUsage` against.
+        ///
+        /// Nothing calls this yet — `gen-contract` (WS2.5) is its first real
+        /// consumer, and the tests below are the only one today. Clippy runs
+        /// without `--all-targets`, so in a shipped build it is genuinely dead
+        /// code and `-D warnings` would fail on it. Same reason as
+        /// `command_names` above, different condition: that one is reachable
+        /// under `devtools`, this one is reachable from nowhere yet.
+        #[cfg_attr(not(test), allow(dead_code))]
+        pub fn contract_manifest() -> &'static [CommandSpec] {
+            &[
+                $(
+                    CommandSpec {
+                        name: stringify!($name),
+                        is_async: is_async_arm!($kind),
+                        args: &[
+                            $( CommandArg { name: stringify!($arg), ty: stringify!($ty) }, )*
+                        ],
+                        returns: stringify!($ret),
+                    },
+                )*
+            ]
         }
 
         /// Whether a command has to be awaited rather than run on a blocking
@@ -120,7 +196,7 @@ macro_rules! dispatch_table {
                         struct Args { $( $arg: $ty, )* }
                         #[allow(unused_variables)]
                         let parsed: Args = parse::<Args>(args, stringify!($name))?;
-                        invoke_one!($kind $name, ctx, parsed, $($arg,)*)
+                        invoke_one!($kind $name, $ret, ctx, parsed, $($arg,)*)
                     }
                 )*
                 other => Err(format!("unknown command: {other}")),
@@ -140,7 +216,7 @@ macro_rules! dispatch_table {
                         struct Args { $( $arg: $ty, )* }
                         #[allow(unused_variables)]
                         let parsed: Args = parse::<Args>(args, stringify!($name))?;
-                        invoke_one_blocking!($kind $name, ctx, parsed, $($arg,)*)
+                        invoke_one_blocking!($kind $name, $ret, ctx, parsed, $($arg,)*)
                     }
                 )*
                 other => Err(format!("unknown command: {other}")),
@@ -168,35 +244,35 @@ fn parse<T: serde::de::DeserializeOwned>(args: Value, command: &str) -> Result<T
 // text and arg specs a macro can't produce) — the two hand-written
 // `generate_handler!` lists and `dev_registered_commands` no longer repeat it.
 dispatch_table! {
-    ctx_result  start_recording();
-    ctx_result  stop_recording();
-    ctx_result  is_recording();
-    ctx_result  list_recordings();
-    ctx_result  rescan_recordings();
-    ctx_result  get_recording_markers(recording_id: i64);
-    ctx_result  get_recording_samples(recording_id: i64);
-    ctx_result  get_disk_usage();
-    ctx_result  get_retention_policy();
-    ctx_result  set_retention_policy(policy: crate::db::RetentionPolicy);
-    ctx_result  set_pinned(recording_id: i64, pinned: bool);
-    ctx_result  preview_retention_policy(policy: crate::db::RetentionPolicy);
-    ctx_result  delete_recording(recording_id: i64);
-    ctx_plain   get_recordings_dir();
-    ctx_result  get_ui_prefs();
-    ctx_result  set_ui_pref(key: String, value: String);
-    ctx_result  get_autostart();
-    ctx_result  set_autostart(enabled: bool);
-    ctx_result  get_audio_preset();
-    ctx_result  set_audio_preset(preset: crate::recorder::audio::AudioPreset);
-    bare_result list_audio_inputs();
-    ctx_result  extract_audio_track(recording_path: String, track_index: usize);
-    bare_async  lcu_status();
-    ctx_async   backfill_match_metadata();
-    ctx_async   resolve_icons(request: crate::ddragon::IconRequest);
-    ctx_plain   game_state_status();
-    ctx_result  get_update_status();
-    ctx_result  check_for_update();
-    ctx_result  install_update();
+    ctx_result  start_recording() -> ();
+    ctx_result  stop_recording() -> String;
+    ctx_result  is_recording() -> bool;
+    ctx_result  list_recordings() -> Vec<crate::db::RecordingRow>;
+    ctx_result  rescan_recordings() -> crate::db::reconcile::ReconcileReport;
+    ctx_result  get_recording_markers(recording_id: i64) -> Vec<crate::db::MarkerRow>;
+    ctx_result  get_recording_samples(recording_id: i64) -> Vec<crate::db::SampleRow>;
+    ctx_result  get_disk_usage() -> crate::core::DiskUsage;
+    ctx_result  get_retention_policy() -> crate::db::RetentionPolicy;
+    ctx_result  set_retention_policy(policy: crate::db::RetentionPolicy) -> crate::retention::EnforcementReport;
+    ctx_result  set_pinned(recording_id: i64, pinned: bool) -> ();
+    ctx_result  preview_retention_policy(policy: crate::db::RetentionPolicy) -> crate::retention::EnforcementReport;
+    ctx_result  delete_recording(recording_id: i64) -> ();
+    ctx_plain   get_recordings_dir() -> String;
+    ctx_result  get_ui_prefs() -> std::collections::HashMap<String, String>;
+    ctx_result  set_ui_pref(key: String, value: String) -> ();
+    ctx_result  get_autostart() -> crate::core::AutostartStatus;
+    ctx_result  set_autostart(enabled: bool) -> crate::core::AutostartStatus;
+    ctx_result  get_audio_preset() -> crate::recorder::audio::AudioPreset;
+    ctx_result  set_audio_preset(preset: crate::recorder::audio::AudioPreset) -> ();
+    bare_result list_audio_inputs() -> Vec<crate::recorder::audio::AudioInputDevice>;
+    ctx_result  extract_audio_track(recording_path: String, track_index: usize) -> String;
+    bare_async  lcu_status() -> crate::core::LcuStatus;
+    ctx_async   backfill_match_metadata() -> crate::backfill::BackfillReport;
+    ctx_async   resolve_icons(request: crate::ddragon::IconRequest) -> crate::ddragon::IconSet;
+    ctx_plain   game_state_status() -> crate::state_machine::SupervisorStatus;
+    ctx_result  get_update_status() -> crate::update::UpdateStatus;
+    ctx_result  check_for_update() -> ();
+    ctx_result  install_update() -> ();
 }
 
 #[cfg(test)]
@@ -254,6 +330,116 @@ mod tests {
             // an installer.
             _ => json!({}),
         }
+    }
+
+    /// The manifest and the dispatcher come from the same macro invocation, so
+    /// they cannot disagree about *which* commands exist. This pins that they
+    /// do not, which is what makes the manifest usable as a source of truth
+    /// rather than a second list to keep in step.
+    #[test]
+    fn the_manifest_describes_exactly_the_commands_that_dispatch() {
+        let manifest: Vec<&str> = contract_manifest().iter().map(|c| c.name).collect();
+        assert_eq!(
+            manifest,
+            command_names(),
+            "the manifest and command_names come from the same rows and must agree"
+        );
+    }
+
+    /// `is_async` decides which of the two dispatchers a caller may use, and
+    /// getting it wrong means either blocking an async worker for the length of
+    /// an ffmpeg run or refusing a command that would have worked.
+    #[test]
+    fn the_manifest_agrees_with_is_async_command() {
+        for spec in contract_manifest() {
+            assert_eq!(
+                spec.is_async,
+                is_async_command(spec.name),
+                "{} disagrees about being async",
+                spec.name
+            );
+        }
+    }
+
+    /// Every command has to declare something it puts on the wire. The compiler
+    /// already proves the declared type *matches the function* — a wrong one is
+    /// an `E0308` at the `?`, not a silent lie — so what is left to check is
+    /// that nothing is blank.
+    #[test]
+    fn every_command_declares_a_return_type() {
+        for spec in contract_manifest() {
+            assert!(
+                !spec.returns.trim().is_empty(),
+                "{} declares no return type",
+                spec.name
+            );
+        }
+    }
+
+    /// The generator emits one TypeScript method per command with named
+    /// arguments, so a duplicate name or a duplicate argument within a command
+    /// would emit something that does not compile — better to fail here.
+    #[test]
+    fn names_are_unique_within_the_surface_and_within_each_command() {
+        let mut seen = std::collections::HashSet::new();
+        for spec in contract_manifest() {
+            assert!(seen.insert(spec.name), "duplicate command: {}", spec.name);
+            let mut args = std::collections::HashSet::new();
+            for arg in spec.args {
+                assert!(
+                    args.insert(arg.name),
+                    "{} has two arguments called {}",
+                    spec.name,
+                    arg.name
+                );
+                assert!(
+                    !arg.ty.trim().is_empty(),
+                    "{}({}) has no type",
+                    spec.name,
+                    arg.name
+                );
+            }
+        }
+    }
+
+    /// The arguments in the manifest are the ones `dispatch` actually
+    /// deserializes, because both come from the same row. Pinned against the
+    /// round-trip fixtures so that a row gaining an argument without the
+    /// fixture gaining one fails here rather than at runtime.
+    #[test]
+    fn manifest_arguments_match_the_round_trip_fixtures() {
+        for spec in contract_manifest() {
+            let fixture = sample_args(spec.name);
+            let obj = fixture.as_object().expect("fixtures are objects");
+            for arg in spec.args {
+                let camel = to_camel(arg.name);
+                assert!(
+                    obj.contains_key(&camel),
+                    "{} takes {} ({}), which the round-trip fixture does not send",
+                    spec.name,
+                    arg.name,
+                    camel
+                );
+            }
+        }
+    }
+
+    /// `#[serde(rename_all = "camelCase")]` is what the generated client has to
+    /// mirror, so the rule is spelled out once here rather than inferred.
+    fn to_camel(snake: &str) -> String {
+        let mut out = String::with_capacity(snake.len());
+        let mut upper = false;
+        for c in snake.chars() {
+            if c == '_' {
+                upper = true;
+            } else if upper {
+                out.extend(c.to_uppercase());
+                upper = false;
+            } else {
+                out.push(c);
+            }
+        }
+        out
     }
 
     /// The whole point of the table: every command must be reachable by name

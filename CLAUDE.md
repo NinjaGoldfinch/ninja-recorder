@@ -212,6 +212,13 @@ workstream should be rewritten to say what it means.
   `rpc` command, so add a row there and an entry in `src/dev/registry.ts`.
   WS2 deletes `registry.ts` and `every_command_round_trips` together, and not
   before the generator exists.
+- **A table row declares its return type, and the compiler checks it.** Since
+  WS2.1 each row ends `-> Type`, and that type is bound to the call inside the
+  macro — get it wrong and you get an `E0308` at the `?`, not a manifest that
+  quietly lies. Write it as an **absolute `crate::` path**: a generator reading
+  `contract_manifest()` has no module context to resolve `super::` against.
+  The declared type is the *success* type, never the `Result` — the error half
+  is the transport's.
 - **The `rpc` passthrough owns argument parsing.** A wrong name or type fails
   at *runtime*, which is why every command is exercised by
   `every_command_round_trips` in `core/dispatch.rs` — keep it that way until
