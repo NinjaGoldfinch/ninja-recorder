@@ -189,10 +189,12 @@ where
 
     // LCU's WAMP-lite subscribe: [5, "OnJsonApiEvent"] subscribes to every
     // endpoint's change events; we filter to gameflow-phase on receipt.
-    ws.send(Message::Text(serde_json::to_string(&(
-        5,
-        "OnJsonApiEvent",
-    ))?))
+    // `.into()` since tokio-tungstenite 0.26: `Message::Text` carries
+    // `Utf8Bytes` rather than `String`. The conversion from an owned `String`
+    // is not a copy — `Utf8Bytes` wraps `Bytes`, which takes ownership.
+    ws.send(Message::Text(
+        serde_json::to_string(&(5, "OnJsonApiEvent"))?.into(),
+    ))
     .await
     .map_err(Box::new)?;
 
