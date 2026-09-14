@@ -186,6 +186,11 @@ endpoint — so stable installs ignore alphas with no filtering of our own. The
 channels *cannot* be separated by version comparison, because semver says
 `1.1.0-alpha.1 > 1.0.0`; they are separated by endpoint.
 
+Both are read from `NinjaGoldfinch/ninja-recorder-v2` — the repository this
+workflow publishes to. They pointed at v1's repository until the key landed
+here, which would have left every v2 install polling a manifest that never
+mentions a v2 release.
+
 | Channel | Manifest |
 |---|---|
 | stable | `releases/latest/download/latest.json` |
@@ -337,7 +342,10 @@ public key is in `src-tauri/tauri.conf.json` under `plugins.updater.pubkey`,
 and every installed build checks each download against it. **The pair is
 permanent** — the public half ships inside every installer ever built, so
 losing the private half strands every install in the field
-([DEVELOPMENT.md §14](../DEVELOPMENT.md)).
+([DEVELOPMENT.md §14](../DEVELOPMENT.md)). It is **the same pair v1 signs
+with**, and that is why it was carried over rather than regenerated: v2 keeps
+v1's `com.ninjarecorder.app` identifier and upgrades those installs in place,
+so a new key would have stranded every one of them.
 
 **Code signing** — not configured, no certificate. Windows SmartScreen warns
 on first run. The standing caveat block appended to every release's notes says

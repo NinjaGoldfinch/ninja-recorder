@@ -567,8 +567,9 @@ jobs:
     # is not available in a job-level `if`** — it has to be read inside a step
     # and handed on as an output. The signing key doubles as the switch that
     # says "this repository is allowed to publish": a fork has none and quietly
-    # builds without publishing, and this one starts publishing the moment the
-    # key is added, which is WS7's business and not before.
+    # builds without publishing. This repository now holds the key, so it
+    # publishes — the pair is the same one v1 ships with, because the public
+    # half is baked into every installer already in the field.
     if: needs.version.outputs.release == 'true' && needs.version.outputs.can_publish == 'true'
     needs: [version, test, build]
     runs-on: ubuntu-latest
