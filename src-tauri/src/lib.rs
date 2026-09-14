@@ -48,6 +48,18 @@ pub(crate) const LIBRARY_CHANGED_EVENT: &str = "library-changed";
 /// frontend from polling a question whose answer changes twice a day.
 pub(crate) const UPDATE_STATUS_EVENT: &str = "update-status-changed";
 
+/// The contract's event channel — WS2.3.
+///
+/// One Tauri event carrying every `contract::events::Event`, because the
+/// contract's own discriminant is `type` and a client switches on that. The two
+/// constants above are the v1 shape: a separate channel per signal, carrying
+/// `()`, with the payload fetched afterwards by command. WS2.6's generated
+/// client subscribes here instead, and WS2.7 deletes them.
+///
+/// Named `event` because that is what the plan's transport interface listens
+/// for (§4.1).
+pub(crate) const CONTRACT_EVENT: &str = "event";
+
 /// How long after startup the first update check runs. Late enough that it
 /// is never competing with the recorder backend coming up, the database
 /// opening or the first paint — none of which should wait on a network
@@ -252,6 +264,26 @@ fn record_update_result(app: &tauri::AppHandle, found: update::CheckResult) {
     app.state::<AppState>().set_update_check_result(found);
     if let Err(e) = app.emit(UPDATE_STATUS_EVENT, ()) {
         warn!("update", "failed to emit update-status-changed: {e}");
+    }
+    // The one event in the table the supervisor cannot emit: update status
+    // lives in `AppState`, not in the state machine, so it is published from
+    // the place that changes it rather than through the sink.
+    // Built through the same `get_update_status` the command uses, so the
+    // pushed value and the polled one cannot disagree — the installability half
+    // is recomputed per read, and a status decided any other way here would be
+    // a second opinion about the same question.
+    match core::get_update_status(&app.state::<AppState>().clone_ctx()) {
+        Ok(status) => {
+            if let Err(e) = app.emit(
+                CONTRACT_EVENT,
+                &contract::events::Event::UpdateStatus { status },
+            ) {
+                warn!("update", "failed to emit the update-status contract event: {e}");
+            }
+        }
+        // The `update-status-changed` ping above has already gone out, so a
+        // client still learns to re-read. Nothing is lost but the payload.
+        Err(e) => warn!("update", "could not build the update-status event: {e}"),
     }
 }
 
@@ -713,6 +745,23 @@ pub fn run() {
             // import stack — out of the test binary. See
             // `Supervisor::on_library_changed` for what happens when it
             // isn't kept out.
+            // The contract sink, installed here and not in the supervisor for
+            // exactly the reason the notifier below is: `run()` is dead code in
+            // a `cargo test` build and gets stripped, which is what keeps
+            // Tauri's Wry window machinery out of the test binary.
+            let sink_handle = app.handle().clone();
+            supervisor.set_event_sink(Box::new(move |event| {
+                use tauri::Emitter;
+                // Serialized here rather than passed as a typed payload: the
+                // wire shape is the contract, and `Event`'s serde tagging is
+                // what the generated client switches on. A Tauri payload of the
+                // enum itself would serialize identically today and silently
+                // stop doing so if anyone reached for `#[serde(untagged)]`.
+                if let Err(e) = sink_handle.emit(CONTRACT_EVENT, &event) {
+                    warn!("contract", "failed to emit a contract event: {e}");
+                }
+            }));
+
             let notify_handle = app.handle().clone();
             supervisor.set_event_notifier(Box::new(move |event| {
                 use state_machine::SupervisorEvent;

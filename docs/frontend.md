@@ -695,7 +695,10 @@ Three details are load-bearing:
   the UI for data drawn as one line.
 - **`recording_id` is `Option<i64>` while a game is in flight.** The library
   row is written at finalize, so nothing has an id until then; a client
-  correlates on `path` until `RecordingStopped` names the row.
+  correlates on `RecordingStarted.file_stem` until `RecordingStopped` names the
+  row. That field is the stem rather than a path because `Recorder::start`
+  returns `Ok(())` — the file it wrote, extension included, is only known when
+  `stop` returns.
 - **`LcuPhase.phase` is `None` exactly when no client is running**, which is a
   different statement from `GameflowPhase::None` — a client sitting at the
   front page. A test pins the two apart.
@@ -708,10 +711,52 @@ anything a client update invents. The state machine *consumes* a subset —
 `is_game_running_phase` matches two variants — but that is a reader narrowing a
 full type, not a narrow type. So the event carries it whole.
 
-**Nothing emits these yet.** The `EventSink` that hangs off `Supervisor`, and
-the wiring at each emission site, are the second half of WS2.3; until then the
-enum is declaration only and carries the `cfg_attr(not(test), allow(dead_code))`
-that `CLAUDE.md` describes.
+### What emits them
+
+`Supervisor::set_event_sink` installs the sink, from `lib.rs` and for the same
+reason `set_event_notifier` is installed there: `run()` is dead code in a `cargo
+test` build and gets stripped, which is what keeps Tauri's Wry window machinery
+— and the whole Win32 GUI import stack behind it — out of the test binary. The
+sink is a type-erased boxed closure, never an `AppHandle`
+([supervisor.rs](../src-tauri/src/state_machine/supervisor.rs)'s `on_event`
+comment records what happens when that rule is broken: the test binary died at
+load with `STATUS_ENTRYPOINT_NOT_FOUND` before running a single test).
+
+Everything goes out on one Tauri event, `event`, because the contract's own
+discriminant is `type` and that is what a client switches on. The v1 channels
+(`library-changed`, `update-status-changed`) still fire beside it; WS2.7 deletes
+them.
+
+| Event | Emitted from | Wired |
+|---|---|---|
+| `StateChanged` | `dispatch_one`, on transitions that actually move | yes |
+| `LcuPhase` | the gameflow watcher, and `stop_gameflow_watch` for `client_present: false` | yes |
+| `RecordingStarted` / `RecordingStopped` | `start_recording` / `stop_recording` | yes |
+| `MarkerAdded` | `on_snapshot`, one per marker a poll produced | yes |
+| `LibraryChanged` | `emit_library_changed` | yes, `Finalized` and `Edited` |
+| `RetentionRan` | the post-finalize enforcement pass | yes |
+| `UpdateStatus` | `record_update_result` in `lib.rs` | yes |
+| `SampleBatch` | — | no: the 5 s window needs a *subscriber* to batch for (WS2.6) |
+| `MatchSummaryPatched` | — | no: published from the `library-changed` site still in `lib.rs` |
+| `DaemonShuttingDown`, `Lagged` | — | no: they describe a daemon and a broadcast buffer WS3 builds |
+
+Declaring the unwired four is the point rather than an oversight — the contract
+is what the surface *is*, not what happens to be connected. They carry
+`cfg_attr(not(test), allow(dead_code))` meanwhile, as `CLAUDE.md` describes.
+
+**`SupervisorEvent` is not a second declaration of the wire.** It is internal:
+it triggers desktop notifications and the v1 `library-changed` push, it carries
+what a toast needs to describe itself, and it is deliberately absent from
+`contract::types`' boundary list because it never crosses IPC. One declaration
+of what crosses, one internal callback for what does not. WS3 folds them
+together when notifications move into the daemon.
+
+**A marker published live is provisional.** `video_time_s` comes from the
+alignment known at that poll, and a later poll can improve it — so a marker on
+the wire mid-game can sit a fraction of a second from where the same marker
+lands in the database, which resolves every marker against the final alignment.
+The live value draws a timeline while the game runs; the row is what the library
+reads.
 
 ## Routing and the tray
 

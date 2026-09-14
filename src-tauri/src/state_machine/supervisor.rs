@@ -106,6 +106,23 @@ impl PendingSample {
 /// split has one type to change.
 type EventNotifier = Box<dyn Fn(SupervisorEvent) + Send + Sync>;
 
+/// Where contract events go — WS2.3's `EventSink`.
+///
+/// Separate from `EventNotifier` on purpose, and the two are not redundant.
+/// `SupervisorEvent` is *internal*: it triggers desktop notifications and the
+/// frontend's `library-changed` push, it carries whatever the toast needs to
+/// describe itself, and it is deliberately absent from
+/// `contract::types`' boundary list because it never crosses the IPC boundary.
+/// `contract::events::Event` is the wire surface. One declaration of what
+/// crosses, one internal callback for what does not — the thing WS2 exists to
+/// prevent is two declarations of the *wire*, which this is not.
+///
+/// WS3 folds these together when notifications move into the daemon and this
+/// seam becomes a socket write.
+///
+/// Type-erased for exactly the reason `on_event` is; see the field's comment.
+type EventSink = Box<dyn Fn(crate::contract::events::Event) + Send + Sync>;
+
 /// The seam for "this recording is written; go and find out what the LCU
 /// says about the game it was".
 ///
@@ -255,7 +272,16 @@ impl RecordingSession {
     /// landed, passed in rather than read from `record_started_at` so tests
     /// can drive a whole game — loading screen, pauses and all — without
     /// waiting for one.
-    fn ingest(&mut self, snapshot: &AllGameData, elapsed_s: f64) {
+    /// Returns the markers this poll produced, already resolved against the
+    /// alignment known *now*.
+    ///
+    /// **Provisional, and deliberately so.** `video_time_s` is computed from
+    /// the current alignment or its fallback, and a later poll can improve
+    /// that — so a marker published live may sit a fraction of a second from
+    /// where the same marker lands in the database at finalize, which resolves
+    /// every marker against the final alignment. The live value is for drawing
+    /// a timeline while the game runs; the row is what the library reads.
+    fn ingest(&mut self, snapshot: &AllGameData, elapsed_s: f64) -> Vec<SessionMarker> {
         // Before the early-exit-free alignment work below, because it has no
         // preconditions: champion and mode are readable on the very first
         // poll, and the outcome on whichever poll happens to carry `GameEnd`.
@@ -291,8 +317,14 @@ impl RecordingSession {
             "{}",
             live_client::poll_trace(snapshot, elapsed_s, alignment, fresh.len())
         );
+        let first_new = self.markers.len();
         self.markers
             .extend(fresh.into_iter().map(|marker| PendingMarker { marker, alignment }));
+        let fallback = self.align.fallback();
+        let added: Vec<SessionMarker> = self.markers[first_new..]
+            .iter()
+            .map(|m| m.resolve(fallback))
+            .collect();
 
         // Advantage-curve sample. Skipped unless game time actually moved:
         // the poller re-fetches the same payload during loading screens and
@@ -312,6 +344,8 @@ impl RecordingSession {
                 alignment,
             });
         }
+
+        added
     }
 
     /// Markers with their video positions resolved. Called at finalize, and
@@ -380,6 +414,14 @@ pub struct Supervisor {
     /// Type-erasing the emit keeps all of that inside `lib.rs`'s `run()`,
     /// which stays dead code — and so gets stripped — in a test build.
     on_event: Mutex<Option<EventNotifier>>,
+    /// The contract-event sink. Installed from `lib.rs` like `on_event`, and
+    /// `None` in every unit test that does not deliberately install one, so the
+    /// paths below behave exactly as they did before this existed.
+    on_contract_event: Mutex<Option<EventSink>>,
+    /// Epoch milliseconds at which the current state was entered, so
+    /// `Event::StateChanged` can carry `since_ms` without a client timing it
+    /// itself. Set by `dispatch_one` on every transition that actually moves.
+    state_since_ms: Mutex<i64>,
     /// Set once at startup from `lib.rs`, like `on_event`. `None` means a
     /// finalized recording keeps whatever Live Client Data established and
     /// is never revisited — which is what every unit test below wants, and
@@ -415,6 +457,8 @@ impl Supervisor {
             pending_game: Mutex::new(lcu::GameIdentity::default()),
             last_finalized: Mutex::new(None),
             on_event: Mutex::new(None),
+            on_contract_event: Mutex::new(None),
+            state_since_ms: Mutex::new(timestamp_millis()),
             summary_fetcher: Mutex::new(None),
             summary_resumer: Mutex::new(None),
             trim_requester: Mutex::new(None),
@@ -431,6 +475,13 @@ impl Supervisor {
     /// write, and having a single seam to replace is the point.
     pub fn set_event_notifier(&self, notify: EventNotifier) {
         *self.on_event.lock().unwrap() = Some(notify);
+    }
+
+    /// Gives the supervisor somewhere to publish contract events. Called once
+    /// from `lib.rs`'s `setup`, beside `set_event_notifier`, and for the same
+    /// reason type-erased rather than handed an `AppHandle`.
+    pub fn set_event_sink(&self, sink: EventSink) {
+        *self.on_contract_event.lock().unwrap() = Some(sink);
     }
 
     /// Gives the supervisor somewhere to send post-game summary requests.
@@ -481,12 +532,26 @@ impl Supervisor {
         }
     }
 
+    /// Publishes one contract event. A no-op when no sink is installed, which
+    /// is what every unit test that does not care about events gets.
+    ///
+    /// The sink runs **under the lock**, exactly as `emit` runs its notifier —
+    /// so a sink that called back into the supervisor would deadlock. The one
+    /// installed from `lib.rs` emits a Tauri event and returns, like the
+    /// notifier beside it.
+    fn publish(&self, event: crate::contract::events::Event) {
+        if let Some(publish) = self.on_contract_event.lock().unwrap().as_ref() {
+            publish(event);
+        }
+    }
+
     /// Tells the frontend the VOD library changed on disk. Until this
     /// existed the app had no backend-to-frontend push at all, so a
     /// recording finalized by the supervisor stayed invisible until the
     /// user happened to press Refresh.
-    fn emit_library_changed(&self) {
+    fn emit_library_changed(&self, reason: crate::contract::events::LibraryChangeReason) {
         self.emit(SupervisorEvent::LibraryChanged);
+        self.publish(crate::contract::events::Event::LibraryChanged { reason });
     }
 
     pub fn status(&self) -> SupervisorStatus {
@@ -550,10 +615,26 @@ impl Supervisor {
     }
 
     fn dispatch_one(self: &Arc<Self>, event: StateEvent) {
-        let (actions, state) = {
+        let (actions, state, moved) = {
             let mut machine = self.machine.lock().unwrap();
-            (machine.handle(event), machine.state.clone())
+            let before = machine.state.clone();
+            let actions = machine.handle(event);
+            let after = machine.state.clone();
+            (actions, after.clone(), before != after)
         };
+        // **One event per transition, not per handled event.** `dispatch` runs
+        // this twice — the caller's event, then a blanket `FinalizeComplete`
+        // that no-ops everywhere but `Finalizing` — and gameflow re-reports the
+        // phase it is already in, so emitting on every `handle` would push a
+        // redraw at 1 Hz for a state nobody moved out of.
+        if moved {
+            let since_ms = timestamp_millis();
+            *self.state_since_ms.lock().unwrap() = since_ms;
+            self.publish(crate::contract::events::Event::StateChanged {
+                state: state.clone(),
+                since_ms,
+            });
+        }
         for action in actions {
             self.execute(action);
         }
@@ -628,7 +709,17 @@ impl Supervisor {
             };
             lcu::gameflow::watch(&lockfile, &client, Duration::from_secs(1), {
                 let sup = Arc::clone(&sup);
-                move |update| sup.dispatch(StateEvent::GameflowPhase(update.phase))
+                move |update| {
+                    // Published before dispatching, so a client sees the phase
+                    // that *caused* a transition ahead of the transition
+                    // itself. The watcher already de-duplicates, so this is one
+                    // event per actual phase change rather than one per poll.
+                    sup.publish(crate::contract::events::Event::LcuPhase {
+                        phase: Some(update.phase.clone()),
+                        client_present: true,
+                    });
+                    sup.dispatch(StateEvent::GameflowPhase(update.phase))
+                }
             })
             .await;
         });
@@ -639,6 +730,13 @@ impl Supervisor {
         if let Some(handle) = self.gameflow_task.lock().unwrap().take() {
             handle.abort();
         }
+        // The other half of `LcuPhase`, and the reason `phase` is an `Option`:
+        // with no client there is no phase, which is a different statement from
+        // `GameflowPhase::None` — a client sitting at the front page.
+        self.publish(crate::contract::events::Event::LcuPhase {
+            phase: None,
+            client_present: false,
+        });
         // The lockfile is deliberately *not* cleared here. Finalize stops
         // the watch before the recording row is written, and the client is
         // usually still running — dropping it would take the LCU out of
@@ -781,7 +879,20 @@ impl Supervisor {
             return;
         };
         let elapsed_s = session.record_started_at.elapsed().as_secs_f64();
-        session.ingest(&snapshot, elapsed_s);
+        let added = session.ingest(&snapshot, elapsed_s);
+        // The session lock is dropped before publishing: `publish` runs the
+        // sink inline, and holding this across it would put a `lib.rs` closure
+        // inside the lock that every poll and the whole finalize contend for.
+        drop(guard);
+        for marker in added {
+            // `None`: the library row does not exist until finalize. A client
+            // correlates these against the `RecordingStarted` it has already
+            // seen, which is what `file_stem` is for.
+            self.publish(crate::contract::events::Event::MarkerAdded {
+                recording_id: None,
+                marker,
+            });
+        }
     }
 
     /// Executes `Action::StartRecording`. The state machine has already
@@ -798,6 +909,12 @@ impl Supervisor {
             self.emit(SupervisorEvent::RecordingFailed(
                 "not enough free disk space to record this game".into(),
             ));
+            self.publish(crate::contract::events::Event::RecordingStopped {
+                recording_id: None,
+                outcome: crate::contract::events::StopOutcome::Refused {
+                    reason: "not enough free disk space to record this game".into(),
+                },
+            });
             return;
         }
 
@@ -805,9 +922,12 @@ impl Supervisor {
         // Read the preset per recording rather than caching it at startup:
         // the user can change what gets captured between games, and the
         // next game should honour that without a restart.
+        // Kept rather than read back off `config`: `start` consumes it, and
+        // this is the only correlation key a client has until finalize.
+        let config_file_stem = format!("recording-{started_at_millis}");
         let config = RecordConfig {
             output_dir: self.recordings_dir.clone(),
-            file_stem: format!("recording-{started_at_millis}"),
+            file_stem: config_file_stem.clone(),
             audio: self.db.get_audio_preset().unwrap_or_else(|e| {
                 warn!("state_machine", "could not read the audio preset ({e}), using the default");
                 Default::default()
@@ -830,6 +950,11 @@ impl Supervisor {
                     started_at_millis,
                 });
                 self.emit(SupervisorEvent::RecordingStarted);
+                self.publish(crate::contract::events::Event::RecordingStarted {
+                    recording_id: None,
+                    file_stem: config_file_stem,
+                    started_at_ms: started_at_millis,
+                });
             }
             Err(e) => {
                 error!("state_machine", "failed to start recording: {e}");
@@ -838,6 +963,12 @@ impl Supervisor {
                 self.emit(SupervisorEvent::RecordingFailed(format!(
                     "the recording could not be started: {e}"
                 )));
+                // `Crashed`, not `Refused`: the recorder was asked and failed.
+                // A refusal is this module deciding not to record at all.
+                self.publish(crate::contract::events::Event::RecordingStopped {
+                    recording_id: None,
+                    outcome: crate::contract::events::StopOutcome::Crashed,
+                });
             }
         }
     }
@@ -1016,13 +1147,25 @@ impl Supervisor {
                 // never restarts.
                 match self.db.get_retention_policy() {
                     Ok(policy) => match crate::retention::enforce_now(&self.db, &policy) {
-                        Ok(report) if !report.deleted.is_empty() => info!(
-                            "retention",
-                            "post-finalize enforcement: removed {} recording(s), freed {} bytes",
-                            report.deleted.len(),
-                            report.freed_bytes
-                        ),
-                        Ok(_) => {}
+                        Ok(report) => {
+                            if !report.deleted.is_empty() {
+                                info!(
+                                    "retention",
+                                    "post-finalize enforcement: removed {} recording(s), freed {} bytes",
+                                    report.deleted.len(),
+                                    report.freed_bytes
+                                );
+                            }
+                            // Published even when nothing was deleted: "the
+                            // pass ran and took nothing" is the answer to
+                            // "why is my disk still full", and the log line
+                            // stays quiet for the same case so the two do
+                            // not have to agree about noise.
+                            self.publish(crate::contract::events::Event::RetentionRan {
+                                deleted: report.deleted.clone(),
+                                freed_bytes: report.freed_bytes,
+                            });
+                        }
                         Err(e) => error!("retention", "post-finalize enforcement failed: {e}"),
                     },
                     Err(e) => error!("retention", "failed to load policy: {e}"),
@@ -1030,7 +1173,9 @@ impl Supervisor {
 
                 // After the row, its markers/samples, and any retention
                 // deletions — one notification for the whole finalize.
-                self.emit_library_changed();
+                self.emit_library_changed(
+                    crate::contract::events::LibraryChangeReason::Finalized,
+                );
                 // Separate from the library signal because it carries what was
                 // written: the frontend refreshes off the first, a tray
                 // notification describes the second.
@@ -1042,6 +1187,10 @@ impl Supervisor {
                 if let Some(finalized) = self.last_finalized.lock().unwrap().clone() {
                     self.emit(SupervisorEvent::Finalized(finalized));
                 }
+                self.publish(crate::contract::events::Event::RecordingStopped {
+                    recording_id,
+                    outcome: crate::contract::events::StopOutcome::Clean,
+                });
 
                 // Last, and deliberately after retention: the LCU still
                 // has no stats for this game — it is in `WaitingForStats`
@@ -1063,6 +1212,13 @@ impl Supervisor {
                 self.emit(SupervisorEvent::RecordingFailed(format!(
                     "the recording could not be finished: {e}"
                 )));
+                // No id: the row is written from `stop`'s output, and there
+                // was none. Whatever the recorder managed to write is still
+                // on disk, which is what `Crashed` says.
+                self.publish(crate::contract::events::Event::RecordingStopped {
+                    recording_id: None,
+                    outcome: crate::contract::events::StopOutcome::Crashed,
+                });
             }
         }
     }
@@ -1159,7 +1315,7 @@ impl Supervisor {
     /// Emits `library-changed` on behalf of the dev commands, which mutate
     /// the DB directly rather than going through a finalize.
     pub fn dev_emit_library_changed(&self) {
-        self.emit_library_changed();
+        self.emit_library_changed(crate::contract::events::LibraryChangeReason::Edited);
     }
 }
 
@@ -1199,6 +1355,11 @@ mod tests {
     //! live-client watchers) is deliberately left untested per this
     //! file's header — no League client is installed on this machine.
     use super::*;
+    // Aliased: `Event` alone would read as something this module owns, and
+    // the tests below are specifically about what crosses the boundary.
+    use crate::contract::events::{Event as ContractEvent, LibraryChangeReason};
+    use crate::lcu::gameflow::GameflowPhase;
+    use crate::lcu::lockfile::{LockfileInfo, LockfileState};
     use crate::db::Db;
     use crate::live_client::MarkerKind;
     use crate::recorder::stub::StubRecorder;
@@ -1263,6 +1424,178 @@ mod tests {
             Supervisor::new(recorder, std::env::temp_dir(), db),
             counts,
         )
+    }
+
+    // --- The event sink (WS2.3) -------------------------------------------
+
+    /// A supervisor with a recording sink attached, so a test can assert on
+    /// what crossed the contract boundary rather than on internal state.
+    fn supervisor_with_sink() -> (Arc<Supervisor>, Arc<Mutex<Vec<ContractEvent>>>, PathBuf) {
+        let (sup, dir) = test_supervisor();
+        let seen: Arc<Mutex<Vec<ContractEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        sup.set_event_sink(Box::new(move |event| sink.lock().unwrap().push(event)));
+        (sup, seen, dir)
+    }
+
+    /// Just the states, in order, from whatever else the run published.
+    fn states(seen: &Arc<Mutex<Vec<ContractEvent>>>) -> Vec<GameState> {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                ContractEvent::StateChanged { state, .. } => Some(state.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn present() -> StateEvent {
+        StateEvent::LockfileChanged(LockfileState::Present(LockfileInfo {
+            name: "LeagueClient".into(),
+            pid: 2,
+            port: 1,
+            password: "x".into(),
+            protocol: "https".into(),
+        }))
+    }
+
+    /// **The exit criterion.** One `StateChanged` per transition, in order,
+    /// across a whole game driven through the real dispatch path.
+    ///
+    /// `dispatch` runs the machine twice per call — the caller's event, then a
+    /// blanket `FinalizeComplete` — so the end of the game produces two moves
+    /// from one call, and both are here. That is the property worth pinning: an
+    /// event per *transition*, not per `dispatch`.
+    #[test]
+    fn one_state_changed_per_transition_across_a_whole_game() {
+        let (sup, seen, _dir) = supervisor_with_sink();
+
+        sup.dispatch(present());
+        sup.dispatch(StateEvent::GameflowPhase(GameflowPhase::InProgress));
+        sup.dispatch(StateEvent::LiveClientUp);
+        sup.dispatch(StateEvent::GameflowPhase(GameflowPhase::EndOfGame));
+
+        assert_eq!(
+            states(&seen),
+            vec![
+                GameState::ClientRunning,
+                GameState::WaitingForGame,
+                GameState::Recording,
+                GameState::Finalizing,
+                // FinalizeComplete, from the same `dispatch` as Finalizing:
+                // the lockfile is still present, so it lands back here rather
+                // than at Idle.
+                GameState::ClientRunning,
+            ]
+        );
+    }
+
+    /// The other half of "one per transition": a handled event that does not
+    /// move the state publishes nothing.
+    ///
+    /// Gameflow re-reports the phase it is already in, and `dispatch`'s blanket
+    /// `FinalizeComplete` is a no-op in every state but `Finalizing`. Emitting
+    /// on every `handle` would push a redraw at 1 Hz for a state nobody left.
+    #[test]
+    fn an_event_that_does_not_move_the_state_publishes_nothing() {
+        let (sup, seen, _dir) = supervisor_with_sink();
+
+        sup.dispatch(present());
+        let after_first = states(&seen).len();
+        assert_eq!(after_first, 1);
+
+        // The same lockfile again, then a phase this state ignores.
+        sup.dispatch(present());
+        sup.dispatch(StateEvent::GameflowPhase(GameflowPhase::ChampSelect));
+        sup.dispatch(StateEvent::LiveClientDown);
+
+        assert_eq!(
+            states(&seen).len(),
+            after_first,
+            "a handled-but-stationary event published a StateChanged"
+        );
+    }
+
+    /// `since_ms` is the moment the state was entered, not the moment the
+    /// event was rendered — so a client can show "recording for 4:12" without
+    /// timing it, and without drifting when the window was asleep.
+    #[test]
+    fn since_ms_is_stamped_at_the_transition() {
+        let (sup, seen, _dir) = supervisor_with_sink();
+        let before = timestamp_millis();
+        sup.dispatch(present());
+        let after = timestamp_millis();
+
+        let stamps: Vec<i64> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                ContractEvent::StateChanged { since_ms, .. } => Some(*since_ms),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(stamps.len(), 1);
+        assert!(
+            stamps[0] >= before && stamps[0] <= after,
+            "since_ms {} is outside [{before}, {after}]",
+            stamps[0]
+        );
+    }
+
+    /// The client going away is published as `phase: None`, which is a
+    /// different statement from `GameflowPhase::None`.
+    #[test]
+    fn losing_the_client_publishes_an_absent_phase() {
+        let (sup, seen, _dir) = supervisor_with_sink();
+        sup.dispatch(present());
+        sup.dispatch(StateEvent::LockfileChanged(LockfileState::Absent));
+
+        let phases: Vec<(Option<GameflowPhase>, bool)> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                ContractEvent::LcuPhase {
+                    phase,
+                    client_present,
+                } => Some((phase.clone(), *client_present)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(phases, vec![(None, false)]);
+    }
+
+    /// Installing no sink must leave every path exactly as it was. This is
+    /// what every other test in this module relies on without saying so.
+    #[test]
+    fn a_supervisor_with_no_sink_publishes_nowhere_and_still_works() {
+        let (sup, _dir) = test_supervisor();
+        sup.dispatch(present());
+        sup.dispatch(StateEvent::GameflowPhase(GameflowPhase::InProgress));
+        assert_eq!(sup.status().state, GameState::WaitingForGame);
+    }
+
+    /// A finalize publishes the library change *and* names the reason, so a
+    /// client can tell a one-row patch from a reconcile that moved many.
+    #[test]
+    fn a_library_change_names_its_reason() {
+        let (sup, seen, _dir) = supervisor_with_sink();
+        // The private emitter directly rather than `dev_emit_library_changed`,
+        // which is behind the `devtools` feature — this behaviour is not.
+        sup.emit_library_changed(LibraryChangeReason::Edited);
+
+        let reasons: Vec<LibraryChangeReason> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                ContractEvent::LibraryChanged { reason } => Some(*reason),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(reasons, vec![LibraryChangeReason::Edited]);
     }
 
     #[test]
