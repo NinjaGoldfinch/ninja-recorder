@@ -68,6 +68,11 @@ mod tests {
         ($m:ident) => {
             $m!(
                 crate::backfill::BackfillReport,
+                crate::contract::events::Event,
+                crate::contract::events::LibraryChangeReason,
+                crate::contract::events::ShutdownReason,
+                crate::contract::events::StopOutcome,
+                crate::contract::events::Topic,
                 crate::core::AutostartStatus,
                 crate::core::DiskUsage,
                 crate::core::LcuStatus,
@@ -78,11 +83,13 @@ mod tests {
                 crate::db::reconcile::ReconcileReport,
                 crate::ddragon::IconRequest,
                 crate::ddragon::IconSet,
+                crate::lcu::gameflow::GameflowPhase,
                 crate::live_client::events::Marker,
                 crate::live_client::events::MarkerKind,
                 crate::live_client::events::Scoreboard,
                 crate::live_client::events::ScoreboardPlayer,
                 crate::live_client::events::ScoreboardRunes,
+                crate::live_client::events::TeamDiff,
                 crate::recorder::audio::AudioInputDevice,
                 crate::recorder::audio::AudioLayout,
                 crate::recorder::audio::AudioPreset,
@@ -93,6 +100,7 @@ mod tests {
                 crate::state_machine::supervisor::FinalizedRecording,
                 crate::state_machine::supervisor::RecordingDiagnostics,
                 crate::state_machine::supervisor::SessionMarker,
+                crate::state_machine::supervisor::SessionSample,
                 crate::state_machine::supervisor::SupervisorStatus,
                 crate::update::UpdateOffer,
                 crate::update::UpdateStatus,
@@ -126,7 +134,7 @@ mod tests {
             }};
         }
         let n = all_boundary_types!(check);
-        assert_eq!(n, 29, "the boundary type list changed; update the count deliberately");
+        assert_eq!(n, 37, "the boundary type list changed; update the count deliberately");
     }
 
     /// The decision above, made executable. Rendering with ts-rs's default

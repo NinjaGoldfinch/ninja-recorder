@@ -20,7 +20,7 @@ use tokio_tungstenite::tungstenite::Message;
 /// League's gameflow phases. `Unknown` is a deliberate catch-all so an
 /// unrecognized value from a client update never breaks parsing — we'd
 /// rather surface an odd phase name than crash the watcher.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
 pub enum GameflowPhase {
     None,
     Lobby,

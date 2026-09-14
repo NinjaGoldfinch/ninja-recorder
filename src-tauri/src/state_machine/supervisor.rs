@@ -41,7 +41,7 @@ pub struct SessionMarker {
 /// One 1 Hz sample of the team-advantage series, time-aligned to the video
 /// the same way markers are. Kept in memory for the duration of the
 /// recording and flushed to the DB in one transaction at finalize.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 pub struct SessionSample {
     pub game_time_s: f64,
     pub video_time_s: f64,

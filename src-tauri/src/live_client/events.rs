@@ -338,7 +338,7 @@ pub struct GameData {
 
 /// Signed team differentials at one instant, from the active player's
 /// point of view: positive means *our* team is ahead.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ts_rs::TS)]
 pub struct TeamDiff {
     /// "ORDER" or "CHAOS" — which side we were on. Persisted alongside the
     /// diffs so the sign convention stays auditable after the fact.

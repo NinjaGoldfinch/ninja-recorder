@@ -594,7 +594,7 @@ stay in the UI process; `dev_registered_commands` must stay direct because
 a shipped build.
 
 > **`src/types.ts` is no longer the source of truth either.** Since WS2.2 all
-> 29 types crossing the boundary derive `ts_rs::TS` beside their serde derives,
+> 37 types crossing the boundary derive `ts_rs::TS` beside their serde derives,
 > and WS2.5's generator emits the TypeScript from those. The hand-written
 > interfaces in `src/types.ts` are what that replaces.
 >
@@ -651,6 +651,67 @@ loads instead of from the `prefs.ts` cache, and applies whatever
 ([DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave)).
 It is the only row in the settings form that can come back disabled, when the
 build has no autostart control or the read failed.
+
+### Event surface
+
+The other half of the contract, and the half v1 never declared. Commands are
+the UI asking; events are the daemon telling — and until WS2.3 the second kind
+existed only as string constants at each `Emitter::emit` call site
+(`LIBRARY_CHANGED_EVENT`, `UPDATE_STATUS_EVENT`), mirrored by hand in
+TypeScript.
+
+`contract::events`'s `contract_events!` table is now the single declaration.
+Each row is `Variant { field: Type, … } => Topic`, and the enum, `topic()`,
+`event_names()` and `event_manifest()` are all generated from it — a variant
+cannot be added without a topic, because that is a syntax error rather than a
+convention.
+
+> **Appendix B calls this "a small derive"; it is a `macro_rules!` instead.** A
+> real derive needs a proc-macro crate, which would mean making `src-tauri` a
+> workspace and taking `syn`, `quote` and `proc-macro2` to produce output a
+> declarative macro produces already. `dispatch_table!` is the precedent — it
+> declares the command half and emits its manifest beside it. The plan's output
+> is unchanged; only the mechanism is.
+
+Events are internally tagged, so one arrives as
+`{"type":"stateChanged","state":"Recording","sinceMs":…}` and a generated
+client gets a discriminated union it can switch on exhaustively.
+
+**A client subscribes by topic, never by event name.** That is what lets a
+variant be added to an existing topic without a client change.
+
+| Topic | Carries | Subscribed by |
+|---|---|---|
+| `recording` | `StateChanged`, `RecordingStarted`, `RecordingStopped`, `MarkerAdded`, `SampleBatch` | main UI, dev portal |
+| `lcu` | `LcuPhase` | main UI, dev portal |
+| `library` | `LibraryChanged`, `MatchSummaryPatched`, `RetentionRan` | main UI, dev portal |
+| `update` | `UpdateStatus` | main UI, dev portal |
+| `daemon` | `DaemonShuttingDown`, `Lagged` | dev portal; the transport handles `Lagged` itself by re-`hello`ing |
+
+Three details are load-bearing:
+
+- **`SampleBatch` is a batch on purpose.** A 35-minute game produces about
+  2,000 advantage samples, and 2,000 notifications is a frame-rate problem in
+  the UI for data drawn as one line.
+- **`recording_id` is `Option<i64>` while a game is in flight.** The library
+  row is written at finalize, so nothing has an id until then; a client
+  correlates on `path` until `RecordingStopped` names the row.
+- **`LcuPhase.phase` is `None` exactly when no client is running**, which is a
+  different statement from `GameflowPhase::None` — a client sitting at the
+  front page. A test pins the two apart.
+
+**Q7 is answered by the code rather than left open.** Issue #73 asks whether
+`LcuPhase` carries the full `gameflow-phase` enumeration or "the subset
+`lcu/gameflow.rs` models today". There is no subset: `GameflowPhase` already
+names all fourteen phases the LCU defines and carries `Unknown(String)` for
+anything a client update invents. The state machine *consumes* a subset —
+`is_game_running_phase` matches two variants — but that is a reader narrowing a
+full type, not a narrow type. So the event carries it whole.
+
+**Nothing emits these yet.** The `EventSink` that hangs off `Supervisor`, and
+the wiring at each emission site, are the second half of WS2.3; until then the
+enum is declaration only and carries the `cfg_attr(not(test), allow(dead_code))`
+that `CLAUDE.md` describes.
 
 ## Routing and the tray
 
