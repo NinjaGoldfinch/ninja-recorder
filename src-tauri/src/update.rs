@@ -50,7 +50,7 @@ pub const CHANNEL_PREF_KEY: &str = "updateChannel";
 /// `/releases/latest/download/`, because GitHub excludes prereleases from
 /// `latest`, which is exactly what keeps the stable channel clean.
 pub const ALPHA_ENDPOINT: &str =
-    "https://github.com/NinjaGoldfinch/ninja-recorder/releases/download/alpha/alpha.json";
+    "https://github.com/NinjaGoldfinch/ninja-recorder-v2/releases/download/alpha/alpha.json";
 
 impl Channel {
     /// Reads the stored pref. Anything unrecognised is **stable**, not an
