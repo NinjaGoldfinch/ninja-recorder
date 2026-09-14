@@ -212,6 +212,14 @@ workstream should be rewritten to say what it means.
   `rpc` command, so add a row there and an entry in `src/dev/registry.ts`.
   WS2 deletes `registry.ts` and `every_command_round_trips` together, and not
   before the generator exists.
+- **A type that crosses the IPC boundary derives `ts_rs::TS` next to its serde
+  derives.** The two describe the same wire shape; splitting them is how they
+  drift. 29 types today, listed in `contract::types`' test.
+  **Never `#[ts(export)]`** — it writes a `.ts` file per type as a side effect
+  of `cargo test`. WS2.5's generator collects them instead.
+  Render through `contract::types::config()`, never `Config::default()`: the
+  default maps `i64` to `bigint`, and **JSON cannot represent a BigInt**, so
+  the default describes a value the runtime never produces.
 - **A table row declares its return type, and the compiler checks it.** Since
   WS2.1 each row ends `-> Type`, and that type is bound to the call inside the
   macro — get it wrong and you get an `E0308` at the `?`, not a manifest that

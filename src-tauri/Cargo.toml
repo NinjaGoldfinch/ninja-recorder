@@ -44,6 +44,33 @@ tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# TypeScript declarations for every type that crosses the IPC boundary (WS2.2).
+#
+# `serde-compat` is on by default and is the point: several of these types carry
+# `#[serde(tag = "...")]` and `rename_all`, and the generated TypeScript has to
+# describe the wire shape serde actually produces, not the Rust shape.
+#
+# **`#[ts(export)]` is deliberately not used.** It writes one `.ts` file per type
+# as a side effect of `cargo test`, which would scatter the output and make it a
+# test artifact. WS2.5's `gen-contract` collects the declarations instead, so the
+# emission happens once, in one place, and is reviewable as a single diff.
+#
+# `no-serde-warnings` because of exactly one attribute: `#[serde(other)]` on
+# `AudioPreset::Unknown`, the forward-compatibility catch-all that stops a
+# downgrade turning a newer build's preset into a hard deserialize error.
+# ts-rs cannot parse it and warns that it is ignored — and `-D warnings` makes
+# that fatal.
+#
+# Ignoring it is correct here: `other` changes *deserialization behaviour*, not
+# the type's shape, and the emitted TypeScript already carries every variant
+# including `{ "preset": "unknown" }`.
+#
+# The cost, stated: this silences the whole class, so a future serde attribute
+# that ts-rs cannot parse *and* that does change the shape would go unmentioned.
+# `contract::types`' tests are the cover for that — they assert on the rendered
+# declarations rather than trusting the absence of a warning, and
+# `audio_presets_keep_every_variant` pins this exact case.
+ts-rs = { version = "12", features = ["no-serde-warnings"] }
 thiserror = "2"
 tokio = { version = "1", features = ["time", "sync", "macros", "rt"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls"] }

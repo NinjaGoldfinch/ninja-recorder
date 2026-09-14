@@ -25,7 +25,7 @@ pub const MAX_TRACKS: usize = 6;
 
 /// One capturable audio source. Each maps to exactly one libobs source object
 /// in the Windows backend; the mapping lives there, not here.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AudioSourceKind {
     /// The League process' own audio, captured per-application.
@@ -60,7 +60,7 @@ impl AudioSourceKind {
 
 /// One mp4 audio track: a label for the UI and the set of sources mixed into
 /// it, as indices into [`AudioLayout::sources`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 pub struct AudioTrackSpec {
     pub label: String,
     pub sources: Vec<usize>,
@@ -70,7 +70,7 @@ pub struct AudioTrackSpec {
 /// carries `sources` alongside `tracks` — the indices in `AudioTrackSpec` are
 /// meaningless without them, and a VOD has to stay readable long after the
 /// preset that produced it was changed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 pub struct AudioLayout {
     pub sources: Vec<AudioSourceKind>,
     pub tracks: Vec<AudioTrackSpec>,
@@ -111,7 +111,7 @@ impl AudioLayout {
 
 /// What the user picked in Settings. Persisted as JSON in `settings_kv` under
 /// `audio_preset`; see `db::Db::get_audio_preset`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
 #[serde(tag = "preset", rename_all = "snake_case")]
 pub enum AudioPreset {
     /// Game audio only. One track, not two: with a single source the
@@ -203,7 +203,7 @@ impl AudioPreset {
 }
 
 /// An audio input device offered in the microphone picker.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 pub struct AudioInputDevice {
     /// The endpoint id the capture backend wants, verbatim.
     pub id: String,
