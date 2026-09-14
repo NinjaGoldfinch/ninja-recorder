@@ -10,7 +10,7 @@ use std::path::Path;
 
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv"];
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, ts_rs::TS)]
 pub struct ReconcileReport {
     pub orphans_removed: usize,
     pub imported: usize,

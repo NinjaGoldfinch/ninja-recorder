@@ -140,7 +140,7 @@ pub fn match_recording(recording: &Candidate, games: &[PlayedGame]) -> Match {
 /// successes: "nothing happened" and "nothing could be matched" are
 /// different answers, and the second one is the user's cue that their
 /// recordings are older than their client's match history.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, ts_rs::TS)]
 pub struct BackfillReport {
     /// Rows that were missing metadata when the pass started.
     pub scanned: usize,

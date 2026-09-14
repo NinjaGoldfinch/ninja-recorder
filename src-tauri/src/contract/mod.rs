@@ -21,6 +21,7 @@
 //! collected by the generator rather than by `#[ts(export)]`.
 
 pub mod events;
+pub mod types;
 // `r#gen`, not `gen`: `gen` is a reserved keyword in edition 2024 (it is the
 // generator syntax), so the plain identifier stopped compiling with the
 // edition bump. The *file* stays `gen.rs`, because §3.4 of the plan draws it
