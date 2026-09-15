@@ -109,7 +109,7 @@ mod tests {
 
     #[test]
     fn removes_db_row_whose_file_is_gone() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let dir = temp_dir("orphan");
         db.insert_recording(&NewRecording {
             path: dir.join("gone.mp4").to_string_lossy().to_string(),
@@ -128,7 +128,7 @@ mod tests {
 
     #[test]
     fn imports_untracked_video_file() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let dir = temp_dir("import");
         std::fs::write(dir.join("untracked.mp4"), b"fake video bytes").unwrap();
 
@@ -146,7 +146,7 @@ mod tests {
 
     #[test]
     fn import_without_an_ffmpeg_leaves_duration_unknown() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let dir = temp_dir("no-ffmpeg");
         std::fs::write(dir.join("untracked.mp4"), b"fake video bytes").unwrap();
 
@@ -161,7 +161,7 @@ mod tests {
         // The failure-tolerance the issue asks for: reconcile must not
         // start failing over a cosmetic column. A path that isn't a binary
         // stands in for every way the probe can come back empty.
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let dir = temp_dir("broken-ffmpeg");
         std::fs::write(dir.join("untracked.mp4"), b"fake video bytes").unwrap();
 
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn ignores_non_video_files() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let dir = temp_dir("ignore");
         std::fs::write(dir.join("notes.txt"), b"not a video").unwrap();
 
@@ -187,7 +187,7 @@ mod tests {
 
     #[test]
     fn tracked_file_is_left_alone() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let dir = temp_dir("tracked");
         let file_path = dir.join("known.mp4");
         std::fs::write(&file_path, b"fake video bytes").unwrap();
@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn missing_recordings_dir_is_not_an_error() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let dir = std::env::temp_dir().join("ninja-recorder-reconcile-does-not-exist");
         std::fs::remove_dir_all(&dir).ok();
 

@@ -323,7 +323,7 @@ mod tests {
 
     #[test]
     fn enforce_removes_files_and_rows_and_reports_freed_bytes() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let dir = std::env::temp_dir().join(format!(
             "ninja-recorder-retention-test-{}-{}",
             std::process::id(),

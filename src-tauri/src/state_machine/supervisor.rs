@@ -1447,7 +1447,7 @@ mod tests {
         let counts = Counts::default();
         let recorder: Arc<Mutex<Box<dyn Recorder>>> =
             Arc::new(Mutex::new(Box::new(CountingRecorder(counts.clone()))));
-        let db = Arc::new(Db::open_in_memory().unwrap());
+        let db = Arc::new(Db::open_temporary().unwrap());
         (
             Supervisor::new(recorder, std::env::temp_dir(), db),
             counts,
@@ -1677,7 +1677,7 @@ mod tests {
             std::process::id(),
             NEXT_DIR.fetch_add(1, Ordering::Relaxed)
         ));
-        let db = Arc::new(Db::open_in_memory().unwrap());
+        let db = Arc::new(Db::open_temporary().unwrap());
         (Supervisor::new(recorder, dir.clone(), db), dir)
     }
 
