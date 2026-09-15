@@ -338,7 +338,8 @@ pub struct GameData {
 
 /// Signed team differentials at one instant, from the active player's
 /// point of view: positive means *our* team is ahead.
-#[derive(Debug, Clone, PartialEq, Serialize, ts_rs::TS)]
+// `Deserialize` too: WS3.4 reads these back off the pipe in the UI process.
+#[derive(Debug, Clone, PartialEq, Serialize, ts_rs::TS, serde::Deserialize)]
 pub struct TeamDiff {
     /// "ORDER" or "CHAOS" — which side we were on. Persisted alongside the
     /// diffs so the sign convention stays auditable after the fact.
@@ -807,7 +808,8 @@ fn outcome(snapshot: &AllGameData) -> Option<bool> {
 
 // --- Markers -------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS)]
+// `Deserialize` too: WS3.4 reads these back off the pipe in the UI process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MarkerKind {
     Kill,
@@ -848,7 +850,8 @@ impl MarkerKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, ts_rs::TS)]
+// `Deserialize` too: WS3.4 reads these back off the pipe in the UI process.
+#[derive(Debug, Clone, PartialEq, Serialize, ts_rs::TS, serde::Deserialize)]
 pub struct Marker {
     pub kind: MarkerKind,
     pub game_time_s: f64,

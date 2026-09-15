@@ -68,7 +68,8 @@ pub enum Topic {
 /// wiring those means publishing from the UI process, which is WS3's business.
 /// Clippy runs without `--all-targets`, so `-D warnings` would fail meanwhile.
 #[cfg_attr(not(test), allow(dead_code))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS)]
+// `Deserialize` too: WS3.4 reads these back off the pipe in the UI process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum LibraryChangeReason {
     /// A recording finished and was written.
@@ -84,7 +85,8 @@ pub enum LibraryChangeReason {
 /// How a recording ended. `Refused` is not an error: the state machine declines
 /// to record spectator sessions and reconnects to an already-recorded game, and
 /// a client that cannot tell that from a crash will show the wrong thing.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
+// `Deserialize` too: WS3.4 reads these back off the pipe in the UI process.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum StopOutcome {
     /// Finalized, muxed and written.
@@ -103,7 +105,8 @@ pub enum StopOutcome {
 /// No producer until there is a daemon to shut down (WS3), and clippy runs
 /// without `--all-targets`, so `-D warnings` would fail on it meanwhile.
 #[cfg_attr(not(test), allow(dead_code))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
+// `Deserialize` too: WS3.4 reads these back off the pipe in the UI process.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ShutdownReason {
     /// The user chose Quit.
@@ -163,8 +166,11 @@ macro_rules! contract_events {
         /// builds. Declaring them now is the point — the contract is what the
         /// surface *is*, not what happens to be wired. Clippy runs without
         /// `--all-targets`, so `-D warnings` would fail on them meanwhile.
+        // `Deserialize` because WS3.4 made this inbound as well: the UI reads
+        // events off the pipe that the daemon wrote, so the same enum has to
+        // cross in both directions.
         #[cfg_attr(not(test), allow(dead_code))]
-        #[derive(Debug, Clone, Serialize, ts_rs::TS)]
+        #[derive(Debug, Clone, Serialize, serde::Deserialize, ts_rs::TS)]
         #[serde(tag = "type", rename_all = "camelCase")]
         pub enum Event {
             $(
