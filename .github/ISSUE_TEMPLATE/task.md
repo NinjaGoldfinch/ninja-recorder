@@ -1,12 +1,12 @@
 ---
 name: Task
 about: A numbered task from the implementation plan
-title: "WSx.y — "
+title: "WSx.y · "
 labels: ["type: task"]
 ---
 
-> **WSx · task x.y** — <workstream name>
-> Gated by: — · Plan: [§5 task table](https://github.com/NinjaGoldfinch/ninja-recorder-v2-plan/blob/main/docs/implementation/v2-implementation-plan.md#5-workstreams-and-task-breakdown)
+> **WSx · task x.y**: <workstream name>
+> Gated by: none · Plan: [§5 task table](https://github.com/NinjaGoldfinch/ninja-recorder-v2-plan/blob/main/docs/implementation/v2-implementation-plan.md#5-workstreams-and-task-breakdown)
 
 ## What
 

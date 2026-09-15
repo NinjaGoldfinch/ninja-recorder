@@ -1,7 +1,7 @@
 # Product design and implementation history
 
 What this product is, the decisions that shaped it, and how it was actually
-built — in what order, and why that order.
+built: in what order, and why that order.
 
 This document is also where the project's **phase vocabulary** lives. The
 build was planned and executed as eleven numbered phases, and for a while
@@ -23,14 +23,14 @@ Improving at League means reviewing your own games, and the tools for that are
 all bad in the same way: they make you do work before you get any value.
 
 - **OBS** records anything, which means configuring scenes, sources, hotkeys
-  and output settings — then remembering to press record. Miss the start of
+  and output settings, then remembering to press record. Miss the start of
   the game and the VOD is worthless.
 - **Riot's own replays** (`.rofl`) give full camera control but only play on
   the exact patch they were recorded on, and require launching the game
   client to watch anything.
 - **Third-party recorders** that solve the automation problem tend to be
   Electron apps that cost 400 MB of disk and 300 MB of RAM to sit idle, or
-  they capture via injection — which is not survivable under a kernel
+  they capture via injection, which is not survivable under a kernel
   anti-cheat.
 
 And every recorder shares one problem: a 35-minute VOD is an undifferentiated
@@ -42,7 +42,7 @@ A recorder that you install, and then never interact with until you want to
 review something.
 
 1. **It knows when you are playing.** The League Client exposes a local API
-   with the current gameflow phase. That is the entire trigger — no button, no
+   with the current gameflow phase. That is the entire trigger: no button, no
    hotkey, no scene.
 2. **It knows what happened.** The Live Client Data API reports kills, deaths,
    objectives and per-player state once a second while a game runs. Those
@@ -55,7 +55,7 @@ review something.
 ### What it must never do
 
 These are constraints, not preferences. Anything violating them is out of
-scope rather than a trade-off to weigh — the reasoning is in
+scope rather than a trade-off to weigh, and the reasoning is in
 [DEVELOPMENT.md §1](../DEVELOPMENT.md#1-hard-constraints).
 
 - **Never inject into the game process.** League runs under Riot Vanguard, a
@@ -70,7 +70,7 @@ scope rather than a trade-off to weigh — the reasoning is in
 
 | Decision | Consequence for the implementation |
 |---|---|
-| **Zero-config recording** | The trigger has to come from the client, so LCU integration is core infrastructure, not an integration nicety. It also means the state machine must handle every way a game can end badly — crashes, dodges, reconnects — because there is no user to press stop. |
+| **Zero-config recording** | The trigger has to come from the client, so LCU integration is core infrastructure, not an integration nicety. It also means the state machine must handle every way a game can end badly (crashes, dodges, reconnects) because there is no user to press stop. |
 | **Event-tagged timeline** | A second data source (Live Client Data) polled during play, its own time base, and an alignment problem: recording starts on the loading screen, before game time zero. |
 | **Retention is a launch feature** | 1080p60 at 8 Mbps is ~3.5 GB/hour. Shipping without retention means uninstalls in week two, so the policy ships **on** (50 GiB / 30 days) rather than waiting for the user to find a settings screen. |
 | **Lightweight** | Tauri over Electron: an OS webview and a ~10 MB shell instead of a bundled Chromium. It also rules out the most proven architecture in this space (Electron + obs-studio-node) on footprint alone. |
@@ -84,18 +84,18 @@ The project has exactly one part that is genuinely hard to develop: the
 capture backend. It is Windows-only, it links a large C library, it cannot be
 tested in a VM (Vanguard refuses hypervisors), and it needs a real GPU.
 
-Everything else — client integration, the state machine, the library, the
-review player, retention — is ordinary application code that happens to sit on
-top of it.
+Everything else, from client integration and the state machine to the library,
+the review player and retention, is ordinary application code that happens to
+sit on top of it.
 
 So the very first thing built was the boundary between them:
 
 ```mermaid
 flowchart TB
-    subgraph Slow["Slow loop — needs Windows hardware"]
+    subgraph Slow["Slow loop: needs Windows hardware"]
         L["LibObsRecorder<br/><small>WGC + hardware encode</small>"]
     end
-    subgraph Fast["Fast loop — develops anywhere"]
+    subgraph Fast["Fast loop: develops anywhere"]
         A["State machine"]
         B["LCU + Live Client Data"]
         C["SQLite library"]
@@ -131,16 +131,16 @@ small to hide a bug. It is the trait boundary trick applied at function scale.
 | 3 | Live Client Data poller, event → marker pipeline, the game state machine | `live_client/`, `state_machine/` | done |
 | 4 | SQLite VOD library, the data model, folder reconciliation | `db/` | done |
 | 5 | Review UI: player, marker timeline, VOD browser | `src/review.ts`, `src/library.ts` | done |
-| 6 | libobs capture backend — WGC window capture + hardware encode | `recorder/libobs/` | done, **verified against real Vanguard-protected games** |
+| 6 | libobs capture backend: WGC window capture + hardware encode | `recorder/libobs/` | done, **verified against real Vanguard-protected games** |
 | 7 | CI: tests on every push and PR, installers and a published release per commit on `main` | `.github/workflows/ci.yml` | done |
-| 8 | Integration test on real hardware, Vanguard verification | [windows-verification.md](windows-verification.md) | **done** — many live games, capture and markers confirmed |
+| 8 | Integration test on real hardware, Vanguard verification | [windows-verification.md](windows-verification.md) | **done**, across many live games, capture and markers confirmed |
 | 9 | Disk retention: max size, max age, pinning, free-space preflight | `retention.rs` | done |
 | 10 | YouTube upload (OAuth desktop flow, resumable upload) | [DEVELOPMENT.md §7](../DEVELOPMENT.md#7-youtube-upload-designed-not-built) | not started |
 | 11 | `.rofl` replay download alongside video | [DEVELOPMENT.md §8](../DEVELOPMENT.md#8-rofl-replays-designed-not-built) | not started |
 | 12 | Background operation: tray icon, close-to-tray, notifications, start-on-login, and the idle-cost work that made staying resident defensible | `tray.rs`, `notify.rs`, `launch.rs` | done, verified on Windows |
 | 13 | Splitting the recorder into its own process, so the UI can exit and a webview crash can't take a recording with it | [DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave) | in progress |
 | 14 | In-app updates on Windows: a background check, a badge, and an install that refuses while a game is being recorded | `update.rs`, `src/update.ts` | built; checks verified, **the install half is not** ([#118](https://github.com/NinjaGoldfinch/ninja-recorder/issues/118)) |
-| — | **Dropped:** the macOS `.dmg`. Shipped the stub recorder, could not capture a game, and cost a 10×-billed runner per commit. The cross-platform code stays; only the bundle is gone | [ci-and-releases.md](ci-and-releases.md) | dropped |
+| none | **Dropped:** the macOS `.dmg`. Shipped the stub recorder, could not capture a game, and cost a 10×-billed runner per commit. The cross-platform code stays; only the bundle is gone | [ci-and-releases.md](ci-and-releases.md) | dropped |
 
 ### Why that dependency order
 
@@ -166,7 +166,7 @@ Two things in that graph are worth defending:
 
 **Phase 6 is late on purpose.** It is the highest-risk work, and conventional
 advice says to attack risk first. That advice assumes the risk is *design*
-risk — "will this approach work at all?" Here it wasn't: the approach was
+risk: "will this approach work at all?" Here it wasn't; the approach was
 already proven by an existing open-source project, so the risk was
 *environmental* (Windows box, real GPU, real anti-cheat). Building it first
 would have meant doing every subsequent phase on the slow loop for no
@@ -186,22 +186,22 @@ The real order, from the commit history:
 ```mermaid
 timeline
     title Build order as executed
-    Aug 31 : Planning docs — README, development guide
-    Sep 1  : Phase 1 — scaffold, Recorder trait, stub
-           : Phase 2 — LCU client
-           : Phase 3 — Live Client Data, markers, state machine
-           : Phase 7 — CI, pulled forward
-           : Phase 4 — SQLite library
-           : Phase 5 — review UI
-           : Phase 6 — libobs capture backend
-    Sep 2  : Phase 9 — disk retention
+    Aug 31 : Planning docs, README, development guide
+    Sep 1  : Phase 1, scaffold, Recorder trait, stub
+           : Phase 2, LCU client
+           : Phase 3, Live Client Data, markers, state machine
+           : Phase 7, CI, pulled forward
+           : Phase 4, SQLite library
+           : Phase 5, review UI
+           : Phase 6, libobs capture backend
+    Sep 2  : Phase 9, disk retention
            : Faststart remux, Windows CI fixes
     Sep 4  : CI cost and release-notes work
     Sep 5  : App shell and theming redesign (unplanned)
            : Dev portal (unplanned)
            : Release pipeline rework
-    Sep 8  : Phase 14 — in-app updates (unplanned)
-    open   : Phase 8 — hardware and Vanguard verification
+    Sep 8  : Phase 14, in-app updates (unplanned)
+    open   : Phase 8, hardware and Vanguard verification
 ```
 
 Phases 1 through 7 landed in a single day, which is what the stub-plus-fixtures
@@ -215,21 +215,21 @@ Worth recording, because these are the parts that cost the most time.
 ### The dev portal was missing from the plan
 
 The plan assumed fixtures plus unit tests would keep the backend developable.
-They did — for the *pure* parts. What it missed is that the async half had no
+They did, for the *pure* parts. What it missed is that the async half had no
 way to be driven at all:
 
 - There was no seed script anywhere, so the library, its filters, retention
   and the entire review player could only be exercised by finishing a real
   game on Windows.
 - The supervisor's async glue was only drivable by real League polling.
-- `set_retention_policy` saved *and* enforced, with no preview — testing an
+- `set_retention_policy` saved *and* enforced, with no preview, so testing an
   age rule meant waiting days.
 - Markers accumulating *during* a recording were invisible; only the last
   finalized recording was exposed.
 
 The fix was a whole second window ([dev-portal.md](dev-portal.md)), compiled
 out of shipped builds behind a Cargo feature. In hindsight this was implied by
-the phase 3 fixture design — "the poller and state machine must be runnable in
+the phase 3 fixture design. "The poller and state machine must be runnable in
 replay mode against fixtures" was in the design doc from the start, and the
 replay mode simply never got built until it became blocking.
 
@@ -240,8 +240,8 @@ that nobody can actually demonstrate.
 ### The UI was planned as one phase and took two passes
 
 Phase 5 delivered a working review player and VOD browser. It took a second,
-unplanned pass — a design-token system, a real app shell with a status strip,
-VOD cards, a stats bar and a settings view — before it was something worth
+unplanned pass (a design-token system, a real app shell with a status strip,
+VOD cards, a stats bar and a settings view) before it was something worth
 shipping. The frontend was also restructured during that pass from
 widget-shaped files into state-ownership-shaped ones
 ([frontend.md](frontend.md)).
@@ -250,10 +250,10 @@ widget-shaped files into state-ownership-shaped ones
 
 | Planned | Shipped | Why |
 |---|---|---|
-| Record MKV, remux to MP4 on stop | Fragmented MP4, then a faststart remux on clean stop | Fragmented MP4 survives a crash with no finalization step — but no player can seek it, including the review player itself, so a lossless stream-copy remux was added on top |
+| Record MKV, remux to MP4 on stop | Fragmented MP4, then a faststart remux on clean stop | Fragmented MP4 survives a crash with no finalization step, but no player can seek it, including the review player itself, so a lossless stream-copy remux was added on top |
 | Pull-only; no backend→frontend events | One event, `library-changed` | Polling `list_recordings` to notice a finished game rebuilt the grid every few seconds and fought scroll and focus |
-| Match metadata comes from the LCU after the game | It comes from three sources at three different times | The in-game API was already being polled at 1 Hz for markers and turned out to carry champion, KDA, outcome and mode — champion as a *name*, so nothing has to resolve an id, and it works in Practice Tool and customs where match history does not. Which `gameId` just ended, the question that kept the LCU path unwired for months, turned out to be the wrong question: the client will say so *during* the game (`/lol-gameflow/v1/session`), which also yields the real `queue` id. Only `role` and `patch` genuinely need the post-game LCU, and that cannot run inside the finalize — the client is still in `WaitingForStats` — so it is a deferred patch that re-emits `library-changed` when it lands (#51, #52, #53) |
-| Frame-by-frame stepping in the review player | Dropped | It was a ±1/30 s time nudge, not a frame seek — no per-recording frame rate is probed anywhere — so it offered precision it did not have. It was removed when the player controls moved inside the video frame, where bar width is scarce |
+| Match metadata comes from the LCU after the game | It comes from three sources at three different times | The in-game API was already being polled at 1 Hz for markers and turned out to carry champion, KDA, outcome and mode, champion as a *name* so nothing has to resolve an id, and it works in Practice Tool and customs where match history does not. Which `gameId` just ended, the question that kept the LCU path unwired for months, turned out to be the wrong question: the client will say so *during* the game (`/lol-gameflow/v1/session`), which also yields the real `queue` id. Only `role` and `patch` genuinely need the post-game LCU, and that cannot run inside the finalize, because the client is still in `WaitingForStats`, so it is a deferred patch that re-emits `library-changed` when it lands (#51, #52, #53) |
+| Frame-by-frame stepping in the review player | Dropped | It was a ±1/30 s time nudge, not a frame seek (no per-recording frame rate is probed anywhere) so it offered precision it did not have. It was removed when the player controls moved inside the video frame, where bar width is scarce |
 
 **Player controls moved inside the video frame.** The review player was built
 with its controls in a bar beneath the video, which reads fine embedded and is
@@ -264,19 +264,19 @@ decision that turned out to be a functional one.
 ### Audio was treated as a backend default, and it is a product decision
 
 The eleven phases never mention audio. It appears once in the capture phase as
-a single line — `AudioSource::SYSTEM`, desktop loopback — filed under encoding
+a single line, `AudioSource::SYSTEM` for desktop loopback, filed under encoding
 defaults alongside bitrate and resolution, on the assumption that the user has
 no more opinion about it than they do about CBR.
 
 That was wrong in a way the plan couldn't see from the outside. Whether your
 own voice is in the VOD, whether your Discord call is, and whether you can
-remove either one later are all things people care about — and the last of
+remove either one later are all things people care about, and the last of
 them is a *recording-time* decision, because an audio track that wasn't
 captured can't be recovered afterwards. A default that silently mixes
 everything into one stream forecloses it permanently for every game already
 recorded.
 
-The fix (track 0 the combined mix, isolated stems after it —
+The fix (track 0 the combined mix, isolated stems after it;
 [DEVELOPMENT.md §2.5](../DEVELOPMENT.md#25-multi-track-audio)) is the same
 shape as the retention decision in §2: pick the option that keeps the user's
 future choices open, and pay a little for it now. It also needed a second
@@ -294,13 +294,13 @@ anything louder into noise.
 
 The second constraint came from the product's own promise. An updater that
 restarts the app is a feature that can destroy a recording, which is the one
-thing this app exists not to do — so it asks, and it refuses while a game is
+thing this app exists not to do, so it asks, and it refuses while a game is
 in progress ([DEVELOPMENT.md §14](../DEVELOPMENT.md)). Neither of those is a
 technical difficulty; both are decisions the plan never anticipated needing.
 
 ### The phase that was the honest gate has closed
 
-Phase 8 — real hardware, real Vanguard — has run, across many live games.
+Phase 8, real hardware and real Vanguard, has run across many live games.
 Capture, markers, the library, multi-track audio, the tray and the
 notifications all hold up. The bet the whole architecture rested on
 (§1.1: window capture rather than injection, so Vanguard never has an
@@ -309,7 +309,7 @@ established any other way.
 
 What is left is smaller and differently shaped: the **install** half of the
 updater has never run end to end. It is not a capture risk, it is a delivery
-one — if it fails, every fix ships by manual reinstall
+one, and if it fails every fix ships by manual reinstall
 ([#118](https://github.com/NinjaGoldfinch/ninja-recorder/issues/118)).
 
 The install-size target was also missed, and is recorded as missed rather
@@ -331,9 +331,9 @@ issues:
 | Phase 5 | the review UI / the review timeline |
 | Phase 6 | the libobs capture backend |
 | Phase 7 | CI |
-| Phase 8 | hardware verification — [windows-verification.md](windows-verification.md) |
+| Phase 8 | hardware verification: [windows-verification.md](windows-verification.md) |
 | Phase 9 | retention |
-| Phase 10 / 11 | not built — [DEVELOPMENT.md §7](../DEVELOPMENT.md#7-youtube-upload-designed-not-built) / [§8](../DEVELOPMENT.md#8-rofl-replays-designed-not-built) |
+| Phase 10 / 11 | not built: [DEVELOPMENT.md §7](../DEVELOPMENT.md#7-youtube-upload-designed-not-built) / [§8](../DEVELOPMENT.md#8-rofl-replays-designed-not-built) |
 
 New code should not reintroduce phase numbers. Describe the behaviour, and
 link to the document that explains it.

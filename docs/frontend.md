@@ -12,7 +12,7 @@ exactly one piece of mutable state and is the only place that writes it.
 
 ```mermaid
 flowchart TB
-    MAIN["main.ts<br/><small>composition root — owns nothing</small>"]
+    MAIN["main.ts<br/><small>composition root: owns nothing</small>"]
     ROUTER["router.ts<br/><small>owns: which view is showing</small>"]
     THEME["theme.ts<br/><small>owns: html[data-theme]</small>"]
     PREFS["prefs.ts<br/><small>owns: the preference cache</small>"]
@@ -75,17 +75,17 @@ compiled out of what it talks to. Its edge to `bridge.ts` is the same
 ### Suppressed browser behaviour
 
 `desktop.ts` is the only module that exists to make things *not* happen. A
-webview arrives as a page — selectable text, a browser context menu, drag
-images, F5 — and a window wants none of it. What each half handles:
+webview arrives as a page, with selectable text, a browser context menu, drag
+images and F5, and a window wants none of it. What each half handles:
 
 | Behaviour | Where | Exemption |
 |---|---|---|
 | Text selection | `styles.css`, `user-select` | Form fields, `code`, `.mono`, `.about-list dd`, and anything marked `.selectable` |
 | Context menu | `contextmenu` | Text fields (it is the Cut/Copy/Paste menu there); every build that can inspect |
 | Drag images | `dragstart` | Text fields |
-| Middle-click autoscroll | `mousedown`, button 1 | — |
+| Middle-click autoscroll | `mousedown`, button 1 | none |
 | Reload (F5, Ctrl+R) | `keydown` | Every build that can inspect |
-| Print (Ctrl+P) | `keydown` | — |
+| Print (Ctrl+P) | `keydown` | none |
 
 "Every build that can inspect" means the vite dev server (`import.meta.env.DEV`)
 or a `devtools` build, detected through `bridge.ts`'s `hasDevCommands` probe.
@@ -101,16 +101,16 @@ The reasoning behind all of it is in
 
 ### The library is a list, not a grid
 
-One row per game. A library is scanned rather than browsed — the question is
+One row per game. A library is scanned rather than browsed. The question is
 almost always "which game was that", answered by champion, result and roughly
-when — and a card grid answers that in two dimensions when one would do. Rows
+when, and a card grid answers that in two dimensions when one would do. Rows
 also left somewhere for the scoreboard, items and team compositions to go
 without a second redesign (#85), which is where all three now are.
 
 **A stacked block on the left sets the row's height**: what the game was, when
 it was, which patch, how long it ran, and how it went. Four short lines rather
 than four columns, because none of them is a number worth comparing down the
-list — together they answer "is this the game I mean", which is read once per
+list. Together they answer "is this the game I mean", which is read once per
 row and then never again.
 
 What *is* worth comparing gets a column: the champion, and the KDA. Deaths are
@@ -134,7 +134,7 @@ real to every column added after it; slack that stays slack keeps the rule
 above true rather than nearly true.
 
 **The lane matchup, not the lobby.** The row shows the one opponent who
-played your position — their champion, their line and their build — where it
+played your position, with their champion, their line and their build, where it
 used to show all ten portraits. Ten champions told you who was in the game;
 one tells you who you actually played against, which is what a person is
 reconstructing when they scan a library. "The Darius game" is a matchup, not a
@@ -143,40 +143,40 @@ them.
 
 **The opponent is looked up, never guessed.** Every player on the board carries
 a `position`, so the enemy in our lane is a filter rather than an index into a
-list whose order nothing promises. Where the position is missing — every
-recording made before the field existed, and any mode with no positions to
-assign — there is no matchup, and the block **says so in words**. Seven blank
+list whose order nothing promises. Where the position is missing, which covers
+every recording made before the field existed and any mode with no positions to
+assign, there is no matchup, and the block **says so in words**. Seven blank
 boxes beside a "vs" read as art that failed to load, which is a bug report
 waiting to happen; "No matchup recorded" reads as what it is. The block keeps
 its width either way, so the columns on both sides stay put.
 
 **The position has to survive the LCU rebuild.** The deferred patch replaces the
-live scoreboard with the LCU's (#127), which is better at almost everything —
+live scoreboard with the LCU's (#127), which is better at almost everything:
 champion ids rather than display names, settled numbers rather than the last
 poll. It is *worse* at position: that comes from Riot's `lane`/`role` inference
 and is sometimes absent. Replacing the board wholesale therefore threw away the
 positions the live capture had, and every patched recording lost its matchup.
 `prefer_live_positions` keeps them, matched on team **and** champion together
-since neither is unique alone — a blind-pick game can have the same champion on
+since neither is unique alone; a blind-pick game can have the same champion on
 both sides.
 
 **The live value wins where both know**, which is the rule `role` has followed
 all along: the inference is a fallback for a game the poller missed, never a
-correction. Filling only the gaps left the quieter half of the bug in place —
+correction. Filling only the gaps left the quieter half of the bug in place:
 an inference that confuses two lanes produces a *present but wrong* position,
 the matchup then picks the enemy in the wrong lane, and the row shows a
 plausible opponent who is not the one you played. An empty matchup announces
 itself; a wrong one does not.
 
 **The art tracks are stated, not `auto`.** Every `.vod-row` is its own grid, so
-an `auto` track sizes to *that row's* content — and a row whose player sold an
+an `auto` track sizes to *that row's* content, and a row whose player sold an
 item, or whose scoreboard is missing, computed different widths from the row
 above it. The blocks are fixed grids of fixed squares internally, so the widths
 were never really variable; they only looked it. Stating them is what makes a
 column read down the list, which is the entire reason the row is a grid at all.
 
 **It sheds in two stages**, because its halves are worth different amounts. The
-opponent's build is the wide part — seven squares and their gaps, 166px — and
+opponent's build is the wide part, seven squares and their gaps at 166px, and
 the least of what the block says; who you played and how they did survives
 another 240px of narrowing. Below about 1440px the build goes, below about
 1200px the rest follows. The thresholds are the row's own tracks rather than
@@ -184,21 +184,21 @@ round numbers: with the build it needs about 1430px, without it about 1180px.
 
 ### What a row says when the data is missing
 
-Match metadata arrives from two independent sources — Live Client Data
-during the game, the LCU after it (see
-[recording-pipeline.md](recording-pipeline.md) §4) — so a row can carry
+Match metadata arrives from two independent sources, Live Client Data
+during the game and the LCU after it (see
+[recording-pipeline.md](recording-pipeline.md) §4), so a row can carry
 either, both or neither. `format.ts` owns the fallback chains rather than
 scattering `??` through the row template:
 
 | Slot | Chain | Why it stops there |
 |---|---|---|
 | Title (`vodTitle`) | `champion` → game mode → filename | Never empty. The filename is untrusted input, so the caller still escapes it |
-| Heading (`vodHeading`) | `vodTitle` + ` vs <opponent>` + ` — Win`/`Loss` | The long form, for the review view's heading and the row's accessible name, where there is room for what actually identifies a game. Each half is added only when known, so it degrades through `Viego vs Darius`, `Viego — Win` and `Viego` rather than emitting `vs undefined`. An undecided game says nothing about a result, exactly as the row's own outcome word does |
+| Heading (`vodHeading`) | `vodTitle` + ` vs <opponent>` + the outcome word | The long form, for the review view's heading and the row's accessible name, where there is room for what actually identifies a game. Each half is added only when known, so it degrades through `Viego vs Darius`, `Viego` plus the outcome, and `Viego` alone, rather than emitting `vs undefined`. An undecided game says nothing about a result, exactly as the row's own outcome word does |
 | Queue (`queueOrModeLabel`) | `queue` id → `game_mode` | `CLASSIC` renders as "Summoner's Rift", the *map*: the mode string cannot tell blind from draft from ranked, and naming one would be a guess in a slot read as fact |
 | KDA (`formatKda`) | all three or nothing | A partial KDA reads as a real one. The ratio (`kdaRatio`) is a hover hint, not a fourth number in a column three numbers wide |
-| Role | Live Client Data's position → the LCU's inference → `Unknown` | The live value is what the game assigned; the LCU's `timeline.lane`/`role` is Riot working it out afterwards and confuses top with jungle, so it fills a gap rather than correcting one. `Unknown` is written out rather than left blank — a row that hides an empty slot is a different shape per recording |
-| Outcome | the leading accent, plus the word on the left block's last line | Undecided rows are excluded from the win-rate tile too, so an unknown never reads as a loss — it gets the neutral edge, no wash and no word. A Win/Loss badge used to sit in its own column and was dropped as redundant with the edge; the word moved into the sub-line rather than being dropped with it, because the accent alone is colour only |
-| Rank (`rankLabel`, `lpLabel`) | `tier` + `division` → `—` | The ladder a game was played at. `—` covers three different things the column cannot tell apart — a queue with no ladder, a player unranked in it, and a patch that landed too late for the reading to still describe the game — so the row does not pretend to. LP is shown only beside a tier, since a number with no scale is not a standing. Master and above have no division and are labelled with none |
+| Role | Live Client Data's position → the LCU's inference → `Unknown` | The live value is what the game assigned; the LCU's `timeline.lane`/`role` is Riot working it out afterwards and confuses top with jungle, so it fills a gap rather than correcting one. `Unknown` is written out rather than left blank, because a row that hides an empty slot is a different shape per recording |
+| Outcome | the leading accent, plus the word on the left block's last line | Undecided rows are excluded from the win-rate tile too, so an unknown never reads as a loss; it gets the neutral edge, no wash and no word. A Win/Loss badge used to sit in its own column and was dropped as redundant with the edge; the word moved into the sub-line rather than being dropped with it, because the accent alone is colour only |
+| Rank (`rankLabel`, `lpLabel`) | `tier` + `division` → the missing-value placeholder | The ladder a game was played at. That placeholder covers three different things the column cannot tell apart (a queue with no ladder, a player unranked in it, and a patch that landed too late for the reading to still describe the game) so the row does not pretend to. LP is shown only beside a tier, since a number with no scale is not a standing. Master and above have no division and are labelled with none |
 | When (`formatRelative`) | relative inside a week → absolute date | "6 weeks ago" is worse than a date at that distance: nobody counts weeks, and the date is what a person searches their memory by. The absolute form is on the `title` either way |
 
 An unrecognised queue id shows as `Queue 1234` and an unrecognised mode
@@ -206,9 +206,9 @@ shows as itself. Both are honest; neither invents a name.
 
 ### Which blanks the backfill can fill, and which are blank forever
 
-A row made before the metadata pipeline shipped — or imported by `reconcile`
-from a folder the user pointed at — starts almost entirely `—`. The backfill
-(Settings → "Fill in missing match data"; mechanics in
+A row made before the metadata pipeline shipped, or imported by `reconcile`
+from a folder the user pointed at, starts with almost every slot missing. The
+backfill (Settings → "Fill in missing match data"; mechanics in
 [data-model.md](data-model.md)) fills some of that from the client's match
 history. **It cannot fill all of it, and the difference is not arbitrary:** it
 is exactly the line between what the game *reported afterwards* and what only
@@ -217,7 +217,7 @@ something watching *during* the game could have seen.
 | Blank on the row | The backfill | Why |
 |---|---|---|
 | Champion, result, KDA | fills | Straight off the match-history document |
-| Queue, role, patch | fills | Same document. `role` is Riot's own `lane`/`role` inference, not the live position — see the table above |
+| Queue, role, patch | fills | Same document. `role` is Riot's own `lane`/`role` inference, not the live position; see the table above |
 | CS | fills, with the scoreboard | Written only when there was no scoreboard at all |
 | Items, spells, runes, the ten champions | fills | The scoreboard is rebuilt from the same document, so it arrives as champion *ids* rather than display names |
 | The gold curve | fills **only if the recording already has samples** | The curve has to be placed in the video, and the offset for that is read off an existing sample (`sample_alignment_offset`). A recording that never had a live poller has no offset, and a guessed one would draw the right curve at the wrong times |
@@ -226,14 +226,14 @@ something watching *during* the game could have seen.
 
 The last two are the ones worth knowing before running it. A backfilled
 recording gets a row that reads completely and a review view that is still
-half empty — the gold curve draws, the other two metrics say they have no
+half empty: the gold curve draws, the other two metrics say they have no
 data, and the timeline carries no glyphs at all. That is not a bug in the
 backfill; those recordings never held the events, and nothing can put them
 back.
 
 Two properties inherited from the mechanism, because they show up as
 surprises otherwise. **It only ever fills**, so a value already on the row
-survives a run — it matches recordings to games on the clock, and filling a
+survives a run. It matches recordings to games on the clock, and filling a
 gap on a heuristic is fair where overwriting good data on one is not. And it
 **refuses outright when more than one game overlaps** a recording, so a row in
 a back-to-back session can come back still blank; that is the refusal working,
@@ -241,7 +241,7 @@ not a miss.
 
 ### The filter bar
 
-Five filters and a sort, all — with the stats bar above them — operating
+Five filters and a sort, all of them (with the stats bar above them) operating
 client-side over the already-fetched row set. That is fine at solo-user
 library sizes and would need real pagination if that stops being true.
 Champion (a search box), result and pinned-only were there first; queue, role
@@ -259,12 +259,12 @@ column that already exists.
 
 **The three derived lists come from the data, not from a vocabulary.** Patch
 is open-ended and could not be enumerated ahead of time at all. Queue ids are
-a table `format.ts` only partly names — `Queue 1234` is a real label a
+a table `format.ts` only partly names, and `Queue 1234` is a real label a
 hard-coded list would have no entry for. And a fixed list offers "Ranked Flex"
 to somebody who has never queued it, which is a control that can only ever
 empty the list. A facet with fewer than two things to choose between is
-`disabled` rather than hidden, so the bar keeps one shape as a library grows
-— unless it is the facet currently filtering, which is never disabled:
+`disabled` rather than hidden, so the bar keeps one shape as a library grows,
+unless it is the facet currently filtering, which is never disabled:
 retention or a delete can take the library down to the one value already
 selected, and greying the control there strands a selection with no way to
 undo it.
@@ -274,18 +274,18 @@ leave. Facets that narrow as you use their neighbours are how a person ends up
 holding a selection they can no longer see the way out of.
 
 **Queue filters on the label, not the id**, because the label is what the row
-shows — and it is the merged `queue`-then-`game_mode` chain, so a row with no
+shows, and it is the merged `queue`-then-`game_mode` chain, so a row with no
 queue id still files under what it says. Two ids that print the same name
 (1700 and 1710 are both "Arena") group together, which is the intent.
 
 **"Unknown" is a value you can filter *to*,** offered only when something is
 actually missing it. "Which of my games never got a role" is the question the
-`Unknown` on the row itself prompts, and the backfill leaves plenty of them —
-see [data-model.md](data-model.md) for what it can and cannot fill.
+`Unknown` on the row itself prompts, and the backfill leaves plenty of them.
+See [data-model.md](data-model.md) for what it can and cannot fill.
 
 **An empty result says which kind of empty it is.** "Nothing recorded yet" and
 "everything is filtered out" are different problems with different next steps,
-and the first message used to be the only one there was — which read as data
+and the first message used to be the only one there was, which read as data
 loss the moment a filter matched nothing. The filtered case names the total it
 is hiding and carries the Clear filters button, which resets the five filters
 and deliberately leaves the sort alone: sort hides nothing, and resetting it
@@ -310,7 +310,7 @@ stateDiagram-v2
 ### The timeline stays above the fold
 
 The review view is a page that scrolls, but the ruler under the advantage
-curve is not optional furniture — it is how a position in the game is read off
+curve is not optional furniture: it is how a position in the game is read off
 the timeline at all, and having to scroll to it defeats the widget.
 
 So the player is capped, and **the cap is a `max-width`, not a `max-height`**.
@@ -322,7 +322,7 @@ uses so the two never disagree before metadata lands.
 
 Capping the height directly is the version that looks right and is wrong: the
 element keeps its full width, `object-fit: contain` letterboxes inside it, and
-resizing the window grows and shrinks black bars — which is why the original
+resizing the window grows and shrinks black bars, which is why the original
 `max-height: 60vh` was removed ([DEVELOPMENT.md §5.1](../DEVELOPMENT.md)).
 Making the player narrower rather than shorter leaves nothing to letterbox.
 
@@ -336,14 +336,14 @@ Two details that are load-bearing rather than tidy:
   fullscreen has neither a fold nor a timeline beneath it; left on, it would
   clamp the video to a fraction of the screen.
 
-On a tall window the cap never binds — the content column's own width is the
-smaller of the two — so this changes nothing for anyone who was not scrolling
+On a tall window the cap never binds, because the content column's own width is
+the smaller of the two, so this changes nothing for anyone who was not scrolling
 in the first place.
 
 ### The player clips both ends
 
-A recording brackets the game: it starts on the loading screen — twenty
-seconds of a static splash — and it keeps rolling after the game window is
+A recording brackets the game: it starts on the loading screen, twenty
+seconds of a static splash, and it keeps rolling after the game window is
 gone, which under WGC captures as *black*, not as a frozen last frame. Opening
 a VOD used to land on the first, and playing one to the end used to land on
 the second.
@@ -366,7 +366,7 @@ the file rather than to a guess:
 |---|---|
 | No samples | A rescan import, or a game whose poller never came up. Nothing knows where its game ended |
 | Tail shorter than `MIN_TRIM_S` (3 s) | Not worth rewriting a gigabyte for. The tail margin is zero (DEVELOPMENT.md §5.4), so this is the only thing that keeps a short one |
-| Gap wider than `MAX_TAIL_CLIP_S` (60 s) | Not a post-game tail. A stretch of unreadable Live Client Data responses keeps recording and produces *no samples*, so real gameplay would sit after the last one — cutting there would hide the game |
+| Gap wider than `MAX_TAIL_CLIP_S` (60 s) | Not a post-game tail. A stretch of unreadable Live Client Data responses keeps recording and produces *no samples*, so real gameplay would sit after the last one, and cutting there would hide the game |
 
 Playback is stopped at the window end from both the rAF loop and
 `timeupdate`: the loop is smooth but only runs while frames are produced,
@@ -389,7 +389,7 @@ game-mode *variant* rather than one per spell: `Flash` is `SummonerFlash`,
 `SummonerFlash_Jade` and `SummonerCherryFlash`. `spell_art_map` collapses each
 name onto the standard version, and maps every variant's id onto it as well, so
 a live-captured scoreboard and one rebuilt from match history draw the same
-picture from one cache file. Smite is folded the same way — the jungle item
+picture from one cache file. Smite is folded the same way, since the jungle item
 renames it `Primal Smite` mid-game and Data Dragon has no such entry. See
 [DEVELOPMENT.md §5.3](../DEVELOPMENT.md).
 
@@ -397,8 +397,8 @@ renames it `Primal Smite` mid-game and Data Dragon has no such entry. See
 
 A row carries a champion portrait, two summoner spells, two rune icons, seven
 item slots and ten more champion squares for the two team compositions. Forty
-rows is therefore several hundred icons, and one IPC call each — every one a
-CDN round trip the first time — would be a library that renders over several
+rows is therefore several hundred icons, and one IPC call each, every one a
+CDN round trip the first time, would be a library that renders over several
 seconds.
 
 The team squares are the one set bounded by the *game* rather than by the
@@ -412,12 +412,12 @@ Dragon has never heard of must not be asked about again on every render.
 
 `fillInArt` walks the rows eight at a time and paints each chunk as it lands,
 so the top of the list fills in while the bottom is still resolving. The
-backend fans out within a chunk as well, six icons at a time — see
+backend fans out within a chunk as well, six icons at a time; see
 [DEVELOPMENT.md §5.3](../DEVELOPMENT.md).
 
 **The row is correct before any of it arrives.** Slots render empty and are
 filled in afterwards, which is also exactly what an offline session gets
-forever — the row still says the champion, the KDA, the CS and the result in
+forever. The row still says the champion, the KDA, the CS and the result in
 words. Nothing about the layout depends on a picture turning up.
 
 Empty slots hold their place rather than collapsing. A build with four items is
@@ -426,7 +426,7 @@ would say neither.
 
 The spell-and-rune block fills **down each column** rather than across each row:
 spells on the left, runes on the right, which is how every scoreboard in the
-game arranges them. The markup order is therefore load-bearing — spell 1, spell
+game arranges them. The markup order is therefore load-bearing: spell 1, spell
 2, keystone, secondary tree.
 
 The team block fills the other way, across each row, for the same reason: a
@@ -440,7 +440,7 @@ escaping the window, and neither can be expressed in CSS alone.
 
 **Horizontally it is clamped in pixels.** `left` used to be the glyph's own
 percentage, which with `translateX(-50%)` put half the box outside the track
-for any glyph near either end — and the page grew sideways to contain it, so
+for any glyph near either end, and the page grew sideways to contain it, so
 the window became scrollable. `placeTooltip` clamps to the tooltip's offset
 parent instead, which needs the *rendered* width and therefore has to run after
 the content is in. A tooltip wider than the timeline is pinned left rather than
@@ -455,7 +455,7 @@ That scroll costs something, and the cost is why `pointer-events` is
 conditional. The tooltip overlaps the top of the track, so making it hoverable
 unconditionally would put a dead strip over the glyphs beneath it. It takes the
 pointer **only when the content actually overflows** and there is a scrollbar
-worth reaching — and `hideClusterTooltip` then has to let the pointer move into
+worth reaching, and `hideClusterTooltip` then has to let the pointer move into
 it, since leaving the glyph is what normally dismisses it and the tooltip is not
 inside the glyph container.
 
@@ -464,18 +464,19 @@ inside the glyph container.
 Two shapes, and the split is about who the marker is *about*.
 
 **Kills name people**: `Killed Nautilus`, `Killed by Akali`, `Blitzcrank killed
-Jarvan IV`. The name is the whole content — it is never yours, and it is what
+Jarvan IV`. The name is the whole content: it is never yours, and it is what
 you would scrub for.
 
 **Objectives name nobody**: `Dragon`, `Baron`, `Herald`, `Turret`,
 `Inhibitor`, `Ace`, `First Blood`. `classify_event` only writes one of these
-when you took part — every objective branch is gated on `took_part()`, and
-`Ace` and `FirstBlood` on it being *you* — so the killer was always you or an
+when you took part. Every objective branch is gated on `took_part()`, and
+`Ace` and `FirstBlood` on it being *you*, so the killer was always you or an
 ally you assisted. Printing it told you your own champion's name, which is the
 one thing you already know.
 
 The elemental dragon type went the same way. It says which drake, not which
-moment; `Fire Dragon — Shyvana` was four words to say `Dragon`. **Elder is the
+moment, and `Fire Dragon` followed by a champion name was four words to say
+`Dragon`. **Elder is the
 exception** and stays `Elder Dragon`: it is a different objective rather than a
 flavour of the same one, and it is a thing you would go looking for by name.
 
@@ -485,20 +486,20 @@ moment, not a detail.
 ### An event carries two clocks, and both are shown
 
 Every marker stores `game_time_s` and `video_time_s`, and the event list and
-the timeline tooltip print both — the game clock first, the position in the
+the timeline tooltip print both: the game clock first, the position in the
 recording after it in the subtler colour.
 
 They are not the same fact twice. **The game clock is what the event *is*:**
 Live Client Data's own number, recorded as the event arrived, and the one a
-person says out loud — "Baron at 24:30". **The video time is derived** —
-`game_time_s` mapped through whatever alignment was in force at the time, with
-a fallback for a marker seen before the game clock ever moved (see
+person says out loud, as in "Baron at 24:30". **The video time is derived**,
+being `game_time_s` mapped through whatever alignment was in force at the time,
+with a fallback for a marker seen before the game clock ever moved (see
 `PendingMarker::resolve`, and [recording-pipeline.md](recording-pipeline.md)
 for why the mapping happens at finalize rather than at ingest). It is the half
 that can be wrong.
 
 That is why both are shown rather than the more meaningful one alone. A
-recording brackets its game — it opens on the loading screen — so the two
+recording brackets its game, opening on the loading screen, so the two
 never agree, and the gap between them *is* the lead-in. It is also the only
 place a bad alignment is visible from the UI: a kill the list calls 24:30 that
 seeks to black is a story the two numbers tell together and neither tells
@@ -507,7 +508,7 @@ alone. The Diagnostics panel names an unproven alignment
 
 The game clock's colour is scoped to the list. The timeline tooltip is a fixed
 dark surface in both themes with a palette of its own, and the page's muted
-grey — chosen against a light background — disappears into it; scoped, the
+grey, chosen against a light background, disappears into it; scoped, the
 tooltip's copy simply inherits the tooltip's own text colour.
 
 ## Backend communication
@@ -536,14 +537,14 @@ flowchart LR
 ```
 
 **Pull for live state.** The header's summoner/phase/recording readout comes
-from a `setTimeout` chain, not `setInterval` — `lcu_status` reads a lockfile
+from a `setTimeout` chain, not `setInterval`: `lcu_status` reads a lockfile
 and makes two HTTPS round trips, and a slow tick under `setInterval` would
 stack calls on top of each other. The interval scales with game state, and
 stretches to 10 s while the window is hidden.
 
 Because that delay is only chosen when the *next* timer is armed, a
-`visibilitychange` listener re-polls immediately when the window comes back —
-otherwise the header could show up to 10 s of stale state while the in-flight
+`visibilitychange` listener re-polls immediately when the window comes back.
+Otherwise the header could show up to 10 s of stale state while the in-flight
 timer ran out. The 60 s safety refresh is skipped entirely while hidden: it
 rebuilds the whole grid with `innerHTML`, and `library-changed` already covers
 real changes. Skipping it leaves its timestamp stale on purpose, so the first
@@ -556,14 +557,14 @@ every few seconds and fight scroll and focus.
 
 **Push for updates.** `update-status-changed` is the other. The background
 check runs every six hours ([DEVELOPMENT.md §14](../DEVELOPMENT.md)), which is
-far too slow to poll for — but *whether the offered update can be installed*
+far too slow to poll for. But *whether the offered update can be installed*
 depends on game state, which changes constantly. So `status.ts` also nudges
 `update.ts` on a state **edge** and not every tick: without it the Install
 button would sit enabled through a whole game and only refuse at the click.
 
 **The release notes are built as nodes, never as markup.** `latest.json` is
-fetched over HTTPS but is *not* covered by the update signature — only the
-installer it points at is — so everything in the notes is remote text the app
+fetched over HTTPS but is *not* covered by the update signature; only the
+installer it points at is. So everything in the notes is remote text the app
 did not write. `renderNotes` therefore drops the `## What's changed` heading,
 turns `- ` lines into a list, and makes a paragraph of anything else, with
 every string reaching the DOM through `textContent`.
@@ -574,14 +575,14 @@ pure-`textContent` paragraph rendered with its asterisks showing. `inlineNodes`
 splits those runs into `<strong>` elements built with `createElement` and
 filled with `textContent`, so nothing from the manifest is ever interpreted as
 HTML. Emphasis is the only inline syntax the notes contain, so it is the only
-one handled — an unclosed `**` matches nothing and the line shows as written,
+one handled. An unclosed `**` matches nothing and the line shows as written,
 which is the same "shown rather than swallowed" rule the line types follow.
 
 ### Command surface
 
 The names and arguments below are the IPC contract and have not changed, but
 how they reach Rust has. `bridge.ts` sends all but three of them through a
-single `rpc` command — `invoke("rpc", { command, args })` — which `core`'s
+single `rpc` command, `invoke("rpc", { command, args })`, which `core`'s
 dispatch table routes by name
 ([DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave)).
 Callers are unaffected: `call()` takes the same name and the same args object,
@@ -598,7 +599,7 @@ a shipped build.
 > and WS2.5's generator emits the TypeScript from those. The hand-written
 > interfaces in `src/types.ts` are what that replaces.
 >
-> They agree today — checked, not assumed: the generated `RecordingRow` uses
+> They agree today, checked rather than assumed: the generated `RecordingRow` uses
 > `number` for every `i64`, which is what this file has said since v1 and what
 > `JSON.parse` actually produces. ts-rs's *default* would have said `bigint`,
 > which JSON cannot carry at all; `contract::types::config()` is where that is
@@ -606,13 +607,13 @@ a shipped build.
 
 > **The `Returns` column is no longer the source of truth.** Since WS2.1 every
 > row of `dispatch_table!` declares its own return type, and the compiler checks
-> the declaration against the function — a wrong one is an `E0308` at the `?`,
+> the declaration against the function, so a wrong one is an `E0308` at the `?`,
 > not a silent disagreement. `core::dispatch::contract_manifest()` is where that
 > lives now, and WS2.5's generator emits the TypeScript from it.
 >
 > This table survives because it carries the one thing the manifest does not:
 > **which part of the UI uses each command.** Keep that column accurate. If the
-> `Returns` column and the manifest ever disagree, the manifest is right — and
+> `Returns` column and the manifest ever disagree, the manifest is right, and
 > WS2.5 deletes this column rather than fixing it.
 
 | Command | Returns | Used by |
@@ -626,25 +627,25 @@ a shipped build.
 | `get_disk_usage` | `DiskUsage` | library stats bar |
 | `get_retention_policy` / `set_retention_policy` | policy / `EnforcementReport` | settings → storage |
 | `preview_retention_policy` | dry-run deletion list | settings, while editing |
-| `set_pinned` | — | library 📌 |
-| `delete_recording` | — | library card |
-| `get_recordings_dir` / `open_recordings_folder` | path / — | settings |
-| `get_ui_prefs` / `set_ui_pref` | `HashMap<String,String>` / — | `prefs.ts` |
+| `set_pinned` | nothing | library 📌 |
+| `delete_recording` | nothing | library card |
+| `get_recordings_dir` / `open_recordings_folder` | path / nothing | settings |
+| `get_ui_prefs` / `set_ui_pref` | `HashMap<String,String>` / nothing | `prefs.ts` |
 | `get_autostart` / `set_autostart` | `AutostartStatus` | settings → background & tray |
-| `get_audio_preset` / `set_audio_preset` | `AudioPreset` / — | settings → audio |
+| `get_audio_preset` / `set_audio_preset` | `AudioPreset` / nothing | settings → audio |
 | `list_audio_inputs` | `Vec<AudioInputDevice>` | settings → microphone picker |
 | `extract_audio_track` | path to a cached sidecar | review player, stem selection |
 | `lcu_status` | `LcuStatus` | header strip |
 | `game_state_status` | `SupervisorStatus` | header strip, About block |
-| `dev_open_portal` | — | the header's dev button, and the 🔎 on each library row (which passes a `recordingId` so the portal opens on it) |
+| `dev_open_portal` | nothing | the header's dev button, and the 🔎 on each library row (which passes a `recordingId` so the portal opens on it) |
 | `get_update_status` | `UpdateStatus` | settings → About (version + changelog), and the badge on the gear |
-| — | the `updateChannel` pref | the channel dropdown rides `get_ui_prefs`/`set_ui_pref`, so it needs no command of its own |
-| `check_for_update` | — | settings → About → "Check now" |
-| `install_update` | — | settings → About → "Install and restart"; ends the process |
-| `start_recording` / `stop_recording` / `is_recording` | — | registered but unreferenced by the main UI; the dev portal's Recorder panel drives them |
+| none | the `updateChannel` pref | the channel dropdown rides `get_ui_prefs`/`set_ui_pref`, so it needs no command of its own |
+| `check_for_update` | nothing | settings → About → "Check now" |
+| `install_update` | nothing | settings → About → "Install and restart"; ends the process |
+| `start_recording` / `stop_recording` / `is_recording` | nothing | registered but unreferenced by the main UI; the dev portal's Recorder panel drives them |
 
 **Start on login is the one setting that is not a pref.** It lives in the
-platform's own store — `HKCU\…\Run` on Windows — which the user can also edit
+platform's own store (`HKCU\…\Run` on Windows) which the user can also edit
 from Task Manager, so `settings.ts` reads it from `get_autostart` when the view
 loads instead of from the `prefs.ts` cache, and applies whatever
 `set_autostart` reports *back* rather than the value it just sent
@@ -655,21 +656,21 @@ build has no autostart control or the read failed.
 ### Event surface
 
 The other half of the contract, and the half v1 never declared. Commands are
-the UI asking; events are the daemon telling — and until WS2.3 the second kind
+the UI asking; events are the daemon telling. Until WS2.3 the second kind
 existed only as string constants at each `Emitter::emit` call site
 (`LIBRARY_CHANGED_EVENT`, `UPDATE_STATUS_EVENT`), mirrored by hand in
 TypeScript.
 
 `contract::events`'s `contract_events!` table is now the single declaration.
 Each row is `Variant { field: Type, … } => Topic`, and the enum, `topic()`,
-`event_names()` and `event_manifest()` are all generated from it — a variant
+`event_names()` and `event_manifest()` are all generated from it, so a variant
 cannot be added without a topic, because that is a syntax error rather than a
 convention.
 
 > **Appendix B calls this "a small derive"; it is a `macro_rules!` instead.** A
 > real derive needs a proc-macro crate, which would mean making `src-tauri` a
 > workspace and taking `syn`, `quote` and `proc-macro2` to produce output a
-> declarative macro produces already. `dispatch_table!` is the precedent — it
+> declarative macro produces already. `dispatch_table!` is the precedent: it
 > declares the command half and emits its manifest beside it. The plan's output
 > is unchanged; only the mechanism is.
 
@@ -697,26 +698,26 @@ Three details are load-bearing:
   row is written at finalize, so nothing has an id until then; a client
   correlates on `RecordingStarted.file_stem` until `RecordingStopped` names the
   row. That field is the stem rather than a path because `Recorder::start`
-  returns `Ok(())` — the file it wrote, extension included, is only known when
+  returns `Ok(())`, so the file it wrote, extension included, is only known when
   `stop` returns.
 - **`LcuPhase.phase` is `None` exactly when no client is running**, which is a
-  different statement from `GameflowPhase::None` — a client sitting at the
-  front page. A test pins the two apart.
+  different statement from `GameflowPhase::None`, which is a client sitting at
+  the front page. A test pins the two apart.
 
 **Q7 is answered by the code rather than left open.** Issue #73 asks whether
 `LcuPhase` carries the full `gameflow-phase` enumeration or "the subset
 `lcu/gameflow.rs` models today". There is no subset: `GameflowPhase` already
 names all fourteen phases the LCU defines and carries `Unknown(String)` for
-anything a client update invents. The state machine *consumes* a subset —
-`is_game_running_phase` matches two variants — but that is a reader narrowing a
-full type, not a narrow type. So the event carries it whole.
+anything a client update invents. The state machine *consumes* a subset, in
+that `is_game_running_phase` matches two variants, but that is a reader
+narrowing a full type, not a narrow type. So the event carries it whole.
 
 ### What emits them
 
 `Supervisor::set_event_sink` installs the sink, from `lib.rs` and for the same
 reason `set_event_notifier` is installed there: `run()` is dead code in a `cargo
-test` build and gets stripped, which is what keeps Tauri's Wry window machinery
-— and the whole Win32 GUI import stack behind it — out of the test binary. The
+test` build and gets stripped, which is what keeps Tauri's Wry window machinery,
+and the whole Win32 GUI import stack behind it, out of the test binary. The
 sink is a type-erased boxed closure, never an `AppHandle`
 ([supervisor.rs](../src-tauri/src/state_machine/supervisor.rs)'s `on_event`
 comment records what happens when that rule is broken: the test binary died at
@@ -736,11 +737,11 @@ them.
 | `LibraryChanged` | `emit_library_changed` | yes, `Finalized` and `Edited` |
 | `RetentionRan` | the post-finalize enforcement pass | yes |
 | `UpdateStatus` | `record_update_result` in `lib.rs` | yes |
-| `SampleBatch` | — | no: the 5 s window needs a *subscriber* to batch for (WS2.6) |
-| `MatchSummaryPatched` | — | no: published from the `library-changed` site still in `lib.rs` |
-| `DaemonShuttingDown`, `Lagged` | — | no: they describe a daemon and a broadcast buffer WS3 builds |
+| `SampleBatch` | nothing yet | no: the 5 s window needs a *subscriber* to batch for (WS2.6) |
+| `MatchSummaryPatched` | nothing yet | no: published from the `library-changed` site still in `lib.rs` |
+| `DaemonShuttingDown`, `Lagged` | nothing yet | no: they describe a daemon and a broadcast buffer WS3 builds |
 
-Declaring the unwired four is the point rather than an oversight — the contract
+Declaring the unwired four is the point rather than an oversight: the contract
 is what the surface *is*, not what happens to be connected. They carry
 `cfg_attr(not(test), allow(dead_code))` meanwhile, as `CLAUDE.md` describes.
 
@@ -752,7 +753,7 @@ of what crosses, one internal callback for what does not. WS3 folds them
 together when notifications move into the daemon.
 
 **A marker published live is provisional.** `video_time_s` comes from the
-alignment known at that poll, and a later poll can improve it — so a marker on
+alignment known at that poll, and a later poll can improve it, so a marker on
 the wire mid-game can sit a fraction of a second from where the same marker
 lands in the database, which resolves every marker against the final alignment.
 The live value draws a timeline while the game runs; the row is what the library
@@ -763,19 +764,19 @@ reads.
 `router.ts` owns which view is showing. `initRouting` adds two entry points the
 tray needs: a `#settings` URL fragment read once at startup, for a window the
 tray has just created, and a `navigate` event for a window that already exists.
-A `#review` fragment is ignored — the review view with no recording loaded is
-not a state worth restoring into.
+A `#review` fragment is ignored, because the review view with no recording
+loaded is not a state worth restoring into.
 
 ## Theming
 
 `data-theme` on `<html>` is written by JS and only ever holds `"light"` or
-`"dark"` — there is no `prefers-color-scheme` query in the stylesheet.
+`"dark"`, and there is no `prefers-color-scheme` query in the stylesheet.
 Resolving the OS preference once, in one place, keeps a single dark block
 instead of two and makes an explicit "Light" on a dark OS win by construction
 rather than by CSS specificity.
 
 The cost: "System" no longer follows the OS for free. `theme.ts` listens on
-the matchMedia `change` event to put that back — **removing that listener is a
+the matchMedia `change` event to put that back, and **removing that listener is a
 silent regression with no test to catch it.**
 
 ```mermaid
@@ -798,13 +799,13 @@ truth and wins any disagreement.
   seeking and playback rate come for free.
 - Video loads through Tauri's asset protocol (`convertFileSrc`), scoped in
   `tauri.conf.json` to `$APPDATA/recordings/*` and
-  `$APPDATA/recordings/audio-tracks/*` — this needs the `protocol-asset` Cargo
+  `$APPDATA/recordings/audio-tracks/*`. This needs the `protocol-asset` Cargo
   feature, not just the config entry. The second entry is not redundant:
   Tauri's scope matcher won't let `*` cross a `/`.
 - **The controls live inside `.player-wrap`**, over a scrim at the bottom of
   the video, not in a bar beneath it. That is not cosmetic:
   `requestFullscreen` is called on `.player-wrap`, and anything outside the
-  fullscreened subtree is not rendered at all — controls beside the video
+  fullscreened subtree is not rendered at all, so controls beside the video
   simply vanished when you pressed `f`. The `:fullscreen` rules in
   `styles.css` are load-bearing for the same feature: without them
   `#review-video` keeps its `max-height: 60vh` and renders as a small
@@ -814,7 +815,7 @@ truth and wins any disagreement.
   `bindScrubbing` + `seekFromPointer`, which take the element to measure
   against. The in-player bar carries no marker ticks; the timeline keeps the
   metric graph, marker glyphs and ruler. The timeline is *outside*
-  `.player-wrap`, so it is unavailable in fullscreen — there, marker
+  `.player-wrap`, so it is unavailable in fullscreen. There, marker
   navigation is the `[` / `]` / `d` / `D` hotkeys, which are bound at the
   document level and keep working.
 - **Speed and audio-track pickers sit behind the gear button**, in a popover
@@ -833,14 +834,14 @@ truth and wins any disagreement.
   itself, so most recordings need nothing here and the picker stays hidden
   (fewer than two tracks, or an unknown layout). Selecting any other track
   calls `extract_audio_track`, then plays the returned sidecar through a
-  hidden `<audio>` synced against the muted video — WebView2 offers no way to
-  switch tracks within one element
+  hidden `<audio>` synced against the muted video, since WebView2 offers no way
+  to switch tracks within one element
   ([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#25-multi-track-audio)).
 - Because of that, **volume and mute are held as state, not read off the video
   element** (`userVolume` / `userMuted` → `applyAudioOutput`). The video is
   muted whenever a stem is playing, and controls that read `video.muted` would
   render a muted player over audible sound. The `volumechange` listener was
-  removed for the same reason — it would re-enter on the programmatic mute.
+  removed for the same reason: it would re-enter on the programmatic mute.
 
 - **Playback stops while the window is hidden.** An open VOD otherwise keeps
   decoding video and playing its stem `<audio>` behind a minimised window,
@@ -848,7 +849,7 @@ truth and wins any disagreement.
   A `visibilitychange` listener pauses it and resumes only what it paused
   (`pausedByHide`), so a video the user had already paused stays paused.
   Pausing cascades through the existing `play`/`pause` handlers, so the rAF
-  playhead loop stops with it — and `resumeStem` hard-resyncs the stem on the
+  playhead loop stops with it, and `resumeStem` hard-resyncs the stem on the
   way back, so it cannot return drifted.
 
 ## Escaping

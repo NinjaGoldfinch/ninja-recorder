@@ -21,4 +21,4 @@ labels: ["type: debt"]
 ## Exit
 
 <!-- The workstream or task that removes it, and what "removed" looks like. Debt
-     with no exit is just a decision — relabel it. -->
+     with no exit is just a decision; relabel it. -->

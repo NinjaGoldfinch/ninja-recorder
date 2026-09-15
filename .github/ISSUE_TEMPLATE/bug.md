@@ -11,8 +11,8 @@ labels: ["type: bug"]
 
 ## Cause
 
-<!-- Fill in once known. If the cause is interesting — a wrong assumption rather
-     than a typo — say what the assumption was. That is usually the part worth
+<!-- Fill in once known. If the cause is interesting, a wrong assumption rather
+     than a typo, say what the assumption was. That is usually the part worth
      keeping. -->
 
 ## Repro
