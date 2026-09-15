@@ -37,7 +37,12 @@ use serde::Serialize;
 /// Five, fixed, and deliberately not derived from the event table: the set is
 /// part of the contract's shape, and a topic that existed only because some
 /// event named it would appear and vanish as events came and went.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, ts_rs::TS)]
+// `Deserialize` because WS3.1 made this an *inbound* type as well: a client
+// names the topics it wants in a `subscribe` frame, so the daemon has to read
+// one off the wire as well as write one.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, serde::Deserialize, ts_rs::TS,
+)]
 #[serde(rename_all = "camelCase")]
 pub enum Topic {
     /// The state machine, the recorder, and everything that happens during one
