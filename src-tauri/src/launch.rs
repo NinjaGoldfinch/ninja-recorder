@@ -26,7 +26,11 @@
 /// entry years earlier.
 pub const HIDDEN_FLAG: &str = "--hidden";
 
-/// Run headless. Reserved — see `Launch::Daemon`.
+/// Run headless. What `daemon::run` answers to.
+///
+/// Not yet what autostart registers: the Run key still carries `HIDDEN_FLAG`
+/// until WS3.5 moves it, because the flag written into the registry is handed
+/// back by builds installed years later and is not a thing to change twice.
 pub const DAEMON_FLAG: &str = "--daemon";
 
 /// What this process should do.
@@ -45,11 +49,11 @@ pub enum Launch {
     UiHidden,
     /// Headless recorder daemon.
     ///
-    /// `main.rs` dispatches this straight to `daemon::run`, which is where
-    /// the "not built yet" answer now lives. It used to be a string here,
-    /// which meant the refusal and the thing that would replace it were in
-    /// different modules; WS3 fills in a function body instead of rerouting
-    /// a process.
+    /// `main.rs` dispatches this straight to `daemon::run`, which since WS3.2
+    /// opens the library, brings up the supervisor and serves clients over the
+    /// pipe. The refusal that used to live here as a string became a value
+    /// returned by the daemon, and then a function body: filling WS3 in meant
+    /// implementing `run`, not rerouting a process.
     Daemon,
 }
 

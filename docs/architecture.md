@@ -84,11 +84,15 @@ flowchart TB
 | `probe.rs` | Reading a container's duration back out with ffmpeg, for files `reconcile` imported | `duration_s` |
 | `match_summary.rs` | Waiting out the LCU after a finalize, then patching the row with what it eventually says | `patch`, `next_delay` |
 | `retention.rs` | Deletion policy and free-space preflight | `select_for_deletion`, `enforce_now`, `has_room_to_record` |
-| `log.rs` | The log file under `app_data_dir()/logs/`, written in release builds too, and the `error!`/`warn!`/`info!`/`debug!` macros everything else writes through | `init`, `write` |
+| `log.rs` | The log file under `app_data_dir()/logs/`, which is `ui.log` or `daemon.log` depending on which process is writing, kept in release builds too, and the `error!`/`warn!`/`info!`/`debug!` macros everything else writes through | `init`, `write`, `Process` |
 | `fixtures.rs` | Capturing live API responses to `fixtures/` | `enabled`, `record` |
 | `dev/` | Dev portal backend, compiled out without `--features devtools` | `dev_*` commands |
 | `core/mod.rs` | Every command's logic, with no `tauri` types in any signature | `Ctx`, the command free functions |
 | `launch.rs` | Which mode argv asked for (`--daemon`, `--hidden`), and the flag constants autostart registers | `Launch::from_env`, `HIDDEN_FLAG` |
+| `daemon/mod.rs` | The headless process: paths without an `AppHandle`, the startup and shutdown order, and everything the UI's `setup` does minus the window | `run`, `Paths`, `IDENTIFIER` |
+| `daemon/rpc.rs` | The wire protocol, the endpoint's name, the listener that owns it, and the client's way in | `serve`, `endpoint`, `Listener`, `connect` |
+| `daemon/snapshot.rs` | The event stream's position and the state a `hello` is answered with | `Stream`, `Stream::source` |
+| `ui/client.rs` | The UI's side of the pipe: reply routing, reconnect, version-skew refusal | `spawn`, `Client` |
 | `tray.rs` | The tray icon and its Open / Settings / Quit menu. No tests, deliberately | `build`, `request_quit` |
 | `notify.rs` | Desktop notifications, best-effort. No tests, deliberately | `notify`, `close_to_tray_notice` |
 | `lib.rs` | Tauri setup, app state, the `rpc` command, and main-window creation | `run` |
@@ -105,7 +109,9 @@ trait object or a closure held by `Ctx` and installed from `lib.rs`'s `setup`.
 There are two: `set_library_changed_notifier` (emitting the Tauri event) and
 `set_autostart` (the `Autostart` trait over `tauri-plugin-autostart`). Both are
 `None` in a unit test, which for autostart is load-bearing: `cargo test` has no
-way to write a real login entry.
+way to write a real login entry. The daemon fills the first with a publish onto
+the wire instead of a Tauri emit, which is what those seams were shaped for, and
+leaves the second unset until 3.5 moves autostart out of the UI.
 
 The consistent shape across `state_machine`, `db::reconcile` and `retention`
 is **a pure decision function plus a thin I/O wrapper**. The decision is unit
@@ -180,24 +186,57 @@ The main window is built in `lib.rs`'s `setup` rather than declared in
 automatically before `setup`, and a `--hidden` start needs to create none at
 all ([DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave)).
 
-### The daemon's RPC server, and what of it exists
+### The daemon, and what of it exists
 
-WS3 splits that one process in two. `daemon/rpc.rs` is the first piece to land:
-the transport, with the supervisor, the tray pump and the UI side still to come.
+WS3 splits that one process in two. The daemon now runs: `--daemon` opens the
+library, brings up the supervisor and the capture backend, binds the endpoint
+and serves clients until it is asked to stop. The tray and its message pump
+(3.3), autostart (3.5), the updater (3.6) and the dev portal's commands (3.7)
+are not in it yet, and until 3.5 nothing starts it automatically, so the UI
+still holds a supervisor of its own.
 
 ```mermaid
 flowchart LR
     subgraph D["ninja-recorder --daemon"]
         SUP["Supervisor · Recorder · SQLite writer"]
+        ST["snapshot::Stream<br/><small>seq · last LCU status</small>"]
         EV["Events<br/><small>bounded broadcast, 512</small>"]
+        LIS["rpc::Listener<br/><small>named pipe · Unix socket</small>"]
         RPC["rpc::serve<br/><small>one task per connection</small>"]
-        SUP -- set_event_sink --> EV
+        SUP -- set_event_sink --> ST
+        ST -- publish --> EV
         EV --> RPC
+        LIS -- accept --> RPC
     end
     UI["UI process"] -- "hello · subscribe · invoke" --> RPC
     RPC -- "ok · err · event" --> UI
     RPC -- dispatch --> SUP
+    ST -- "snapshot on hello" --> RPC
 ```
+
+**Startup order, and why it is that order.** The endpoint is bound before
+anything else is opened, because binding it is also the single-instance check:
+a second `--daemon` finds it owned and exits 0 without having touched the log
+or the database. Only then does the daemon open `daemon.log`, open the library,
+run the startup reconcile and retention passes, start the supervisor, and begin
+accepting. Shutdown reverses it: stop accepting, publish `DaemonShuttingDown`,
+then finalize whatever recording is in flight, because a game is worth more
+than a fast exit.
+
+**One endpoint, no separate mutex.** `rpc::Listener::bind` returns
+`Ok(None)` when a daemon already owns the address: `first_pipe_instance` says so
+on Windows, and on Unix a failed `bind` followed by a probe distinguishes a live
+daemon from a socket file its owner left behind. The address itself is
+`rpc::endpoint`, scoped by build identity, because a devtools build and a
+release build share `app_data_dir()` and must not also share a pipe.
+
+**No Tauri in the daemon.** It builds no `App`, so `daemon::Paths::resolve`
+answers what the UI asks an `AppHandle`: `dirs::data_dir()` joined with the
+identifier, which is what Tauri's own `app_data_dir()` does, and the executable's
+directory for bundled resources. `daemon::IDENTIFIER` is checked against
+`tauri.conf.json` by a test, because a mismatch would not crash. It would give
+the daemon a different database in a different folder and have it record
+perfectly into a library the UI cannot see.
 
 | Frame | Direction | Carries |
 |---|---|---|
@@ -209,8 +248,9 @@ flowchart LR
 | `event` | out | a contract event, with no id because nothing asked for it |
 
 **It is generic over the stream, and that is the point.** Production is a
-Windows named pipe; the tests drive the same `serve` over a loopback socket in
-milliseconds. A protocol exercised only on the Windows box is one that gets
+Windows named pipe and a Unix socket on a dev box; the tests drive the same
+`serve` over a loopback socket in milliseconds, and over the real endpoint on
+whichever platform they run. A protocol exercised only on the Windows box is one that gets
 tested once a week, and the transport is the one part of the daemon that can be
 checked honestly without Windows. Loopback rather than a Unix socket so the
 tests also run in CI, which is Windows-only; one Unix-socket test is kept to
