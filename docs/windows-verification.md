@@ -328,8 +328,9 @@ backend is libobs, and this section is what stands in for that.
       the process exits, and the row is in the library when it comes back.
 
 **Not in the daemon yet**, so do not look for them: the tray icon (3.3), the
-updater (3.6), desktop notifications, and the dev portal's `dev_*` commands
-(3.7). Running the UI and the daemon together means two supervisors watching for
+updater (3.6) and desktop notifications. The dev portal's `dev_*` commands do
+run there since WS3.7 and can be invoked over the pipe, but the portal window
+itself still talks to the UI process until WS3.4's proxy lands. Running the UI and the daemon together means two supervisors watching for
 the same game, which is expected rather than a defect to report.
 
 **The Run key still points at `--hidden`**, so §5.0.2 is unchanged and a login

@@ -85,7 +85,6 @@ fn status_locked(held: &Option<Capture>) -> CaptureStatus {
 /// written and survives being cut off — a single top-level array would have to
 /// be complete before anything could parse it, which is the wrong property for
 /// a capture that may end when a cap is hit or a client quits.
-#[tauri::command]
 pub async fn dev_event_capture_start() -> Result<CaptureStatus, String> {
     {
         let held = slot().lock().unwrap();
@@ -220,7 +219,6 @@ async fn pump(
 }
 
 /// Stops the running capture, if there is one.
-#[tauri::command]
 pub fn dev_event_capture_stop() -> CaptureStatus {
     let held = slot().lock().unwrap();
     if let Some(c) = held.as_ref() {
@@ -230,7 +228,6 @@ pub fn dev_event_capture_stop() -> CaptureStatus {
 }
 
 /// Whether a capture is running, and how much it has written.
-#[tauri::command]
 pub fn dev_event_capture_status() -> CaptureStatus {
     let held = slot().lock().unwrap();
     status_locked(&held)
@@ -284,7 +281,6 @@ pub fn event_uris(lines: &str) -> Vec<UriCount> {
 }
 
 /// `event_uris` over a capture file.
-#[tauri::command]
 pub fn dev_event_uris(path: String) -> Result<Vec<UriCount>, String> {
     let text = std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?;
     Ok(event_uris(&text))

@@ -272,6 +272,10 @@ macro_rules! dispatch_table {
         pub fn is_async_command(command: &str) -> bool {
             match command {
                 $( stringify!($name) => is_async_arm!($kind), )*
+                // The portal's own commands answer for themselves, and only in
+                // a build that has them.
+                #[cfg(feature = "devtools")]
+                other if other.starts_with("dev_") => crate::dev::is_async_dev_command(other),
                 _ => false,
             }
         }
@@ -297,6 +301,13 @@ macro_rules! dispatch_table {
                         invoke_one!($kind $name, $ret, ctx, parsed, $($arg,)*)
                     }
                 )*
+                // Delegated rather than tabled here, because the portal's surface
+                // is behind a feature and must not exist at all in a shipped
+                // build. `dev::dispatch` is that whole module (WS3.7).
+                #[cfg(feature = "devtools")]
+                other if other.starts_with("dev_") => {
+                    crate::dev::dispatch_dev(ctx, other, args).await
+                }
                 other => Err(format!("unknown command: {other}")),
             }
         }
@@ -317,6 +328,10 @@ macro_rules! dispatch_table {
                         invoke_one_blocking!($kind $name, $ret, ctx, parsed, $($arg,)*)
                     }
                 )*
+                #[cfg(feature = "devtools")]
+                other if other.starts_with("dev_") => {
+                    crate::dev::dispatch_dev_blocking(ctx, other, args)
+                }
                 other => Err(format!("unknown command: {other}")),
             }
         }

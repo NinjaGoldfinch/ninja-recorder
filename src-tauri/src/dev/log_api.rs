@@ -72,7 +72,6 @@ pub struct LogPage {
 /// Reports the ones that are *missing* too: "there is no log file" and
 /// "the log file is empty" are different answers, and a panel that shows
 /// nothing for both is one nobody can trust.
-#[tauri::command]
 pub fn dev_log_files() -> Result<Vec<LogFileInfo>, String> {
     let dir = crate::log::dir().ok_or_else(|| "logging is not initialized".to_string())?;
     Ok(log_files_in(&dir))
@@ -123,7 +122,6 @@ fn describe(dir: &std::path::Path, name: String, active: bool) -> LogFileInfo {
 /// Returns the **newest** matching lines, because that is what anyone
 /// opening a log wants; `truncated` says whether older matches were left
 /// behind rather than silently dropping them.
-#[tauri::command]
 pub fn dev_read_log(query: LogQuery) -> Result<LogPage, String> {
     let dir = crate::log::dir().ok_or_else(|| "logging is not initialized".to_string())?;
 

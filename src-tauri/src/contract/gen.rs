@@ -117,6 +117,16 @@ export interface PortalCommand {
   group: string;
   /** `dev_*` commands are compiled out of shipped builds. */
   dev: boolean;
+  /**
+   * Whether this command is invoked by name through `rpc`, or is a Tauri
+   * command the UI registers directly.
+   *
+   * Every production command is `true`. A `dev_*` command is `true` when it
+   * runs wherever the library does, which is the daemon, and `false` for the
+   * handful that need a window or the desktop shell and so stay in the UI
+   * process. `src/dev/ipc.ts` reads this to decide which call to make.
+   */
+  overRpc: boolean;
   /** Writes, deletes, or otherwise cannot simply be re-run. */
   danger: boolean;
   description: string;
@@ -148,6 +158,7 @@ export interface PortalCommand {
         let _ = writeln!(out, "    name: {},", quote(spec.name));
         let _ = writeln!(out, "    group: {},", quote(spec.group));
         let _ = writeln!(out, "    dev: {is_dev},");
+        let _ = writeln!(out, "    overRpc: {},", spec.over_rpc);
         let _ = writeln!(out, "    danger: {},", spec.danger);
         let _ = writeln!(out, "    description: {},", quote(&description));
         if spec.args.is_empty() {

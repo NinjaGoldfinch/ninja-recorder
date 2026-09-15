@@ -6,7 +6,7 @@
 //! wrapper that runs the same decision against the same rows and reports
 //! what enforcement *would* remove.
 
-use crate::{db, retention, AppState};
+use crate::{db, retention};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -39,19 +39,18 @@ pub struct RetentionPreview {
 /// overridable so an age rule can be tested without waiting days for it to
 /// bite — `select_for_deletion` already takes an injected clock precisely
 /// so it can be driven like this.
-#[tauri::command]
 pub fn dev_retention_preview(
-    state: tauri::State<AppState>,
+    ctx: &crate::core::Ctx,
     policy: Option<db::RetentionPolicy>,
     now_millis: Option<i64>,
 ) -> Result<RetentionPreview, String> {
     let policy = match policy {
         Some(p) => p,
-        None => state.db.get_retention_policy().map_err(|e| e.to_string())?,
+        None => ctx.db.get_retention_policy().map_err(|e| e.to_string())?,
     };
     let now_millis = now_millis.unwrap_or_else(now);
 
-    let rows = state.db.list_recordings().map_err(|e| e.to_string())?;
+    let rows = ctx.db.list_recordings().map_err(|e| e.to_string())?;
     let selected = retention::select_for_deletion(&rows, &policy, now_millis);
 
     let to_delete: Vec<PreviewRow> = rows

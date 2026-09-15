@@ -238,12 +238,11 @@ pub struct LcuComparison {
 /// Read-only, like the report beside it: it writes nothing back, so asking
 /// can never change what it describes. `dev_patch_match_summary` is the one
 /// that acts on the answer.
-#[tauri::command]
 pub async fn dev_recording_vs_lcu(
-    state: tauri::State<'_, crate::AppState>,
+    ctx: &crate::core::Ctx,
     recording_id: i64,
 ) -> Result<LcuComparison, String> {
-    let row = state
+    let row = ctx
         .db
         .get_recording(recording_id)
         .map_err(|e| e.to_string())?
@@ -279,18 +278,17 @@ pub async fn dev_recording_vs_lcu(
 
 /// Assembles the report. Thin: every hard question is answered by a query or
 /// by `provenance_of`.
-#[tauri::command]
 pub fn dev_recording_report(
-    state: tauri::State<crate::AppState>,
+    ctx: &crate::core::Ctx,
     recording_id: i64,
 ) -> Result<RecordingReport, String> {
-    let row = state
+    let row = ctx
         .db
         .get_recording(recording_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("no recording {recording_id}"))?;
 
-    let (markers, samples, gold_samples) = state
+    let (markers, samples, gold_samples) = ctx
         .db
         .recording_counts(recording_id)
         .map_err(|e| e.to_string())?;
@@ -307,7 +305,7 @@ pub fn dev_recording_report(
         markers,
         samples,
         gold_samples,
-        alignment_offset_s: state
+        alignment_offset_s: ctx
             .db
             .sample_alignment_offset(recording_id)
             .map_err(|e| e.to_string())?,
@@ -527,7 +525,6 @@ mod tests {
 ///
 /// Returns the raw document beside the parsed standings, because the whole
 /// point of a probe is seeing what actually arrived.
-#[tauri::command]
 pub async fn dev_ranked_stats(puuid: Option<String>) -> Result<serde_json::Value, String> {
     let lockfile = crate::lcu::lockfile::discover()
         .map_err(|e| e.to_string())?
@@ -567,7 +564,6 @@ pub async fn dev_ranked_stats(puuid: Option<String>) -> Result<serde_json::Value
 /// the result says how many it knew. That is the whole difference between
 /// "Gold II" and "Gold II, 8 of 10" — one is a claim about a lobby, the other
 /// is a claim about eight people in it.
-#[tauri::command]
 pub async fn dev_lobby_rank(
     puuids: Vec<String>,
     queue: Option<String>,
@@ -619,7 +615,6 @@ pub async fn dev_lobby_rank(
 /// Takes the client's own spelling: `{ "tier": "GOLD", "division": "IV",
 /// "leaguePoints": 98 }`. The unranked sentinels work too, and are refused
 /// the same way the real path refuses them.
-#[tauri::command]
 pub fn dev_lp_delta(
     before: crate::lcu::ranked::RankedEntry,
     after: crate::lcu::ranked::RankedEntry,

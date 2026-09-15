@@ -23,6 +23,16 @@ export interface PortalCommand {
   group: string;
   /** `dev_*` commands are compiled out of shipped builds. */
   dev: boolean;
+  /**
+   * Whether this command is invoked by name through `rpc`, or is a Tauri
+   * command the UI registers directly.
+   *
+   * Every production command is `true`. A `dev_*` command is `true` when it
+   * runs wherever the library does, which is the daemon, and `false` for the
+   * handful that need a window or the desktop shell and so stay in the UI
+   * process. `src/dev/ipc.ts` reads this to decide which call to make.
+   */
+  overRpc: boolean;
   /** Writes, deletes, or otherwise cannot simply be re-run. */
   danger: boolean;
   description: string;
@@ -34,6 +44,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "backfill_match_metadata",
     group: "Library",
     dev: false,
+    overRpc: true,
     danger: false,
     description: "Matches every recording with no champion or result against the client's match history, by when it was played. Refuses a recording that overlaps more than one game rather than guessing. Needs the League Client running.",
     args: [],
@@ -42,6 +53,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "check_for_update",
     group: "Updates",
     dev: false,
+    overRpc: true,
     danger: false,
     description: "Asks for a check now rather than waiting for the six-hourly one. Returns as soon as the request is handed over; the answer arrives on the `update-status-changed` event. Refuses in a devtools build.",
     args: [],
@@ -50,6 +62,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "delete_recording",
     group: "Library",
     dev: false,
+    overRpc: true,
     danger: true,
     description: "Deletes one recording's row and its file on disk.",
     args: [
@@ -60,6 +73,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "extract_audio_track",
     group: "Audio",
     dev: false,
+    overRpc: true,
     danger: false,
     description: "Extracts one audio stem to a cached sidecar so the review player can play it. Rejects track 0, which plays from the video itself.",
     args: [
@@ -71,6 +85,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "game_state_status",
     group: "League",
     dev: false,
+    overRpc: true,
     danger: false,
     description: "Current supervisor state and the last finalized recording.",
     args: [],
@@ -79,6 +94,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "get_audio_preset",
     group: "Audio",
     dev: false,
+    overRpc: true,
     danger: false,
     description: "The audio capture preset. Unlike the settings_kv prefs, this is parsed and validated backend-side: it decides what gets recorded.",
     args: [],
@@ -87,6 +103,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "get_autostart",
     group: "Settings",
     dev: false,
+    overRpc: true,
     danger: false,
     description: "Whether the app is registered to start on login, read live from the platform (HKCU\\...\\Run on Windows) rather than from settings_kv. `supported: false` means this build has no autostart control.",
     args: [],
@@ -95,6 +112,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "get_disk_usage",
     group: "Disk",
     dev: false,
+    overRpc: true,
     danger: false,
     description: "Total library bytes, recording count, and free space on the recordings volume.",
     args: [],
@@ -103,6 +121,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "get_recording_markers",
     group: "Library",
     dev: false,
+    overRpc: true,
     danger: false,
     description: "Timeline markers for one recording, ordered by video time.",
     args: [
@@ -113,6 +132,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "get_recording_samples",
     group: "Library",
     dev: false,
+    overRpc: true,
     danger: false,
     description: "Advantage-curve samples for one recording. An empty array means the recording predates sampling, not an error.",
     args: [
@@ -123,6 +143,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "get_recordings_dir",
     group: "Disk",
     dev: false,
+    overRpc: true,
     danger: false,
     description: "Absolute path of the recordings directory.",
     args: [],
@@ -131,6 +152,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "get_retention_policy",
     group: "Disk",
     dev: false,
+    overRpc: true,
     danger: false,
     description: "The saved policy. null on either field means that dimension is unbounded.",
     args: [],
@@ -139,6 +161,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "get_ui_prefs",
     group: "Settings",
     dev: false,
+    overRpc: true,
     danger: false,
     description: "Every key/value in the settings_kv store (theme, default sort, …).",
     args: [],
@@ -147,6 +170,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "get_update_status",
     group: "Updates",
     dev: false,
+    overRpc: true,
     danger: false,
     description: "What the last background check found, with installability recomputed against live state. `unsupported` in a devtools build, this one included, because the update seam is never wired there.",
     args: [],
@@ -155,6 +179,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "install_update",
     group: "Updates",
     dev: false,
+    overRpc: true,
     danger: true,
     description: "Downloads the offered installer and hands the machine over to it, which ends the process. Refuses while anything is being recorded, and refuses outright in a devtools build.",
     args: [],
@@ -163,6 +188,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "is_recording",
     group: "Recorder",
     dev: false,
+    overRpc: true,
     danger: false,
     description: "Whether the backend believes it is capturing right now.",
     args: [],
@@ -171,6 +197,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "lcu_status",
     group: "League",
     dev: false,
+    overRpc: true,
     danger: false,
     description: "One-shot LCU check: lockfile discovery, auth, gameflow phase, summoner. Infallible; failures come back in the `error` field.",
     args: [],
@@ -179,6 +206,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "list_audio_inputs",
     group: "Audio",
     dev: false,
+    overRpc: true,
     danger: false,
     description: "Audio input devices for the microphone picker, default first. Empty off Windows.",
     args: [],
@@ -187,6 +215,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "list_recordings",
     group: "Library",
     dev: false,
+    overRpc: true,
     danger: false,
     description: "Every row in the VOD library, newest first.",
     args: [],
@@ -195,6 +224,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "open_recordings_folder",
     group: "Disk",
     dev: false,
+    overRpc: true,
     danger: false,
     description: "",
     args: [],
@@ -203,6 +233,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "preview_retention_policy",
     group: "Disk",
     dev: false,
+    overRpc: true,
     danger: false,
     description: "Dry run of enforcement under the given policy. Writes nothing; the safe counterpart to set_retention_policy.",
     args: [
@@ -213,6 +244,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "rescan_recordings",
     group: "Library",
     dev: false,
+    overRpc: true,
     danger: true,
     description: "Reconciles rows against the folder: drops rows whose file is gone, imports untracked .mp4/.mkv files. Deletes rows.",
     args: [],
@@ -221,6 +253,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "resolve_icons",
     group: "Library",
     dev: false,
+    overRpc: true,
     danger: false,
     description: "Cached Data Dragon art for a page of rows: champions by display name, items and runes by id, spells by display name. Fetches whatever is not cached yet. Anything that could not be resolved is absent from the result rather than null.",
     args: [
@@ -231,6 +264,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "set_audio_preset",
     group: "Audio",
     dev: false,
+    overRpc: true,
     danger: true,
     description: "Chooses what gets captured and how it is split across mp4 audio tracks. Track 0 is always the combined mix.",
     args: [
@@ -241,6 +275,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "set_autostart",
     group: "Settings",
     dev: false,
+    overRpc: true,
     danger: true,
     description: "Adds or removes the login entry for this executable, then returns what the platform says afterwards, which is not always what was asked for. Writes outside the app's own data: enabling here really does register the running binary, dev build included.",
     args: [
@@ -251,6 +286,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "set_pinned",
     group: "Library",
     dev: false,
+    overRpc: true,
     danger: true,
     description: "Pins or unpins a recording. Pinned rows are exempt from retention deletion.",
     args: [
@@ -262,6 +298,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "set_retention_policy",
     group: "Disk",
     dev: false,
+    overRpc: true,
     danger: true,
     description: "Saves the policy AND immediately enforces it, which deletes files. Use dev_retention_preview first.",
     args: [
@@ -272,6 +309,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "set_ui_pref",
     group: "Settings",
     dev: false,
+    overRpc: true,
     danger: true,
     description: "Writes one UI preference. Unseeded store: a missing key means 'use the frontend default'.",
     args: [
@@ -283,6 +321,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "start_recording",
     group: "Recorder",
     dev: false,
+    overRpc: true,
     danger: true,
     description: "Starts the active capture backend, after a free-space preflight. Races the state machine's own automatic start, because the supervisor does not know about this call.",
     args: [],
@@ -291,6 +330,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "stop_recording",
     group: "Recorder",
     dev: false,
+    overRpc: true,
     danger: true,
     description: "Stops capture and returns the path of the file produced.",
     args: [],
@@ -299,6 +339,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_open_portal",
     group: "Dev · Diagnostics",
     dev: true,
+    overRpc: false,
     danger: false,
     description: "Opens the dev portal window, creating it if it is not already open.",
     args: [],
@@ -307,22 +348,16 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_env_info",
     group: "Dev · Diagnostics",
     dev: true,
+    overRpc: false,
     danger: false,
     description: "Build, platform, active recorder backend, and every resolved path.",
-    args: [],
-  },
-  {
-    name: "dev_health",
-    group: "Dev · Diagnostics",
-    dev: true,
-    danger: false,
-    description: "Everything the Overview panel polls, in one round trip.",
     args: [],
   },
   {
     name: "dev_registered_commands",
     group: "Dev · Diagnostics",
     dev: true,
+    overRpc: false,
     danger: false,
     description: "The Rust side's own list of production commands, for the drift check.",
     args: [],
@@ -331,6 +366,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_open_data_dir",
     group: "Dev · Diagnostics",
     dev: true,
+    overRpc: false,
     danger: false,
     description: "Reveals one of the app's directories in the OS file manager.",
     args: [
@@ -338,9 +374,43 @@ export const COMMANDS: PortalCommand[] = [
     ],
   },
   {
+    name: "dev_reveal_recording",
+    group: "Dev · Diagnostics",
+    dev: true,
+    overRpc: false,
+    danger: false,
+    description: "Opens a recording's file, or shows it in the OS file manager. Takes an id, not a path: the path comes off the row, so nothing the frontend holds decides which file is opened. Refuses a file that is no longer there.",
+    args: [
+      { name: "recordingId", kind: "number", default: "", help: "", optional: false },
+      { name: "which", kind: "string", default: "folder", help: "play | folder", optional: false },
+    ],
+  },
+  {
+    name: "dev_open_fixture",
+    group: "Dev · Fixtures",
+    dev: true,
+    overRpc: false,
+    danger: false,
+    description: "Opens a fixture in whatever the OS opens `.json` with, or shows it in the file manager. Confined to the two fixture roots, like `dev_fixture_read`, the panel's textarea is the wrong tool for a 99 KB capture.",
+    args: [
+      { name: "path", kind: "string", default: "", help: "", optional: false },
+      { name: "which", kind: "string", default: "play", help: "play | folder", optional: false },
+    ],
+  },
+  {
+    name: "dev_health",
+    group: "Dev · Diagnostics",
+    dev: true,
+    overRpc: true,
+    danger: false,
+    description: "Everything the Overview panel polls, in one round trip.",
+    args: [],
+  },
+  {
     name: "dev_log_files",
     group: "Dev · Tools",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "The backend log files that exist, newest first, including the rotated ones. Reports the missing ones too, \"no log file\" and \"empty log file\" are different answers.",
     args: [],
@@ -349,6 +419,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_read_log",
     group: "Dev · Tools",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "One filtered window of a log file, newest matching lines first. Filtering happens in Rust: the file is capped at 5 MiB, which is far too much to hand a webview whole.",
     args: [
@@ -359,6 +430,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_schema",
     group: "Dev · Database",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "Live PRAGMA table_info for every browsable table, plus row counts.",
     args: [],
@@ -367,6 +439,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_table_page",
     group: "Dev · Database",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "A page of one table. Column names in order_by are validated against the schema.",
     args: [
@@ -380,6 +453,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_sql_query",
     group: "Dev · Database",
     dev: true,
+    overRpc: true,
     danger: true,
     description: "Arbitrary SQL against the live library database.",
     args: [
@@ -390,6 +464,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_insert_row",
     group: "Dev · Database",
     dev: true,
+    overRpc: true,
     danger: true,
     description: "Inserts one row, bypassing the typed API and its path upsert rule.",
     args: [
@@ -401,6 +476,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_update_row",
     group: "Dev · Database",
     dev: true,
+    overRpc: true,
     danger: true,
     description: "Updates one row by id.",
     args: [
@@ -413,6 +489,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_delete_row",
     group: "Dev · Database",
     dev: true,
+    overRpc: true,
     danger: true,
     description: "Deletes one row by id. Without deleteFile, the next rescan re-imports the recording from its file.",
     args: [
@@ -425,6 +502,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_reset_db",
     group: "Dev · Database",
     dev: true,
+    overRpc: true,
     danger: true,
     description: "Empties every table and restores the default retention policy.",
     args: [
@@ -435,6 +513,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_seed_library",
     group: "Dev · Seed",
     dev: true,
+    overRpc: true,
     danger: true,
     description: "Generates recordings, markers, samples, and their files on disk.",
     args: [
@@ -445,6 +524,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_clear_seeded",
     group: "Dev · Seed",
     dev: true,
+    overRpc: true,
     danger: true,
     description: "Removes every seeded recording and file. Captured recordings are untouched.",
     args: [],
@@ -453,6 +533,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_retention_preview",
     group: "Dev · Retention",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "Dry run: exactly what enforcement would delete, and how many bytes it would free. Touches nothing.",
     args: [
@@ -464,6 +545,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_dispatch_state_event",
     group: "Dev · Simulate",
     dev: true,
+    overRpc: true,
     danger: true,
     description: "Feeds one event through the live supervisor. Really starts and stops the recorder.",
     args: [
@@ -474,6 +556,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_inject_snapshot",
     group: "Dev · Simulate",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "Pushes one Live Client Data payload through the real marker/sample pipeline.",
     args: [
@@ -484,6 +567,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_session_snapshot",
     group: "Dev · Simulate",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "The in-flight recording session, markers and samples accumulating right now.",
     args: [],
@@ -492,6 +576,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_replay_start",
     group: "Dev · Simulate",
     dev: true,
+    overRpc: true,
     danger: true,
     description: "Plays a scripted game at a speed multiplier.",
     args: [
@@ -502,6 +587,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_replay_stop",
     group: "Dev · Simulate",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "Aborts a running replay.",
     args: [],
@@ -510,6 +596,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_replay_status",
     group: "Dev · Simulate",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "Progress of the running replay.",
     args: [],
@@ -518,6 +605,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_lcu_get",
     group: "Dev · Simulate",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "Raw GET against any LCU path. Needs the League Client running.",
     args: [
@@ -528,6 +616,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_champion_name",
     group: "Dev · Simulate",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "Resolves a champion id through the real asset-store lookup. 62 must come back as Wukong, MonkeyKing means the parse is reading `alias`. Needs the League Client running.",
     args: [
@@ -538,6 +627,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_fetch_match_summary",
     group: "Dev · Simulate",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "One shot at the post-game summary, end-of-game block, then match history, with no retries. Needs the League Client running.",
     args: [
@@ -548,6 +638,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_patch_match_summary",
     group: "Dev · Simulate",
     dev: true,
+    overRpc: true,
     danger: true,
     description: "Runs the whole deferred patch against a real client and writes the result to an existing recording. May block for up to a minute, that is the real retry schedule.",
     args: [
@@ -561,6 +652,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_live_client_probe",
     group: "Dev · Simulate",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "Raw allgamedata fetch. Only reachable while a game is running.",
     args: [],
@@ -569,6 +661,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_fixtures_state",
     group: "Dev · Fixtures",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "Capture flag, both fixture roots, and every fixture found under them.",
     args: [],
@@ -577,6 +670,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_shape_report",
     group: "Dev · Fixtures",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "Reads every captured payload back and reports what the parser did not understand, event names with no `classify_event` arm, events that failed to deserialize at all (with the JSON that broke them), fields that arrived as the wrong JSON type, including the ones a lenient reader silently absorbs, keys on events that nothing reads, and files that are not JSON at all. A report, not a validator: nothing here changes what the parser accepts. `HordeKill` sat in captures for months while Voidgrubs never became markers.",
     args: [],
@@ -585,6 +679,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_recording_report",
     group: "Dev · Diagnostics",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "One recording's whole story: the row, a named likely writer for every field that has more than one, marker and sample counts, the alignment offset, and the scoreboard and diagnostics parsed. Read-only, the actions that operate on a recording are their own commands.",
     args: [
@@ -595,6 +690,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_recording_vs_lcu",
     group: "Dev · Diagnostics",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "Asks the client about a recording's game and lays its answer beside the row's, field by field. The same one-shot `fetch_match_summary` the deferred patch uses, a disagreement here almost always means the wrong game id was matched. Read-only; `dev_patch_match_summary` is the one that acts on the answer.",
     args: [
@@ -605,6 +701,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_backfill_recording",
     group: "Dev · Diagnostics",
     dev: true,
+    overRpc: true,
     danger: true,
     description: "Runs the backfill against one recording, the same candidate query, matching and refusals the whole-library pass uses, pointed at a single row. A row it has nothing to fill comes back with `scanned: 0` rather than an error.",
     args: [
@@ -612,31 +709,10 @@ export const COMMANDS: PortalCommand[] = [
     ],
   },
   {
-    name: "dev_reveal_recording",
-    group: "Dev · Diagnostics",
-    dev: true,
-    danger: false,
-    description: "Opens a recording's file, or shows it in the OS file manager. Takes an id, not a path: the path comes off the row, so nothing the frontend holds decides which file is opened. Refuses a file that is no longer there.",
-    args: [
-      { name: "recordingId", kind: "number", default: "", help: "", optional: false },
-      { name: "which", kind: "string", default: "folder", help: "play | folder", optional: false },
-    ],
-  },
-  {
-    name: "dev_open_fixture",
-    group: "Dev · Fixtures",
-    dev: true,
-    danger: false,
-    description: "Opens a fixture in whatever the OS opens `.json` with, or shows it in the file manager. Confined to the two fixture roots, like `dev_fixture_read`, the panel's textarea is the wrong tool for a 99 KB capture.",
-    args: [
-      { name: "path", kind: "string", default: "", help: "", optional: false },
-      { name: "which", kind: "string", default: "play", help: "play | folder", optional: false },
-    ],
-  },
-  {
     name: "dev_ranked_stats",
     group: "Dev · Diagnostics",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "A player's ranked standing right now. Omit `puuid` to ask about yourself. **Take the puuid from a match document, never from an alias lookup**, that returns a name-derived v5 UUID the ranked ladder has nothing keyed by, so the lookup succeeds and this answers nothing, which looks exactly like an unranked player.",
     args: [
@@ -647,6 +723,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_lobby_rank",
     group: "Dev · Diagnostics",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "A whole lobby's rank from its puuids, the median standing, with a count of how many were known. Take the ten puuids from a captured `eog-stats-block` (`teams[].players[].puuid`). Players whose rank cannot be read are excluded rather than counted low.",
     args: [
@@ -658,6 +735,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_lp_delta",
     group: "Dev · Diagnostics",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "Measures an LP delta from two standings by hand, the bench for the one check that cannot be a unit test: whether the delta agrees with what the client's post-game screen showed. Reports the ladder positions as well as the answer, because a wrong delta is almost always a wrong position. Takes the client's own spelling.",
     args: [
@@ -670,6 +748,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_event_capture_start",
     group: "Dev · Fixtures",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "Records **every** LCU WebSocket event to a JSONL file, unfiltered. A URI filter presupposes knowing which endpoint carries what you are hunting; this exists for the case where nothing does. Stops itself at 64 MiB rather than rotating, for a probe the start of a session is usually the part being looked for.",
     args: [],
@@ -678,6 +757,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_event_capture_stop",
     group: "Dev · Fixtures",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "Stops the running capture and reports what it wrote.",
     args: [],
@@ -686,6 +766,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_event_capture_status",
     group: "Dev · Fixtures",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "Whether a capture is running, where it is writing, and how much it has written.",
     args: [],
@@ -694,6 +775,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_event_uris",
     group: "Dev · Fixtures",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "Which endpoints appeared in a capture, most frequent first. The half that makes a raw capture usable, a post-game window is thousands of frames across dozens of endpoints, and a list of URIs answers \"which of these could carry it\" in seconds where a 40 MB file does not.",
     args: [
@@ -704,6 +786,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_fixture_read",
     group: "Dev · Fixtures",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "Reads one fixture. Confined to the two known fixture roots.",
     args: [
@@ -714,6 +797,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_fixture_write",
     group: "Dev · Fixtures",
     dev: true,
+    overRpc: true,
     danger: true,
     description: "Saves a payload as a fixture under the capture directory.",
     args: [
@@ -726,6 +810,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_set_fixture_recording",
     group: "Dev · Fixtures",
     dev: true,
+    overRpc: true,
     danger: false,
     description: "Turns response capture on or off for the running process.",
     args: [
@@ -736,6 +821,7 @@ export const COMMANDS: PortalCommand[] = [
     name: "dev_trim_lead_in",
     group: "Dev · Tools",
     dev: true,
+    overRpc: true,
     danger: true,
     description: "Cuts the loading screen off a recording's file and rebases its markers and samples onto what is left. Finalize already does this; the command is for recordings made before it did, or one it skipped. A no-op on anything already trimmed.",
     args: [

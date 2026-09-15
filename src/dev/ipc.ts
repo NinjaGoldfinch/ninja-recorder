@@ -8,6 +8,7 @@
  * durably visible.
  */
 import { invoke } from "@tauri-apps/api/core";
+import { COMMANDS } from "./commands.generated";
 
 export interface LogEntry {
   id: number;
@@ -60,18 +61,27 @@ function push(entry: LogEntry) {
 }
 
 /**
- * Production commands are not registered individually any more — they are
- * reached through the `rpc` passthrough and routed by name in Rust
- * (DEVELOPMENT.md §12). Invoking them directly from here would fail with
- * "command not found", which would break the Commands panel for every command
- * that isn't a `dev_*` one.
+ * Almost nothing is registered as its own Tauri command any more. Production
+ * commands go through the `rpc` passthrough and are routed by name in Rust
+ * (DEVELOPMENT.md §12), and since WS3.7 forty of the `dev_*` commands do too,
+ * because they need the process that owns the database and the supervisor.
  *
- * `dev_*` commands are still registered individually behind the `devtools`
- * feature, and `open_recordings_folder` stays a real command because it drives
- * the desktop shell.
+ * What is left is the handful that need a window or the desktop shell, plus
+ * `dev_registered_commands`, which has to stay directly registered because
+ * `devportal.ts` decides whether the portal exists by watching that call
+ * reject in a shipped build.
+ *
+ * The list is not written here. `COMMANDS` is generated from the two Rust
+ * tables and each entry carries `overRpc`, so this cannot drift from where the
+ * command actually lives: a command that moved tables moves here on the next
+ * `gen-contract` run, and CI fails if that run was not committed.
  */
+const DIRECT: ReadonlySet<string> = new Set(COMMANDS.filter((c) => !c.overRpc).map((c) => c.name));
+
 function isDirectCommand(command: string): boolean {
-  return command.startsWith("dev_") || command === "open_recordings_folder";
+  // `open_recordings_folder` is not in the catalogue: it is a production
+  // command that drives the shell, so it never had a form or a table row.
+  return command === "open_recordings_folder" || DIRECT.has(command);
 }
 
 /** `invoke`, plus timing and a log entry. Errors still throw. */
