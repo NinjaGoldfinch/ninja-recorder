@@ -759,6 +759,52 @@ lands in the database, which resolves every marker against the final alignment.
 The live value draws a timeline while the game runs; the row is what the library
 reads.
 
+### The snapshot, and why it is not a replay
+
+Commands answer questions and events announce changes, which leaves one gap: a
+client that has just connected knows nothing, and a client that reconnects after
+a dropped pipe knows something out of date. `contract::snapshot::Snapshot` is
+the answer to both. A client gets exactly one, then a stream of events, and it
+**never replays history**. There is no backlog to drain, so there is no way to
+be subtly behind.
+
+| Field | Kept current afterwards by |
+|---|---|
+| `state` | `StateChanged` |
+| `lcu` | `LcuPhase` |
+| `currentRecording` | `MarkerAdded`, `SampleBatch` |
+| `update` | `UpdateStatus` |
+| `prefs` | nothing; the UI writes these and owns the echo |
+
+The snapshot and the event surface describe the same state deliberately. A
+field with no event would go stale without saying so, and an event with no
+field would leave a reconnecting client with no baseline to apply it to.
+
+**`seq` positions it in the stream.** An event numbered at or below it is
+already reflected in the snapshot and is dropped; the first event a client
+applies is `seq + 1`. Without that, a snapshot assembled while events were in
+flight would be applied over newer state. The counter belongs to the transport
+(WS3.1), so `assemble` is handed one rather than inventing it.
+
+**`lcu` is handed in for a sharper reason.** `core::lcu_status` is async,
+discovers the lockfile itself and makes two HTTPS round trips; its own doc calls
+it a smoke test. Putting that on every connect would make the handshake cost a
+network request, and would re-derive what the state machine already knows from
+`lcu::gameflow::watch`.
+
+**`state` is the bare `GameState`, not `SupervisorStatus`.** The latter also
+carries `last_finalized`, which is a whole recording including every marker of
+the last game. A message sent on every connect must not grow with the length of
+a game, and "what did the last game produce" is a library question that
+`list_recordings` and `get_recording_markers` already answer. What is live
+rather than stored is in `currentRecording`, which carries the file stem, the
+running marker and sample counts, and the alignment offset (`null` until the
+game clock is first seen to advance, which is not the same as `0`).
+
+Nothing sends one yet: WS3.1 is where a pipe exists to send it down. The type is
+declared now for the same reason the four unwired events are, which the table
+above records.
+
 ## Routing and the tray
 
 `router.ts` owns which view is showing. `initRouting` adds two entry points the

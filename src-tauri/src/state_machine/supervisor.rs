@@ -256,6 +256,12 @@ struct RecordingSession {
     last_game_time_s: Option<f64>,
     ever_matched: bool,
     record_started_at: Instant,
+    /// The stem `Recorder::start` was given. Kept rather than re-derived from
+    /// `started_at_millis`: the format lives at the one call site that builds
+    /// the `RecordConfig`, and a second copy of it here would be a second
+    /// place to change when the naming does.
+    #[cfg_attr(not(test), allow(dead_code))]
+    file_stem: String,
     /// Wall-clock capture alongside `record_started_at` — `Instant` is
     /// monotonic only, not convertible to a real timestamp, but the DB's
     /// `recordings.started_at` column needs one.
@@ -565,6 +571,27 @@ impl Supervisor {
                 .as_ref()
                 .map(|s| s.record_started_at.elapsed().as_secs_f64()),
         }
+    }
+
+    /// The recording in flight, reduced to what a fresh client needs to
+    /// render one.
+    ///
+    /// Shares its numbers with `dev_session_view` but is not behind
+    /// `devtools`: a snapshot has to describe an in-progress game in a shipped
+    /// build, which is exactly the case a UI killed mid-game comes back to.
+    /// `None` is the resting state, not a failure.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn current_recording(&self) -> Option<crate::contract::snapshot::CurrentRecording> {
+        let guard = self.session.lock().unwrap();
+        let session = guard.as_ref()?;
+        Some(crate::contract::snapshot::CurrentRecording {
+            file_stem: session.file_stem.clone(),
+            started_at_millis: session.started_at_millis,
+            elapsed_s: session.record_started_at.elapsed().as_secs_f64(),
+            marker_count: session.markers.len(),
+            sample_count: session.samples.len(),
+            alignment_offset_s: session.align.current_offset_s(),
+        })
     }
 
     /// Starts the always-on lockfile watch. Everything else (gameflow
@@ -947,6 +974,7 @@ impl Supervisor {
                     last_game_time_s: None,
                     ever_matched: false,
                     record_started_at: Instant::now(),
+                    file_stem: config_file_stem.clone(),
                     started_at_millis,
                 });
                 self.emit(SupervisorEvent::RecordingStarted);
@@ -1687,6 +1715,7 @@ mod tests {
             last_game_time_s: None,
             ever_matched: false,
             record_started_at: Instant::now(),
+            file_stem: "recording-0".to_string(),
             started_at_millis: 0,
         }
     }

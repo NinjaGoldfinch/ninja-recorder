@@ -351,7 +351,7 @@ pub struct DiskUsage {
     pub free_bytes: i64,
 }
 
-#[derive(serde::Serialize, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct LcuStatus {
     pub connected: bool,
     pub phase: Option<String>,

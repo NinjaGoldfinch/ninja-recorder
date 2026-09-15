@@ -97,6 +97,8 @@ mod tests {
                 crate::recorder::audio::AudioTrackSpec,
                 crate::retention::EnforcementReport,
                 crate::state_machine::machine::GameState,
+                crate::contract::snapshot::CurrentRecording,
+                crate::contract::snapshot::Snapshot,
                 crate::state_machine::supervisor::FinalizedRecording,
                 crate::state_machine::supervisor::RecordingDiagnostics,
                 crate::state_machine::supervisor::SessionMarker,
@@ -134,7 +136,7 @@ mod tests {
             }};
         }
         let n = all_boundary_types!(check);
-        assert_eq!(n, 37, "the boundary type list changed; update the count deliberately");
+        assert_eq!(n, 39, "the boundary type list changed; update the count deliberately");
     }
 
     /// The decision above, made executable. Rendering with ts-rs's default
