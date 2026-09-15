@@ -108,15 +108,20 @@ pub trait Recorder: Send {
     fn release(&mut self) {}
 }
 
-/// Stands in for the real backend when it fails to initialize (Windows
-/// only — see `libobs::LibObsRecorder::new`). Startup must not fail just
-/// because capture is unavailable: LCU polling, the VOD library, and the
-/// review UI don't depend on it, so the app should still open and only
-/// surface the original error if/when the user tries to record.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+/// A backend that refuses, and says why.
+///
+/// Two callers, on every platform since WS3.4. It stands in for the real
+/// backend when that fails to initialize (Windows only, see
+/// `libobs::LibObsRecorder::new`), because startup must not fail just because
+/// capture is unavailable: LCU polling, the VOD library and the review UI do
+/// not depend on it, so the app should open and surface the original error only
+/// if the user tries to record.
+///
+/// And it is what the **UI process** holds, where refusing is the correct
+/// behaviour rather than a degraded one: that process does not record, and
+/// `StubRecorder` would fabricate a file instead of saying so.
 pub struct FailedRecorder(pub String);
 
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 impl Recorder for FailedRecorder {
     fn start(&mut self, _config: RecordConfig) -> Result<(), RecorderError> {
         Err(RecorderError::Backend(self.0.clone()))

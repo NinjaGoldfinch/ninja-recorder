@@ -36,10 +36,7 @@ mod update;
 // this file *is* the crate root, and `#[macro_export]` already puts the
 // macros in its macro namespace. Importing them would collide with the
 // definitions themselves (E0255).
-// Not `cfg`'d any more: the UI process uses the stub on every platform, because
-// the real backend belongs to the daemon.
-use recorder::stub::StubRecorder;
-use recorder::Recorder;
+use recorder::{FailedRecorder, Recorder};
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
@@ -617,11 +614,22 @@ pub fn run() {
             // **The UI links no capture backend.** It used to build the real
             // one here, which is what made killing the window kill the
             // recording. The daemon owns the `Recorder` now (§3.1's ownership
-            // table); this process keeps a stub so `Ctx` has the shape the
-            // shell commands and the portal's UI-side commands expect, and so
-            // that anything reaching for it in this process fails visibly
-            // rather than capturing a second copy of the screen.
-            let backend: Box<dyn Recorder> = Box::new(StubRecorder::new());
+            // table).
+            //
+            // `FailedRecorder` rather than `StubRecorder`, and rather than
+            // restructuring `Ctx` to make the backend optional. It refuses
+            // every call with the reason, which is what this process should do:
+            // the stub *fabricates* a recording by copying a fixture, so
+            // anything that reached for it here would quietly produce a file
+            // rather than say it was in the wrong process. `backend_name()`
+            // reports the message, so the portal's Overview shows it too.
+            //
+            // It is also the type that compiles everywhere: `stub` is gated to
+            // non-Windows plus `cfg(test)`, which CI caught and this box could
+            // not.
+            let backend: Box<dyn Recorder> = Box::new(FailedRecorder(
+                "this process does not record; the daemon does".to_string(),
+            ));
 
             let recorder: Arc<Mutex<Box<dyn Recorder>>> = Arc::new(Mutex::new(backend));
             let dir = recordings_dir(app.handle())?;
