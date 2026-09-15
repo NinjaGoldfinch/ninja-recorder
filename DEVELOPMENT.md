@@ -1617,3 +1617,71 @@ means a custom `version_comparator` *and* an installer willing to go
 backwards, which NSIS has never been asked to do here.
 
 **An alpha release per commit accumulates.** Nothing prunes them yet.
+
+---
+
+## 17. Contract and transport
+
+§16 is WS1.5's to write and does not exist yet; the numbers are reserved by the
+plan, so this is §17 with a gap above it rather than a renumbering.
+
+WS2 made the command and event surface a single declaration in Rust, generated
+into TypeScript and checked in CI. This section is the half that carries it:
+how a client reaches the daemon once the UI is a separate process.
+
+### Newline-delimited JSON, not a length prefix
+
+Every frame is one `serde_json` value on one line. A length prefix would be
+marginally cheaper and considerably harder to debug; this way the protocol can
+be read with `cat`, replayed with `echo`, and diffed in a test failure as text.
+Nothing here is on a hot path, and the busiest frame is a marker at roughly
+1 Hz. JSON cannot contain a raw newline, so the delimiter cannot appear inside
+a frame and reading a line is a complete framer.
+
+### Requests carry ids because replies overtake each other
+
+A slow `extract_audio_track` must not head-of-line block a status poll. Commands
+are answered on whatever task finishes first, and the client matches a reply to
+its request by `id` rather than by arrival order. The daemon never invents an
+id; it echoes the one it was given.
+
+Only `lcu_status` is genuinely async. Everything else is blocking work against
+SQLite or the filesystem, and runs on `spawn_blocking`, because running it on
+the runtime's worker threads would stall every other session behind the slowest
+of them and make the ids a promise the transport could not keep.
+
+### Events are a bounded broadcast, and lag is a frame
+
+One broadcast per daemon, one receiver per session, bounded at 512 events. A
+client that stops reading must not be able to grow the daemon's memory without
+limit, which is exactly what an unbounded channel would let a hung UI do while a
+game is being recorded. 512 is more than a whole game's markers and samples, so
+a session has to be wedged rather than merely slow to lose anything.
+
+When one falls behind, the oldest frames go and it is told how many, as
+`Event::Lagged`. **Not a disconnect:** the client's right move is to re-`hello`
+for a fresh snapshot, and it cannot decide that if the socket simply died.
+
+A session subscribes to *topics*, never to individual events, which is what lets
+a variant be added to an existing topic without a client change. Subscribing
+replaces rather than adds, so narrowing and widening are the same operation and
+there is no `unsubscribe` to keep in step.
+
+### A skewed protocol refuses rather than adapts
+
+`hello` carries a version and a mismatch is an error naming both sides. The
+updater can replace the daemon under a running UI, so this is a real state
+rather than a theoretical one, and a daemon that tried to speak an older dialect
+would be guessing at frames it has never seen.
+
+### The server is generic over the stream, and that is load-bearing
+
+Production is a Windows named pipe. The tests drive the same `serve` over a Unix
+socket on the dev box, in milliseconds. That is not a convenience: the
+alternative is a protocol whose only exercise is on the Windows box, which is
+the loop §9 is organised to stay out of. The transport is the one part of the
+daemon that can be tested honestly without Windows, so it is.
+
+What still needs Windows is everything around it: the pipe name and the
+single-instance mutex scoped by build identity, the Win32 message pump, and the
+daemon actually recording a game. Those are WS3.2, WS3.3 and WS3.8.
