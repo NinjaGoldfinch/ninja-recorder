@@ -1222,10 +1222,35 @@ and its Win32 message pump, autostart pointed at `--daemon` rather than
 Those are WS3.3, 3.5, 3.6 and 3.7.
 
 Until autostart moves, nothing starts the daemon on its own: `--daemon` is
-something a person runs. The UI still builds its own supervisor, so running both
-at once means two processes watching for the same game and two recorders
-competing for the same capture. That state is not a bug to be fixed in the UI,
-it is the reason 3.5 exists, and it is why the Run key still says `--hidden`.
+something a person runs, or something `daemon::spawn` asks for on the UI's
+behalf. The UI still builds its own supervisor, so running both at once means
+two processes watching for the same game and two recorders competing for the
+same capture.
+
+### Why the Run key still says `--hidden`
+
+WS3.5 is "login starts a daemon only", the daemon has worked since 3.2, and the
+change is one string. It is deliberately not made yet, and `launch::autostart_args`
+is where the reason lives so that flipping it is a decision rather than a tidy-up.
+
+Two things have to be true first, and neither is:
+
+1. **The daemon needs its tray** (3.3). A login start today would be a recorder
+   with no window, no tray icon and no notifications, reachable only by finding
+   the app in the Start menu. The `--hidden` start it replaces has a tray, which
+   is the whole reason that mode exists.
+2. **The UI needs to stop running a supervisor** (the rest of 3.4). Otherwise
+   opening the app after a login-started daemon gives two state machines
+   watching one game and two recorders reaching for one capture device. Running
+   both processes is possible today, but it is something a person does on
+   purpose; the Run key would make it what happens to everyone who ticked a box.
+
+The argument list is also an on-disk contract. `tauri-plugin-autostart` writes
+it once, when the box is ticked, and Windows hands it back to whatever build is
+installed years later, so a flag that changes meaning strands every user who
+enabled autostart before the change. `--hidden` therefore keeps working
+whatever else happens, and `Launch::UiHidden` is not going away when the flag
+moves: entries written by older builds will still be arriving at that door.
 
 ---
 

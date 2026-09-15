@@ -46,7 +46,7 @@ disagreeing about the same file.
 
 | Path | Owner |
 |---|---|
-| `src-tauri/src/daemon/` (`pump`, `spawn`) | WS3 tasks 3.3 and 3.5 |
+| `src-tauri/src/daemon/` (`pump`) | WS3 task 3.3 |
 | `src-tauri/src/contract/` (`mod`, `events`, `r#gen`) | WS2 |
 | `src-tauri/src/ui/` (the Tauri commands; `client` has landed) | WS3 |
 | `src-tauri/src/recorder/own/` | WS1 task 1.6 |
