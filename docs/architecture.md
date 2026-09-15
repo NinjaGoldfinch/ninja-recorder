@@ -92,6 +92,7 @@ flowchart TB
 | `daemon/mod.rs` | The headless process: paths without an `AppHandle`, the startup and shutdown order, and everything the UI's `setup` does minus the window | `run`, `Paths`, `IDENTIFIER` |
 | `daemon/rpc.rs` | The wire protocol, the endpoint's name, the listener that owns it, and the client's way in | `serve`, `endpoint`, `Listener`, `connect` |
 | `daemon/snapshot.rs` | The event stream's position and the state a `hello` is answered with | `Stream`, `Stream::source` |
+| `daemon/spawn.rs` | Connecting to the daemon, and starting one when nothing answers | `connect_or_start` |
 | `ui/client.rs` | The UI's side of the pipe: reply routing, reconnect, version-skew refusal | `spawn`, `Client` |
 | `tray.rs` | The tray icon and its Open / Settings / Quit menu. No tests, deliberately | `build`, `request_quit` |
 | `notify.rs` | Desktop notifications, best-effort. No tests, deliberately | `notify`, `close_to_tray_notice` |
@@ -192,8 +193,10 @@ WS3 splits that one process in two. The daemon now runs: `--daemon` opens the
 library, brings up the supervisor and the capture backend, binds the endpoint
 and serves clients until it is asked to stop. The tray and its message pump
 (3.3), autostart (3.5), the updater (3.6) and the dev portal's commands (3.7)
-are not in it yet, and until 3.5 nothing starts it automatically, so the UI
-still holds a supervisor of its own.
+are not in it yet. Nothing starts it automatically either: `daemon/spawn.rs`
+knows how to, but the Run key still launches the UI and the UI still holds a
+supervisor of its own. [DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave)
+says what has to be true before that changes.
 
 ```mermaid
 flowchart LR

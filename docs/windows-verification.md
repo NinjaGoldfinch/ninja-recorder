@@ -327,12 +327,18 @@ backend is libobs, and this section is what stands in for that.
 - [ ] Stop the daemon while it is recording. The recording is finalized before
       the process exits, and the row is in the library when it comes back.
 
-**Not in the daemon yet**, so do not look for them: the tray icon (3.3),
-autostart (3.5), the updater (3.6), desktop notifications, and the dev portal's
-`dev_*` commands (3.7). The Run key still points at `--hidden`, so a login start
-is still the UI. Until 3.5, running the UI and the daemon together means two
-supervisors watching for the same game, which is expected rather than a defect
-to report.
+**Not in the daemon yet**, so do not look for them: the tray icon (3.3), the
+updater (3.6), desktop notifications, and the dev portal's `dev_*` commands
+(3.7). Running the UI and the daemon together means two supervisors watching for
+the same game, which is expected rather than a defect to report.
+
+**The Run key still points at `--hidden`**, so §5.0.2 is unchanged and a login
+start is still the UI. That is deliberate rather than pending: the two
+prerequisites are in
+[DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave).
+When it does move, §5.0.2's "sign out and back in" row is the one that changes,
+and the row to add beside it is that an entry written by an older build still
+says `--hidden` and must keep working.
 
 ### 5.1 Capture-backend lifecycle
 
