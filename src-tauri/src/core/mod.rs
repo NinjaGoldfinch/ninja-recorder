@@ -23,7 +23,7 @@
 //! Both drive the desktop shell — an opener call and a window — which only
 //! the UI process can meaningfully do.
 
-mod dispatch;
+pub mod dispatch;
 
 #[cfg_attr(not(feature = "devtools"), allow(unused_imports))]
 pub use dispatch::{command_names, dispatch, dispatch_blocking, is_async_command};

@@ -231,12 +231,16 @@ jobs:
         working-directory: src-tauri
         run: cargo deny check
 
-      # WS2.5: uncomment when the generator exists. It replaces
-      # `every_command_round_trips` in `core/dispatch.rs` and the dev portal's
-      # drift banner — both of which stay until it does.
-      # - name: Contract drift
-      #   working-directory: src-tauri
-      #   run: cargo run --bin gen-contract -- --check
+      # The contract gate. `gen-contract --check` re-emits the TypeScript from
+      # the Rust declaration and fails if it differs from what is committed, so
+      # a command or event added without regenerating cannot merge.
+      #
+      # This is what `every_command_round_trips` and the dev portal's drift
+      # banner were standing in for. WS2.7 deletes both; they stay until then
+      # because deleting them is that task's exit criterion, not this one's.
+      - name: Contract drift
+        working-directory: src-tauri
+        run: cargo run --bin gen-contract -- --check
 
       - name: Run Rust tests
         working-directory: src-tauri

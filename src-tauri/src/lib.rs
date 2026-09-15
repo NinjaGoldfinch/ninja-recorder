@@ -1,6 +1,11 @@
 mod audio_tracks;
 mod backfill;
 mod contract;
+/// The TypeScript emitter, re-exported for the `gen-contract` binary.
+///
+/// A single named re-export rather than making `contract` public: the binary
+/// needs exactly this, and the rest of the module is internal to the crate.
+pub use contract::r#gen as gen_contract;
 mod core;
 // `pub` because `main.rs` dispatches on it before either side is built, and
 // the daemon's refusal is a value it returns rather than a string in

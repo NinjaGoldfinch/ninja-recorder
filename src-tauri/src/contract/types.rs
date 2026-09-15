@@ -49,6 +49,85 @@ pub fn config() -> Config {
     Config::new().with_large_int("number")
 }
 
+/// Every type that crosses the IPC boundary, in one place.
+///
+/// Hand-written, and the comment this replaces apologised for that: a second
+/// list able to disagree with the table, in the workstream that exists to
+/// delete second lists. It is still hand-written, but it is no longer only a
+/// test fixture — `boundary_declarations` below is what `gen-contract` emits
+/// `types.ts` from, so a type missing here is a type missing from the generated
+/// client, and `--check` is what makes that visible.
+///
+/// Alphabetical by path, so a reviewer can see at a glance whether something
+/// was added in the right place.
+macro_rules! all_boundary_types {
+    ($m:ident) => {
+        $m!(
+            crate::backfill::BackfillReport,
+            crate::contract::events::Event,
+            crate::contract::events::LibraryChangeReason,
+            crate::contract::events::ShutdownReason,
+            crate::contract::events::StopOutcome,
+            crate::contract::events::Topic,
+        crate::contract::snapshot::CurrentRecording,
+        crate::contract::snapshot::Snapshot,
+            crate::core::AutostartStatus,
+            crate::core::DiskUsage,
+            crate::core::LcuStatus,
+            crate::db::MarkerRow,
+            crate::db::RecordingRow,
+            crate::db::RetentionPolicy,
+            crate::db::SampleRow,
+            crate::db::reconcile::ReconcileReport,
+            crate::ddragon::IconRequest,
+            crate::ddragon::IconSet,
+            crate::lcu::gameflow::GameflowPhase,
+            crate::live_client::events::Marker,
+            crate::live_client::events::MarkerKind,
+            crate::live_client::events::Scoreboard,
+            crate::live_client::events::ScoreboardPlayer,
+            crate::live_client::events::ScoreboardRunes,
+            crate::live_client::events::TeamDiff,
+            crate::recorder::audio::AudioInputDevice,
+            crate::recorder::audio::AudioLayout,
+            crate::recorder::audio::AudioPreset,
+            crate::recorder::audio::AudioSourceKind,
+            crate::recorder::audio::AudioTrackSpec,
+            crate::retention::EnforcementReport,
+            crate::state_machine::machine::GameState,
+            crate::state_machine::supervisor::FinalizedRecording,
+            crate::state_machine::supervisor::RecordingDiagnostics,
+            crate::state_machine::supervisor::SessionMarker,
+            crate::state_machine::supervisor::SessionSample,
+            crate::state_machine::supervisor::SupervisorStatus,
+            crate::update::UpdateOffer,
+            crate::update::UpdateStatus,
+        )
+    };
+}
+
+/// Every boundary type's TypeScript declaration, paired with its name.
+///
+/// The name is what `client.ts` refers to; the declaration is what `types.ts`
+/// contains. Both come from ts-rs rather than from anything written here, so
+/// the generated file cannot drift from the Rust type it describes.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn boundary_declarations(cfg: &Config) -> Vec<(String, String)> {
+    macro_rules! collect {
+        ($($t:ty),* $(,)?) => {
+            // `vec![]` rather than `Vec::new` plus pushes: clippy reads the
+            // expansion, not the table, and sees a fixed-size construction.
+            vec![
+                $( (
+                    <$t as ts_rs::TS>::name(cfg),
+                    <$t as ts_rs::TS>::decl(cfg),
+                ), )*
+            ]
+        };
+    }
+    all_boundary_types!(collect)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -64,51 +143,6 @@ mod tests {
     /// into a Rust type to ask it for its declaration. Closing that gap is
     /// WS2.5's, since it is the generator that needs the mapping. Until then
     /// this list is the honest version of the problem rather than a hidden one.
-    macro_rules! all_boundary_types {
-        ($m:ident) => {
-            $m!(
-                crate::backfill::BackfillReport,
-                crate::contract::events::Event,
-                crate::contract::events::LibraryChangeReason,
-                crate::contract::events::ShutdownReason,
-                crate::contract::events::StopOutcome,
-                crate::contract::events::Topic,
-                crate::core::AutostartStatus,
-                crate::core::DiskUsage,
-                crate::core::LcuStatus,
-                crate::db::MarkerRow,
-                crate::db::RecordingRow,
-                crate::db::RetentionPolicy,
-                crate::db::SampleRow,
-                crate::db::reconcile::ReconcileReport,
-                crate::ddragon::IconRequest,
-                crate::ddragon::IconSet,
-                crate::lcu::gameflow::GameflowPhase,
-                crate::live_client::events::Marker,
-                crate::live_client::events::MarkerKind,
-                crate::live_client::events::Scoreboard,
-                crate::live_client::events::ScoreboardPlayer,
-                crate::live_client::events::ScoreboardRunes,
-                crate::live_client::events::TeamDiff,
-                crate::recorder::audio::AudioInputDevice,
-                crate::recorder::audio::AudioLayout,
-                crate::recorder::audio::AudioPreset,
-                crate::recorder::audio::AudioSourceKind,
-                crate::recorder::audio::AudioTrackSpec,
-                crate::retention::EnforcementReport,
-                crate::state_machine::machine::GameState,
-                crate::contract::snapshot::CurrentRecording,
-                crate::contract::snapshot::Snapshot,
-                crate::state_machine::supervisor::FinalizedRecording,
-                crate::state_machine::supervisor::RecordingDiagnostics,
-                crate::state_machine::supervisor::SessionMarker,
-                crate::state_machine::supervisor::SessionSample,
-                crate::state_machine::supervisor::SupervisorStatus,
-                crate::update::UpdateOffer,
-                crate::update::UpdateStatus,
-            )
-        };
-    }
 
     #[test]
     fn every_boundary_type_renders_a_usable_declaration() {

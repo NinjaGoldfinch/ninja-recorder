@@ -1,16 +1,13 @@
-/**
- * GENERATED — do not edit by hand. WS2 task 2.4.
- *
- * `cargo run --bin gen-contract` writes `types.ts`, `client.ts` and
- * `events.ts` here from the Rust declaration in `src-tauri/src/contract/`.
- * The output is committed so the frontend builds without a Rust toolchain and
- * so a contract change is reviewable as a diff; CI runs the generator with
- * `--check` and fails if the committed files disagree (task 2.5).
- *
- * That check is what replaces `every_command_round_trips` in
- * `src-tauri/src/core/dispatch.rs` and the drift banner in
- * `src/dev/registry.ts`. Both are deleted by WS2, not before.
- *
- * Until then the hand-written client is `src/bridge.ts`.
- */
-export {};
+// GENERATED FILE. Do not edit by hand.
+//
+// Regenerate with:  cargo run --bin gen-contract   (from src-tauri/)
+// CI runs the same binary with --check and fails if this file is stale.
+//
+// The declaration lives in Rust:
+//   commands  src-tauri/src/core/dispatch.rs   (dispatch_table!)
+//   events    src-tauri/src/contract/events.rs (contract_events!)
+//   types     src-tauri/src/contract/types.rs  (the boundary list)
+
+export * from "./types";
+export * from "./client";
+export { EVENTS_BY_TOPIC } from "./events";
