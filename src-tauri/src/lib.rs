@@ -574,16 +574,16 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         // The argument list is the on-disk contract: it is written into
         // `HKCU\...\Run` once, when the user ticks the box, and handed
-        // back to whatever build is installed years later — which is why
-        // `launch.rs` owns the string and pins it with a test. `--hidden`
-        // and not `--daemon`: the daemon is still reserved, and registering
-        // a flag that exits 2 would mean a login start that records nothing.
+        // back to whatever build is installed years later. `launch.rs` owns
+        // it for that reason, and `autostart_args` is where the choice of
+        // flag is made and explained — including why it is still the UI's
+        // and not the daemon's now that the daemon runs.
         //
         // Nothing is registered by installing; the entry only appears when
         // the settings toggle is turned on.
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec![launch::HIDDEN_FLAG]),
+            Some(launch::autostart_args()),
         ))
         // Registered unconditionally; whether it is ever *used* is
         // `updates_enabled`. The endpoint and the public key that verifies
