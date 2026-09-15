@@ -10,6 +10,58 @@ One database, in the Tauri app data directory, opened via `rusqlite` with the
 
 ---
 
+## Connections
+
+v1 held a single `Mutex<Connection>`. That is correct for one process and wrong
+for two: the UI's list query would block the daemon's marker write. WS6 splits
+it into `db::pool::Pool`, one writer and four readers, without touching the
+schema.
+
+| | Count | Pragmas | Who |
+|---|---|---|---|
+| Writer | 1 | `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5s`, `foreign_keys=ON` | the daemon: every insert, update and delete |
+| Readers | 4 | the same, plus `query_only=ON` | the library grid, the review timeline, the stats bar, the dev portal |
+
+**One writer, because SQLite allows exactly one.** A second write connection
+would buy nothing and would turn a `Mutex` wait into an `SQLITE_BUSY` we have to
+handle. Keeping the writer behind a mutex means writes queue in the process,
+where waiting is free and ordered, rather than at the database, where it is an
+error code.
+
+**WAL is what makes the readers worth having.** Under the default rollback
+journal a writer blocks every reader for the length of its transaction, so four
+reader connections would queue exactly as one did. WAL lets reads run
+concurrently with the writer and with each other, which leaves our own lock as
+the only thing serialising them, and round-robin over four connections is what
+turns that lock from a queue into a fast path. On disk it shows up as
+`library.sqlite-wal` beside the database.
+
+**`synchronous=NORMAL`, not `FULL`.** `FULL` fsyncs on every commit, a cost paid
+at 1 Hz for the length of every game, to buy durability against power loss.
+`NORMAL` is the documented pairing with WAL and loses at most the last commits
+on a power cut. What it cannot lose is the *recording*: the file on disk is the
+source of truth and reconciliation rebuilds a missing row from it.
+
+**`query_only=ON` on the readers is a tripwire, not a formality.** A read path
+that tries to write fails at the connection instead of quietly racing the
+writer, so a method filed on the wrong side of the split is a test failure
+rather than a rare interleaving nobody can reproduce. It is also what the UI
+process gets once WS3 splits it out: the daemon owns every write and the UI
+reads the same file directly.
+
+Four tests hold this up, in `db/pool.rs`: the file is in WAL mode, a write on a
+reader is refused, a long-held read does not block a write, and a writer and
+three readers hammering the database together record zero `SQLITE_BUSY`.
+
+**Tests run against a real file, not `:memory:`.** Each pool gets a throwaway
+directory that it removes when it drops. An in-memory database is private to its
+connection, so a pool of them would leave the readers looking at no tables at
+all, and WAL is a no-op in memory, which would make the concurrency test prove
+nothing. Some tests used to open `Db::open(Path::new(":memory:"))` and only
+worked because there was one connection; they now use `Db::open_temporary()`.
+
+---
+
 ## Schema
 
 ```mermaid
