@@ -4,8 +4,8 @@ How the pieces fit together, what owns what, and where a given behaviour
 lives in the tree. Start here; [recording-pipeline.md](recording-pipeline.md)
 then walks the runtime path end to end.
 
-For the *reasoning* behind these choices — why libobs, why no injection, why
-Tauri — read [DEVELOPMENT.md](../DEVELOPMENT.md). This file describes the
+For the *reasoning* behind these choices: why libobs, why no injection, why
+Tauri: read [DEVELOPMENT.md](../DEVELOPMENT.md). This file describes the
 shape; that one defends it.
 
 ---
@@ -97,12 +97,12 @@ flowchart TB
 Rust, so a windowless recorder daemon could not reuse `#[tauri::command]`
 functions at all ([DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave)).
 `AppState` is a newtype that `Deref`s to `core::Ctx`. Two commands stay in
-`lib.rs` rather than moving down — `open_recordings_folder` and
-`dev_open_portal` — because they drive the desktop shell.
+`lib.rs` rather than moving down: `open_recordings_folder` and
+`dev_open_portal`: because they drive the desktop shell.
 
 Anything `core` needs that only an `AppHandle` can do crosses the same way: a
 trait object or a closure held by `Ctx` and installed from `lib.rs`'s `setup`.
-There are two — `set_library_changed_notifier` (emitting the Tauri event) and
+There are two: `set_library_changed_notifier` (emitting the Tauri event) and
 `set_autostart` (the `Autostart` trait over `tauri-plugin-autostart`). Both are
 `None` in a unit test, which for autostart is load-bearing: `cargo test` has no
 way to write a real login entry.
@@ -134,7 +134,7 @@ flowchart TB
     style T fill:#ede7f6,stroke:#5e35b1
 ```
 
-The stub is not a mock — it writes a real, playable file into the real
+The stub is not a mock: it writes a real, playable file into the real
 recordings directory and takes a real amount of time to do it. That is what
 keeps the library, retention, review player and the whole state machine
 developable away from Windows, with no Windows box in the loop.
@@ -148,7 +148,7 @@ goes away, off the resulting state rather than off individual actions
 to no-ops, so `StubRecorder` ignores them entirely.
 
 `start` takes the user's audio preset and `stop` reports the track layout it
-actually wrote — reported, not assumed, because a microphone can be unplugged
+actually wrote: reported, not assumed, because a microphone can be unplugged
 mid-game and the library row has to describe the file that exists
 ([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#25-multi-track-audio)). Both types are
 plain Rust in `recorder/audio.rs`; the libobs vocabulary stops at
@@ -157,7 +157,7 @@ plain Rust in `recorder/audio.rs`; the libobs vocabulary stops at
 ## Frontend
 
 Vanilla TypeScript, no framework, split by **state ownership** rather than by
-widget — see [frontend.md](frontend.md) for the module graph and the IPC
+widget: see [frontend.md](frontend.md) for the module graph and the IPC
 surface.
 
 ## Process and window model
@@ -176,7 +176,7 @@ flowchart LR
 ```
 
 The main window is built in `lib.rs`'s `setup` rather than declared in
-`tauri.conf.json`, whose `app.windows` is empty — Tauri creates config windows
+`tauri.conf.json`, whose `app.windows` is empty: Tauri creates config windows
 automatically before `setup`, and a `--hidden` start needs to create none at
 all ([DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave)).
 
@@ -188,6 +188,6 @@ and every launch of the bundled ffmpeg goes through `lib.rs`'s
 
 Both windows talk to the same Rust state and the same database. The dev
 portal is a second Vite entry point gated on the `NINJA_DEVTOOLS` env var and
-a second command set gated on the `devtools` Cargo feature — a plain
+a second command set gated on the `devtools` Cargo feature: a plain
 `npm run build` cannot emit it, and a default `cargo build` cannot register
 its commands. See [dev-portal.md](dev-portal.md).

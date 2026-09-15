@@ -1,6 +1,6 @@
 # ninja-recorder-v2
 
-A lightweight League of Legends VOD recorder for Windows — records your games
+A lightweight League of Legends VOD recorder for Windows. It records your games
 automatically, tags the timeline with in-game events, and gives you a review
 player built for improving rather than editing. **v2 is not a rewrite of that
 app; it is the same app with five things changed underneath it.** The stack
@@ -10,7 +10,7 @@ to Svelte 5, by strangler), the IPC contract (two hand-maintained lists to one
 generated one), the process model (one Tauri process to a headless daemon plus
 a disposable UI), the quality gates (none on the frontend to five in CI), and
 the capture backend (embedded libobs to an own WGC/D3D11/Media Foundation
-backend) — that last one being what eventually lets the licence change.
+backend): that last one being what eventually lets the licence change.
 
 > **Pre-alpha. v1-equivalent, gates only.**
 >
@@ -36,13 +36,13 @@ start on day one; WS1's spike could too.
 
 | | WS | What | Gated by | Effort |
 |---|---|---|---|---|
-| [ ] | **WS0** | Baseline measurement — install size, idle RAM by Private Bytes | — | 1 wk, part-time |
-| [ ] | **WS1** | Capture backend: P0c go/no-go spike, then Option B; trimmed libobs as fallback | — (spike); gate (build) | 3 wk + 4 wk |
-| [ ] | **WS2** | Generated contract — commands *and* events declared once in Rust | — | 2–3 wk |
+| [ ] | **WS0** | Baseline measurement: install size, idle RAM by Private Bytes | none | 1 wk, part-time |
+| [ ] | **WS1** | Capture backend: P0c go/no-go spike, then Option B; trimmed libobs as fallback | none (spike); gate (build) | 3 wk + 4 wk |
+| [ ] | **WS2** | Generated contract: commands *and* events declared once in Rust | none | 2–3 wk |
 | [ ] | **WS3** | Daemon / UI split over named-pipe JSON-RPC | WS2, WS6 | 3 wk |
 | [ ] | **WS4** | Svelte 5 strangler migration, player last as an imperative island | WS2 | 5–6 wk |
-| [ ] | **WS5** | Toolchain pin, edition 2024, Biome, Vitest, svelte-check, cargo-deny | — | 2 wk |
-| [ ] | **WS6** | SQLite WAL, `busy_timeout`, writer + reader pool, `query_only` UI connection | — | 1 wk |
+| [ ] | **WS5** | Toolchain pin, edition 2024, Biome, Vitest, svelte-check, cargo-deny | none | 2 wk |
+| [ ] | **WS6** | SQLite WAL, `busy_timeout`, writer + reader pool, `query_only` UI connection | none | 1 wk |
 | [ ] | **WS7** | Measure against C3 and ship v2.0.0 | everything | 1 wk |
 | [ ] | **WS8** | Remove libobs, audit, relicense, ship v2.1.0 | one release of WS7 in the field | 1–2 wk |
 
@@ -105,10 +105,10 @@ npm run tauri:dev
 ```
 
 Prerequisites: Node.js 22 or newer, and the compiler in
-[`src-tauri/rust-toolchain.toml`](src-tauri/rust-toolchain.toml) — rustup reads
+[`src-tauri/rust-toolchain.toml`](src-tauri/rust-toolchain.toml): rustup reads
 it, so there is nothing to choose.
 
-**`tauri:dev`, not `tauri dev`** — the colon passes `--features devtools`,
+**`tauri:dev`, not `tauri dev`.** The colon passes `--features devtools`,
 which compiles in the dev portal: a second window that seeds the library,
 drives the state machine without League running, dry-runs retention and runs
 raw SQL. Most of the backend can only be exercised through it.
@@ -153,7 +153,7 @@ Installers are produced by CI, never built locally and never cross-compiled.
 
 1. **No injection.** OBS "Game Capture"-style hooking is permanently off the
    table. Vanguard is a kernel anti-cheat and DLL injection is what it exists
-   to stop. WGC and display capture only — and that constraint is what the
+   to stop. WGC and display capture only, and that constraint is what the
    whole Option B design is built around, not something bolted onto it.
 2. **Official APIs only.** LCU and Live Client Data. No memory reading, no
    packet sniffing.
@@ -169,7 +169,7 @@ The reasoning is in [DEVELOPMENT.md §1](DEVELOPMENT.md#1-hard-constraints).
 whole distributed binary.
 
 Changing that is WS8 and happens at v2.1.0, after libobs is deleted and one
-release of v2.0.0 has been in the field — not before.
+release of v2.0.0 has been in the field, not before.
 [`src-tauri/deny.toml`](src-tauri/deny.toml) is what makes the exit mechanical:
 GPL is denied with exactly two named exceptions, this crate and the libobs
 fork, and deleting them is the proof. See

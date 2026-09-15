@@ -57,9 +57,11 @@ pub enum Topic {
 /// Why the library changed. A reason rather than a bare ping so a client can
 /// decide whether a full refetch is warranted — reconcile and retention can
 /// both move many rows at once, while a patch touches one.
-/// Dead until the sink that emits it lands (the second half of WS2.3), and
-/// clippy runs without `--all-targets` — same treatment, same reason, as
-/// `Event` above.
+/// `Finalized` is the only reason with a producer today. `Edited` has one only
+/// under the `devtools` feature (`dev_emit_library_changed`), and `Reconciled`
+/// and `Retention` belong to the `library-changed` sites still in `lib.rs` —
+/// wiring those means publishing from the UI process, which is WS3's business.
+/// Clippy runs without `--all-targets`, so `-D warnings` would fail meanwhile.
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
@@ -77,10 +79,6 @@ pub enum LibraryChangeReason {
 /// How a recording ended. `Refused` is not an error: the state machine declines
 /// to record spectator sessions and reconnects to an already-recorded game, and
 /// a client that cannot tell that from a crash will show the wrong thing.
-/// Dead until the sink that emits it lands (the second half of WS2.3), and
-/// clippy runs without `--all-targets` — same treatment, same reason, as
-/// `Event` above.
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum StopOutcome {
@@ -97,9 +95,8 @@ pub enum StopOutcome {
 /// Why the daemon is going away. The UI uses this to decide whether to say
 /// anything: a quit the user asked for needs no announcement, an update install
 /// does, and an error certainly does.
-/// Dead until the sink that emits it lands (the second half of WS2.3), and
-/// clippy runs without `--all-targets` — same treatment, same reason, as
-/// `Event` above.
+/// No producer until there is a daemon to shut down (WS3), and clippy runs
+/// without `--all-targets`, so `-D warnings` would fail on it meanwhile.
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
@@ -152,10 +149,15 @@ macro_rules! contract_events {
         /// wire carries `{"type":"stateChanged",…}` and a TypeScript client
         /// gets a discriminated union it can exhaustively switch on.
         ///
-        /// Nothing constructs one yet — the `EventSink` that emits these is
-        /// the second half of WS2.3. Until then this is dead code in a build
-        /// without `cfg(test)`, and clippy runs without `--all-targets`, so
-        /// `-D warnings` would fail on it.
+        /// Four variants have no producer yet, and each is waiting on a
+        /// specific thing rather than on attention: `SampleBatch` needs the
+        /// 5-second batching window, which needs a *subscriber* to batch for
+        /// (WS2.6's transport); `MatchSummaryPatched` is published from the
+        /// `library-changed` site still in `lib.rs`; and `DaemonShuttingDown`
+        /// and `Lagged` describe a daemon and a broadcast buffer that WS3
+        /// builds. Declaring them now is the point — the contract is what the
+        /// surface *is*, not what happens to be wired. Clippy runs without
+        /// `--all-targets`, so `-D warnings` would fail on them meanwhile.
         #[cfg_attr(not(test), allow(dead_code))]
         #[derive(Debug, Clone, Serialize, ts_rs::TS)]
         #[serde(tag = "type", rename_all = "camelCase")]
@@ -167,6 +169,9 @@ macro_rules! contract_events {
             )*
         }
 
+        /// `topic()` has no production caller yet — routing by topic needs a
+        /// subscriber to route to, which is WS2.6's transport. Clippy runs
+        /// without `--all-targets`, so `-D warnings` would fail on it.
         #[cfg_attr(not(test), allow(dead_code))]
         impl Event {
             /// Which topic this event is delivered on. Total by construction:
@@ -239,9 +244,17 @@ contract_events! {
     RecordingStarted {
         /// `None` until finalize: the library row is written when the recording
         /// ends, so nothing has an id while it is still being captured. A
-        /// client correlates on `path` until `RecordingStopped` names the row.
+        /// client correlates on `file_stem` until `RecordingStopped` names the
+        /// row.
         recording_id: Option<i64>,
-        path: String,
+        /// **The stem, not the path.** `Recorder::start` returns `Ok(())`; the
+        /// file it actually wrote — extension and all, which depends on the
+        /// backend — is only known when `stop` hands back a `RecordingOutput`.
+        /// The stem is what capture was asked for, it is unique per recording
+        /// (it carries `started_at_millis`), and it is a substring of the path
+        /// the library row ends up with. Publishing a guessed path instead
+        /// would be a value that is sometimes wrong.
+        file_stem: String,
         started_at_ms: i64,
     } => Recording,
 

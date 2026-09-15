@@ -644,7 +644,7 @@ jobs:
 
           ---
 
-          Unsigned build — Windows SmartScreen will warn on first run. No
+          Unsigned build: Windows SmartScreen will warn on first run. No
           code-signing certificate is configured yet.
           CAVEATS
           } > notes.md

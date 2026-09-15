@@ -4,8 +4,8 @@ How install size and memory are measured for this project, so that a number in
 [windows-verification.md](windows-verification.md) §5 means the same thing
 every time it is taken.
 
-This is WS0 task 0.1. It exists because the target it serves —
-[DEVELOPMENT.md §1.2](../DEVELOPMENT.md)'s 100 MB idle-RAM ceiling — was
+This is WS0 task 0.1. It exists because the target it serves,
+[DEVELOPMENT.md §1.2](../DEVELOPMENT.md)'s 100 MB idle-RAM ceiling, was
 written without a method, and a target with no method is unfalsifiable. WS0.2
 takes the v1 baseline with it; WS7.1 repeats it on the v2.0.0 release
 candidate, with [`scripts/measure.ps1`](../scripts/measure.ps1) so that the two
@@ -17,7 +17,7 @@ runs are the same run.
 
 ### 1.1 Private Bytes is the headline
 
-**Private Bytes** — private committed memory — is the figure this project
+**Private Bytes** (private committed memory) is the figure this project
 quotes. It excludes pages shared with other processes, so it is the honest
 answer to "what does running this cost the machine". A number that counted
 shared copies of `ntdll` would flatter every process on Windows equally and
@@ -40,7 +40,7 @@ In PowerShell:
 | Working Set | `(Get-Process <name>).WorkingSet64` |
 
 `Get-Process`'s `PrivateMemorySize64` is the private *commit* charge and is
-what `measure.ps1` samples — it needs no performance-counter permissions and
+what `measure.ps1` samples. It needs no performance-counter permissions and
 is stable across the instance-name collisions that `\Process(name#1)\` paths
 run into when two processes share a binary name, which is exactly the v2
 daemon-plus-UI case.
@@ -48,8 +48,8 @@ daemon-plus-UI case.
 ### 1.2 Sample over time, report min / median / max
 
 A single reading catches whatever the allocator happened to be doing. Sample at
-a fixed interval for a fixed duration — `measure.ps1` defaults to 1 Hz for 60
-seconds — and report the three numbers. A resting process should show a flat
+a fixed interval for a fixed duration (`measure.ps1` defaults to 1 Hz for 60
+seconds) and report the three numbers. A resting process should show a flat
 line; if it does not, the spread is the finding and a single figure would have
 hidden it.
 
@@ -80,10 +80,10 @@ twenty-three hours a day nobody has the window open. It is the figure to gate
 on.
 
 **The two-process total is recorded separately, and is not gated.** The cost of
-having the UI open is real and belongs in the table — hiding it inside a single
-headline would be the same mistake as quoting Working Set as Private Bytes —
-but a webview that exists only while someone is looking at it is not what the
-ceiling is about. Record it; do not let it move the pass/fail.
+having the UI open is real and belongs in the table, because hiding it inside a
+single headline would be the same mistake as quoting Working Set as Private
+Bytes. But a webview that exists only while someone is looking at it is not
+what the ceiling is about. Record it; do not let it move the pass/fail.
 
 ### 1.5 What v1's 9 MB actually was
 
@@ -95,8 +95,8 @@ for v1 0.8.0. That figure is:
 - from **Task Manager / `Get-Process`**, as a single reading rather than a
   sample.
 
-The design document says idle RAM was never measured. It was — but as the one
-of the six possible numbers that flatters the app most. It is not wrong and it
+The design document says idle RAM was never measured. It was, but as the one of
+the six possible numbers that flatters the app most. It is not wrong and it
 is not a like-for-like baseline for the v2 target, which is why WS0.2 retakes
 it under this method before anything changes.
 
@@ -112,14 +112,14 @@ Get-ChildItem -Recurse | Measure-Object -Property Length -Sum
 
 This is the project's own existing method and the reason the 248 MB figure is
 comparable across versions. The installer's own size is recorded next to it as
-a second figure — v1's NSIS `.exe` is 64 MB, roughly a quarter of what it
-unpacks to — because it is what a user downloads and is not what the target is
+a second figure (v1's NSIS `.exe` is 64 MB, roughly a quarter of what it unpacks
+to) because it is what a user downloads and is not what the target is
 about.
 
 The target is **200 MB** ([DEVELOPMENT.md §1.2](../DEVELOPMENT.md)). v1 misses
 it at 248 MB, of which roughly 200 MB is libobs plus ffmpeg. That miss is
 recorded rather than rounded; see §8 of the implementation plan, which requires
-the same of v2.0.0 — under 200 MB, or the miss documented with the number.
+the same of v2.0.0: under 200 MB, or the miss documented with the number.
 
 ---
 
@@ -130,7 +130,7 @@ Every run lands as a row in [windows-verification.md](windows-verification.md)
 directly so the transcription step cannot introduce a typo:
 
 ```powershell
-.\scripts\measure.ps1 -ProcessName ninja-recorder -Label "v1 0.8.0 — window closed"
+.\scripts\measure.ps1 -ProcessName ninja-recorder -Label "v1 0.8.0, window closed"
 ```
 
 State what was measured, not just the number: the version, the state from §1.3,
