@@ -1,21 +1,29 @@
 /**
- * IPC console: every command, an argument form generated from the
- * registry, and the raw response.
+ * IPC console: every command, an argument form generated from the catalogue,
+ * and the raw response.
  *
- * This is the answer to "test every backend feature" — anything reachable
- * over `invoke` is reachable here, including the commands no other panel
- * bothers to surface.
+ * This is the answer to "test every backend feature": anything reachable over
+ * `invoke` is reachable here, including the commands no other panel bothers to
+ * surface.
+ *
+ * The catalogue is generated from the Rust declaration (WS2.7). It used to be
+ * `registry.ts`, a hand-written second copy of the command surface, and this
+ * panel carried a banner comparing the two at runtime. There is one list now,
+ * so there is nothing left to compare and the banner is gone.
  */
 
-import { call, tryCall } from "../ipc";
+import {
+  type PortalArg as ArgSpec,
+  COMMANDS,
+  type PortalCommand as CommandSpec,
+} from "../commands.generated";
+import { call } from "../ipc";
 import type { Panel, PanelContext } from "../main";
-import { type ArgSpec, COMMANDS, type CommandSpec, productionCommandNames } from "../registry";
 import { card, escapeHtml, output, panelHead, toast } from "../ui";
 
 let root: HTMLElement | null = null;
 let selected: CommandSpec = COMMANDS[0];
 let search = "";
-let drift: string[] = [];
 let result: { value: unknown; ms: number; error: boolean } | null = null;
 /** Last argument values per command, so re-running one is one click. */
 const remembered = new Map<string, Record<string, string>>();
@@ -127,13 +135,6 @@ function draw() {
       "Commands",
       "Every command the backend exposes, with a generated argument form. Blue dots are dev-only commands; red dots change state.",
     ) +
-    (drift.length
-      ? `<div class="warnbar warnbar-danger"><strong>Command registry drift.</strong>
-         The Rust handler list and this page's registry disagree about: ${escapeHtml(
-           drift.join(", "),
-         )}. One of <code>src-tauri/src/lib.rs</code>,
-         <code>dev::dev_registered_commands</code>, or <code>src/dev/registry.ts</code> is stale.</div>`
-      : "") +
     `<div class="split">
       <div>
         <input type="search" id="cmd-search" placeholder="Search commands…" style="width:100%;margin-bottom:.5rem" />
@@ -230,17 +231,6 @@ export const commandsPanel: Panel = {
     root = el;
     result = null;
     draw();
-
-    const registered = await tryCall<string[]>("dev_registered_commands");
-    if (registered.ok) {
-      const rust = new Set(registered.value);
-      const ts = new Set(productionCommandNames());
-      drift = [
-        ...[...rust].filter((n) => !ts.has(n)).map((n) => `${n} (missing from this page)`),
-        ...[...ts].filter((n) => !rust.has(n)).map((n) => `${n} (not registered in Rust)`),
-      ];
-      if (drift.length) draw();
-    }
 
     el.addEventListener("click", async (e) => {
       const target = e.target as HTMLElement;

@@ -214,16 +214,23 @@ workstream should be rewritten to say what it means.
   `CREATE_NO_WINDOW`, and the bundled binary is the **LGPL** build used only
   with `-c copy` — which is what keeps it compatible with a proprietary
   distribution after WS8. A second way to launch it would break both.
-- **Adding a command means two edits, not four.** Production commands live in
-  `core/dispatch.rs`'s `dispatch_table!` and are reached through the single
-  `rpc` command, so add a row there and an entry in `src/dev/registry.ts`.
-  WS2 deletes `registry.ts` and `every_command_round_trips` together, and not
-  before the generator exists.
+- **Adding a command means one edit, then regenerate.** Production commands
+  live in `core/dispatch.rs`'s `dispatch_table!` and are reached through the
+  single `rpc` command, so add a row there **with a doc comment**, give it form
+  metadata in `contract::portal`'s `production_form_table!`, and run
+  `cargo run --bin gen-contract`. The doc comment is the help text the dev
+  portal shows; there is no TypeScript list to keep in step any more, and
+  `--check` fails the build if the generated files are stale.
+- **A `dev_*` command is declared in `contract::portal`'s `dev_command_table!`
+  and nowhere else.** That one table feeds `generate_handler!` in `lib.rs` *and*
+  the portal's catalogue, so a command cannot be registered without the portal
+  knowing about it or described without being registered. Do not add a name to
+  the `generate_handler!` list by hand.
 - **A type that crosses the IPC boundary derives `ts_rs::TS` next to its serde
   derives.** The two describe the same wire shape; splitting them is how they
   drift. 29 types today, listed in `contract::types`' test.
-  **Never `#[ts(export)]`** — it writes a `.ts` file per type as a side effect
-  of `cargo test`. WS2.5's generator collects them instead.
+  **Never `#[ts(export)]`**: it writes a `.ts` file per type as a side effect
+  of `cargo test`. The generator collects them instead.
   Render through `contract::types::config()`, never `Config::default()`: the
   default maps `i64` to `bigint`, and **JSON cannot represent a BigInt**, so
   the default describes a value the runtime never produces.
@@ -236,8 +243,11 @@ workstream should be rewritten to say what it means.
   is the transport's.
 - **The `rpc` passthrough owns argument parsing.** A wrong name or type fails
   at *runtime*, which is why every command is exercised by
-  `every_command_round_trips` in `core/dispatch.rs` — keep it that way until
-  `gen-contract --check` replaces it.
+  `every_command_round_trips` in `core/dispatch.rs`. **`gen-contract --check`
+  does not replace it** and WS2.7 kept it deliberately: the generator proves the
+  emitted TypeScript matches the declaration, which is a claim about two files,
+  while that test proves `dispatch` can parse what the client actually sends,
+  which is a claim about runtime.
 - **Don't remove `theme.ts`'s matchMedia `change` listener.** It is the only
   thing making the "System" theme follow the OS, and no test covers it.
 - **Don't attach the devtools build to a release.** It carries raw SQL,
