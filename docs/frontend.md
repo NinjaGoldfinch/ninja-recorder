@@ -605,6 +605,26 @@ a shipped build.
 > which JSON cannot carry at all; `contract::types::config()` is where that is
 > corrected and a test pins it.
 
+> **This whole table is now generated, and `src/lib/contract/` is the output.**
+> Since WS2.5 `cargo run --bin gen-contract` emits `types.ts`, `client.ts`,
+> `events.ts` and a barrel from the Rust declaration, and CI runs the same
+> binary with `--check`, so a command added without regenerating cannot merge.
+> The generated files are committed, which is what lets a frontend developer
+> work without a Rust toolchain and makes a contract change reviewable as a
+> diff. Biome does not format them: a formatter rewriting a generator's output
+> is a loop.
+>
+> There is deliberately **no Rust-to-TypeScript type map in the generator**.
+> The macros resolve the names where they still hold the real types, so
+> `dispatch_table!` emits a manifest whose types are already rendered and every
+> boundary type answers `ts_rs::TS::decl`. A third list able to disagree with
+> the other two is the thing this workstream exists to delete.
+>
+> The generated client's **method name is the wire name**, `list_recordings`
+> rather than `listRecordings`. Only the *arguments* are camelCased, because
+> that is the only rename serde actually performs, and camel-casing the method
+> too would add a second mapping to keep in step.
+
 > **The `Returns` column is no longer the source of truth.** Since WS2.1 every
 > row of `dispatch_table!` declares its own return type, and the compiler checks
 > the declaration against the function, so a wrong one is an `E0308` at the `?`,

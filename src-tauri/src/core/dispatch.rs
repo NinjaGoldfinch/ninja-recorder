@@ -29,6 +29,50 @@ pub struct CommandArg {
     pub ty: &'static str,
 }
 
+/// One argument, with its type already rendered as TypeScript.
+///
+/// The `&'static str` pair above carries the Rust *spelling*; this carries what
+/// that spelling means on the wire. Resolving it needs the real type and a
+/// `ts_rs::Config`, neither of which survives into a `&'static` const, which is
+/// why this is owned and built on demand.
+#[cfg_attr(not(test), allow(dead_code))]
+pub struct CommandTsArg {
+    /// camelCase, as the wire spells it. See `to_camel`.
+    pub name: String,
+    pub ts: String,
+}
+
+/// One command, rendered for TypeScript.
+#[cfg_attr(not(test), allow(dead_code))]
+pub struct CommandTsSpec {
+    pub name: &'static str,
+    pub is_async: bool,
+    pub args: Vec<CommandTsArg>,
+    pub returns: String,
+}
+
+/// `#[serde(rename_all = "camelCase")]` on the generated `Args` struct is what
+/// the client has to mirror, so the rule is spelled out once, here, and used by
+/// both the generator and `every_command_round_trips`.
+///
+/// Deliberately not a dependency: this is the whole of the transformation serde
+/// applies to these identifiers, which are all plain `snake_case` ASCII.
+pub fn to_camel(snake: &str) -> String {
+    let mut out = String::with_capacity(snake.len());
+    let mut upper = false;
+    for c in snake.chars() {
+        if c == '_' {
+            upper = true;
+        } else if upper {
+            out.extend(c.to_uppercase());
+            upper = false;
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// One command, as the generator sees it. Built by `dispatch_table!` from the
 /// same row that builds the `match` arm, so the two cannot disagree.
 #[cfg_attr(not(test), allow(dead_code))]
@@ -163,6 +207,42 @@ macro_rules! dispatch_table {
                             $( CommandArg { name: stringify!($arg), ty: stringify!($ty) }, )*
                         ],
                         returns: stringify!($ret),
+                    },
+                )*
+            ]
+        }
+
+        /// The same table again, with every type resolved through ts-rs
+        /// instead of `stringify!`.
+        ///
+        /// This is what closes the gap `contract::types` documents: the
+        /// `&'static str` manifest names types as *source text*, and a string
+        /// cannot be turned back into a type to ask it for its declaration.
+        /// Here the macro still has the real types, so it asks them directly.
+        ///
+        /// The alternative was a Rust-path-to-TypeScript table inside the
+        /// generator, parsing `Vec<..>`, `HashMap<..>` and `()` by hand. That
+        /// would be a third list able to disagree with the other two, in the
+        /// one workstream whose purpose is deleting exactly that. ts-rs already
+        /// knows how every one of these renders, including the generics.
+        ///
+        /// Every type in the table must therefore implement `TS`. That is a
+        /// compile error here rather than a runtime surprise in the generator,
+        /// which is where it belongs.
+        #[cfg_attr(not(test), allow(dead_code))]
+        pub fn contract_manifest_ts(cfg: &ts_rs::Config) -> Vec<CommandTsSpec> {
+            vec![
+                $(
+                    CommandTsSpec {
+                        name: stringify!($name),
+                        is_async: is_async_arm!($kind),
+                        args: vec![
+                            $( CommandTsArg {
+                                name: to_camel(stringify!($arg)),
+                                ts: <$ty as ts_rs::TS>::name(cfg),
+                            }, )*
+                        ],
+                        returns: <$ret as ts_rs::TS>::name(cfg),
                     },
                 )*
             ]
@@ -422,24 +502,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    /// `#[serde(rename_all = "camelCase")]` is what the generated client has to
-    /// mirror, so the rule is spelled out once here rather than inferred.
-    fn to_camel(snake: &str) -> String {
-        let mut out = String::with_capacity(snake.len());
-        let mut upper = false;
-        for c in snake.chars() {
-            if c == '_' {
-                upper = true;
-            } else if upper {
-                out.extend(c.to_uppercase());
-                upper = false;
-            } else {
-                out.push(c);
-            }
-        }
-        out
     }
 
     /// The whole point of the table: every command must be reachable by name
@@ -778,3 +840,4 @@ mod tests {
         assert!(rows.is_array());
     }
 }
+
