@@ -14,7 +14,7 @@ is skipped until a commit reaches `main`.
 ```mermaid
 flowchart TB
     subgraph PR["Pull request"]
-        T1["<b>Test</b> (windows-latest)<br/>biome ci · tsc --noEmit · vitest<br/>cargo deny check<br/>cargo test ×2<br/>cargo clippy ×2<br/><small>±devtools, no --all-targets</small>"]
+        T1["<b>Test</b> (windows-latest)<br/>biome ci · tsc --noEmit · vitest<br/>cargo deny check · gen-contract --check<br/>cargo test ×2<br/>cargo clippy ×2<br/><small>±devtools, no --all-targets</small>"]
     end
     subgraph MAIN["Push to main / manual dispatch"]
         T["<b>Test</b> (windows-latest)"]
@@ -44,12 +44,12 @@ a formatting mistake fails in seconds rather than after a four-minute compile.
 | 4 | *(`npx svelte-check`)* | types `tsc` cannot see | **WS4.1: commented** |
 | 5 | `npx vitest run` | frontend unit tests | WS5.5 |
 | 6 | `cargo deny check` | licences + advisories | WS5.3 |
-| 7 | *(`cargo run --bin gen-contract -- --check`)* | contract drift | **WS2.5: commented** |
+| 7 | `cargo run --bin gen-contract -- --check` | contract drift | WS2.5 |
 | 8 | `cargo test`, `cargo test --features devtools` | Rust tests, both feature sets | v1 |
 | 9 | `cargo clippy -- -D warnings`, and again with `--features devtools` | Rust lints, both feature sets | v1 |
 
-Steps 4 and 7 are commented placeholders in `ci.yml`, sitting in their final
-position so that turning them on is uncommenting a block rather than deciding
+Step 4 is a commented placeholder in `ci.yml`, sitting in its final
+position so that turning it on is uncommenting a block rather than deciding
 where it goes.
 
 **Why each of the new ones is there.**
@@ -67,9 +67,12 @@ where it goes.
   the code being strangled.
 - **cargo-deny** is the instrument of the v2.1 licence exit, not hygiene. See
   [the licences and advisories gate](#licences-and-advisories) below.
-- **`gen-contract --check`** replaces `every_command_round_trips` in
-  `core/dispatch.rs` *and* the dev portal's drift banner. Both stay until it
-  exists; none of the three overlaps the others until then.
+- **`gen-contract --check`** re-emits `src/lib/contract/` from the Rust
+  declaration and fails if it differs from what is committed, so a command or
+  an event added without regenerating cannot merge. It is what
+  `every_command_round_trips` in `core/dispatch.rs` and the dev portal's drift
+  banner were standing in for; WS2.7 deletes both, because deleting them is
+  that task's exit criterion rather than this one's.
 
 The Rust half runs twice: with and without `--features devtools`: for both
 `cargo test` and `cargo clippy -- -D warnings`. An off-by-default feature is

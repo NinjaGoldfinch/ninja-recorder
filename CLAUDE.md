@@ -68,14 +68,21 @@ npx biome ci .                                        # lint + format
 npx tsc --noEmit                                      # types
 npx vitest run                                        # frontend tests
 cd src-tauri && cargo deny check                      # licences + advisories
+cd src-tauri && cargo run --bin gen-contract -- --check  # contract drift
 cd src-tauri && cargo test
 cd src-tauri && cargo test --features devtools
 cd src-tauri && cargo clippy --no-deps -- -D warnings
 cd src-tauri && cargo clippy --features devtools --no-deps -- -D warnings
 ```
 
-Two more are commented placeholders in `ci.yml` until their workstream lands:
-`svelte-check` (WS4.1) and `cargo run --bin gen-contract -- --check` (WS2.5).
+One more is a commented placeholder in `ci.yml` until its workstream lands:
+`svelte-check` (WS4.1).
+
+`gen-contract --check` re-emits `src/lib/contract/` from the Rust declaration
+and fails if it differs from what is committed. **Regenerate and commit** with
+`cargo run --bin gen-contract` whenever a command, an event or a boundary type
+changes; the generated files are not hand-edited and Biome does not format
+them.
 
 ### Clippy runs without `--all-targets`, deliberately
 
