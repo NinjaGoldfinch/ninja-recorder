@@ -180,6 +180,46 @@ The main window is built in `lib.rs`'s `setup` rather than declared in
 automatically before `setup`, and a `--hidden` start needs to create none at
 all ([DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave)).
 
+### The daemon's RPC server, and what of it exists
+
+WS3 splits that one process in two. `daemon/rpc.rs` is the first piece to land:
+the transport, with the supervisor, the tray pump and the UI side still to come.
+
+```mermaid
+flowchart LR
+    subgraph D["ninja-recorder --daemon"]
+        SUP["Supervisor · Recorder · SQLite writer"]
+        EV["Events<br/><small>bounded broadcast, 512</small>"]
+        RPC["rpc::serve<br/><small>one task per connection</small>"]
+        SUP -- set_event_sink --> EV
+        EV --> RPC
+    end
+    UI["UI process"] -- "hello · subscribe · invoke" --> RPC
+    RPC -- "ok · err · event" --> UI
+    RPC -- dispatch --> SUP
+```
+
+| Frame | Direction | Carries |
+|---|---|---|
+| `hello` | in | protocol version; must come first |
+| `subscribe` | in | the topics this session wants, replacing what it had |
+| `invoke` | in | a command name and its args, with an id |
+| `hello` | out | the daemon's protocol version |
+| `ok` / `err` | out | the reply, echoing the request's id |
+| `event` | out | a contract event, with no id because nothing asked for it |
+
+**It is generic over the stream, and that is the point.** Production is a
+Windows named pipe; the tests drive the same `serve` over a loopback socket in
+milliseconds. A protocol exercised only on the Windows box is one that gets
+tested once a week, and the transport is the one part of the daemon that can be
+checked honestly without Windows. Loopback rather than a Unix socket so the
+tests also run in CI, which is Windows-only; one Unix-socket test is kept to
+prove `serve` really is generic.
+
+The reasoning behind the framing, the per-request ids, the bounded broadcast and
+the version refusal is in
+[DEVELOPMENT.md §17](../DEVELOPMENT.md#17-contract-and-transport).
+
 Neither child process the app spawns shows a window of its own: the fork
 builds `extprocess_recorder.exe` as a Windows-subsystem binary for release,
 and every launch of the bundled ffmpeg goes through `lib.rs`'s

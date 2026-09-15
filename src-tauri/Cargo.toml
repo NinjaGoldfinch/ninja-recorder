@@ -72,7 +72,11 @@ serde_json = "1"
 # `audio_presets_keep_every_variant` pins this exact case.
 ts-rs = { version = "12", features = ["no-serde-warnings"] }
 thiserror = "2"
-tokio = { version = "1", features = ["time", "sync", "macros", "rt"] }
+# "net" and "io-util" are WS3.1's: the daemon's RPC server is a byte stream
+# (a named pipe on Windows, a Unix socket in its tests) framed with
+# `AsyncBufReadExt::lines`. "rt-multi-thread" is what gives `spawn_blocking`
+# somewhere to put the blocking SQLite commands.
+tokio = { version = "1", features = ["time", "sync", "macros", "rt", "rt-multi-thread", "net", "io-util"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls"] }
 tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
 native-tls = "0.2"
