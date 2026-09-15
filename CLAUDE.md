@@ -46,9 +46,9 @@ disagreeing about the same file.
 
 | Path | Owner |
 |---|---|
-| `src-tauri/src/daemon/` (`mod`, `pump`, `rpc`, `snapshot`, `spawn`) | WS3 |
+| `src-tauri/src/daemon/` (`pump`, `spawn`) | WS3 tasks 3.3 and 3.5 |
 | `src-tauri/src/contract/` (`mod`, `events`, `r#gen`) | WS2 |
-| `src-tauri/src/ui/` | WS3 |
+| `src-tauri/src/ui/` (the Tauri commands; `client` has landed) | WS3 |
 | `src-tauri/src/recorder/own/` | WS1 task 1.6 |
 | `src-tauri/src/db/pool.rs` | WS6 |
 | `src/lib/` (`contract/`, `transport/`, `stores/`, `styles/tokens.css`) | WS2 / WS4 |
@@ -216,6 +216,14 @@ workstream should be rewritten to say what it means.
   which side it is on; getting it wrong is a test failure, not a rare race.
   Tests use `Db::open_temporary()`, which is a real file: `:memory:` is private
   per connection and would leave the readers seeing no tables.
+- **The daemon resolves its own paths, and `daemon::IDENTIFIER` is the one
+  that matters.** It builds no `tauri::App`, so `app_data_dir()` is
+  `dirs::data_dir()` joined with that constant. A test pins it against
+  `tauri.conf.json`, because a mismatch would not crash: the daemon would open
+  a different database in a different folder and record into a library the UI
+  cannot see. The same goes for the endpoint, which `daemon::rpc::endpoint`
+  names for both sides so the binder and the connector cannot spell it
+  differently.
 - **Every ffmpeg spawn goes through `lib.rs::ffmpeg_command`.** It sets
   `CREATE_NO_WINDOW`, and the bundled binary is the **LGPL** build used only
   with `-c copy` — which is what keeps it compatible with a proprietary

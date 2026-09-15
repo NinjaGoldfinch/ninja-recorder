@@ -49,7 +49,50 @@ const MAX_BYTES: u64 = 5 * 1024 * 1024;
 /// The active file plus this many rotated ones.
 const KEEP_ROTATED: usize = 2;
 
-const FILE_STEM: &str = "ninja-recorder";
+/// Which process is writing, and therefore which file.
+///
+/// The daemon and the UI are one binary in two roles, they run at the same
+/// time, and they share `app_data_dir()/logs/`. One file between them would
+/// mean two independent `Sink`s appending to the same handle and, worse, each
+/// rotating the other's file out from under it — a rename is not something the
+/// other process can be told about. So the stem names the role
+/// (implementation plan §3.1's ownership table).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Process {
+    /// `ui.log`. The Tauri process: windows, the webview, the dev portal.
+    Ui,
+    /// `daemon.log`. The headless recorder.
+    Daemon,
+}
+
+impl Process {
+    fn stem(self) -> &'static str {
+        match self {
+            Process::Ui => "ui",
+            Process::Daemon => "daemon",
+        }
+    }
+}
+
+/// Set once by `init`. `None` means nothing has initialized logging, which is
+/// every moment before `init` and the whole of a session whose data directory
+/// could not be opened.
+static PROCESS: OnceLock<Process> = OnceLock::new();
+
+/// The stem this process writes under, or the UI's as a fallback.
+///
+/// Behind the same gate as its one caller: `Sink` carries the stem it opened
+/// with, so nothing on the writing path reads this, and clippy runs with
+/// `-D warnings`.
+///
+/// The fallback is only reachable before `init`, and the one caller that can
+/// get there — the dev portal's file list — runs in the UI process well after
+/// it. It is a fallback rather than an `Option` because the alternative is an
+/// empty file list that `dev_log_read` would index into.
+#[cfg(feature = "devtools")]
+fn stem() -> &'static str {
+    PROCESS.get().copied().unwrap_or(Process::Ui).stem()
+}
 
 /// Severity, most severe first — the declaration order *is* the filter, so
 /// `level <= max` reads as "at most this verbose".
@@ -99,7 +142,11 @@ static SINK: OnceLock<Mutex<Sink>> = OnceLock::new();
 /// Returns the active file's path when logging is live, so the caller can
 /// say where it went. `None` means this session has no file and everything
 /// falls back to stderr; that is not an error the caller should act on.
-pub fn init(dir: &Path) -> Option<PathBuf> {
+pub fn init(dir: &Path, process: Process) -> Option<PathBuf> {
+    // Before `Sink::open`, which names the file after it. A second `init` loses
+    // the race here as well as at `SINK` below, and both are caller bugs.
+    let _ = PROCESS.set(process);
+
     if let Some(level) = std::env::var("NINJA_RECORDER_LOG_LEVEL")
         .ok()
         .and_then(|v| Level::from_env_value(&v))
@@ -107,7 +154,7 @@ pub fn init(dir: &Path) -> Option<PathBuf> {
         set_max_level(level);
     }
 
-    let sink = Sink::open(dir)?;
+    let sink = Sink::open(dir, process.stem())?;
     let path = sink.path.clone();
     // Already initialized: a second call is a caller bug, not a reason to
     // lose the log we already have.
@@ -228,19 +275,24 @@ fn should_rotate(written: u64, incoming: u64) -> bool {
 struct Sink {
     path: PathBuf,
     dir: PathBuf,
+    /// Carried rather than read back from `PROCESS` on every rotation: the
+    /// file a `Sink` rotates has to be the one it opened, and a global read
+    /// mid-rotation is a way for those two to be different.
+    stem: String,
     file: Option<File>,
     written: u64,
 }
 
 impl Sink {
-    fn open(dir: &Path) -> Option<Sink> {
+    fn open(dir: &Path, stem: &str) -> Option<Sink> {
         fs::create_dir_all(dir).ok()?;
-        let path = dir.join(format!("{FILE_STEM}.log"));
+        let path = dir.join(format!("{stem}.log"));
         let file = OpenOptions::new().create(true).append(true).open(&path).ok()?;
         let written = file.metadata().map(|m| m.len()).unwrap_or(0);
         Some(Sink {
             path,
             dir: dir.to_path_buf(),
+            stem: stem.to_string(),
             file: Some(file),
             written,
         })
@@ -276,9 +328,9 @@ impl Sink {
             let from = if index == 1 {
                 self.path.clone()
             } else {
-                self.dir.join(format!("{FILE_STEM}.{}.log", index - 1))
+                self.dir.join(format!("{}.{}.log", self.stem, index - 1))
             };
-            let to = self.dir.join(format!("{FILE_STEM}.{index}.log"));
+            let to = self.dir.join(format!("{}.{index}.log", self.stem));
             if index == KEEP_ROTATED {
                 let _ = fs::remove_file(&to);
             }
@@ -423,8 +475,8 @@ pub fn dir() -> Option<PathBuf> {
 /// only — the caller joins them to `dir`.
 #[cfg(feature = "devtools")]
 pub fn file_names() -> Vec<String> {
-    let mut names = vec![format!("{FILE_STEM}.log")];
-    names.extend((1..=KEEP_ROTATED).map(|i| format!("{FILE_STEM}.{i}.log")));
+    let mut names = vec![format!("{}.log", stem())];
+    names.extend((1..=KEEP_ROTATED).map(|i| format!("{}.{i}.log", stem())));
     names
 }
 
@@ -570,7 +622,7 @@ mod tests {
     #[test]
     fn lines_land_in_the_file() {
         let dir = temp_dir("writes");
-        let mut sink = Sink::open(&dir).expect("a fresh temp dir is writable");
+        let mut sink = Sink::open(&dir, "ninja-recorder").expect("a fresh temp dir is writable");
         sink.write_line("first");
         sink.write_line("second");
         drop(sink);
@@ -585,11 +637,11 @@ mod tests {
     #[test]
     fn reopening_keeps_what_was_already_there() {
         let dir = temp_dir("append");
-        let mut sink = Sink::open(&dir).unwrap();
+        let mut sink = Sink::open(&dir, "ninja-recorder").unwrap();
         sink.write_line("before the restart");
         drop(sink);
 
-        let mut sink = Sink::open(&dir).unwrap();
+        let mut sink = Sink::open(&dir, "ninja-recorder").unwrap();
         sink.write_line("after it");
         drop(sink);
 
@@ -601,7 +653,7 @@ mod tests {
     #[test]
     fn rotating_rolls_the_file_and_keeps_the_cap() {
         let dir = temp_dir("rotate");
-        let mut sink = Sink::open(&dir).unwrap();
+        let mut sink = Sink::open(&dir, "ninja-recorder").unwrap();
 
         sink.write_line("oldest");
         sink.rotate();
@@ -624,7 +676,7 @@ mod tests {
         );
 
         // And the oldest falls off rather than accumulating forever.
-        let mut sink = Sink::open(&dir).unwrap();
+        let mut sink = Sink::open(&dir, "ninja-recorder").unwrap();
         sink.write_line("newer still");
         sink.rotate();
         drop(sink);
@@ -650,7 +702,7 @@ mod tests {
         let blocked = dir.join("blocked");
         fs::write(&blocked, b"not a directory").unwrap();
 
-        assert!(Sink::open(&blocked).is_none());
+        assert!(Sink::open(&blocked, "ninja-recorder").is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -666,8 +718,8 @@ mod tests {
         write(Level::Error, "test", "nobody is listening yet");
 
         let dir = temp_dir("global");
-        let path = init(&dir).expect("a fresh temp dir is writable");
-        assert_eq!(path, dir.join("ninja-recorder.log"));
+        let path = init(&dir, Process::Ui).expect("a fresh temp dir is writable");
+        assert_eq!(path, dir.join("ui.log"), "the UI process writes ui.log");
 
         write(Level::Error, "state_machine", "failed to stop recording");
         // Filtered out: `Debug` is off unless something asks for it.
@@ -819,9 +871,11 @@ mod tests {
     #[cfg(feature = "devtools")]
     #[test]
     fn the_rotated_files_are_listed_newest_first() {
+        // Whichever process asks, it is told about its own files and no
+        // other's: the daemon's `daemon.log` is not the UI's to rotate.
         let names = file_names();
-        assert_eq!(names[0], "ninja-recorder.log");
+        assert_eq!(names[0], format!("{}.log", stem()));
         assert_eq!(names.len(), KEEP_ROTATED + 1);
-        assert!(names.contains(&"ninja-recorder.2.log".to_string()));
+        assert!(names.contains(&format!("{}.2.log", stem())));
     }
 }

@@ -133,7 +133,7 @@ fn ffmpeg_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn which_ffmpeg() -> Option<std::path::PathBuf> {
+pub(crate) fn which_ffmpeg() -> Option<std::path::PathBuf> {
     ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
         .into_iter()
         .map(std::path::PathBuf::from)
@@ -607,7 +607,7 @@ pub fn run() {
             // whichever started first would silently own the other's client.
             // Scope both names by build identity when WS3 creates them.
             match app.path().app_data_dir() {
-                Ok(data_dir) => match log::init(&data_dir.join("logs")) {
+                Ok(data_dir) => match log::init(&data_dir.join("logs"), log::Process::Ui) {
                     Some(path) => info!("log", "logging to {}", path.display()),
                     // Only reachable via stderr, which in a release build
                     // is nowhere — but in `tauri:dev` it is exactly where

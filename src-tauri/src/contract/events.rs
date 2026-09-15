@@ -62,11 +62,12 @@ pub enum Topic {
 /// Why the library changed. A reason rather than a bare ping so a client can
 /// decide whether a full refetch is warranted — reconcile and retention can
 /// both move many rows at once, while a patch touches one.
-/// `Finalized` is the only reason with a producer today. `Edited` has one only
-/// under the `devtools` feature (`dev_emit_library_changed`), and `Reconciled`
-/// and `Retention` belong to the `library-changed` sites still in `lib.rs` —
-/// wiring those means publishing from the UI process, which is WS3's business.
-/// Clippy runs without `--all-targets`, so `-D warnings` would fail meanwhile.
+/// Three of the four now have a daemon-side producer: `Finalized` from the
+/// finalize and the trim that follows it, `Reconciled` from the startup folder
+/// scan, and `Edited` from the command seam `Ctx::set_library_changed_notifier`
+/// hangs off. `Retention` is the one still waiting — a retention pass
+/// publishes `RetentionRan`, which says the same thing and names the rows, so
+/// this variant is for the UI-side sites in `lib.rs` that WS3.4 replaces.
 #[cfg_attr(not(test), allow(dead_code))]
 // `Deserialize` too: WS3.4 reads these back off the pipe in the UI process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS, serde::Deserialize)]
@@ -157,15 +158,15 @@ macro_rules! contract_events {
         /// wire carries `{"type":"stateChanged",…}` and a TypeScript client
         /// gets a discriminated union it can exhaustively switch on.
         ///
-        /// Four variants have no producer yet, and each is waiting on a
-        /// specific thing rather than on attention: `SampleBatch` needs the
-        /// 5-second batching window, which needs a *subscriber* to batch for
-        /// (WS2.6's transport); `MatchSummaryPatched` is published from the
-        /// `library-changed` site still in `lib.rs`; and `DaemonShuttingDown`
-        /// and `Lagged` describe a daemon and a broadcast buffer that WS3
-        /// builds. Declaring them now is the point — the contract is what the
-        /// surface *is*, not what happens to be wired. Clippy runs without
-        /// `--all-targets`, so `-D warnings` would fail on them meanwhile.
+        /// One variant still has no producer. `SampleBatch` needs the
+        /// 5-second batching window, which needs a *subscriber* to batch for;
+        /// WS3.2 gave the rest one — `MatchSummaryPatched` and
+        /// `DaemonShuttingDown` are published by the daemon, and `Lagged` by
+        /// the broadcast when a session falls behind it. Declaring them ahead
+        /// of their producers was the point: the contract is what the surface
+        /// *is*, not what happens to be wired. Clippy runs without
+        /// `--all-targets`, so `-D warnings` would fail on the last one
+        /// meanwhile.
         // `Deserialize` because WS3.4 made this inbound as well: the UI reads
         // events off the pipe that the daemon wrote, so the same enum has to
         // cross in both directions.

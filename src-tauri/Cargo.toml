@@ -72,11 +72,21 @@ serde_json = "1"
 # `audio_presets_keep_every_variant` pins this exact case.
 ts-rs = { version = "12", features = ["no-serde-warnings"] }
 thiserror = "2"
+# The daemon builds no `tauri::App`, so it cannot ask an `AppHandle` where the
+# data directory is — and `app_data_dir()` is `dirs::data_dir()` joined with the
+# identifier. This is the crate Tauri itself uses, at the version it uses, so
+# the daemon and the UI are running the same function rather than two
+# implementations of one rule (`daemon::Paths::resolve`). Already in the tree
+# through tauri; naming it here adds no crate.
+dirs = "6"
 # "net" and "io-util" are WS3.1's: the daemon's RPC server is a byte stream
 # (a named pipe on Windows, a Unix socket in its tests) framed with
 # `AsyncBufReadExt::lines`. "rt-multi-thread" is what gives `spawn_blocking`
 # somewhere to put the blocking SQLite commands.
-tokio = { version = "1", features = ["time", "sync", "macros", "rt", "rt-multi-thread", "net", "io-util"] }
+# "signal" is WS3.2's: Ctrl-C is how the daemon is stopped on a dev box, and
+# the stop has to be graceful — an in-flight recording is finalized rather than
+# dropped, which is the difference between a library row and an orphan file.
+tokio = { version = "1", features = ["time", "sync", "macros", "rt", "rt-multi-thread", "net", "io-util", "signal"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls"] }
 tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
 native-tls = "0.2"

@@ -309,7 +309,215 @@ where
     w.flush().await
 }
 
-/// A snapshot source for tests. The daemon's real one is WS3.2's.
+// --- Where the daemon listens, and how a client reaches it ----------------
+//
+// The transport is a Windows named pipe in production and a Unix socket on a
+// dev box. Both sides of the split read the address from here — the daemon to
+// bind it, the UI to connect to it — because a pipe name that two modules
+// spell separately is a pipe name they can disagree about, and the failure
+// looks exactly like a daemon that is not running.
+
+/// Which build this is, as it appears in the endpoint name.
+///
+/// `tauri.devtools.conf.json` overrides `productName` but **not**
+/// `identifier`, so a devtools build and a release build already share
+/// `app_data_dir()`, the database and the recordings folder. One process can
+/// survive that. Two daemons cannot: they would bind the same pipe, and
+/// whichever started first would silently own the other's clients — a dev
+/// portal driving the release daemon's recorder, or the reverse. Scoping the
+/// name by build identity is what keeps them apart (implementation plan §4.2).
+const BUILD: &str = if cfg!(feature = "devtools") { "devtools" } else { "release" };
+
+/// The address the daemon binds and a client connects to.
+///
+/// `data_dir` is the app data directory, and is used on Unix only — a named
+/// pipe lives in the kernel's namespace rather than the filesystem, so on
+/// Windows there is nothing to put it beside.
+pub fn endpoint(data_dir: &std::path::Path) -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        let _ = data_dir;
+        // `\\.\pipe\` is the only namespace named pipes live in, and the name
+        // after it is flat: no directories, and it may not contain a
+        // backslash. `IDENTIFIER` carries dots, which are fine.
+        std::path::PathBuf::from(format!(
+            r"\\.\pipe\ninja-recorder.{}.{BUILD}",
+            crate::daemon::IDENTIFIER
+        ))
+    }
+    #[cfg(unix)]
+    {
+        // Beside the database rather than in `/tmp`: the socket is per-user
+        // state, `$TMPDIR` is world-writable, and a path under the app data
+        // directory inherits that directory's permissions. Unix sockets have a
+        // ~108-byte path limit, which this is comfortably inside.
+        data_dir.join(format!("daemon.{BUILD}.sock"))
+    }
+}
+
+/// The accepting half of the endpoint.
+///
+/// Also the daemon's single-instance guard, which is why `bind` distinguishes
+/// "already running" from "failed": see its doc comment.
+pub struct Listener {
+    #[cfg(windows)]
+    name: std::ffi::OsString,
+    /// The idle server instance, waiting for the next client. `accept` hands
+    /// this one over and immediately creates its replacement, so the name is
+    /// owned continuously — the moment no instance exists is the moment
+    /// another process could take the name.
+    #[cfg(windows)]
+    idle: Option<tokio::net::windows::named_pipe::NamedPipeServer>,
+    #[cfg(unix)]
+    listener: tokio::net::UnixListener,
+    #[cfg(unix)]
+    path: std::path::PathBuf,
+}
+
+impl Listener {
+    /// Binds the endpoint, or reports that a daemon already owns it.
+    ///
+    /// `Ok(None)` means **another daemon is already running**, which is a
+    /// normal outcome and not an error: the plan's startup rule 3 is that a
+    /// second `--daemon` launch exits 0 silently rather than signalling the
+    /// first, because the first might be recording.
+    ///
+    /// ## This is the single-instance check, and there is no separate mutex
+    ///
+    /// The plan sketches a named mutex alongside the pipe. One lock is better
+    /// than two here, because the thing worth protecting is the *endpoint*:
+    /// a mutex held while the pipe failed to bind, or a pipe bound while the
+    /// mutex was somehow free, are both states where the answer to "is a
+    /// daemon running" depends on which one you asked. Binding the endpoint
+    /// answers it directly, on both platforms, and needs no Win32 surface
+    /// beyond what tokio already wraps.
+    ///
+    /// Windows gets that from `first_pipe_instance`, which fails with
+    /// `ERROR_ACCESS_DENIED` when another process already has a server on the
+    /// name. Unix gets it from `bind`, plus a probe: a socket file outlives
+    /// the process that made it, so `EADDRINUSE` alone cannot tell a live
+    /// daemon from a crashed one's leftovers. Connecting is what separates
+    /// them — someone answers, or nobody does and the file is stale.
+    pub fn bind(endpoint: &std::path::Path) -> std::io::Result<Option<Listener>> {
+        #[cfg(windows)]
+        {
+            use tokio::net::windows::named_pipe::ServerOptions;
+
+            let name = endpoint.as_os_str().to_os_string();
+            match ServerOptions::new()
+                .first_pipe_instance(true)
+                // Default, set explicitly because it is a security property
+                // rather than a tuning one: a pipe reachable over SMB would let
+                // a machine on the network drive this one's recorder.
+                .reject_remote_clients(true)
+                .create(&name)
+            {
+                Ok(idle) => Ok(Some(Listener { name, idle: Some(idle) })),
+                // The one error that means "someone else got here first".
+                // Every other failure is a real one and is reported.
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => Ok(None),
+                Err(e) => Err(e),
+            }
+        }
+        #[cfg(unix)]
+        {
+            use tokio::net::UnixListener;
+
+            match UnixListener::bind(endpoint) {
+                Ok(listener) => {
+                    Ok(Some(Listener { listener, path: endpoint.to_path_buf() }))
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                    // Someone answering means a live daemon. A refused
+                    // connection means the file outlived the process that
+                    // bound it — a crash, or a kill -9 — and nothing is
+                    // listening, so it is ours to remove.
+                    match std::os::unix::net::UnixStream::connect(endpoint) {
+                        Ok(_) => Ok(None),
+                        Err(_) => {
+                            std::fs::remove_file(endpoint)?;
+                            let listener = UnixListener::bind(endpoint)?;
+                            Ok(Some(Listener { listener, path: endpoint.to_path_buf() }))
+                        }
+                    }
+                }
+                Err(e) => Err(e),
+            }
+        }
+    }
+
+    /// Waits for the next client.
+    ///
+    /// The returned stream is a `NamedPipeServer` on Windows and a
+    /// `UnixStream` on Unix; `serve` is generic over both, which is the whole
+    /// reason the protocol can be exercised on a dev box.
+    pub async fn accept(&mut self) -> std::io::Result<impl ClientStream + use<>> {
+        #[cfg(windows)]
+        {
+            use tokio::net::windows::named_pipe::ServerOptions;
+
+            // Rebuilt here rather than assumed, because either line below can
+            // leave us without one: a failed `connect` returns before the
+            // replacement is made, and the caller's answer to that is to call
+            // `accept` again. An `expect` on the `Option` would turn one
+            // refused connection into a panicking daemon on the next client.
+            let idle = match self.idle.take() {
+                Some(idle) => idle,
+                None => ServerOptions::new().reject_remote_clients(true).create(&self.name)?,
+            };
+            idle.connect().await?;
+
+            // The replacement, made while the connected instance is still in
+            // hand, so the name is owned continuously. Best-effort on purpose:
+            // a client is already connected, and failing the accept to report
+            // that the *next* instance could not be made would drop a session
+            // over a problem the next `accept` will retry anyway.
+            self.idle = ServerOptions::new().reject_remote_clients(true).create(&self.name).ok();
+            Ok(idle)
+        }
+        #[cfg(unix)]
+        {
+            self.listener.accept().await.map(|(stream, _)| stream)
+        }
+    }
+}
+
+/// A socket file is not cleaned up by the kernel, so the daemon cleans up
+/// after itself. A crash still leaves one behind, which is what `bind`'s probe
+/// is for; this only spares the ordinary case.
+#[cfg(unix)]
+impl Drop for Listener {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// What both ends of the transport require of a stream. Named so `accept` can
+/// return one type on Windows and another on Unix without every caller
+/// repeating the bounds.
+pub trait ClientStream: tokio::io::AsyncRead + AsyncWrite + Unpin + Send + 'static {}
+impl<T: tokio::io::AsyncRead + AsyncWrite + Unpin + Send + 'static> ClientStream for T {}
+
+/// Connects to a running daemon.
+///
+/// The client half of `endpoint`, here rather than in `ui` so the two spellings
+/// of the address cannot drift: the same file binds it and opens it.
+pub async fn connect(endpoint: &std::path::Path) -> std::io::Result<impl ClientStream + use<>> {
+    #[cfg(windows)]
+    {
+        // `ClientOptions::open` is synchronous and can fail with
+        // `ERROR_PIPE_BUSY` when every instance is momentarily taken. The
+        // caller's answer to a failed connect is a backoff retry, which is
+        // also the answer to a busy pipe, so this does not special-case it.
+        tokio::net::windows::named_pipe::ClientOptions::new().open(endpoint)
+    }
+    #[cfg(unix)]
+    {
+        tokio::net::UnixStream::connect(endpoint).await
+    }
+}
+
+/// A snapshot source for tests. The daemon's real one is `daemon::snapshot`.
 ///
 /// Lives here rather than in either test module because both `rpc`'s tests and
 /// `ui::client`'s drive a real server, and two copies of the same stand-in
@@ -596,5 +804,171 @@ mod tests {
         let reply: Value = serde_json::from_str(&line).unwrap();
         assert_eq!(reply["type"], "hello");
         assert_eq!(reply["protocol"], PROTOCOL);
+    }
+
+    // --- the endpoint ------------------------------------------------------
+    //
+    // These drive the *production* transport — a named pipe on Windows, a Unix
+    // socket on a dev box — rather than the loopback socket the protocol tests
+    // above use. That is the point of them: `serve` being generic is what lets
+    // the protocol be tested in milliseconds, and this is the part that proves
+    // the generic ends up connected to something real.
+
+    /// A unique endpoint, because these tests run concurrently and, on
+    /// Windows, in a namespace shared with any daemon already running on the
+    /// machine. Binding `endpoint()` itself in a test would either collide
+    /// with another test or, worse, take the name a real daemon was about to
+    /// want.
+    fn test_endpoint() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let unique = format!("{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed));
+
+        #[cfg(windows)]
+        {
+            std::path::PathBuf::from(format!(r"\\.\pipe\ninja-recorder-test.{unique}"))
+        }
+        #[cfg(unix)]
+        {
+            let dir = std::env::temp_dir().join(format!("nr-endpoint-test-{unique}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            dir.join("daemon.sock")
+        }
+    }
+
+    /// The name carries the identifier *and* the build, because a devtools
+    /// build and a release build share `app_data_dir()` and would otherwise
+    /// share this too — a dev portal driving the release daemon's recorder.
+    #[test]
+    fn the_endpoint_is_scoped_by_build_identity() {
+        let endpoint = endpoint(std::path::Path::new("/tmp/data"));
+        let name = endpoint.display().to_string();
+
+        assert!(name.contains(BUILD), "the endpoint must name the build: {name}");
+        assert_eq!(
+            BUILD,
+            if cfg!(feature = "devtools") { "devtools" } else { "release" },
+            "the two builds must not agree on a name"
+        );
+
+        #[cfg(windows)]
+        {
+            assert!(name.starts_with(r"\\.\pipe\"), "a named pipe lives in the pipe namespace: {name}");
+            assert!(name.contains(crate::daemon::IDENTIFIER), "the endpoint must name the app: {name}");
+        }
+        #[cfg(unix)]
+        {
+            // Under the data directory, which is per-user, rather than in a
+            // world-writable `/tmp`.
+            assert!(endpoint.starts_with("/tmp/data"), "the socket belongs beside the database: {name}");
+        }
+    }
+
+    /// The single-instance rule, and the reason `bind` returns an `Option`: a
+    /// second daemon must find the endpoint owned and leave, rather than
+    /// racing the first for it or signalling it to quit while it records.
+    #[tokio::test]
+    async fn a_second_bind_finds_the_endpoint_already_owned() {
+        let endpoint = test_endpoint();
+        let first = Listener::bind(&endpoint).unwrap();
+        assert!(first.is_some(), "the first daemon takes the endpoint");
+
+        let second = Listener::bind(&endpoint).unwrap();
+        assert!(second.is_none(), "the second must find it owned, not fail and not steal it");
+
+        // And once the first lets go, the name is available again — otherwise
+        // a daemon could not be restarted without a reboot.
+        drop(first);
+        let third = Listener::bind(&endpoint).unwrap();
+        assert!(third.is_some(), "the endpoint is free once its owner is gone");
+    }
+
+    /// A socket file outlives the process that bound it, so "the file is
+    /// there" cannot mean "a daemon is running". A daemon that believed it
+    /// would refuse to start after a single crash, forever, with nothing to
+    /// tell the user but silence.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_socket_left_behind_by_a_dead_daemon_is_taken_over() {
+        let endpoint = test_endpoint();
+
+        // Exactly what a kill -9 leaves: the file, and nothing listening.
+        let stale = std::os::unix::net::UnixListener::bind(&endpoint).unwrap();
+        drop(stale);
+        assert!(endpoint.exists(), "dropping a listener leaves the file behind");
+
+        let listener = Listener::bind(&endpoint).unwrap();
+        assert!(listener.is_some(), "a stale socket is not a running daemon");
+    }
+
+    /// The exit criterion, in a test: a client connects over the transport the
+    /// daemon actually listens on, hands it a command, and gets the answer.
+    ///
+    /// On Windows that is the named pipe, which is what CI runs; on a dev box
+    /// it is the Unix socket. Both go through `connect`, which is the same
+    /// function the UI will use to find the daemon (WS3.5).
+    #[tokio::test]
+    async fn a_client_reaches_the_daemon_over_the_real_endpoint() {
+        let endpoint = test_endpoint();
+        let mut listener = Listener::bind(&endpoint).unwrap().expect("a fresh endpoint is free");
+
+        let ctx = ctx();
+        let snapshot = super::test_snapshot(&ctx);
+        let events = Events::new();
+        let published = events.clone();
+        tokio::spawn(async move {
+            let stream = listener.accept().await.unwrap();
+            let _ = serve(stream, ctx, events, snapshot).await;
+            // Held until the session ends: dropping the listener early would
+            // release the name while a client is still connected.
+            drop(listener);
+        });
+
+        let stream = connect(&endpoint).await.expect("the daemon is listening");
+        let (rx, mut tx) = tokio::io::split(stream);
+        let mut rx = BufReader::new(rx);
+
+        // Every read is bounded. A frame that never arrives is a real failure
+        // mode of a transport test — the wrong topic, a listener that dropped
+        // the name — and an unbounded `read_line` reports it as a suite that
+        // hangs forever rather than as a test that failed.
+        async fn reply<R: tokio::io::AsyncBufRead + Unpin>(rx: &mut R) -> Value {
+            let mut line = String::new();
+            tokio::time::timeout(std::time::Duration::from_secs(10), rx.read_line(&mut line))
+                .await
+                .expect("the daemon answered within ten seconds")
+                .unwrap();
+            serde_json::from_str(&line).unwrap()
+        }
+
+        async fn send<W: AsyncWrite + Unpin>(tx: &mut W, frame: &str) {
+            tx.write_all(frame.as_bytes()).await.unwrap();
+            tx.write_all(b"\n").await.unwrap();
+            tx.flush().await.unwrap();
+        }
+
+        send(&mut tx, r#"{"method":"hello","id":1,"protocol":1}"#).await;
+        let hello = reply(&mut rx).await;
+        assert_eq!(hello["type"], "hello", "the handshake crosses the real transport: {hello}");
+        assert!(hello["snapshot"].is_object());
+
+        // `daemon` as well as `recording`, because the event below is the
+        // transport's own rather than a game's.
+        send(&mut tx, r#"{"method":"subscribe","id":2,"topics":["recording","daemon"]}"#).await;
+        assert_eq!(reply(&mut rx).await["type"], "ok");
+
+        // A command, because a transport that carries only the handshake
+        // carries nothing worth having.
+        send(&mut tx, r#"{"method":"invoke","id":3,"command":"game_state_status","args":{}}"#).await;
+        let ran = reply(&mut rx).await;
+        assert_eq!(ran["id"], 3);
+        assert_eq!(ran["value"]["state"], "Idle", "the command ran in the daemon: {ran}");
+
+        // And an event pushed the other way, which is the half a
+        // request/reply transport would let you forget about.
+        published.publish(Event::Lagged { dropped: 7 });
+        let event = reply(&mut rx).await;
+        assert_eq!(event["type"], "event");
+        assert_eq!(event["event"]["dropped"], 7);
     }
 }
