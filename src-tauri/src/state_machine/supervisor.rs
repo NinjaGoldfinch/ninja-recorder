@@ -31,7 +31,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::async_runtime::JoinHandle;
 
-#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+// `Deserialize` too: WS3.4 reads these back off the pipe in the UI process.
+#[derive(Debug, Clone, Serialize, ts_rs::TS, serde::Deserialize)]
 pub struct SessionMarker {
     #[serde(flatten)]
     pub marker: Marker,
@@ -41,7 +42,8 @@ pub struct SessionMarker {
 /// One 1 Hz sample of the team-advantage series, time-aligned to the video
 /// the same way markers are. Kept in memory for the duration of the
 /// recording and flushed to the DB in one transaction at finalize.
-#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+// `Deserialize` too: WS3.4 reads these back off the pipe in the UI process.
+#[derive(Debug, Clone, Serialize, ts_rs::TS, serde::Deserialize)]
 pub struct SessionSample {
     pub game_time_s: f64,
     pub video_time_s: f64,

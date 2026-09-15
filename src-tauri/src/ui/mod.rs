@@ -8,3 +8,9 @@
 //! The UI is disposable by design. Killing it must not stop a recording and
 //! must not lose a marker; everything it holds is either presentation state or
 //! a read-only view of what the daemon wrote (implementation plan §3.1, §3.2).
+//!
+//! `client` is the first piece: the UI's side of the pipe, with reply routing,
+//! reconnect and version-skew refusal. What is not here yet is the daemon to
+//! talk to (WS3.2) and the Tauri commands that expose this to the webview.
+
+pub mod client;

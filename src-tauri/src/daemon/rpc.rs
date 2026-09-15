@@ -44,6 +44,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::broadcast;
 
 use crate::contract::events::{Event, Topic};
+use crate::contract::snapshot::Snapshot;
 use crate::core::Ctx;
 
 /// How many events the daemon buffers for a session that is not keeping up.
@@ -87,9 +88,17 @@ pub enum Request {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Reply {
-    /// The handshake's answer.
+    /// The handshake's answer, carrying the whole of the daemon's observable
+    /// state.
+    ///
+    /// **The snapshot rides on `hello` rather than being fetched after it.** A
+    /// client that connects, or reconnects after a dropped pipe, gets one
+    /// snapshot and then a stream of events; it never replays history. Making
+    /// that a second round trip would open a window between the two where
+    /// events arrive that the client has no baseline to apply them to, which is
+    /// the exact gap `seq` exists to close.
     #[serde(rename_all = "camelCase")]
-    Hello { id: u64, protocol: u32 },
+    Hello { id: u64, protocol: u32, snapshot: Box<Snapshot> },
     /// A command succeeded. `value` is whatever the command returns, already
     /// serialized by the dispatcher.
     Ok { id: u64, value: Value },
@@ -145,79 +154,91 @@ struct Session {
     greeted: bool,
 }
 
+/// Builds the snapshot a `hello` answers with.
+///
+/// A closure rather than something assembled here, because `Snapshot::assemble`
+/// needs the last observed LCU status and the stream's position, and neither
+/// belongs to the transport: the daemon owns the gameflow watcher and the event
+/// counter. WS2.4 declared those two fields as supplied for the same reason.
+pub type SnapshotSource = Arc<dyn Fn() -> Snapshot + Send + Sync>;
+
 /// Serves one connection until it closes or the protocol is violated.
 ///
 /// Generic over the stream so the same code serves a Windows named pipe in
 /// production and a Unix socket in the tests. That is not a convenience: the
 /// alternative is a protocol whose only exercise is on the Windows box, which
 /// is the loop this project is organised to stay out of.
-pub async fn serve<S>(stream: S, ctx: Arc<Ctx>, events: Events) -> std::io::Result<()>
+pub async fn serve<S>(
+    stream: S,
+    ctx: Arc<Ctx>,
+    events: Events,
+    snapshot: SnapshotSource,
+) -> std::io::Result<()>
 where
     S: tokio::io::AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let (rx, tx) = tokio::io::split(stream);
+    let (rx, mut tx) = tokio::io::split(stream);
     let mut lines = BufReader::new(rx).lines();
-    let writer = Arc::new(tokio::sync::Mutex::new(tx));
 
     // Subscribed from the start, not from `subscribe`: a client that asks for
     // topics should not miss what happened between its `hello` and its
-    // subscription. Frames for topics it has not asked for are dropped when
-    // they are written, which costs nothing and closes that window.
+    // subscription. Frames for topics it has not asked for are dropped on the
+    // way out, which costs nothing and closes that window.
     let mut rx_events = events.subscribe();
-    let session = Arc::new(tokio::sync::Mutex::new(Session { topics: Vec::new(), greeted: false }));
+    let mut session = Session { topics: Vec::new(), greeted: false };
 
-    let pump = {
-        let writer = Arc::clone(&writer);
-        let session = Arc::clone(&session);
-        tokio::spawn(async move {
-            loop {
-                match rx_events.recv().await {
+    // **One task owns the connection.** The first version spawned the event
+    // pump separately, sharing the write half through an `Arc<Mutex<..>>`. That
+    // is a leak with teeth: aborting the serve task does not run its cleanup,
+    // so the pump outlived it still holding the socket, and a client whose
+    // daemon had gone away never saw EOF and never reconnected. Selecting in
+    // one task means dropping it drops everything, and the writer needs no lock
+    // because there is only ever one writer.
+    loop {
+        tokio::select! {
+            line = lines.next_line() => {
+                let Some(line) = line? else { return Ok(()) };
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let reply = match serde_json::from_str::<Request>(&line) {
+                    Ok(request) => handle(request, &ctx, &mut session, &snapshot).await,
+                    // A frame we cannot parse has no id to echo, so the error
+                    // goes out under `NO_ID`. Answering at all is deliberate:
+                    // silence looks identical to a hung daemon from the far end.
+                    Err(e) => Reply::Err { id: NO_ID, error: format!("malformed frame: {e}") },
+                };
+                if write_frame(&mut tx, &reply).await.is_err() {
+                    return Ok(());
+                }
+            }
+            received = rx_events.recv() => {
+                let reply = match received {
                     Ok(event) => {
-                        let wanted = {
-                            let s = session.lock().await;
-                            s.greeted && s.topics.contains(&event.topic())
-                        };
-                        if wanted && write_frame(&writer, &Reply::Event { event }).await.is_err() {
-                            return;
+                        if !(session.greeted && session.topics.contains(&event.topic())) {
+                            continue;
                         }
+                        Reply::Event { event }
                     }
                     Err(broadcast::error::RecvError::Lagged(dropped)) => {
                         // The contract declares this for exactly this moment.
-                        let event = Event::Lagged { dropped: dropped as u32 };
-                        if write_frame(&writer, &Reply::Event { event }).await.is_err() {
-                            return;
-                        }
+                        Reply::Event { event: Event::Lagged { dropped: dropped as u32 } }
                     }
-                    Err(broadcast::error::RecvError::Closed) => return,
+                    Err(broadcast::error::RecvError::Closed) => return Ok(()),
+                };
+                if write_frame(&mut tx, &reply).await.is_err() {
+                    return Ok(());
                 }
             }
-        })
-    };
-
-    while let Some(line) = lines.next_line().await? {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let reply = match serde_json::from_str::<Request>(&line) {
-            Ok(request) => handle(request, &ctx, &session).await,
-            // A frame we cannot parse has no id to echo, so the error goes out
-            // under `NO_ID`. Answering at all is deliberate: silence would look
-            // identical to a hung daemon from the other end.
-            Err(e) => Reply::Err { id: NO_ID, error: format!("malformed frame: {e}") },
-        };
-        if write_frame(&writer, &reply).await.is_err() {
-            break;
         }
     }
-
-    pump.abort();
-    Ok(())
 }
 
 async fn handle(
     request: Request,
     ctx: &Arc<Ctx>,
-    session: &Arc<tokio::sync::Mutex<Session>>,
+    session: &mut Session,
+    snapshot: &SnapshotSource,
 ) -> Reply {
     match request {
         Request::Hello { id, protocol } => {
@@ -233,23 +254,19 @@ async fn handle(
                     ),
                 };
             }
-            session.lock().await.greeted = true;
-            Reply::Hello { id, protocol: PROTOCOL }
+            session.greeted = true;
+            Reply::Hello { id, protocol: PROTOCOL, snapshot: Box::new(snapshot()) }
         }
         Request::Subscribe { id, topics } => {
-            let mut s = session.lock().await;
-            if !s.greeted {
+            if !session.greeted {
                 return Reply::Err { id, error: "subscribe before hello".to_string() };
             }
-            s.topics = topics;
+            session.topics = topics;
             Reply::Ok { id, value: Value::Null }
         }
         Request::Invoke { id, command, args } => {
-            {
-                let s = session.lock().await;
-                if !s.greeted {
-                    return Reply::Err { id, error: "invoke before hello".to_string() };
-                }
+            if !session.greeted {
+                return Reply::Err { id, error: "invoke before hello".to_string() };
             }
             match invoke(ctx, &command, args).await {
                 Ok(value) => Reply::Ok { id, value },
@@ -280,18 +297,33 @@ async fn invoke(ctx: &Arc<Ctx>, command: &str, args: Value) -> Result<Value, Str
 
 /// One frame, one line.
 ///
-/// The lock is held across the write so two tasks cannot interleave halves of
-/// two frames into one line, which would be a protocol error the reader could
-/// not recover from.
-async fn write_frame<W>(writer: &Arc<tokio::sync::Mutex<W>>, reply: &Reply) -> std::io::Result<()>
+/// No lock, because there is exactly one writer: replies and events are written
+/// from the same task, so two frames cannot interleave halves into one line.
+async fn write_frame<W>(w: &mut W, reply: &Reply) -> std::io::Result<()>
 where
     W: AsyncWrite + Unpin,
 {
     let mut line = serde_json::to_string(reply).map_err(std::io::Error::other)?;
     line.push('\n');
-    let mut w = writer.lock().await;
     w.write_all(line.as_bytes()).await?;
     w.flush().await
+}
+
+/// A snapshot source for tests. The daemon's real one is WS3.2's.
+///
+/// Lives here rather than in either test module because both `rpc`'s tests and
+/// `ui::client`'s drive a real server, and two copies of the same stand-in
+/// would be one more thing able to disagree.
+#[cfg(test)]
+pub(crate) fn test_snapshot(ctx: &Arc<Ctx>) -> SnapshotSource {
+    let ctx = Arc::clone(ctx);
+    Arc::new(move || {
+        Snapshot::assemble(
+            &ctx,
+            0,
+            crate::core::LcuStatus { connected: false, phase: None, summoner: None, error: None },
+        )
+    })
 }
 
 #[cfg(test)]
@@ -343,9 +375,10 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let ctx = ctx();
+        let snapshot = super::test_snapshot(&ctx);
         tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            let _ = serve(stream, ctx, events).await;
+            let _ = serve(stream, ctx, events, snapshot).await;
         });
 
         let client = TcpStream::connect(addr).await.unwrap();
@@ -373,6 +406,12 @@ mod tests {
         assert_eq!(reply["type"], "hello");
         assert_eq!(reply["id"], 1);
         assert_eq!(reply["protocol"], PROTOCOL);
+        // The whole of the daemon's observable state, in the handshake: a
+        // reconnecting client must not need a second round trip to have a
+        // baseline for the events that follow.
+        assert!(reply["snapshot"].is_object(), "hello must carry the snapshot: {reply}");
+        assert!(reply["snapshot"]["state"].is_string());
+        assert!(reply["snapshot"]["prefs"].is_object());
     }
 
     /// The updater can replace the daemon under a running UI, so this is a real
@@ -538,9 +577,10 @@ mod tests {
         let listener = UnixListener::bind(&path).unwrap();
 
         let ctx = ctx();
+        let snapshot = super::test_snapshot(&ctx);
         tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            let _ = serve(stream, ctx, Events::new()).await;
+            let _ = serve(stream, ctx, Events::new(), snapshot).await;
         });
 
         let client = UnixStream::connect(&path).await.unwrap();
