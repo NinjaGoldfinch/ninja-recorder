@@ -88,13 +88,12 @@ pub struct DevHealth {
 /// Everything the Overview panel polls, in one round trip. Six separate
 /// `invoke`s per tick at 1 Hz would be six IPC hops and six DB locks for a
 /// display that is only ever read as a whole.
-#[tauri::command]
 pub fn dev_health(
-    state: tauri::State<AppState>,
-    dev: tauri::State<super::DevState>,
+    ctx: &crate::core::Ctx,
+    
 ) -> Result<DevHealth, String> {
     let counts = {
-        let conn = state.db.conn();
+        let conn = ctx.db.conn();
         let count = |table: &str| -> Result<i64, String> {
             conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
                 .map_err(|e| e.to_string())
@@ -107,18 +106,18 @@ pub fn dev_health(
     };
 
     Ok(DevHealth {
-        supervisor: state.supervisor.status(),
-        session: state.supervisor.dev_session_view(),
-        is_recording: state
+        supervisor: ctx.supervisor.status(),
+        session: ctx.supervisor.dev_session_view(),
+        is_recording: ctx
             .recorder
             .lock()
             .map_err(|e| e.to_string())?
             .is_recording(),
-        total_bytes: state.db.total_size_bytes().map_err(|e| e.to_string())?,
-        free_bytes: retention::free_space_bytes(&state.recordings_dir).unwrap_or(0) as i64,
+        total_bytes: ctx.db.total_size_bytes().map_err(|e| e.to_string())?,
+        free_bytes: retention::free_space_bytes(&ctx.recordings_dir).unwrap_or(0) as i64,
         counts,
-        policy: state.db.get_retention_policy().map_err(|e| e.to_string())?,
-        replay_running: dev.replay.lock().map_err(|e| e.to_string())?.is_some(),
+        policy: ctx.db.get_retention_policy().map_err(|e| e.to_string())?,
+        replay_running: super::dev_state().replay.lock().map_err(|e| e.to_string())?.is_some(),
         fixture_recording: crate::fixtures::enabled(),
     })
 }

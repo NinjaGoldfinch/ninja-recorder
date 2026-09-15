@@ -10,7 +10,7 @@
 
 use crate::live_client::AllGameData;
 use crate::state_machine::{DevSessionView, StateEvent, SupervisorStatus};
-use crate::{dev, lcu, AppState};
+use crate::{lcu};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -76,23 +76,22 @@ pub struct DispatchReport {
 /// Feeds one event through the live supervisor. Reports the state on
 /// either side so the portal can show the transition rather than just the
 /// result — a dispatch that changes nothing is the interesting case.
-#[tauri::command]
 pub fn dev_dispatch_state_event(
-    state: tauri::State<AppState>,
-    app: tauri::AppHandle,
+    ctx: &crate::core::Ctx,
+    
     event: DevStateEvent,
 ) -> Result<DispatchReport, String> {
-    let before = state.supervisor.status();
-    state.supervisor.dev_dispatch(event.into_state_event());
-    let after = state.supervisor.status();
+    let before = ctx.supervisor.status();
+    ctx.supervisor.dev_dispatch(event.into_state_event());
+    let after = ctx.supervisor.status();
 
     // A transition out of Recording writes a row; anything else can't.
     if before.state != after.state {
-        dev::notify_library_changed(&app);
+        ctx.notify_library_changed();
     }
 
     Ok(DispatchReport {
-        session: state.supervisor.dev_session_view(),
+        session: ctx.supervisor.dev_session_view(),
         before,
         after,
     })
@@ -113,17 +112,16 @@ pub struct InjectReport {
 
 /// Feeds one Live Client Data payload through the real marker and sample
 /// pipeline, exactly as the 1 Hz poller would.
-#[tauri::command]
 pub fn dev_inject_snapshot(
-    state: tauri::State<AppState>,
+    ctx: &crate::core::Ctx,
     snapshot: serde_json::Value,
 ) -> Result<InjectReport, String> {
     let parsed: AllGameData = serde_json::from_value(snapshot)
         .map_err(|e| format!("not a valid Live Client Data payload: {e}"))?;
 
-    let before = state.supervisor.dev_session_view();
-    state.supervisor.dev_on_snapshot(parsed);
-    let after = state.supervisor.dev_session_view();
+    let before = ctx.supervisor.dev_session_view();
+    ctx.supervisor.dev_on_snapshot(parsed);
+    let after = ctx.supervisor.dev_session_view();
 
     let (markers_added, samples_added) = match (&before, &after) {
         (Some(b), Some(a)) => (
@@ -134,7 +132,7 @@ pub fn dev_inject_snapshot(
         _ => (0, 0),
     };
 
-    let status = state.supervisor.status();
+    let status = ctx.supervisor.status();
     Ok(InjectReport {
         accepted: after.is_some(),
         note: after.is_none().then(|| {
@@ -153,9 +151,8 @@ pub fn dev_inject_snapshot(
 /// The in-flight session — markers and samples accumulating right now.
 /// `game_state_status` only carries the *last finalized* recording, so
 /// without this there is no way to watch the pipeline work.
-#[tauri::command]
-pub fn dev_session_snapshot(state: tauri::State<AppState>) -> Option<DevSessionView> {
-    state.supervisor.dev_session_view()
+pub fn dev_session_snapshot(ctx: &crate::core::Ctx) -> Option<DevSessionView> {
+    ctx.supervisor.dev_session_view()
 }
 
 // --- Scripted replay ---------------------------------------------------
@@ -216,14 +213,11 @@ impl Drop for ReplayHandle {
 /// uses — so the `MarkerTracker`'s cross-poll de-duplication (each real
 /// poll returns the *entire* event history, not just new events) is
 /// exercised too, not bypassed.
-#[tauri::command]
 pub fn dev_replay_start(
-    state: tauri::State<AppState>,
-    dev: tauri::State<super::DevState>,
-    app: tauri::AppHandle,
+    ctx: &crate::core::Ctx,
     spec: ReplaySpec,
 ) -> Result<(), String> {
-    let mut slot = dev.replay.lock().map_err(|e| e.to_string())?;
+    let mut slot = super::dev_state().replay.lock().map_err(|e| e.to_string())?;
     if slot.is_some() {
         return Err("a replay is already running — stop it first".to_string());
     }
@@ -243,9 +237,14 @@ pub fn dev_replay_start(
         ..Default::default()
     }));
 
-    let supervisor = Arc::clone(&state.supervisor);
+    let supervisor = Arc::clone(&ctx.supervisor);
     let task_status = Arc::clone(&status);
-    let app_handle = app.clone();
+    // A handle on the library-changed seam rather than an `AppHandle`: the
+    // replay writes rows for the length of a simulated game, and telling
+    // whoever is listening about that is the one thing it needs to reach out
+    // of the task for. In the UI that seam is still a Tauri event; in the
+    // daemon it is a contract event on the wire.
+    let notify = ctx.library_notifier();
 
     let task = tauri::async_runtime::spawn(async move {
         if spec.drive_state_machine {
@@ -326,7 +325,9 @@ pub fn dev_replay_start(
             supervisor.dev_dispatch(StateEvent::GameflowPhase(lcu::GameflowPhase::EndOfGame));
             supervisor.dev_emit_library_changed();
         }
-        dev::notify_library_changed(&app_handle);
+        if let Some(notify) = notify.as_ref() {
+            notify();
+        }
 
         let mut s = task_status.lock().unwrap();
         s.running = false;
@@ -337,16 +338,14 @@ pub fn dev_replay_start(
     Ok(())
 }
 
-#[tauri::command]
-pub fn dev_replay_stop(dev: tauri::State<super::DevState>) -> Result<(), String> {
+pub fn dev_replay_stop() -> Result<(), String> {
     // `ReplayHandle::drop` aborts the task.
-    dev.replay.lock().map_err(|e| e.to_string())?.take();
+    super::dev_state().replay.lock().map_err(|e| e.to_string())?.take();
     Ok(())
 }
 
-#[tauri::command]
-pub fn dev_replay_status(dev: tauri::State<super::DevState>) -> Result<ReplayStatus, String> {
-    let slot = dev.replay.lock().map_err(|e| e.to_string())?;
+pub fn dev_replay_status() -> Result<ReplayStatus, String> {
+    let slot = super::dev_state().replay.lock().map_err(|e| e.to_string())?;
     Ok(match slot.as_ref() {
         Some(handle) => handle.status.lock().map_err(|e| e.to_string())?.clone(),
         None => ReplayStatus::default(),
@@ -357,7 +356,6 @@ pub fn dev_replay_status(dev: tauri::State<super::DevState>) -> Result<ReplaySta
 
 /// Raw GET against any LCU path, so an endpoint can be inspected before
 /// any parsing code is written for it. Returns the response as JSON.
-#[tauri::command]
 pub async fn dev_lcu_get(path: String) -> Result<serde_json::Value, String> {
     let lockfile = lcu::lockfile::discover()
         .map_err(|e| e.to_string())?
@@ -380,7 +378,6 @@ pub async fn dev_lcu_get(path: String) -> Result<serde_json::Value, String> {
 /// `null` covers both "the store has no such id" and "the fetch failed",
 /// because the resolver is best-effort by design and swallows the
 /// difference. The Log panel's `lcu` tag says which it was.
-#[tauri::command]
 pub async fn dev_champion_name(champion_id: i64) -> Result<Option<String>, String> {
     let lockfile = lcu::lockfile::discover()
         .map_err(|e| e.to_string())?
@@ -393,7 +390,6 @@ pub async fn dev_champion_name(champion_id: i64) -> Result<Option<String>, Strin
 /// no retries — so its parsing can be checked against a real client
 /// without waiting out a schedule. `dev_patch_match_summary` is the same
 /// fetch with the retry loop and the DB write around it.
-#[tauri::command]
 pub async fn dev_fetch_match_summary(game_id: i64) -> Result<lcu::MatchSummary, String> {
     let lockfile = lcu::lockfile::discover()
         .map_err(|e| e.to_string())?
@@ -416,15 +412,13 @@ pub async fn dev_fetch_match_summary(game_id: i64) -> Result<lcu::MatchSummary, 
 /// Returns whether a row was actually patched — `false` covers "the client
 /// never produced stats", "the row is gone" and "we gave up", which the
 /// logs distinguish and a single boolean cannot.
-#[tauri::command]
 pub async fn dev_patch_match_summary(
-    state: tauri::State<'_, AppState>,
+    ctx: &crate::core::Ctx,
     recording_id: i64,
     game_id: i64,
     is_custom: bool,
     queue_id: Option<i64>,
 ) -> Result<bool, String> {
-    let ctx = state.clone_ctx();
     let lockfile = lcu::lockfile::discover()
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "League Client not running (no lockfile found)".to_string())?;
@@ -461,7 +455,6 @@ pub async fn dev_patch_match_summary(
 
 /// One-shot fetch from the in-game Live Client Data API, returned raw so
 /// it can be saved as a fixture.
-#[tauri::command]
 pub async fn dev_live_client_probe() -> Result<serde_json::Value, String> {
     let client = crate::live_client::LiveClientDataClient::new().map_err(|e| e.to_string())?;
     client

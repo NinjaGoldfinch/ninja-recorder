@@ -150,6 +150,31 @@ What keeps the shared path from being reckless:
   after the file was replaced would otherwise leave every seek target out by a
   loading screen, which looks exactly like a working recording.
 
+## Where a command runs
+
+Since WS3.2 there are two processes, and the portal's commands are split
+between them by what they need to reach.
+
+| | Runs in | Reached by | Why |
+|---|---|---|---|
+| 40 `dev_*` commands | the daemon | `rpc` → `dev::dispatch` | They read the database, drive the state machine, ask the recorder, or read the log, and the daemon owns all four |
+| `dev_open_portal`, `dev_open_data_dir`, `dev_reveal_recording`, `dev_open_fixture` | the UI | a Tauri command | A window, or the OS file manager. An Explorer window opened by a background daemon can land behind the foreground app |
+| `dev_env_info` | the UI | a Tauri command | It reports *this* process's paths and build, which is a different answer in each and is meant to be |
+| `dev_registered_commands` | the UI | a Tauri command | Its rejection in a shipped build is how the portal decides it exists |
+
+The split lives in `contract::portal` as two tables, `dev_ui_command_table!`
+and `dev_rpc_command_table!`, and which table a row is in is the whole of the
+decision. `lib.rs` registers the first, `dev::dispatch` expands the second into
+`match` arms, and the portal's generated catalogue reads both and marks each
+entry `overRpc`.
+
+**The portal does not yet talk to a separate daemon.** Its `invoke('rpc', ...)`
+still lands in the UI process, so what it drives is the UI's own supervisor and
+database connection. Pointing it at the daemon needs the `rpc_call` proxy from
+WS3.4; what WS3.7 did is make every one of those commands *able* to run there,
+which is verifiable today by invoking them on a running `--daemon` over the
+pipe.
+
 ## Known limits
 
 - **The TS command registry is hand-maintained.** This project has no type
@@ -165,11 +190,20 @@ What keeps the shared path from being reckless:
   `generate_handler!` still cannot host a `#[cfg]`, so `lib.rs` still has two
   lists, but they are `rpc` + `open_recordings_folder` and the `dev_*` set
   the production surface is no longer spelled out in them at all.
-- **Most commands are invoked through `rpc`, not by name.** The portal's own
-  invoke layer (`src/dev/ipc.ts`) routes anything that isn't a `dev_*` command
-  (or `open_recordings_folder`) through the passthrough, because those are no
-  longer registered individually. The IPC log still records the logical command
-  name rather than `rpc`, so the Commands panel reads the same as before.
+- **Almost every command is invoked through `rpc`, not by name.** The portal's
+  invoke layer (`src/dev/ipc.ts`) routes through the passthrough, and since
+  WS3.7 that includes forty of the `dev_*` commands, which are reached by name
+  through `dev::dispatch` rather than registered individually. The IPC log
+  still records the logical command name rather than `rpc`, so the Commands
+  panel reads the same as before.
+
+  Which way a command goes is not a list in TypeScript: `COMMANDS` is generated
+  from the two Rust tables and each entry carries `overRpc`, so `ipc.ts` reads
+  the answer rather than deciding it. Six `dev_*` commands are still registered
+  directly, and `dev_ui_command_table!`'s header says why for each: four drive
+  the desktop shell or a window, `dev_env_info` reports the process it runs in,
+  and `dev_registered_commands` has to keep rejecting in a shipped build
+  because that rejection is how `devportal.ts` decides the portal exists.
 - **The three update commands always refuse here.** The portal only exists in
   a `--features devtools` build, and that is exactly the build where
   `updates_enabled()` is false: a dev bundle that updated itself would

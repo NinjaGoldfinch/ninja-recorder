@@ -5,7 +5,6 @@
 //! whole point (reproducing a specific bad row is otherwise impossible)
 //! and also exactly why this module is behind the `devtools` feature.
 
-use crate::{dev, AppState};
 use rusqlite::types::{Value as SqlValue, ValueRef};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
@@ -36,9 +35,8 @@ pub struct TableSchema {
 /// Live schema, read from `PRAGMA table_info`. The portal generates its
 /// insert and edit forms from this rather than hardcoding today's columns,
 /// so a new migration shows up in the UI without a frontend change.
-#[tauri::command]
-pub fn dev_schema(state: tauri::State<AppState>) -> Result<Vec<TableSchema>, String> {
-    let conn = state.db.conn();
+pub fn dev_schema(ctx: &crate::core::Ctx) -> Result<Vec<TableSchema>, String> {
+    let conn = ctx.db.conn();
     let mut out = Vec::new();
 
     for table in BROWSABLE_TABLES {
@@ -86,9 +84,8 @@ pub struct QueryResult {
 
 /// A paged read of one table. Separate from `dev_sql_query` so the common
 /// case can't be a typo away from a `DELETE`.
-#[tauri::command]
 pub fn dev_table_page(
-    state: tauri::State<AppState>,
+    ctx: &crate::core::Ctx,
     table: String,
     limit: Option<i64>,
     offset: Option<i64>,
@@ -107,14 +104,14 @@ pub fn dev_table_page(
                 "DESC" => "DESC",
                 _ => "ASC",
             };
-            let col = checked_column(&state, table, col.trim())?;
+            let col = checked_column(ctx, table, col.trim())?;
             format!("ORDER BY \"{col}\" {dir}")
         }
         None => String::new(),
     };
 
     run_sql(
-        &state,
+        ctx,
         &format!("SELECT * FROM {table} {order} LIMIT {limit} OFFSET {offset}"),
     )
 }
@@ -122,15 +119,14 @@ pub fn dev_table_page(
 /// Arbitrary SQL against the live library DB. The portal shows the
 /// resolved DB path in its header so there is never doubt about which file
 /// this lands in.
-#[tauri::command]
 pub fn dev_sql_query(
-    state: tauri::State<AppState>,
-    app: tauri::AppHandle,
+    ctx: &crate::core::Ctx,
+    
     sql: String,
 ) -> Result<QueryResult, String> {
-    let result = run_sql(&state, &sql)?;
+    let result = run_sql(ctx, &sql)?;
     if !result.returned_rows {
-        dev::notify_library_changed(&app);
+        ctx.notify_library_changed();
     }
     Ok(result)
 }
@@ -152,8 +148,8 @@ pub(crate) fn returns_rows(sql: &str) -> bool {
         .any(|kw| head.starts_with(kw))
 }
 
-fn run_sql(state: &tauri::State<AppState>, sql: &str) -> Result<QueryResult, String> {
-    let conn = state.db.conn();
+fn run_sql(ctx: &crate::core::Ctx, sql: &str) -> Result<QueryResult, String> {
+    let conn = ctx.db.conn();
     let started = std::time::Instant::now();
 
     if returns_rows(sql) {
@@ -196,10 +192,9 @@ fn run_sql(state: &tauri::State<AppState>, sql: &str) -> Result<QueryResult, Str
 #[derive(Deserialize)]
 pub struct RowValues(pub std::collections::BTreeMap<String, Json>);
 
-#[tauri::command]
 pub fn dev_insert_row(
-    state: tauri::State<AppState>,
-    app: tauri::AppHandle,
+    ctx: &crate::core::Ctx,
+    
     table: String,
     values: RowValues,
 ) -> Result<i64, String> {
@@ -211,13 +206,13 @@ pub fn dev_insert_row(
     let mut names = Vec::new();
     let mut binds: Vec<SqlValue> = Vec::new();
     for (name, value) in &values.0 {
-        names.push(format!("\"{}\"", checked_column(&state, table, name)?));
+        names.push(format!("\"{}\"", checked_column(ctx, table, name)?));
         binds.push(json_to_sql(value)?);
     }
     let placeholders = vec!["?"; names.len()].join(", ");
 
     let id = {
-        let conn = state.db.conn();
+        let conn = ctx.db.conn();
         conn.execute(
             &format!(
                 "INSERT INTO {table} ({}) VALUES ({placeholders})",
@@ -230,14 +225,13 @@ pub fn dev_insert_row(
         // caller only uses it as a confirmation for autoincrement tables.
         conn.last_insert_rowid()
     };
-    dev::notify_library_changed(&app);
+    ctx.notify_library_changed();
     Ok(id)
 }
 
-#[tauri::command]
 pub fn dev_update_row(
-    state: tauri::State<AppState>,
-    app: tauri::AppHandle,
+    ctx: &crate::core::Ctx,
+    
     table: String,
     id: Json,
     values: RowValues,
@@ -250,13 +244,13 @@ pub fn dev_update_row(
     let mut assignments = Vec::new();
     let mut binds: Vec<SqlValue> = Vec::new();
     for (name, value) in &values.0 {
-        assignments.push(format!("\"{}\" = ?", checked_column(&state, table, name)?));
+        assignments.push(format!("\"{}\" = ?", checked_column(ctx, table, name)?));
         binds.push(json_to_sql(value)?);
     }
     binds.push(json_to_sql(&id)?);
 
     let changed = {
-        let conn = state.db.conn();
+        let conn = ctx.db.conn();
         conn.execute(
             &format!(
                 "UPDATE {table} SET {} WHERE {} = ?",
@@ -267,14 +261,13 @@ pub fn dev_update_row(
         )
         .map_err(|e| e.to_string())?
     };
-    dev::notify_library_changed(&app);
+    ctx.notify_library_changed();
     Ok(changed)
 }
 
-#[tauri::command]
 pub fn dev_delete_row(
-    state: tauri::State<AppState>,
-    app: tauri::AppHandle,
+    ctx: &crate::core::Ctx,
+    
     table: String,
     id: Json,
     // `delete_file` only means anything for `recordings`. Without it the
@@ -287,7 +280,7 @@ pub fn dev_delete_row(
     let key = json_to_sql(&id)?;
 
     if table == "recordings" && delete_file.unwrap_or(false) {
-        let conn = state.db.conn();
+        let conn = ctx.db.conn();
         let path: Option<String> = conn
             .query_row("SELECT path FROM recordings WHERE id = ?", [&key], |r| r.get(0))
             .ok();
@@ -298,14 +291,14 @@ pub fn dev_delete_row(
     }
 
     let changed = {
-        let conn = state.db.conn();
+        let conn = ctx.db.conn();
         conn.execute(
             &format!("DELETE FROM {table} WHERE {} = ?", primary_key(table)),
             [&key],
         )
         .map_err(|e| e.to_string())?
     };
-    dev::notify_library_changed(&app);
+    ctx.notify_library_changed();
     Ok(changed)
 }
 
@@ -323,15 +316,14 @@ pub struct ResetReport {
 /// the DB file — `AppState` holds a live `Arc<Db>` with an open
 /// connection, and swapping that out mid-session is a real hazard for an
 /// identical observable result.
-#[tauri::command]
 pub fn dev_reset_db(
-    state: tauri::State<AppState>,
-    app: tauri::AppHandle,
+    ctx: &crate::core::Ctx,
+    
     also_clear_files: bool,
 ) -> Result<ResetReport, String> {
     let mut files_deleted = 0usize;
     if also_clear_files
-        && let Ok(entries) = std::fs::read_dir(&state.recordings_dir)
+        && let Ok(entries) = std::fs::read_dir(&ctx.recordings_dir)
     {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -346,7 +338,7 @@ pub fn dev_reset_db(
     }
 
     let rows_deleted = {
-        let mut conn = state.db.conn();
+        let mut conn = ctx.db.conn();
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         let mut deleted = 0usize;
         // markers/samples cascade from recordings, but deleting them
@@ -374,7 +366,7 @@ pub fn dev_reset_db(
         deleted
     };
 
-    dev::notify_library_changed(&app);
+    ctx.notify_library_changed();
     Ok(ResetReport {
         rows_deleted,
         files_deleted,
@@ -392,11 +384,11 @@ fn checked_table(table: &str) -> Result<&'static str, String> {
 /// Column names can't be bound as parameters, so every one that reaches a
 /// format string is first matched against the table's real schema.
 fn checked_column(
-    state: &tauri::State<AppState>,
+    ctx: &crate::core::Ctx,
     table: &str,
     column: &str,
 ) -> Result<String, String> {
-    let conn = state.db.conn();
+    let conn = ctx.db.conn();
     let mut stmt = conn
         .prepare(&format!("PRAGMA table_info({table})"))
         .map_err(|e| e.to_string())?;

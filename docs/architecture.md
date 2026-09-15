@@ -87,6 +87,7 @@ flowchart TB
 | `log.rs` | The log file under `app_data_dir()/logs/`, which is `ui.log` or `daemon.log` depending on which process is writing, kept in release builds too, and the `error!`/`warn!`/`info!`/`debug!` macros everything else writes through | `init`, `write`, `Process` |
 | `fixtures.rs` | Capturing live API responses to `fixtures/` | `enabled`, `record` |
 | `dev/` | Dev portal backend, compiled out without `--features devtools` | `dev_*` commands |
+| `dev/dispatch.rs` | Name-and-JSON dispatch over the `dev_*` commands that run in the daemon | `dispatch_dev`, `is_async_dev_command` |
 | `core/mod.rs` | Every command's logic, with no `tauri` types in any signature | `Ctx`, the command free functions |
 | `launch.rs` | Which mode argv asked for (`--daemon`, `--hidden`), and the flag constants autostart registers | `Launch::from_env`, `HIDDEN_FLAG` |
 | `daemon/mod.rs` | The headless process: paths without an `AppHandle`, the startup and shutdown order, and everything the UI's `setup` does minus the window | `run`, `Paths`, `IDENTIFIER` |

@@ -31,7 +31,6 @@ pub struct FixturesState {
     pub entries: Vec<FixtureEntry>,
 }
 
-#[tauri::command]
 pub fn dev_fixtures_state() -> Result<FixturesState, String> {
     let capture_dir = crate::fixtures::base_dir();
     let repo_dir = super::info::repo_fixtures_dir();
@@ -109,7 +108,6 @@ fn collect(root: &Path, source: &'static str, out: &mut Vec<FixtureEntry>) {
 /// Reads one fixture. Confined to the two known roots — the path comes
 /// back from `dev_fixtures_state`, but it arrives over IPC as a plain
 /// string, and a dev command is no reason to accept `../../etc/passwd`.
-#[tauri::command]
 pub fn dev_fixture_read(path: String) -> Result<String, String> {
     let path = checked_path(&path)?;
     std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))
@@ -157,7 +155,6 @@ pub fn dev_open_fixture(path: String, which: super::recording_actions::Reveal) -
 /// Payloads that fail to parse are counted rather than skipped silently: a
 /// file this cannot read is the single most interesting thing it could find,
 /// and dropping it would hide exactly the case worth knowing about.
-#[tauri::command]
 pub fn dev_shape_report() -> Result<ShapeReport, String> {
     let mut payloads = Vec::new();
     let mut scanned = 0usize;
@@ -218,7 +215,6 @@ pub struct ShapeReport {
 
 /// Saves a payload as a fixture under the capture directory, so a
 /// hand-edited snapshot can be replayed later.
-#[tauri::command]
 pub fn dev_fixture_write(group: String, name: String, contents: String) -> Result<String, String> {
     // Fail before writing rather than leaving unparseable JSON behind for
     // the injector to choke on later.
@@ -239,7 +235,6 @@ pub fn dev_fixture_write(group: String, name: String, contents: String) -> Resul
 /// Turns fixture capture on or off for the running process. Previously
 /// only settable by launching with `NINJA_RECORDER_RECORD_FIXTURES` set,
 /// which meant deciding to capture a game before starting the app.
-#[tauri::command]
 pub fn dev_set_fixture_recording(enabled: bool) -> bool {
     crate::fixtures::set_enabled(enabled);
     crate::fixtures::enabled()

@@ -140,7 +140,7 @@ commit.** A diagram that lies is worse than no diagram.
 | `src-tauri/src/db/reconcile.rs` | [docs/data-model.md](docs/data-model.md) — the reconciliation flowchart |
 | `src-tauri/src/retention.rs` | [docs/data-model.md](docs/data-model.md) — the retention flowchart, and when enforcement runs |
 | Anything in `src/` or `src/lib/` | [docs/frontend.md](docs/frontend.md) — the module graph, view diagram, or theming flow |
-| Anything in `src/dev/` or `src-tauri/src/dev/` | [docs/dev-portal.md](docs/dev-portal.md) — the panel table |
+| Anything in `src/dev/` or `src-tauri/src/dev/` | [docs/dev-portal.md](docs/dev-portal.md) — the panel table, and "Where a command runs" if the command moved process |
 | `.github/workflows/ci.yml`, `biome.jsonc`, `deny.toml`, `vitest.config.ts` | [docs/ci-and-releases.md](docs/ci-and-releases.md) — the job graph and the gate list |
 | Anything verified on real Windows hardware, or a memory/size figure | [docs/windows-verification.md](docs/windows-verification.md) and [docs/measurement.md](docs/measurement.md) if the *method* changed |
 | A *decision*, constraint, or trade-off | [DEVELOPMENT.md](DEVELOPMENT.md) — the "why" doc |
@@ -235,11 +235,18 @@ workstream should be rewritten to say what it means.
   `cargo run --bin gen-contract`. The doc comment is the help text the dev
   portal shows; there is no TypeScript list to keep in step any more, and
   `--check` fails the build if the generated files are stale.
-- **A `dev_*` command is declared in `contract::portal`'s `dev_command_table!`
-  and nowhere else.** That one table feeds `generate_handler!` in `lib.rs` *and*
-  the portal's catalogue, so a command cannot be registered without the portal
-  knowing about it or described without being registered. Do not add a name to
-  the `generate_handler!` list by hand.
+- **A `dev_*` command is declared in `contract::portal` and nowhere else, in
+  one of two tables.** `dev_rpc_command_table!` is for commands that run
+  wherever the library does, which is the daemon: they carry a `call:` giving
+  their Rust signature, and `dev::dispatch` expands that into the `match` arm.
+  `dev_ui_command_table!` is for the handful that need a window, the desktop
+  shell, or the process they are running in; those stay `#[tauri::command]`s in
+  `generate_handler!`. **Which table a row is in decides where the command
+  runs**, and the portal's catalogue reads both and marks each entry `overRpc`,
+  so `src/dev/ipc.ts` cannot disagree about which call to make. Do not add a
+  name to the `generate_handler!` list by hand, and do not put a command in the
+  rpc table if its body names a `tauri` type - it will not compile there, which
+  is the point.
 - **A type that crosses the IPC boundary derives `ts_rs::TS` next to its serde
   derives.** The two describe the same wire shape; splitting them is how they
   drift. 29 types today, listed in `contract::types`' test.

@@ -10,16 +10,14 @@
 //! `trim_point_s` returns `None`.
 
 use crate::trim::{trim_recording, TrimReport};
-use crate::AppState;
 
-#[tauri::command]
 pub fn dev_trim_lead_in(
-    state: tauri::State<AppState>,
+    ctx: &crate::core::Ctx,
     recording_id: i64,
 ) -> Result<TrimReport, String> {
-    let ffmpeg = state
+    let ffmpeg = ctx
         .ffmpeg
         .as_deref()
         .ok_or_else(|| "no ffmpeg in this build, so nothing can cut a file".to_string())?;
-    trim_recording(&state.db, ffmpeg, recording_id)
+    trim_recording(&ctx.db, ffmpeg, recording_id)
 }
