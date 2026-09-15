@@ -6,7 +6,7 @@ the tray and the notifications all hold up on real hardware.
 
 It stands as the record of what was checked, and as the procedure for
 re-checking after a change to the capture backend. None of it is executable
-from the dev box — it needs real Windows hardware, a real League client and
+from the dev box: it needs real Windows hardware, a real League client and
 Vanguard active
 ([DEVELOPMENT.md §1.1, §9](../DEVELOPMENT.md#11-riot-vanguard-the-constraint-that-shapes-everything)).
 
@@ -31,7 +31,7 @@ flowchart LR
 
 - [ ] Latest `main` has a green CI run on `windows-latest`
 - [ ] League of Legends installed and up to date on the Windows box
-- [ ] **No dev toolchain involved in the app under test** — no `cargo run`, no
+- [ ] **No dev toolchain involved in the app under test.** No `cargo run`, no
       `npm run tauri dev` for this pass. The dev loop already covers
       everything short of a real installer and real Vanguard; this pass exists
       specifically to catch what that loop cannot.
@@ -39,16 +39,16 @@ flowchart LR
 ## 1. Install from a CI artifact
 
 - [ ] Download `ninja-recorder-windows-latest-<sha>` from the latest `main` CI
-      run — or take the installer off that run's Release instead, if
+      run, or take the installer off that run's Release instead, if
       this pass is also meant to validate what a release actually ships
 - [ ] Run the NSIS installer on a clean-ish user account (not the profile used
-      for `cargo run` testing, if avoidable — the goal is to catch anything
+      for `cargo run` testing, if avoidable; the goal is to catch anything
       leftover dev state hides)
 - [ ] Launch the installed app from the Start Menu / desktop shortcut, not
       from a terminal
 
-Record: installer filename, version, SmartScreen prompt behaviour (expected —
-unsigned build).
+Record: installer filename, version, SmartScreen prompt behaviour (expected on
+an unsigned build).
 
 ## 2. Full loop: client detected → recording → markers → VOD in library
 
@@ -60,7 +60,7 @@ Never iterate against real queued games.
       a Practice Tool game starts
 - [ ] Recording file appears and grows during the game
 - [ ] Markers are captured (kills, objectives) and time-aligned
-- [ ] On game end the VOD and its markers land in the library — SQLite row,
+- [ ] On game end the VOD and its markers land in the library: SQLite row,
       visible in the review UI
 - [ ] Playback works in the review UI and markers seek correctly
 
@@ -71,7 +71,7 @@ Record: any step that didn't fire, or fired late or wrong.
 - [ ] The Practice Tool run above completed with Vanguard active and no flags
       or warnings from Vanguard or Riot
 - [ ] Repeat the full loop once during a **live queued game**, not just
-      Practice Tool — this confirms behaviour under real matchmaking timing
+      Practice Tool. This confirms behaviour under real matchmaking timing
       (champ select, dodges) per the documented state machine edge cases in
       [recording-pipeline.md](recording-pipeline.md#2-the-state-machine)
 
@@ -84,9 +84,9 @@ VOD is playable:
 
 - [ ] Alt-tab out of League and back mid-game
 - [ ] In-game resolution change mid-recording
-- [ ] Mid-game reconnect — disconnect the client (brief network drop or manual
+- [ ] Mid-game reconnect: disconnect the client (brief network drop or manual
       client kill), then reconnect; exercises the `Reconnect` path
-- [ ] Unplug the microphone mid-game on a mic preset — the recording should
+- [ ] Unplug the microphone mid-game on a mic preset. The recording should
       survive with its remaining tracks rather than failing
 
 Record: pass/fail per case, and what the output VOD looked like for any
@@ -99,16 +99,16 @@ First real measurement against the targets in
 
 | Metric | Target | Measured | How |
 |---|---|---|---|
-| Installed size | ≤ 200 MB | **248 MB** — over | `Get-ChildItem -Recurse \| Measure-Object -Property Length -Sum` on the install folder |
-| Installer | — | 64 MB | the NSIS `.exe` on the release page, LZMA-compressed — roughly a quarter of what it unpacks to |
-| Idle RAM | ≤ 100 MB | **9 MB** — well under | Task Manager / `Get-Process` working set, app idle, no League running |
+| Installed size | ≤ 200 MB | **248 MB**, over | `Get-ChildItem -Recurse \| Measure-Object -Property Length -Sum` on the install folder |
+| Installer | none | 64 MB | the NSIS `.exe` on the release page, LZMA-compressed, roughly a quarter of what it unpacks to |
+| Idle RAM | ≤ 100 MB | **9 MB**, well under | Task Manager / `Get-Process` working set, app idle, no League running |
 | Recording overhead | Hardware encoder only, no x264 | | Confirm encoder choice in app logs during §2/§3 |
 | Idle CPU | ~0% | | Task Manager, app idle with the client closed |
 
 **The size target is missed, and that is recorded rather than rounded.** 248 MB
 against a 200 MB budget ([DEVELOPMENT.md §1.2](../DEVELOPMENT.md)); the binary
 is 64 MB of it and the rest is bundled libobs plus ffmpeg. Whether the budget
-was wrong or the bundle is, it is not a pass. Idle RAM went the other way —
+was wrong or the bundle is, it is not a pass. Idle RAM went the other way, at
 9 MB against 100 MB, which is what staying out of Electron bought.
 
 **Measure idle RAM with the client closed *and* open.** The capture backend is
@@ -150,7 +150,7 @@ by a test.**
 - [ ] The tray icon appears, with a tooltip, and its menu has exactly three
       items: Open ninja-recorder / Settings / Quit.
 - [ ] Left-click opens the window; right-click opens the menu.
-- [ ] "Settings" opens the window **on the settings view** — both when a window
+- [ ] "Settings" opens the window **on the settings view**, both when a window
       already exists (a `navigate` event) and when one does not (the
       `index.html#settings` fragment). These are different code paths.
 - [ ] With Close = "Close the window" (the default), the X destroys the window
@@ -160,11 +160,11 @@ by a test.**
 - [ ] With Close = "Quit", the X quits.
 - [ ] **Quit mid-recording finalizes rather than dropping the game**: start a
       recording, Quit from the tray, relaunch, and confirm the VOD is in the
-      library with its markers — not adopted as an untracked file by
+      library with its markers, not adopted as an untracked file by
       `reconcile`.
 - [ ] The tray icon survives an `explorer.exe` restart (kill it from Task
       Manager and confirm the icon comes back).
-- [ ] Measure idle RAM with the window closed vs hidden — the whole premise of
+- [ ] Measure idle RAM with the window closed vs hidden. The whole premise of
       "close-window" as the default is that hiding reclaims nothing.
 
 ### 5.0.2 Start on login
@@ -172,8 +172,8 @@ by a test.**
 The one setting that writes outside the app's own data, and the one whose
 source of truth is not ours: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 Nothing in `cargo test` can reach it (`Ctx::new` leaves the control unset), and
-the dev loop exercises a LaunchAgent or a `.desktop` entry, not this — so every row below is
-Windows-only.
+the dev loop exercises a LaunchAgent or a `.desktop` entry, not this, so every
+row below is Windows-only.
 
 **Check the registry directly, not just the checkbox**, since the checkbox is
 supposed to be a report of that key and the whole failure mode is the two
@@ -193,19 +193,19 @@ Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' |
 - [ ] The setting survives a restart of the app: reopen Settings and confirm
       the checkbox still reflects the key.
 - [ ] **Sign out and back in.** The app comes up with no window and no taskbar
-      button, the tray icon is there, and the recorder is live — start a game
+      button, the tray icon is there, and the recorder is live. Start a game
       without opening the window and confirm it records.
 - [ ] Delete the entry from **Task Manager → Startup** with the app running,
       then reopen Settings: the checkbox must now read *off*. This is the case
       the "no `settings_kv` mirror" decision exists for
       ([DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave)).
-- [ ] Disabling the entry in Task Manager (rather than deleting it) — note what
+- [ ] Disabling the entry in Task Manager (rather than deleting it): note what
       the checkbox says. Windows records that state outside the `Run` key, so
       the app is expected to still report "on"; confirm it, and that toggling
       off then on clears it.
 - [ ] Uninstall with autostart enabled, then check the key: NSIS does not know
-      about it, so a stale entry pointing at a removed exe is the expected —
-      and harmless — outcome. Confirm it does not produce an error dialog on
+      about it, so a stale entry pointing at a removed exe is the expected and
+      harmless outcome. Confirm it does not produce an error dialog on
       the next login.
 - [ ] Reinstall over an existing install with autostart on: the path must still
       resolve, or the entry silently stops working.
@@ -217,7 +217,7 @@ Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' |
 
 **None of this can be checked before installing.** The plugin only sets the
 `System.AppUserModel.ID` for a non-`target/debug|release` exe, and Windows
-resolves it through the Start-menu shortcut NSIS creates — so a dev run shows
+resolves it through the Start-menu shortcut NSIS creates, so a dev run shows
 nothing and that is expected. The decision logic (which kinds are enabled, the
 one-time notice) is unit tested; presentation is not testable anywhere but here.
 
@@ -230,7 +230,7 @@ one-time notice) is unit tested; presentation is not testable anywhere but here.
       one-time notice, and greys out the other three checkboxes.
 - [ ] A recording that fails to start (try filling the disk below 1 GiB) shows
       the problem notification.
-- [ ] Toasts are **display-only** — clicking one is expected to do nothing.
+- [ ] Toasts are **display-only**; clicking one is expected to do nothing.
       Confirm it at least does not crash or mis-focus.
 - [ ] Both product names get their own Start-menu shortcut and therefore their
       own AUMID; confirm `ninja-recorder` and `ninja-recorder-dev` do not
@@ -239,8 +239,8 @@ one-time notice) is unit tested; presentation is not testable anywhere but here.
 ### 5.0.4 In-app updates
 
 **Nothing about this is testable off Windows, and none of it without two
-builds on the same channel.** The gate — whether an offered update may be
-installed — is pure and unit-tested (`update::decide`); everything below it
+builds on the same channel.** The gate, whether an offered update may be
+installed, is pure and unit-tested (`update::decide`); everything below it
 is not ([DEVELOPMENT.md §14](../DEVELOPMENT.md#14-updates)).
 
 **Use the alpha channel.** Every commit on `main` publishes one, so getting a
@@ -252,7 +252,7 @@ deliberate cuts ([DEVELOPMENT.md §15](../DEVELOPMENT.md)).
 Whichever channel, the versions must move **forwards**. An alpha is below the
 stable release it precedes, so an alpha install offered a stable build is
 being offered an upgrade, and a stable install will never be offered an alpha
-at all — that is the design, not a fault.
+at all. That is the design, not a fault.
 
 - [ ] Both manifests resolve and name the build they should:
       `curl -L .../releases/latest/download/latest.json` (stable) and
@@ -264,13 +264,13 @@ at all — that is the design, not a fault.
       in time. This is the one that a comparison-based implementation would
       get wrong, since semver says `1.1.0-alpha.1 > 1.0.0`.
 - [ ] About 30 s after launch, a dot appears on the settings button and
-      Settings → About names the newer version. **Nothing else happens** — no
+      Settings → About names the newer version. **Nothing else happens**: no
       toast, no Windows notification, no dialog. That is the design, not a
       missing piece.
 - [ ] "Check now" produces the same answer without waiting.
 - [ ] **The gate.** Start a game. While the header reads Recording, the Install
       button is disabled and the row says why. Confirm the same during
-      `Game starting…` and `Saving…` — all three refuse.
+      `Game starting…` and `Saving…`. All three refuse.
 - [ ] The button re-enables on its own once the game ends, **without**
       reopening Settings or restarting the app. This is the `status.ts` edge
       refresh; if it needs a reload, that hook is broken.
@@ -280,7 +280,7 @@ at all — that is the design, not a fault.
 - [ ] The install did **not** create a second entry in Apps & Features, a
       second Start-menu shortcut, or a second install directory.
 - [ ] Start-on-login, the close-button setting, the audio preset and the
-      retention policy all survive the update — they live in `settings_kv` and
+      retention policy all survive the update; they live in `settings_kv` and
       the `Run` key, neither of which the installer touches.
 - [ ] The VOD library survives it: recordings are still listed, and their files
       still play.
@@ -290,10 +290,10 @@ at all — that is the design, not a fault.
       is exactly what renaming the product was meant to prevent.
 - [ ] Pull the network cable and press "Check now": the row reports the failure
       in words and the app carries on recording normally.
-- [ ] Tamper check — needs a scratch release: replace the installer attached to
-      a release without updating `latest.json`, and confirm the download is
-      **rejected** rather than run. This is the only test that exercises the
-      signature at all.
+- [ ] Tamper check, which needs a scratch release: replace the installer
+      attached to a release without updating `latest.json`, and confirm the
+      download is **rejected** rather than run. This is the only test that
+      exercises the signature at all.
 
 ### 5.1 Capture-backend lifecycle
 
@@ -307,17 +307,17 @@ New with `prepare`/`release`; none of it can be exercised off Windows.
       backend is now brought up well before `start`, so this checks it is still
       healthy after sitting warm through champ select.
 - [ ] **Several games in one session.** Bring-up/tear-down now repeats across a
-      session (client restart, or closing and reopening the client) — watch for
+      session (client restart, or closing and reopening the client). Watch for
       a leak, a stale GPU device, or a second worker process.
 - [ ] Closing the client *mid-recording* does not tear the backend down under a
-      live encoder — the recording should finalize normally.
+      live encoder; the recording should finalize normally.
 - [ ] A machine where libobs fails to initialize surfaces
       `libobs (unavailable: …)` in the dev portal's health panel rather than
       failing at startup.
 
 ### 5.2 Memory, by the v2 method
 
-Added by WS0 task 0.1. Nothing above is renumbered or rewritten — §5's original
+Added by WS0 task 0.1. Nothing above is renumbered or rewritten; §5's original
 table stays as the record of what was measured in v1 and how.
 
 What it does not do is say which of several different numbers "9 MB" was.
@@ -352,7 +352,7 @@ capture backend are each visible, rather than folded into one figure that
 describes neither.
 
 WS7.1 appends the v2.0.0 rows beneath these, in the four states the process
-split creates — daemon only, daemon + UI, daemon + League client, all three.
+split creates: daemon only, daemon + UI, daemon + League client, all three.
 **Daemon only is the one gated against C3**: it is what runs at login and what
 runs for the twenty-three hours a day nobody has the window open. The
 two-process total is recorded and not gated.
@@ -367,14 +367,15 @@ These are the things nobody has been able to answer by reading the code:
 - [ ] **Does the duration probe work off the bundled `ffmpeg.exe`?** Drop a
       handful of video files the app did not record into the recordings
       folder, press Rescan, and confirm each card shows a real LENGTH rather
-      than `—`. This is the only place `ffmpeg -i` output is parsed
+      than the empty-value placeholder. This is the only place `ffmpeg -i`
+      output is parsed
       ([DEVELOPMENT.md §4.1](../DEVELOPMENT.md)), and the wording it parses
       has only ever been checked against a hand-written sample.
 - [ ] **Time a first startup against a large existing folder** (a few hundred
       files, none of them in the DB). The probe spawns one ffmpeg per file on
       the import branch and startup reconcile is inline, so this is the cost
       §4.1 says to watch. A settled folder should spawn nothing on the next
-      launch — confirm the second start is fast.
+      launch; confirm the second start is fast.
 - [ ] Does the bundled resource path (`target/libobs` → next to the installed
       `.exe`) resolve correctly in an installed build, and does dev mode need
       the staging step to also copy into `target/debug/libobs`?
@@ -383,8 +384,8 @@ These are the things nobody has been able to answer by reading the code:
 
 ### Multi-track audio ([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#25-multi-track-audio))
 
-Nothing below can be checked off Windows. Use `ffprobe` — the failure modes
-here are silent, and the app's own UI will not show you most of them.
+Nothing below can be checked off Windows. Use `ffprobe`, because the failure
+modes here are silent, and the app's own UI will not show you most of them.
 
 - [ ] **Does `wasapi_process_output_capture` produce non-silent samples for a
       Vanguard-protected `League of Legends.exe`?** This is the big one: every
@@ -394,7 +395,7 @@ here are silent, and the app's own UI will not show you most of them.
       table in §2.5, and that a Game-only recording contains no microphone
       audio.
 - [ ] Confirm track 0 is the combined mix and tracks 1+ are genuinely
-      isolated — **not four copies of the same mix**, which is what a missing
+      isolated, **not four copies of the same mix**, which is what a missing
       `obs_source_set_audio_mixers` call produces and what the app cannot
       detect on its own.
 - [ ] Confirm the faststart remux preserved every track. `-c copy` without
@@ -404,7 +405,7 @@ here are silent, and the app's own UI will not show you most of them.
 - [ ] Discord audio lands on its own track and is absent from the game stem.
       With Discord *not* running, the track should be silent rather than the
       recording failing.
-- [ ] On a non-English client, game audio is still captured — this is what the
+- [ ] On a non-English client, game audio is still captured. This is what the
       `priority = 2` (match-by-executable) fix in the fork is for.
 - [ ] The microphone picker lists real devices, and "Windows default" records
       from the device the user expects. libobs resolves an input `device_id`
@@ -423,13 +424,13 @@ here are silent, and the app's own UI will not show you most of them.
       carry `teams[].isPlayerTeam`/`isWinningTeam`, and are its scoreboard keys
       really `CHAMPIONS_KILLED`/`NUM_DEATHS`/`ASSISTS`?
 - [ ] **The deferred patch end to end.** Play a game, then watch the card fill
-      in `role` and a queue label on its own within a minute of the finalize —
-      no manual refresh. `dev_patch_match_summary` drives the same path against
+      in `role` and a queue label on its own within a minute of the finalize,
+      with no manual refresh. `dev_patch_match_summary` drives the same path against
       an existing row without playing another game. Check the log for a
       disagreement warning: the LCU and Live Client Data must never report a
       different winner, and if they do, the wrong game was matched.
 - [ ] **Start the app during a game.** It should begin recording rather than
-      waiting for the next one — the gameflow watch now reads the current
+      waiting for the next one; the gameflow watch now reads the current
       phase on connect instead of only reacting to changes (#75). The same
       path is what lets a recording resume after anything interrupts it
       mid-game.

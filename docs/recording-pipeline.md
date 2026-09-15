@@ -30,7 +30,7 @@ sequenceDiagram
     S->>S: ClientRunning → WaitingForGame
     S->>G: live_client::poller::watch @ 1 Hz
 
-    Note over G: loading screen — port 2999 not up yet
+    Note over G: loading screen, port 2999 not up yet
     G-->>S: first successful /allgamedata
     S->>S: WaitingForGame → Recording
     S->>R: start(RecordConfig)
@@ -55,9 +55,9 @@ sequenceDiagram
 
 ## 2. The state machine
 
-`state_machine::machine::StateMachine::handle` is a pure function — no I/O, no
-clock, no async — which is why the whole edge-case matrix below is covered by
-unit tests that need neither League nor Windows.
+`state_machine::machine::StateMachine::handle` is a pure function with no I/O,
+no clock and no async, which is why the whole edge-case matrix below is covered
+by unit tests that need neither League nor Windows.
 
 ```mermaid
 stateDiagram-v2
@@ -90,7 +90,7 @@ supervisor is the only thing that executes them, so "what should happen" and
 
 Alongside those, one request that drives no transition: entering
 `WaitingForGame` also fires a single `GET /lol-gameflow/v1/session` to learn
-*which* game is starting — `gameId`, the real `queueId`, and whether it is a
+*which* game is starting: `gameId`, the real `queueId`, and whether it is a
 custom. See "Identifying the game" below.
 
 ### The capture backend's warm window
@@ -102,8 +102,8 @@ Windows backend is warm for exactly as long as the League client is running,
 because holding it from launch to exit is the largest single item on the
 idle-RAM budget ([DEVELOPMENT.md §2.2](../DEVELOPMENT.md#22-the-recorder-trait)).
 
-`prepare` is only a pre-warm — `start` brings the backend up itself if it has to
-— so a client that goes straight into a game is safe, and `release` is a no-op
+`prepare` is only a pre-warm, and `start` brings the backend up itself if it has
+to, so a client that goes straight into a game is safe, and `release` is a no-op
 while a recording is in flight.
 
 ### Edge cases the pure tests cover
@@ -113,7 +113,7 @@ while a recording is in flight.
 | Game crashes mid-match | Live Client Data stops responding → `LiveClientDown` → finalize normally; footage up to the crash is kept |
 | Client crashes mid-match | lockfile disappears → finalize, then `Idle` |
 | Client crashes before the game loads | `WaitingForGame` → `Idle`, nothing recorded, nothing to finalize |
-| Reconnect to a game in progress | Identical to a fresh start — the machine has no memory of *how* it reached `WaitingForGame`, so recording begins when 2999 answers (later than a from-the-start recording) |
+| Reconnect to a game in progress | Identical to a fresh start; the machine has no memory of *how* it reached `WaitingForGame`, so recording begins when 2999 answers (later than a from-the-start recording) |
 | Practice Tool | Reports the same `InProgress`/`Reconnect` phases, so it is not special-cased |
 | Dodge / cancelled champ select | `WaitingForGame` bounces back to `ClientRunning` without ever recording |
 | Client restart during finalize | Handled regardless of ordering against `FinalizeComplete` |
@@ -137,7 +137,7 @@ flowchart TB
     SNAP["/liveclientdata/allgamedata"] --> ID["Match activePlayer against allPlayers"]
     SNAP --> EV["the events list"]
     ID --> CL
-    EV --> DEDUP["Drop events already seen<br/><small>matched on EventID — the endpoint<br/>returns the whole list every poll</small>"]
+    EV --> DEDUP["Drop events already seen<br/><small>matched on EventID; the endpoint<br/>returns the whole list every poll</small>"]
     DEDUP --> CL{"classify_event<br/><small>are we named in it?</small>"}
     CL -->|"no"| DROP["dropped<br/><small>never becomes a marker</small>"]
     CL -->|"killer / victim / assister"| K["kill · death · assist"]
@@ -158,7 +158,7 @@ flowchart TB
     ABS --> ROW["recordings row @ finalize"]
 ```
 
-`find_us` — the `Match activePlayer against allPlayers` step above — is
+`find_us`, the `Match activePlayer against allPlayers` step above, is
 shared by `team_diff` and `self_summary`, so there is one answer in the
 module to "which of these ten players are we" and one place to fix it.
 
@@ -185,8 +185,8 @@ Two rules now stand between a failed request and a finalize.
 
 **A response we could not read never ends a recording.** It is proof of the
 opposite: something answered, so the game is running. It is also the one
-failure guaranteed to repeat — a payload the parser cannot read will not
-start parsing next second — so treating it as "game over" turns a cosmetic
+failure guaranteed to repeat, since a payload the parser cannot read will not
+start parsing next second, so treating it as "game over" turns a cosmetic
 problem into a lost game. `LiveClientError::means_endpoint_gone` draws the
 line: only a request that got **no response at all** (connection refused, or
 the 3-second timeout) counts. An HTTP error status came from a live server
@@ -195,16 +195,16 @@ and does not.
 **Five consecutive transport failures, not one.** The trade is asymmetric:
 being too tolerant costs a few seconds of post-game screen on the end of a
 VOD, being too strict costs the VOD. While still hoping, the poller stays at
-its normal 1 Hz rather than backing off — the exponential backoff exists for
+its normal 1 Hz rather than backing off. The exponential backoff exists for
 the long stretch between games, and applying it here would stretch five
 failures across fifteen seconds instead of five.
 
-The dev portal can also record that socket's whole output to disk without filtering (`dev::events`, [dev-portal.md](dev-portal.md)) — a second connection rather than a tap on this one, because this watch's lifetime belongs to the state machine and a debug tool has no business in the path that decides when recordings start.
+The dev portal can also record that socket's whole output to disk without filtering (`dev::events`, [dev-portal.md](dev-portal.md)). It is a second connection rather than a tap on this one, because this watch's lifetime belongs to the state machine and a debug tool has no business in the path that decides when recordings start.
 
 Underneath both, the event list is parsed **entry by entry**: an event whose
 shape we cannot read is dropped and the rest of the snapshot survives. The
 events array is the only part of `AllGameData` that both grows during a game
-and can fail to deserialize — everything in `allPlayers` is defaulted — so it
+and can fail to deserialize (everything in `allPlayers` is defaulted) so it
 is the one place a shape nobody here has seen can arrive mid-game and take
 the payload with it. `Stolen` and `KillStreak` additionally accept whichever
 spelling the client uses, since Riot has historically sent booleans in this
@@ -214,13 +214,13 @@ API as the strings `"True"`/`"False"`.
 from documentation, and the captured game confirms it: `Stolen` arrives as the
 string `"False"` six times in
 `fixtures/live-client/captured-allgamedata.json`. `flexible_bool` absorbs it,
-nothing fails, and nothing said so until `shapes::mistyped_fields` existed —
+nothing fails, and nothing said so until `shapes::mistyped_fields` existed,
 which is the exact silent loss #113 was about. A field Riot spells that way
 *without* a lenient reader waiting costs the whole event instead.
 
 **What it drops is recoverable afterwards, and that is deliberate.** Dropping
-the entry is right while a game is running — #74 is what happens when one bad
-event takes the whole payload with it — but it used to leave nothing behind
+the entry is right while a game is running, and #74 is what happens when one bad
+event takes the whole payload with it, but it used to leave nothing behind
 except a `debug!` line in a log nobody kept, so the shape that caused it was
 gone with the game. Fixture capture writes the raw payload
 ([DEVELOPMENT.md §3.3](../DEVELOPMENT.md)), so re-parsing it reproduces the
@@ -231,11 +231,12 @@ broke it. See [dev-portal.md](dev-portal.md) for where that surfaces.
 That pairs with `shapes::unmodelled_events`, and the pair is the whole
 diagnosis: one lists events that parsed perfectly well and then classified to
 nothing, the other lists events that never parsed at all. The two failures look
-identical from the outside — no marker — and have completely different fixes.
+identical from the outside, in that neither produces a marker, and have
+completely different fixes.
 
 Two more sit alongside them. `shapes::mistyped_fields` reports a modelled field
 whose JSON type is not the one modelled, and marks whether a lenient reader
-absorbed it — a *tolerated* mismatch is a value silently lost rather than an
+absorbed it. A *tolerated* mismatch is a value silently lost rather than an
 event dropped, and it is invisible everywhere else. `shapes::unread_event_keys`
 reports keys on events that nothing reads, which is what a new field from Riot
 looks like. Both are scoped to the events array rather than the whole payload:
@@ -246,7 +247,7 @@ real capture, which is what makes a line worth acting on.
 
 **The ladder is read when the game starts, not only when it ends.** The
 gameflow session resolved at `InProgress` is where `game_id` and `queue` come
-from, and — when the queue has a ladder — the standing at that moment is read
+from, and when the queue has a ladder the standing at that moment is read
 alongside them and held for the finalize. That reading is the *before* half of
 #164's LP measurement, and game start is the only moment it is true: by the
 time the game ends the number has already moved. It is best effort and comes
@@ -261,7 +262,7 @@ with every per-minute delta map empty, which is what a field the API has stopped
 maintaining looks like.
 
 Two things follow. `position` accepts the client's current spelling as well as
-the old one — it sends `SUPPORT` where this was written for `DUO_SUPPORT`, so
+the old one. It sends `SUPPORT` where this was written for `DUO_SUPPORT`, so
 every support was falling through and being labelled `Bottom`, in the `role`
 column as well as in the matchup. And `discard_implausible_positions` drops a
 side's positions wholesale when two players share one: five players share five
@@ -283,17 +284,17 @@ So every poll also writes one distilled line to the log
 game=1512.3 cap=1530.0 off=17.70 matched=yes champ=Ahri kda=3/1/2 gold=450 lvl=11 events=12 new=2
 ```
 
-- `game` / `cap` — the game clock the poll reported, and how long capture
+- `game` / `cap`: the game clock the poll reported, and how long capture
   had been running when it landed. The pair is what the offset is derived
   from
-- `off` — the alignment in force, or `-` while the clock has not been seen
+- `off`: the alignment in force, or `-` while the clock has not been seen
   to advance. `-` is not `0.00`: "not yet known" and "aligned" are
   different states and reading one as the other is how a marker ends up in
   the wrong place
-- `matched` — whether we could be found in `allPlayers`. `no` silently
+- `matched`: whether we could be found in `allPlayers`. `no` silently
   empties champion, KDA and the advantage curve, and the Practice Tool
   ambiguity means it is a real recurring state, not a corner case
-- `events` / `new` — how many events the payload carried, and how many the
+- `events` / `new`: how many events the payload carried, and how many the
   `MarkerTracker` had not already seen
 
 The key set and order are fixed even when a value is unknown, so the
@@ -301,8 +302,8 @@ stream is greppable and parseable; unknown reads as `-`.
 
 **Distilled rather than raw, deliberately.** A real `allgamedata` response
 is tens of kilobytes and arrives at 1 Hz, so keeping every payload would
-cost hundreds of megabytes per game. A trace line is about 120 bytes —
-roughly 200 KB across a game. When the raw stream is genuinely wanted,
+cost hundreds of megabytes per game. A trace line is about 120 bytes, roughly
+200 KB across a game. When the raw stream is genuinely wanted,
 that is what fixture capture is for
 ([DEVELOPMENT.md §3.3](../DEVELOPMENT.md)), and it is on by default until
 v1.0.
@@ -314,7 +315,7 @@ rotate a session's real errors out of the file within a single game.
 A poll that **fails** is logged too, and that one is not at `debug`. The
 first failure after a healthy run is what ends a recording
 ([#74](https://github.com/NinjaGoldfinch/ninja-recorder/issues/74)), so it
-is a `warn` carrying the error — which is what separates "the endpoint went
+is a `warn` carrying the error, which is what separates "the endpoint went
 away" from "the payload would not parse", a distinction that cost a real
 game before the error was being recorded at all. Failures *before* the
 endpoint has ever answered stay at `debug`: the poller starts when gameflow
@@ -323,8 +324,8 @@ are expected.
 
 ### A marker is a seek target, so it has to be about the player
 
-Every kind above is gated on the recording player appearing in the event —
-as killer, victim, assister, acer or recipient. An event nobody asked us
+Every kind above is gated on the recording player appearing in the event, as
+killer, victim, assister, acer or recipient. An event nobody asked us
 about is dropped at classification and never reaches the database.
 
 This is not a size optimisation. Markers drive the review timeline and the
@@ -335,19 +336,19 @@ the event's own name fields, not team membership.
 
 The cost is that it is **irreversible per recording**. Live Client Data is
 gone once the game ends, so a marker not captured cannot be recovered for
-that VOD — an enemy Baron taken in our absence is dropped along with our
+that VOD. An enemy Baron taken in our absence is dropped along with our
 own team's uncontested turrets, and "why did we lose that Baron" is not a
 question this VOD can answer afterwards. That trade was made deliberately;
 [DEVELOPMENT.md §3.2](../DEVELOPMENT.md#32-live-client-data-api-in-game)
 records why.
 
 `Stolen` rides in the payload of the neutral objectives rather than
-becoming a kind of its own — a stolen Baron is still a Baron, and the
+becoming a kind of its own: a stolen Baron is still a Baron, and the
 review list renders the flag as a suffix.
 
 ### Timestamp alignment
 
-Recording starts on the loading screen — before game time 0 — so event times
+Recording starts on the loading screen, before game time 0, so event times
 and video times do not share an origin.
 
 ```
@@ -357,8 +358,8 @@ video_time = max(0, game_time + offset)
 
 A positive offset is the normal loading-screen case (recording ran for a few
 seconds before the clock started). A negative offset means recording started
-*after* game time 0 — a reconnect. The clamp to 0 keeps a backdated event at
-game start from producing a negative seek target.
+*after* game time 0, which is a reconnect. The clamp to 0 keeps a backdated
+event at game start from producing a negative seek target.
 
 ```
 video time  0s        8s                              40s
@@ -384,7 +385,7 @@ first poll:
 
 `0 − 0 = 0` claims the video and the game start together, which puts every
 marker one whole loading screen early. So `AlignmentTracker` waits for
-`gameTime` to **advance** — proving it is a clock and not the frozen 0 —
+`gameTime` to **advance**, proving it is a clock and not the frozen 0,
 before measuring anything, and then re-measures on **every** advancing poll.
 Re-measuring also absorbs drift a single offset cannot: a game pause freezes
 the clock while the video keeps rolling, and dropped encoder frames skew a
@@ -393,8 +394,8 @@ fixed offset over a long game.
 ```mermaid
 flowchart TB
     P["poll: (gameTime, elapsed)"] --> Q{"gameTime ><br/>previous gameTime?"}
-    Q -->|"no — loading screen,<br/>or paused"| H["hold the last alignment<br/><small>None if there isn't one yet</small>"]
-    Q -->|"yes — the clock is running"| N["alignment = elapsed − gameTime<br/><small>remembered as 'first' if it is</small>"]
+    Q -->|"no: loading screen,<br/>or paused"| H["hold the last alignment<br/><small>None if there isn't one yet</small>"]
+    Q -->|"yes: the clock is running"| N["alignment = elapsed − gameTime<br/><small>remembered as 'first' if it is</small>"]
     H --> S["stamp markers/samples from<br/>this poll with that alignment"]
     N --> S
     S --> F["finalize: video_time = game_time + alignment<br/><small>alignment ?? first proven ?? 0</small>"]
@@ -404,7 +405,7 @@ flowchart TB
 ingest. A marker seen before the clock ever moved has no alignment yet; it is
 still collected (and still fed to `MarkerTracker`, so its event ID is deduped)
 and resolved at finalize against the first alignment the recording ever
-proved. If the clock never moved at all — the game ended during loading —
+proved. If the clock never moved at all, meaning the game ended during loading,
 the fallback is a 1:1 mapping. Nothing is dropped.
 
 A reconnect's first poll reports a clock already at, say, 600, which is
@@ -433,7 +434,7 @@ flowchart TB
     H --> I["retention::enforce_now"]
     I --> J["emit library-changed"]
     J --> K["request_summary(recording_id, game_id)"]
-    K -.->|"only if both are known"| L["deferred LCU patch<br/><small>off this path — see below</small>"]
+    K -.->|"only if both are known"| L["deferred LCU patch<br/><small>off this path; see below</small>"]
     style Z fill:#ffebee,stroke:#c62828
     style E fill:#fff3e0,stroke:#ef6c00
 ```
@@ -483,11 +484,8 @@ into the session on every poll by `events::self_summary` and written at
 finalize. Nothing about that path needs the LCU, so it works in Practice
 Tool and customs too.
 
-`game_id` and `queue` come from the gameflow session read above.
-
-`game_id` and `queue` come from the gameflow session read above — the second
-time, because the finalize writes them and then the patch below confirms
-them.
+`game_id` and `queue` come from the gameflow session read above. They are
+written twice: the finalize writes them, and the patch below confirms them.
 
 ### The deferred LCU patch
 
@@ -513,7 +511,7 @@ sequenceDiagram
     SUP->>MS: SummaryRequest {recording_id, game_id, is_custom, live}
     Note over SUP: finalize returns; nothing waits
     loop 2s · 4s · 8s · 15s · 15s · 15s, then give up
-        MS->>EOG: GET (our own block — no participant join)
+        MS->>EOG: GET (our own block, no participant join)
         EOG-->>MS: win · championId · KDA
         MS->>MH: GET (skipped for a custom game)
         MH-->>MS: queueId · role · gameVersion
@@ -524,16 +522,16 @@ sequenceDiagram
 
 **The eog block is tried first, not second.** It is *our own* stats block,
 so `teams[].isPlayerTeam` + `isWinningTeam` gives the outcome with no
-participant matching at all — which removes the most fragile step in the
+participant matching at all, which removes the most fragile step in the
 whole path (see #59, where a join key that did not exist made every fetch
 fail). It is also populated during `EndOfGame`, so it usually answers on the
 first attempt. Match history is authoritative but arrives late, and is the
 only source for `role` and `patch`; it fills the gaps the block left.
 
 Where both answer, the block wins, because it cannot have matched the wrong
-player. Where they *disagree*, that is logged loudly — the two are views of
-one game, so a contradiction almost certainly means the wrong `gameId` was
-matched, and that is worth knowing before it mislabels a library.
+player. Where they *disagree*, that is logged loudly, because the two are
+views of one game, so a contradiction almost certainly means the wrong `gameId`
+was matched, and that is worth knowing before it mislabels a library.
 
 The retry schedule is a pure function (`match_summary::next_delay`) with a
 roughly 60-second ceiling. Past it, the patch gives up **silently**: the row
@@ -544,7 +542,7 @@ queue id is not worth interrupting the next game over. A 404 or a 5xx is
 
 Two skips, both normal and neither logged: no `recording_id` (the row write
 itself failed) and no `game_id` (the gameflow read lost its race, or there
-was no client — which is simply what Practice Tool looks like).
+was no client, which is simply what Practice Tool looks like).
 
 ### What happens when the app does not survive that minute
 
@@ -552,13 +550,13 @@ The schedule runs **in memory**, so a quit, a crash or an in-app update
 inside it takes the unfinished patch with it. That mattered more than it
 sounds: the gold curve is written by this path and by nothing else, and the
 row shows no sign of the gap, because champion, KDA and outcome all come from
-the live path at finalize. The failure therefore looks arbitrary — it is
-"did the app stay open for a minute after the game ended" (#137).
+the live path at finalize. The failure therefore looks arbitrary, when what it
+turns on is "did the app stay open for a minute after the game ended" (#137).
 
 So the state is **derived rather than stored**: a recording with a `game_id`
 that is missing `role`, `patch`, `queue`, `win` or a gold curve *is* an
 unfinished patch. No column, no migration, nothing to keep in sync with
-reality — the row already says everything needed.
+reality, because the row already says everything needed.
 
 `match_summary::resume_pending` runs that query when a client becomes
 reachable, which is `start_gameflow_watch` rather than startup: the app can
@@ -577,7 +575,7 @@ Two bounds keep it from becoming a permanent tail of doomed work:
   would make a client restart cost minutes of pointless requests.
 
 **What the patch will not touch.** It is a plain `UPDATE` of the post-game
-columns, never a re-`insert_recording` — that method's `ON CONFLICT(path)`
+columns, never a re-`insert_recording`. That method's `ON CONFLICT(path)`
 takes `pinned`, `size_bytes`, `started_at` and `duration_s` from `excluded`,
 so re-upserting a summary would unpin the recording and zero its size. Zero
 rows changed is a no-op, not an error: retention runs during the same
@@ -588,8 +586,8 @@ The LCU answers with a champion *id*, which `lcu::champions` turns into a
 name by asking the client's own asset store
 (`/lol-game-data/assets/v1/champion-summary.json`, fetched once per client
 session and cached against its lockfile). It reads that entry's `name`, never
-its `alias`, because `alias` is where the legacy internal spellings live —
-`MonkeyKing` beside `Wukong` — and one champion under two spellings would
+its `alias`, because `alias` is where the legacy internal spellings live
+(`MonkeyKing` beside `Wukong`) and one champion under two spellings would
 split its games in two everywhere the library sorts and filters. The store
 also repeats display names across ids (a `Jade_*` block in the 60000s), which
 id → name does not mind and a name → id map could not survive. Filling only
@@ -597,28 +595,28 @@ when the column is NULL is the second half of the same guarantee: the two
 writers can disagree without the column ever holding both.
 
 An id the store has never heard of, a client that went away, a shape that
-would not parse — each of those resolves to no name rather than a wrong one,
+would not parse: each of those resolves to no name rather than a wrong one,
 and none of them stops the rest of the patch. The outcome and the queue id
 are worth more than the name.
 
 **The gold curve rides along with the patch.** Kill and CS diffs are sampled
 live at 1 Hz and are exact; gold is not a live number at all. The Live Client
 Data API exposes no per-player gold, so it used to be estimated from summed
-item prices — an estimate whose error was unbounded, signed in our favour and
+item prices, an estimate whose error was unbounded, signed in our favour and
 time-varying (DEVELOPMENT.md §5.2). It now comes from
 `/lol-match-history/v1/game-timelines/{gameId}`, which carries Riot's own
 per-participant `totalGold` per frame, and lands as its own sparser rows in
-`samples` — one a minute against one a second, with every other metric NULL.
+`samples`, one a minute against one a second, with every other metric NULL.
 
 The frames carry a game clock, so they go through the same game-time →
 video-time alignment the 1 Hz samples did, recovered from an existing sample
 row. A recording with no samples gets no gold: there is no alignment to place
-frames through. A custom or practice game gets none either — it never reaches
-match history — and that renders as "no gold data for this recording", never as
-a flat zero line, because a zero line reads as "you were even".
+frames through. A custom or practice game gets none either, since it never
+reaches match history, and that renders as "no gold data for this recording",
+never as a flat zero line, because a zero line reads as "you were even".
 
-**Known gap:** neither endpoint's shape has been seen off a real client —
-both are modelled from the LCU's own OpenAPI spec, so every field is
+**Known gap:** neither endpoint's shape has been seen off a real client.
+Both are modelled from the LCU's own OpenAPI spec, so every field is
 optional and an unrecognised response degrades to "this source knew less"
 rather than failing. `dev_patch_match_summary` drives the whole path against
 a live client without playing a game.
@@ -626,7 +624,7 @@ a live client without playing a game.
 ### The scoreboard is captured, not fetched
 
 All ten champions, their KDA and CS, the items and spells they finished with,
-and our own rune page come from the Live Client Data poll — the same 1 Hz
+and our own rune page come from the Live Client Data poll, the same 1 Hz
 stream the markers and the advantage curve already ride. Nothing extra is
 requested, and the LCU is not involved: it is written at finalize from what
 the game itself was saying while it was running.
@@ -634,7 +632,7 @@ the game itself was saying while it was running.
 **Last good, not last.** The poll carrying `GameEnd` is often the last one that
 succeeds; the ones after it, during the end-of-game screen or as the process
 exits, come back with no `allPlayers` at all. So a snapshot with no players
-yields no scoreboard and the session keeps whatever it captured before —
+yields no scoreboard and the session keeps whatever it captured before;
 overwriting would trade a real scoreboard for the absence of one. Same
 asymmetry, and the same reason, as `LiveSummary::absorb`.
 
@@ -645,15 +643,15 @@ champion names.
 
 ## 4a. Labelling what predates all of this
 
-Everything above only labels recordings made *after* it shipped. Older rows —
-and anything `reconcile` imported from a folder the user pointed at — have no
+Everything above only labels recordings made *after* it shipped. Older rows,
+and anything `reconcile` imported from a folder the user pointed at, have no
 `game_id`, because a finalize captures one *during* the game and these rows
 never had one.
 
 `backfill::run` is the manual pass that fixes them, triggered from settings and
 never on startup: it is a bulk read against the user's client and the moment to
 do that is theirs. One request for the match history and one for the summoner
-cover the whole run, because the list response carries entire game documents —
+cover the whole run, because the list response carries entire game documents:
 forty unlabelled recordings cost two requests, not forty-two.
 
 The only handle left is the clock, so `match_recording` compares windows: the
@@ -668,7 +666,7 @@ flowchart TD
     EACH --> OVER{"games overlapping<br/>≥50% of the shorter window"}
     OVER -->|none| SKIP["unmatched<br/><small>older than the client's history,<br/>or a custom, or not a game</small>"]
     OVER -->|exactly one| PATCH["update_match_metadata<br/><small>same UPDATE the deferred patch uses</small>"]
-    OVER -->|more than one| REFUSE["ambiguous — write nothing"]
+    OVER -->|more than one| REFUSE["ambiguous: write nothing"]
     style REFUSE fill:#ffebee,stroke:#c62828
     style PATCH fill:#e8f5e9,stroke:#2e7d32
 ```
@@ -676,7 +674,7 @@ flowchart TD
 **It also rebuilds the scoreboard.** A recording made before the live capture
 existed has no `scoreboard_json`, and the match-history document carries enough
 to reconstruct one: every participant's champion id, items, spell ids, perks,
-level and minion counts. That fills a gap and never corrects one —
+level and minion counts. That fills a gap and never corrects one, because
 `fill_scoreboard` writes only where the column is NULL, because a scoreboard
 captured live came from the game itself while a rebuilt one is Riot's account
 of it afterwards, and the live one has things the rebuild does not.
@@ -687,13 +685,13 @@ one being converted into the other, since converting would need Data Dragon in
 a path that otherwise only talks to the League client.
 
 **More than one match is refused, not resolved.** A card labelled with the
-wrong game is worse than one labelled `—`: the value of this library is that
+wrong game is worse than one left unlabelled: the value of this library is that
 what it says about a VOD is true, and a wrong label is invisible, because
 nobody re-checks a row that already looks plausible.
 
 The report counts every outcome rather than only the successes. "Nothing to
 fill in" and "nothing could be matched" look identical otherwise, and they mean
-opposite things — the second says the recordings are older than the client's
+opposite things. The second says the recordings are older than the client's
 own history, and re-running will never help.
 
 ## 5. Where recording can refuse to start
@@ -701,4 +699,4 @@ own history, and re-running will never help.
 `retention::has_room_to_record` runs as a preflight from both
 `Supervisor::start_recording` and the manual `start_recording` command, and
 refuses below **1 GiB free** on the recordings volume. It fails *open* on a
-stat error — a check that could not run is not a reason to lose a game.
+stat error, because a check that could not run is not a reason to lose a game.

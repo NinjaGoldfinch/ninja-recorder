@@ -1,7 +1,7 @@
 ---
 name: Decision needed
 about: Something that has to be settled before work can proceed
-title: "Qn — "
+title: "Qn · "
 labels: ["type: question"]
 ---
 
@@ -19,7 +19,7 @@ labels: ["type: question"]
 
 ## Why it cannot be deferred
 
-<!-- If it can be deferred, say so — that is a useful answer too. Some decisions
+<!-- If it can be deferred, say so; that is a useful answer too. Some decisions
      have to be made *before* an experiment runs, so that the result is not
      litigated afterwards; if this is one of those, say which experiment. -->
 

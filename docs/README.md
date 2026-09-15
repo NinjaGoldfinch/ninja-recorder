@@ -3,14 +3,14 @@
 Two kinds of document live here, and the split matters:
 
 - **[product-design.md](product-design.md)** is the *what and why, at product
-  level* — the problem, the decisions that shaped the build, and the
+  level*: the problem, the decisions that shaped the build, and the
   implementation history phase by phase. It also holds the project's phase
   numbering, which no longer appears in source comments.
-- **[DEVELOPMENT.md](../DEVELOPMENT.md)** (repo root) is the *why* — hard
+- **[DEVELOPMENT.md](../DEVELOPMENT.md)** (repo root) is the *why*: hard
   constraints, decisions, alternatives rejected, risks. Its section numbers
   (`§2.2`, `§3.4`, …) are referenced from ~35 source comments, so **do not
   renumber them**.
-- **These files** are the *what and how* — diagrams, module maps, runtime
+- **These files** are the *what and how*: diagrams, module maps, runtime
   flows. Update them when behaviour changes.
 
 ## Map
@@ -59,7 +59,7 @@ flowchart TB
 
 [CLAUDE.md](../CLAUDE.md) maps each area of the codebase to the documents that
 describe it. A change to behaviour and the doc update that reflects it belong
-in the **same commit** — a diagram that lies is worse than no diagram.
+in the **same commit**. A diagram that lies is worse than no diagram.
 
 Diagrams are [Mermaid](https://mermaid.js.org/) in fenced code blocks, which
 GitHub renders natively. No image files, no external tooling, and a diagram

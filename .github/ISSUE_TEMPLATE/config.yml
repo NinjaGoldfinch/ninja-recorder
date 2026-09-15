@@ -1,6 +1,6 @@
 blank_issues_enabled: true
 contact_links:
-  - name: The plan — design doc, implementation plan, decision log
+  - name: "The plan: design doc, implementation plan, decision log"
     url: https://github.com/NinjaGoldfinch/ninja-recorder-v2-plan
     about: What v2 is going to be and why. Argue about the plan there, not here.
   - name: The board
