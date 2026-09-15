@@ -296,12 +296,20 @@ where
 
 #[cfg(test)]
 mod tests {
-    //! Over a Unix socket, which is the point.
+    //! Over a loopback socket, which is the point.
     //!
     //! The production transport is a Windows named pipe, and a protocol whose
     //! only exercise is on the Windows box is one that gets tested once a week.
     //! `serve` is generic over the stream precisely so the same code can be
     //! driven here in milliseconds.
+    //!
+    //! **TCP on loopback rather than a Unix socket, and that is a correction.**
+    //! #20 asks for a Unix socket, which is the right instinct: keep the
+    //! protocol in the seconds-long dev loop instead of on the Windows box. But
+    //! CI runs on `windows-latest` and nothing else (§9), so Unix-only tests
+    //! would never run there at all, which is the same hole the other way
+    //! round. Loopback runs in both places. `a_unix_socket_serves_the_same_code`
+    //! below keeps the literal ask, gated to where it compiles.
 
     use super::*;
     use crate::core::Ctx;
@@ -311,7 +319,7 @@ mod tests {
     use crate::state_machine;
     use std::sync::Mutex;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    use tokio::net::{UnixListener, UnixStream};
+    use tokio::net::{TcpListener, TcpStream};
 
     fn ctx() -> Arc<Ctx> {
         let recorder: Arc<Mutex<Box<dyn Recorder>>> =
@@ -323,16 +331,16 @@ mod tests {
         Arc::new(Ctx::new(recorder, supervisor, db, dir.clone(), dir.join("ddragon"), None))
     }
 
-    /// Spins up a server on a throwaway socket and returns a connected client.
-    async fn connected(events: Events) -> (BufReader<tokio::net::unix::OwnedReadHalf>, tokio::net::unix::OwnedWriteHalf) {
-        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let path = std::env::temp_dir().join(format!(
-            "nr-rpc-{}-{}.sock",
-            std::process::id(),
-            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
-        let _ = std::fs::remove_file(&path);
-        let listener = UnixListener::bind(&path).unwrap();
+    type Rx = BufReader<tokio::net::tcp::OwnedReadHalf>;
+    type Tx = tokio::net::tcp::OwnedWriteHalf;
+
+    /// Spins up a server on a loopback port and returns a connected client.
+    ///
+    /// Port 0 so the OS picks a free one: two tests running concurrently must
+    /// not be able to collide on a fixed number.
+    async fn connected(events: Events) -> (Rx, Tx) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
 
         let ctx = ctx();
         tokio::spawn(async move {
@@ -340,19 +348,18 @@ mod tests {
             let _ = serve(stream, ctx, events).await;
         });
 
-        let client = UnixStream::connect(&path).await.unwrap();
-        let _ = std::fs::remove_file(&path);
+        let client = TcpStream::connect(addr).await.unwrap();
         let (rx, tx) = client.into_split();
         (BufReader::new(rx), tx)
     }
 
-    async fn send(tx: &mut tokio::net::unix::OwnedWriteHalf, frame: &str) {
+    async fn send(tx: &mut Tx, frame: &str) {
         tx.write_all(frame.as_bytes()).await.unwrap();
         tx.write_all(b"\n").await.unwrap();
         tx.flush().await.unwrap();
     }
 
-    async fn next(rx: &mut BufReader<tokio::net::unix::OwnedReadHalf>) -> Value {
+    async fn next(rx: &mut Rx) -> Value {
         let mut line = String::new();
         rx.read_line(&mut line).await.unwrap();
         serde_json::from_str(&line).unwrap()
@@ -512,5 +519,42 @@ mod tests {
             }
         }
         assert!(saw_lagged, "a session that overflowed the buffer must be told");
+    }
+
+    /// #20's literal ask, kept: the same `serve` over a Unix socket.
+    ///
+    /// One test rather than the whole module, because the stream type is not
+    /// what the protocol tests are about. What this proves is that `serve` is
+    /// genuinely generic, which is the claim the Windows named pipe rests on.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_unix_socket_serves_the_same_code() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::{UnixListener, UnixStream};
+
+        let path = std::env::temp_dir()
+            .join(format!("nr-rpc-{}-unix.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).unwrap();
+
+        let ctx = ctx();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let _ = serve(stream, ctx, Events::new()).await;
+        });
+
+        let client = UnixStream::connect(&path).await.unwrap();
+        let _ = std::fs::remove_file(&path);
+        let (rx, mut tx) = client.into_split();
+        let mut rx = BufReader::new(rx);
+
+        tx.write_all(b"{\"method\":\"hello\",\"id\":1,\"protocol\":1}\n").await.unwrap();
+        tx.flush().await.unwrap();
+
+        let mut line = String::new();
+        rx.read_line(&mut line).await.unwrap();
+        let reply: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(reply["type"], "hello");
+        assert_eq!(reply["protocol"], PROTOCOL);
     }
 }

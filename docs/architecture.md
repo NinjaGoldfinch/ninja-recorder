@@ -209,10 +209,12 @@ flowchart LR
 | `event` | out | a contract event, with no id because nothing asked for it |
 
 **It is generic over the stream, and that is the point.** Production is a
-Windows named pipe; the tests drive the same `serve` over a Unix socket on the
-dev box. A protocol exercised only on the Windows box is one that gets tested
-once a week, and the transport is the one part of the daemon that can be checked
-honestly without Windows.
+Windows named pipe; the tests drive the same `serve` over a loopback socket in
+milliseconds. A protocol exercised only on the Windows box is one that gets
+tested once a week, and the transport is the one part of the daemon that can be
+checked honestly without Windows. Loopback rather than a Unix socket so the
+tests also run in CI, which is Windows-only; one Unix-socket test is kept to
+prove `serve` really is generic.
 
 The reasoning behind the framing, the per-request ids, the bounded broadcast and
 the version refusal is in

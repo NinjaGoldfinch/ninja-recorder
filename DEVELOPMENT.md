@@ -1676,11 +1676,27 @@ would be guessing at frames it has never seen.
 
 ### The server is generic over the stream, and that is load-bearing
 
-Production is a Windows named pipe. The tests drive the same `serve` over a Unix
-socket on the dev box, in milliseconds. That is not a convenience: the
-alternative is a protocol whose only exercise is on the Windows box, which is
-the loop §9 is organised to stay out of. The transport is the one part of the
-daemon that can be tested honestly without Windows, so it is.
+Production is a Windows named pipe. The tests drive the same `serve` over a
+loopback TCP socket, in milliseconds. That is not a convenience: the alternative
+is a protocol whose only exercise is on the Windows box, which is the loop §9 is
+organised to stay out of. The transport is the one part of the daemon that can
+be tested honestly without Windows, so it is.
+
+**Loopback rather than a Unix socket, which is a correction worth recording.**
+The obvious choice was a Unix socket, and it is what the task asked for: it is a
+local IPC primitive like the named pipe, and it keeps the protocol in the dev
+loop. But CI runs on `windows-latest` and nothing else, so Unix-only tests would
+never run there at all, which is the same hole seen from the other side. A
+loopback socket runs in both places. One Unix-socket test is kept, gated to
+where it compiles, because what it proves is that `serve` is genuinely generic,
+and that is the claim the named pipe rests on.
+
+This was found by CI rather than by reasoning: the first version of those tests
+named `tokio::net::unix` unconditionally and compiled perfectly on the dev box.
+Cross-checking with `cargo check --target x86_64-pc-windows-msvc` does not work
+either, because `ring` needs a C toolchain for the target, which is the same
+reason §9 refuses to cross-compile the build. For anything that differs by
+platform, CI is the only check.
 
 What still needs Windows is everything around it: the pipe name and the
 single-instance mutex scoped by build identity, the Win32 message pump, and the
