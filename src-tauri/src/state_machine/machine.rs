@@ -17,7 +17,7 @@
 use crate::lcu::{GameflowPhase, LockfileInfo, LockfileState};
 use serde::Serialize;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, ts_rs::TS)]
 pub enum GameState {
     Idle,
     ClientRunning,
