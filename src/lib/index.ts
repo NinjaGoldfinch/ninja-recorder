@@ -10,8 +10,8 @@
  * | Path | WS | What it becomes |
  * |---|---|---|
  * | `App.svelte`, `Library.svelte`, `Settings.svelte`, `Review.svelte`, `Timeline.svelte` | WS4.2–4.5 | the views, replacing `library.ts`, `settings.ts`, `update.ts`, `review.ts` |
- * | `contract/` | WS2.4 | GENERATED — `types.ts`, `client.ts`, `events.ts`. Committed, CI-checked |
- * | `transport/` | WS2.6, WS3.6 | `pipe.ts`, `invoke.ts`, `mock.ts` |
+ * | `contract/` | WS2.5 | GENERATED: `types.ts`, `client.ts`, `events.ts`, `index.ts`. Committed, CI-checked by `gen-contract --check` |
+ * | `transport/` | WS2.6, WS3.6 | `invoke.ts` and `mock.ts` landed in WS2.6; `pipe.ts` is WS3.6 |
  * | `stores/` | WS4.1 | `$state` driven by the daemon's snapshot and event stream |
  * | `styles/tokens.css` | WS4.1 | design tokens, replacing the 2,013-line global `styles.css` |
  *

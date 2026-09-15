@@ -23,7 +23,11 @@ flowchart TB
     TOAST["toast.ts<br/><small>owns: the transient message</small>"]
     UPDATE["update.ts<br/><small>owns: the update row + badge</small>"]
     DESK["desktop.ts<br/><small>owns: the browser behaviours we suppress</small>"]
-    BRIDGE["bridge.ts<br/><small>invoke + asset URLs</small>"]
+    BRIDGE["bridge.ts<br/><small>composition root: picks a transport,<br/>exposes the generated client</small>"]
+    TRANSPORT["lib/transport/<br/><small>invoke.ts · mock.ts<br/>pipe.ts is WS3.6</small>"]
+    CONTRACT["lib/contract/<br/><small>GENERATED from Rust</small>"]
+    BRIDGE --> TRANSPORT
+    BRIDGE --> CONTRACT
     DOM["dom.ts<br/><small>el, escapeHtml, escapeAttr</small>"]
     FMT["format.ts<br/><small>pure formatters + label fallbacks</small>"]
     TYPES["types.ts<br/><small>mirrors the Rust serde structs</small>"]
@@ -71,6 +75,36 @@ consumer would make `bridge` → `review` → `bridge` a cycle.
 `devportal.ts` is left off the graph: it is one button and a probe, and it is
 compiled out of what it talks to. Its edge to `bridge.ts` is the same
 `hasDevCommands` one `desktop.ts` draws.
+
+### How a command reaches the backend
+
+Since WS2.6 `bridge.ts` is a composition root rather than an implementation. It
+picks a transport and exposes the generated client over it.
+
+```
+view  ->  client (generated)  ->  Transport  ->  invoke("rpc", …)   in Tauri
+                                            ->  fixtures            in the vite dev server
+```
+
+**The transport is an interface with three implementations.** `invoke.ts` is
+the Tauri one and is what v1 did all along: every production command goes
+through the single `rpc` passthrough, with a short direct-command list for the
+three that drive the desktop shell. `mock.ts` is in-memory. `pipe.ts` is WS3.6
+and does not exist yet; when it lands, no caller changes, which is the point of
+there being an interface at this seam before the daemon needs one.
+
+**The mock is a transport now, not a branch inside `call`.** It used to be two
+thirds of `bridge.ts`, reachable only by being outside Tauri with
+`import.meta.env.DEV` set. As a transport a test picks it explicitly, which is
+what lets Vitest drive the *real* generated client with neither a daemon nor a
+WebView2 behind it. It still tree-shakes out of a production build, because
+`import.meta.env.DEV` is statically false there.
+
+**`call` survives, deliberately.** The nine view modules are written against
+it, and WS2.6's exit criterion is that frontend behaviour does not move, so
+rewriting all of them was not this task. New code should prefer `client`, whose
+method names, arguments and return types come from the Rust declaration; `call`
+is what WS4 strangles as each view is rewritten.
 
 ### Suppressed browser behaviour
 
