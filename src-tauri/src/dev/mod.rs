@@ -11,6 +11,7 @@
 //! client or need a library that only a real recording session produces.
 //! DEVELOPMENT.md §3.3 asked for a fixture replay mode; this is it.
 
+mod dispatch;
 mod events;
 mod fixtures_api;
 mod info;
@@ -22,6 +23,8 @@ mod seed;
 mod simulate;
 mod sql;
 mod trim;
+
+pub(crate) use dispatch::{dispatch_dev, dispatch_dev_blocking, is_async_dev_command};
 
 // Glob re-exports, not a named list: `#[tauri::command]` expands to the
 // function *plus* hidden `__cmd__*` / `__tauri_command_name_*` items that
@@ -46,6 +49,22 @@ use std::sync::Mutex;
 #[derive(Default)]
 pub struct DevState {
     pub(crate) replay: Mutex<Option<simulate::ReplayHandle>>,
+}
+
+/// The portal's own process state, which is not the daemon's and not the
+/// library's.
+///
+/// A global rather than Tauri managed state since WS3.7. The replay handle has
+/// to be reachable from a command running in the daemon, which has no
+/// `tauri::State` to fetch it from and no `App` to have managed it. It is
+/// per-process by nature anyway: a replay is a task this process is running,
+/// and the handle is how it gets aborted.
+///
+/// Behind the `devtools` feature with the rest of this module, so a shipped
+/// build carries neither the state nor the commands that reach it.
+pub(crate) fn dev_state() -> &'static DevState {
+    static STATE: std::sync::OnceLock<DevState> = std::sync::OnceLock::new();
+    STATE.get_or_init(DevState::default)
 }
 
 /// The window label the portal runs in. Matches
@@ -133,15 +152,4 @@ pub async fn dev_open_portal(
     // has no inspector at all without it.
     window.open_devtools();
     Ok(())
-}
-
-/// Tells the frontend the VOD library changed. Every dev command that
-/// writes to `recordings`/`markers`/`samples` calls this, so the main
-/// window's library view stays in step with whatever the portal does to
-/// it without the user reloading anything.
-pub(crate) fn notify_library_changed(app: &tauri::AppHandle) {
-    use tauri::Emitter;
-    if let Err(e) = app.emit(crate::LIBRARY_CHANGED_EVENT, ()) {
-        eprintln!("[dev] failed to emit library-changed: {e}");
-    }
 }

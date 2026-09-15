@@ -61,7 +61,12 @@ pub struct Ctx {
     /// Type-erased so this module stays `tauri`-free; see the module header.
     /// `None` simply means nothing is emitted, which is what the unit tests
     /// want.
-    on_library_changed: Option<Box<dyn Fn() + Send + Sync>>,
+    /// `Arc` rather than `Box` so a background task can hold one.
+    ///
+    /// The dev portal's replay runs for the length of a simulated game and
+    /// writes rows as it goes, so it needs to say the library moved *after* the
+    /// command that started it has returned. See `library_notifier`.
+    on_library_changed: Option<Arc<dyn Fn() + Send + Sync>>,
     /// Start-on-login control, behind a trait for the same reason: the only
     /// implementation wraps `tauri-plugin-autostart`, whose manager is
     /// reached through an `AppHandle`.
@@ -122,7 +127,16 @@ impl Ctx {
     /// same shape as `Supervisor::set_library_changed_notifier`, and for
     /// the same reason.
     pub fn set_library_changed_notifier(&mut self, notify: Box<dyn Fn() + Send + Sync>) {
-        self.on_library_changed = Some(notify);
+        self.on_library_changed = Some(Arc::from(notify));
+    }
+
+    /// A handle on the same seam that a spawned task can keep.
+    ///
+    /// `None` means nothing is listening, which is what a unit test looks like
+    /// and is not an error: the caller simply has nobody to tell.
+    #[cfg_attr(not(feature = "devtools"), allow(dead_code))]
+    pub(crate) fn library_notifier(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        self.on_library_changed.clone()
     }
 
     /// Called once from `lib.rs`'s `setup`, for the same reason as
@@ -151,7 +165,14 @@ impl Ctx {
         }
     }
 
-    fn notify_library_changed(&self) {
+    /// Tells whoever is listening that the library moved under them.
+    ///
+    /// `pub(crate)` since WS3.7: the dev portal's write commands used to emit
+    /// the Tauri event themselves through an `AppHandle`, which is precisely
+    /// the thing that kept them in the UI process. Going through the same seam
+    /// every other command uses is what lets them run in the daemon, where it
+    /// publishes a contract event instead.
+    pub(crate) fn notify_library_changed(&self) {
         if let Some(notify) = self.on_library_changed.as_ref() {
             notify();
         }

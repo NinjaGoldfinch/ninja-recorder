@@ -973,11 +973,17 @@ pub fn run() {
     #[cfg(not(feature = "devtools"))]
     let builder = builder.invoke_handler(tauri::generate_handler![rpc, open_recordings_folder]);
 
-    // The list lives in `dev::commands`, and this is the callback that turns
+    // The list lives in `contract::portal`, and this is the callback that turns
     // it into a `generate_handler!` invocation. `generate_handler!` cannot host
     // a macro expansion inside its brackets, but it can be the *output* of one,
     // which is what lets the registration and the portal's manifest come from
     // the same tokens instead of two hand-written lists (#74, WS2.7).
+    //
+    // Only the *UI* table since WS3.7. The other forty `dev_*` commands are
+    // reached by name through `rpc`, the same way every production command is,
+    // because they need the process that owns the database and the supervisor.
+    // What is left here is the handful that need a window or the desktop shell,
+    // and `dev_ui_command_table!`'s header says why for each one.
     #[cfg(feature = "devtools")]
     let builder = {
         macro_rules! with_dev_commands {
@@ -989,7 +995,7 @@ pub fn run() {
                 ]
             };
         }
-        builder.invoke_handler(dev_command_table!(with_dev_commands))
+        builder.invoke_handler(dev_ui_command_table!(with_dev_commands))
     };
 
     let builder = builder.on_window_event(|window, event| {

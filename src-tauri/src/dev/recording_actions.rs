@@ -26,12 +26,11 @@ use crate::backfill::BackfillReport;
 /// A recording the backfill has nothing to fill comes back with `scanned: 0`
 /// rather than an error — "there was nothing to do" is an answer, and it is
 /// often the one being checked for.
-#[tauri::command]
 pub async fn dev_backfill_recording(
-    state: tauri::State<'_, AppState>,
+    ctx: &crate::core::Ctx,
     recording_id: i64,
 ) -> Result<BackfillReport, String> {
-    let db = state.db.clone();
+    let db = ctx.db.clone();
     crate::backfill::run_one(&db, recording_id).await
 }
 

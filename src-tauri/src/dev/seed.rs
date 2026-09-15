@@ -14,7 +14,7 @@
 //! exactly like captured ones, which is the point — a seeded library that
 //! reconcile would delete on next launch would test nothing.
 
-use crate::{db, dev, AppState};
+use crate::{db};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -92,13 +92,12 @@ pub struct SeedReport {
     pub paths: Vec<String>,
 }
 
-#[tauri::command]
 pub fn dev_seed_library(
-    state: tauri::State<AppState>,
-    app: tauri::AppHandle,
+    ctx: &crate::core::Ctx,
+    
     spec: SeedSpec,
 ) -> Result<SeedReport, String> {
-    std::fs::create_dir_all(&state.recordings_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&ctx.recordings_dir).map_err(|e| e.to_string())?;
 
     let sample_mp4 = spec
         .use_sample_mp4
@@ -118,7 +117,7 @@ pub fn dev_seed_library(
 
     for i in 0..spec.count {
         let plan = plan_recording(&spec, &mut rng, i, now);
-        let path = state
+        let path = ctx
             .recordings_dir
             .join(format!("{SEED_PREFIX}{}-{}.mp4", spec.seed, plan.stamp));
 
@@ -130,7 +129,7 @@ pub fn dev_seed_library(
         // report the real marker count rather than a guess.
         let markers = plan_markers(&spec, &mut rng, plan.duration_s);
 
-        let id = state
+        let id = ctx
             .db
             .insert_recording(&db::NewRecording {
                 path: path.display().to_string(),
@@ -186,7 +185,7 @@ pub fn dev_seed_library(
             })
             .map_err(|e| e.to_string())?;
 
-        state
+        ctx
             .db
             .insert_markers(id, &markers)
             .map_err(|e| e.to_string())?;
@@ -194,7 +193,7 @@ pub fn dev_seed_library(
 
         if spec.samples {
             let samples = plan_samples(&mut rng, plan.duration_s, &markers);
-            state
+            ctx
                 .db
                 .insert_samples(id, &samples)
                 .map_err(|e| e.to_string())?;
@@ -205,7 +204,7 @@ pub fn dev_seed_library(
         report.paths.push(path.display().to_string());
     }
 
-    dev::notify_library_changed(&app);
+    ctx.notify_library_changed();
     Ok(report)
 }
 
@@ -217,12 +216,11 @@ pub struct ClearReport {
 
 /// Removes only what this module created — rows whose file basename starts
 /// with `seed-`, and those files. Real captured recordings are untouched.
-#[tauri::command]
 pub fn dev_clear_seeded(
-    state: tauri::State<AppState>,
-    app: tauri::AppHandle,
+    ctx: &crate::core::Ctx,
+    
 ) -> Result<ClearReport, String> {
-    let rows = state.db.list_recordings().map_err(|e| e.to_string())?;
+    let rows = ctx.db.list_recordings().map_err(|e| e.to_string())?;
     let mut report = ClearReport {
         rows_deleted: 0,
         files_deleted: 0,
@@ -232,7 +230,7 @@ pub fn dev_clear_seeded(
         if std::fs::remove_file(&row.path).is_ok() {
             report.files_deleted += 1;
         }
-        state
+        ctx
             .db
             .delete_recording(row.id)
             .map_err(|e| e.to_string())?;
@@ -242,7 +240,7 @@ pub fn dev_clear_seeded(
     // Seeded files with no row (a manual DB wipe, or a failed insert) are
     // still ours to clean up — otherwise the next reconcile re-imports
     // them as untracked recordings.
-    if let Ok(entries) = std::fs::read_dir(&state.recordings_dir) {
+    if let Ok(entries) = std::fs::read_dir(&ctx.recordings_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if is_seeded(&path.display().to_string()) && std::fs::remove_file(&path).is_ok() {
@@ -251,7 +249,7 @@ pub fn dev_clear_seeded(
         }
     }
 
-    dev::notify_library_changed(&app);
+    ctx.notify_library_changed();
     Ok(report)
 }
 
