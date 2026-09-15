@@ -64,11 +64,10 @@ use crate::update::UpdateStatus;
 
 /// One message carrying everything a fresh client needs to render.
 ///
-/// Nothing constructs this until WS3.1 has a pipe to send it down. Declaring
-/// the shape is the point of this task, exactly as `contract::events` declares
-/// four variants nothing emits yet; the alternative is a transport inventing
-/// its own message shape and a contract that describes something else.
-#[cfg_attr(not(test), allow(dead_code))]
+/// Built by `daemon::snapshot::Stream::source`, which is the closure a `hello`
+/// is answered with — the declaration came first (WS2.4) and the producer
+/// followed (WS3.2), so that the transport could not invent its own message
+/// shape and leave the contract describing something else.
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
@@ -111,7 +110,6 @@ pub struct Snapshot {
 /// The counts are what the session has accumulated so far, not what the row
 /// will hold. Markers keep arriving until the game ends, so a client that
 /// renders this is rendering a running total and should say so.
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CurrentRecording {
@@ -152,7 +150,6 @@ impl Snapshot {
     /// client that gets no preferences falls back to the frontend defaults,
     /// which is the same thing a fresh install does; a client that gets no
     /// snapshot cannot render at all.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn assemble(ctx: &Ctx, seq: u64, lcu: LcuStatus) -> Self {
         Self {
             seq,

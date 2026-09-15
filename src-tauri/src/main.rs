@@ -19,9 +19,12 @@ fn main() {
     match Launch::from_env() {
         Launch::Daemon => {
             if let Err(why) = daemon::run() {
-                // Deliberately not through the log facade: this is the
-                // daemon refusing to start, so there is no `daemon.log` to
-                // write to yet.
+                // Deliberately not through the log facade: every one of these
+                // is a refusal to start, and the log is opened after the
+                // endpoint is bound, so there is no `daemon.log` yet. Note
+                // "one is already running" is `Ok` and exits 0, not an error:
+                // a second launch leaves quietly rather than reporting a
+                // failure that did not happen.
                 //
                 // Exit code 2, unchanged from v1. `windows_subsystem =
                 // "windows"` means a release build has no console and this

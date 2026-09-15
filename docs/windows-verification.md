@@ -134,9 +134,9 @@ process is what needs confirming.
       minimum, titled `ninja-recorder`.
 - [ ] `ninja-recorder.exe --hidden` starts with **no** window and no taskbar
       button, and is reachable from the tray icon.
-- [ ] `ninja-recorder.exe --daemon` prints its message and exits 2. Note
-      `windows_subsystem = "windows"` means release builds have no console, so
-      the message goes nowhere visible; confirm the **exit code**, not the text.
+- [ ] `ninja-recorder.exe --daemon` starts headless and stays running, with no
+      window and no taskbar button. It used to print a refusal and exit 2;
+      since WS3.2 it is the daemon, and §5.0.5 is where it is checked.
 - [ ] Unknown arguments (a shell verb, a file path from "Open with") do not
       prevent startup.
 
@@ -294,6 +294,45 @@ at all. That is the design, not a fault.
       attached to a release without updating `latest.json`, and confirm the
       download is **rejected** rather than run. This is the only test that
       exercises the signature at all.
+
+### 5.0.5 The daemon process
+
+`--daemon` runs the recorder with no Tauri, no window and no WebView2
+(WS3.2). All of it has been exercised on a Linux dev box over a Unix socket,
+which is the same code path with a different address: the daemon started,
+opened the library, served a client, recorded through the stub backend,
+reported a second launch as already running, and shut down cleanly on Ctrl-C.
+None of that has been run on Windows, where the address is a named pipe and the
+backend is libobs, and this section is what stands in for that.
+
+- [ ] `ninja-recorder.exe --daemon` starts and keeps running. Task Manager
+      shows one process and **no** `msedgewebview2.exe` alongside it.
+- [ ] `app_data_dir()/logs/daemon.log` is created and names the pipe it bound.
+      The UI's own log is `ui.log` beside it, and neither rotates the other.
+- [ ] The pipe exists while the daemon runs. From PowerShell:
+      `[System.IO.Directory]::GetFiles("\\.\pipe\") -match "ninja-recorder"`
+      should list `ninja-recorder.com.ninjarecorder.app.release`, or
+      `...devtools` for a devtools build.
+- [ ] A devtools build and a release build can run at the same time without
+      either taking the other's clients. Their pipe names differ by that last
+      segment; the database and the recordings folder are still shared.
+- [ ] A second `ninja-recorder.exe --daemon` exits **0** immediately and
+      silently, leaving the first running. Confirm the exit code and confirm
+      the first daemon's log has nothing new in it.
+- [ ] Kill the daemon with Task Manager, then start it again. It binds the pipe
+      on the first try: a killed daemon must not leave the name unusable.
+- [ ] With the daemon running and a game in progress, the recording continues
+      with no UI process at all. This is the whole point of the split, and it
+      is also §3.2's exit criterion.
+- [ ] Stop the daemon while it is recording. The recording is finalized before
+      the process exits, and the row is in the library when it comes back.
+
+**Not in the daemon yet**, so do not look for them: the tray icon (3.3),
+autostart (3.5), the updater (3.6), desktop notifications, and the dev portal's
+`dev_*` commands (3.7). The Run key still points at `--hidden`, so a login start
+is still the UI. Until 3.5, running the UI and the daemon together means two
+supervisors watching for the same game, which is expected rather than a defect
+to report.
 
 ### 5.1 Capture-backend lifecycle
 

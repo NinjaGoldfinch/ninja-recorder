@@ -10,7 +10,10 @@
 //! a read-only view of what the daemon wrote (implementation plan §3.1, §3.2).
 //!
 //! `client` is the first piece: the UI's side of the pipe, with reply routing,
-//! reconnect and version-skew refusal. What is not here yet is the daemon to
-//! talk to (WS3.2) and the Tauri commands that expose this to the webview.
+//! reconnect and version-skew refusal. There is a daemon to talk to since
+//! WS3.2, and `daemon::rpc::connect` opens the address it listens on. What is
+//! missing is the rest of 3.4 — the `rpc_call`/`rpc_subscribe` commands that
+//! expose this to the webview — and 3.5, which is what makes the UI start a
+//! daemon rather than assume one.
 
 pub mod client;

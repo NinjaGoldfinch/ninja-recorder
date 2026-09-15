@@ -1216,15 +1216,16 @@ exactly one place to change it.
 
 ### Still to build
 
-The socket itself, and with it: per-request ids, because a slow
-`extract_audio_track` must not head-of-line block a status poll; and a socket
-name scoped by build identity, deferred until there is a socket to name rather
-than added speculatively, because
-`tauri.devtools.conf.json` overrides `productName` but **not** `identifier`, so
-a dev build and an installed release already share `app_data_dir()`, the
-database and the recordings folder. For the same reason a version-mismatched
-handshake must refuse to attach and say so, never tell the other daemon to quit:
-it might be recording.
+The daemon runs and serves clients (§17). What it does not yet have is the tray
+and its Win32 message pump, autostart pointed at `--daemon` rather than
+`--hidden`, the updater, desktop notifications, and the dev portal's commands.
+Those are WS3.3, 3.5, 3.6 and 3.7.
+
+Until autostart moves, nothing starts the daemon on its own: `--daemon` is
+something a person runs. The UI still builds its own supervisor, so running both
+at once means two processes watching for the same game and two recorders
+competing for the same capture. That state is not a bug to be fixed in the UI,
+it is the reason 3.5 exists, and it is why the Run key still says `--hidden`.
 
 ---
 
@@ -1698,6 +1699,85 @@ either, because `ring` needs a C toolchain for the target, which is the same
 reason §9 refuses to cross-compile the build. For anything that differs by
 platform, CI is the only check.
 
-What still needs Windows is everything around it: the pipe name and the
-single-instance mutex scoped by build identity, the Win32 message pump, and the
-daemon actually recording a game. Those are WS3.2, WS3.3 and WS3.8.
+What still needs Windows is the Win32 message pump and the daemon actually
+recording a game, which are WS3.3 and WS3.8. The endpoint's name and the
+single-instance check landed with the daemon itself, and the sections below say
+what they turned out to be.
+
+### The endpoint is the single-instance lock, and there is no separate mutex
+
+The implementation plan sketches a named mutex held alongside the pipe. What
+landed is one lock rather than two, and the lock is the endpoint.
+
+The thing worth protecting is the address. Two daemons are a problem precisely
+because they would fight over one pipe, one database writer and one capture
+device, and the pipe is the first of those to be contended. A mutex held while
+the pipe failed to bind, or a pipe bound while the mutex was somehow free, are
+both states where "is a daemon running" has two answers depending on which lock
+you ask. Binding the address answers it once.
+
+Windows gets that from `first_pipe_instance`, which fails with
+`ERROR_ACCESS_DENIED` when another process already has a server on the name.
+Unix gets it from `bind`, plus a probe: a socket file outlives the process that
+created it, so `EADDRINUSE` on its own cannot tell a running daemon from a
+crashed one's leftovers. Connecting separates them. Someone answers, or nobody
+does and the file is stale and ours to remove. A daemon that could not tell
+those apart would refuse to start after a single crash, forever, with nothing to
+show for it but silence.
+
+"Already running" is `Ok(None)` rather than an error, and the process exits 0.
+A second launch must never signal the first to quit, because the first might be
+recording, and a login start that found a daemon already up is a correct
+outcome, not a failure to report.
+
+### The name is scoped by build identity
+
+`\\.\pipe\ninja-recorder.<identifier>.<build>`, where the build is `release` or
+`devtools`. `tauri.devtools.conf.json` overrides `productName` but **not**
+`identifier`, so a devtools build and an installed release already share
+`app_data_dir()`, the database and the recordings folder. One process can
+survive that. Two daemons cannot: they would bind the same name, and whichever
+started first would silently own the other's clients, which means a dev portal
+driving the release daemon's recorder, or the reverse.
+
+### Paths without an `AppHandle`
+
+The daemon builds no `tauri::App`, so it cannot ask one where anything is. It
+resolves the same paths itself, following Tauri's rules rather than inventing
+its own: `app_data_dir()` is `dirs::data_dir()` joined with the identifier, and
+bundled resources sit beside the executable. `dirs` is the crate Tauri itself
+uses, at the version it uses, and was already in the tree through it, so this is
+the same function producing the same answer rather than a second implementation
+of one rule.
+
+The identifier is the one string both processes have to spell identically, and
+it is now written in two places: `tauri.conf.json`, which Tauri reads, and
+`daemon::IDENTIFIER`, which the daemon reads. A test parses the first and
+asserts the second, because getting this wrong would not crash anything. The
+daemon would open a different database in a different folder and record
+flawlessly into a library the UI has never heard of, which is the kind of bug
+that is found weeks later by a user with no recordings.
+
+### One log file per process
+
+`log.rs` used to write one `ninja-recorder.log`. Two processes sharing it would
+be two independent sinks appending to one file and, worse, each rotating the
+other's file out from under it, since a rename is not something the other
+process can be told about. So the stem names the role: `ui.log` and
+`daemon.log`, both under `app_data_dir()/logs/`, which is what the ownership
+table said all along. The dev portal lists its own files and picks the daemon's
+up through the same directory scan that already finds `libobs.log`.
+
+### Startup and shutdown order
+
+The endpoint is bound first, before the log and before the database, because
+binding it is the single-instance check and a second daemon should cost nothing
+and say nothing. Opening a log file it is about to abandon would rotate the
+running daemon's history for it.
+
+Shutdown runs the other way: stop accepting, publish `DaemonShuttingDown` so a
+connected UI can say why it is about to lose its connection instead of showing a
+dead pipe, then finalize whatever recording is in flight. That last step is the
+one worth the wait. Killing a daemon mid-game leaves a fragmented MP4 with no
+row, recoverable only by the next startup's reconcile and stripped of its
+markers, so a clean stop finalizes first and exits second.
