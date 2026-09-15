@@ -15,7 +15,7 @@ use crate::recorder::audio::AudioPreset;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
@@ -495,28 +495,20 @@ fn row_to_recording(row: &rusqlite::Row) -> rusqlite::Result<RecordingRow> {
 }
 
 pub struct Db {
-    conn: Mutex<Connection>,
+    pool: pool::Pool,
 }
 
 impl Db {
     pub fn open(path: &Path) -> Result<Self, DbError> {
-        let mut conn = Connection::open(path)?;
-        Self::init(&mut conn)?;
-        Ok(Self {
-            conn: Mutex::new(conn),
-        })
+        Ok(Self { pool: pool::Pool::open(path, Self::init)? })
     }
 
     /// `pub(crate)` rather than private: other modules' tests (e.g.
     /// `state_machine::supervisor`) need this too, but it must never be
     /// reachable outside `#[cfg(test)]` builds.
     #[cfg(test)]
-    pub(crate) fn open_in_memory() -> Result<Self, DbError> {
-        let mut conn = Connection::open_in_memory()?;
-        Self::init(&mut conn)?;
-        Ok(Self {
-            conn: Mutex::new(conn),
-        })
+    pub(crate) fn open_temporary() -> Result<Self, DbError> {
+        Ok(Self { pool: pool::Pool::open_temporary(Self::init)? })
     }
 
     /// Raw connection access for the dev portal's SQL console and table
@@ -527,7 +519,11 @@ impl Db {
     /// build. Panics on a poisoned lock, matching every other method here.
     #[cfg(feature = "devtools")]
     pub(crate) fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
-        self.conn.lock().unwrap()
+        // The writer, not a reader: the SQL console runs `UPDATE` and `DELETE`
+        // as readily as `SELECT`, and a `query_only` connection would refuse
+        // them with an error that looks like a bug in the console rather than
+        // the deliberate split it is.
+        self.pool.write()
     }
 
     fn init(conn: &mut Connection) -> Result<(), DbError> {
@@ -561,7 +557,7 @@ impl Db {
     /// None` case) even though the recording itself succeeded. The real
     /// finalize data should win over reconcile's guessed one either way.
     pub fn insert_recording(&self, new: &NewRecording) -> Result<i64, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.write();
         conn.query_row(
             "INSERT INTO recordings
                 (path, started_at, duration_s, game_id, queue, champion, role,
@@ -647,7 +643,7 @@ impl Db {
         recording_id: i64,
         meta: &MatchMetadata,
     ) -> Result<usize, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.write();
         let changed = conn.execute(
             "UPDATE recordings SET
                 game_id  = COALESCE(?2, game_id),
@@ -685,7 +681,7 @@ impl Db {
 
     /// Inserts all `markers` for `recording_id` in one transaction.
     pub fn insert_markers(&self, recording_id: i64, markers: &[NewMarker]) -> Result<(), DbError> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.pool.write();
         let tx = conn.transaction()?;
         {
             let mut stmt = tx.prepare(
@@ -710,7 +706,7 @@ impl Db {
     /// same shape as `insert_markers`, but this runs with ~2100 rows on a
     /// normal game, so the single-transaction batching matters more here.
     pub fn insert_samples(&self, recording_id: i64, samples: &[NewSample]) -> Result<(), DbError> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.pool.write();
         let tx = conn.transaction()?;
         {
             let mut stmt = tx.prepare(
@@ -740,7 +736,7 @@ impl Db {
     /// Advantage-curve samples for one recording, ordered by position in
     /// the video — what the review timeline's graph plots.
     pub fn get_samples(&self, recording_id: i64) -> Result<Vec<SampleRow>, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.read();
         let mut stmt = conn.prepare(
             "SELECT id, recording_id, game_time_s, video_time_s, our_team,
                     gold_diff, kill_diff, cs_diff, our_gold, our_level
@@ -764,7 +760,7 @@ impl Db {
     }
 
     pub fn list_recordings(&self) -> Result<Vec<RecordingRow>, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.read();
         let mut stmt = conn.prepare(
             "SELECT id, path, started_at, duration_s, game_id, queue, champion, role,
                     win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
@@ -777,7 +773,7 @@ impl Db {
     }
 
     pub fn find_by_path(&self, path: &str) -> Result<Option<i64>, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.read();
         conn.query_row("SELECT id FROM recordings WHERE path = ?1", [path], |r| {
             r.get(0)
         })
@@ -788,7 +784,7 @@ impl Db {
     /// Markers for one recording, ordered by position in the video —
     /// what the review timeline renders.
     pub fn get_markers(&self, recording_id: i64) -> Result<Vec<MarkerRow>, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.read();
         let mut stmt = conn.prepare(
             "SELECT id, recording_id, game_time_s, video_time_s, kind, payload_json
              FROM markers WHERE recording_id = ?1 ORDER BY video_time_s ASC",
@@ -807,13 +803,13 @@ impl Db {
     }
 
     pub fn delete_recording(&self, id: i64) -> Result<(), DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.write();
         conn.execute("DELETE FROM recordings WHERE id = ?1", [id])?;
         Ok(())
     }
 
     pub fn set_pinned(&self, id: i64, pinned: bool) -> Result<(), DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.write();
         conn.execute(
             "UPDATE recordings SET pinned = ?1 WHERE id = ?2",
             params![pinned, id],
@@ -825,7 +821,7 @@ impl Db {
     /// disk *usage*, which pinned files still count toward even though
     /// they're exempt from retention deletion.
     pub fn total_size_bytes(&self) -> Result<i64, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.read();
         conn.query_row("SELECT COALESCE(SUM(size_bytes), 0) FROM recordings", [], |r| {
             r.get(0)
         })
@@ -833,7 +829,7 @@ impl Db {
     }
 
     pub fn get_retention_policy(&self) -> Result<RetentionPolicy, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.read();
         conn.query_row(
             "SELECT max_total_bytes, max_age_days FROM settings WHERE id = 1",
             [],
@@ -848,7 +844,7 @@ impl Db {
     }
 
     pub fn set_retention_policy(&self, policy: &RetentionPolicy) -> Result<(), DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.write();
         conn.execute(
             "UPDATE settings SET max_total_bytes = ?1, max_age_days = ?2 WHERE id = 1",
             params![policy.max_total_bytes, policy.max_age_days],
@@ -879,7 +875,7 @@ impl Db {
         recording_id: i64,
         samples: &[NewSample],
     ) -> Result<(), DbError> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.pool.write();
         let tx = conn.transaction()?;
         tx.execute(
             "DELETE FROM samples
@@ -945,7 +941,7 @@ impl Db {
         scoreboard_json: &str,
         cs: Option<i64>,
     ) -> Result<bool, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.write();
         let changed = conn.execute(
             "UPDATE recordings
                 SET scoreboard_json = ?2,
@@ -962,7 +958,7 @@ impl Db {
         scoreboard_json: &str,
         cs: Option<i64>,
     ) -> Result<bool, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.write();
         let changed = conn.execute(
             "UPDATE recordings
                 SET scoreboard_json = ?2,
@@ -996,7 +992,7 @@ impl Db {
     /// correction is a method of its own rather than a flipped `COALESCE` in
     /// the shared one.
     pub fn correct_champion(&self, recording_id: i64, champion: &str) -> Result<bool, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.write();
         let changed = conn.execute(
             "UPDATE recordings SET champion = ?2 WHERE id = ?1",
             params![recording_id, champion],
@@ -1026,7 +1022,7 @@ impl Db {
         lp_before: Option<i64>,
         lp_delta: Option<i64>,
     ) -> Result<bool, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.write();
         let changed = conn.execute(
             "UPDATE recordings
                 SET tier = ?2, division = ?3, lp_after = ?4,
@@ -1060,7 +1056,7 @@ impl Db {
         new_duration_s: f64,
         new_size_bytes: i64,
     ) -> Result<(), DbError> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.pool.write();
         let tx = conn.transaction()?;
         for table in ["markers", "samples"] {
             tx.execute(
@@ -1099,7 +1095,7 @@ impl Db {
     /// (CLAUDE.md). Same shape as `command_names`'s allow.
     #[cfg_attr(not(feature = "devtools"), allow(dead_code))]
     pub fn recording_counts(&self, recording_id: i64) -> Result<(i64, i64, i64), DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.read();
         conn.query_row(
             "SELECT
                (SELECT COUNT(*) FROM markers WHERE recording_id = ?1),
@@ -1122,7 +1118,7 @@ impl Db {
     /// `None` when there are no samples, which is the same answer as the head
     /// end gives and means the same thing: nothing knows, so touch nothing.
     pub fn last_sample_video_time_s(&self, recording_id: i64) -> Result<Option<f64>, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.read();
         conn.query_row(
             "SELECT MAX(video_time_s) FROM samples WHERE recording_id = ?1",
             [recording_id],
@@ -1149,7 +1145,7 @@ impl Db {
     /// no gold in that case: frames placed through a guessed offset would
     /// draw the right curve at the wrong times.
     pub fn sample_alignment_offset(&self, recording_id: i64) -> Result<Option<f64>, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.read();
         conn.query_row(
             "SELECT video_time_s - game_time_s FROM samples
              WHERE recording_id = ?1 ORDER BY game_time_s LIMIT 1",
@@ -1199,7 +1195,7 @@ impl Db {
         &self,
         since_ms: i64,
     ) -> Result<Vec<(i64, i64)>, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.read();
         let mut stmt = conn.prepare(
             "SELECT id, game_id FROM recordings
               WHERE game_id IS NOT NULL
@@ -1217,7 +1213,7 @@ impl Db {
     }
 
     pub fn recordings_missing_metadata(&self) -> Result<Vec<crate::backfill::Candidate>, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.read();
         // `needs_gold` is computed here rather than inferred from the other
         // columns, because a recording can be complete in every other respect
         // and still have no curve: the gold series is written by a deferred
@@ -1257,7 +1253,7 @@ impl Db {
     }
 
     pub fn get_recording(&self, id: i64) -> Result<Option<RecordingRow>, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.read();
         conn.query_row(
             "SELECT id, path, started_at, duration_s, game_id, queue, champion, role,
                     win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
@@ -1275,7 +1271,7 @@ impl Db {
     /// set once at boot, so N separate `get_ui_pref` calls would just be
     /// N times the IPC for the same data.
     pub fn get_ui_prefs(&self) -> Result<HashMap<String, String>, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.read();
         let mut stmt = conn.prepare("SELECT key, value FROM settings_kv")?;
         let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         rows.collect::<Result<HashMap<_, _>, _>>()
@@ -1283,7 +1279,7 @@ impl Db {
     }
 
     pub fn set_ui_pref(&self, key: &str, value: &str) -> Result<(), DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.write();
         conn.execute(
             "INSERT INTO settings_kv (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -1301,7 +1297,7 @@ impl Db {
     /// unreadable row records game audio only, which is the safe answer, and
     /// says so on stderr.
     pub fn get_audio_preset(&self) -> Result<AudioPreset, DbError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.pool.read();
         let raw: Option<String> = conn
             .query_row(
                 "SELECT value FROM settings_kv WHERE key = ?1",
@@ -1385,7 +1381,7 @@ mod tests {
 
     #[test]
     fn insert_and_list_recording() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = db
             .insert_recording(&NewRecording {
                 path: "/recordings/one.mp4".into(),
@@ -1406,7 +1402,7 @@ mod tests {
 
     #[test]
     fn list_recordings_orders_newest_first() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         db.insert_recording(&NewRecording {
             path: "/a.mp4".into(),
             started_at: 100,
@@ -1433,7 +1429,7 @@ mod tests {
     /// finalize needs to attach markers to.
     #[test]
     fn duplicate_path_upserts_instead_of_erroring() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let first_id = db
             .insert_recording(&NewRecording {
                 path: "/dup.mp4".into(),
@@ -1461,7 +1457,7 @@ mod tests {
 
     #[test]
     fn insert_and_count_markers() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = db
             .insert_recording(&NewRecording {
                 path: "/game.mp4".into(),
@@ -1473,7 +1469,7 @@ mod tests {
         db.insert_markers(id, &[marker("kill", 10.0), marker("death", 20.0)])
             .unwrap();
 
-        let conn = db.conn.lock().unwrap();
+        let conn = db.pool.read();
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM markers WHERE recording_id = ?1",
@@ -1486,7 +1482,7 @@ mod tests {
 
     #[test]
     fn get_markers_returns_them_ordered_by_video_time() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = db
             .insert_recording(&NewRecording {
                 path: "/game.mp4".into(),
@@ -1508,7 +1504,7 @@ mod tests {
 
     #[test]
     fn get_markers_for_recording_with_none_is_empty() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = db
             .insert_recording(&NewRecording {
                 path: "/quiet-game.mp4".into(),
@@ -1522,7 +1518,7 @@ mod tests {
 
     #[test]
     fn deleting_recording_cascades_to_its_markers() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = db
             .insert_recording(&NewRecording {
                 path: "/game.mp4".into(),
@@ -1534,7 +1530,7 @@ mod tests {
 
         db.delete_recording(id).unwrap();
 
-        let conn = db.conn.lock().unwrap();
+        let conn = db.pool.read();
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM markers", [], |r| r.get(0))
             .unwrap();
@@ -1543,7 +1539,7 @@ mod tests {
 
     #[test]
     fn find_by_path_distinguishes_present_and_absent() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         db.insert_recording(&NewRecording {
             path: "/known.mp4".into(),
             started_at: 1,
@@ -1557,7 +1553,7 @@ mod tests {
 
     #[test]
     fn get_recording_returns_the_whole_row_or_none() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = db
             .insert_recording(&NewRecording {
                 path: "/vod.mp4".into(),
@@ -1578,7 +1574,7 @@ mod tests {
 
     #[test]
     fn ui_pref_round_trips_and_overwrites() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
 
         db.set_ui_pref("theme", "dark").unwrap();
         let prefs = db.get_ui_prefs().unwrap();
@@ -1593,13 +1589,13 @@ mod tests {
 
     #[test]
     fn missing_ui_pref_is_absent_not_an_error() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         assert!(!db.get_ui_prefs().unwrap().contains_key("never-set"));
     }
 
     #[test]
     fn get_ui_prefs_returns_every_pref_and_starts_empty() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         // Migration 4 deliberately seeds nothing: a missing pref means
         // "use the frontend default".
         assert!(db.get_ui_prefs().unwrap().is_empty());
@@ -1614,13 +1610,13 @@ mod tests {
 
     #[test]
     fn audio_preset_defaults_to_game_when_unset() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         assert_eq!(db.get_audio_preset().unwrap(), AudioPreset::Game);
     }
 
     #[test]
     fn audio_preset_round_trips_through_settings_kv() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let preset = AudioPreset::GameMicDiscord {
             mic_device_id: Some("{0.0.1.00000000}.{abc}".into()),
         };
@@ -1632,14 +1628,14 @@ mod tests {
     /// and must not take the app down either — it falls back to the default.
     #[test]
     fn an_unparseable_audio_preset_falls_back_to_the_default() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         db.set_ui_pref(AUDIO_PRESET_KEY, "{not json").unwrap();
         assert_eq!(db.get_audio_preset().unwrap(), AudioPreset::Game);
     }
 
     #[test]
     fn audio_tracks_json_round_trips_through_insert_and_list() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let layout = AudioPreset::GameMic { mic_device_id: None }.layout();
         let json = serde_json::to_string(&layout).unwrap();
 
@@ -1665,7 +1661,7 @@ mod tests {
     /// stem picker for that VOD.
     #[test]
     fn a_rescan_upsert_cannot_erase_a_known_audio_layout() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let json = serde_json::to_string(&AudioPreset::GameMic { mic_device_id: None }.layout())
             .unwrap();
 
@@ -1698,7 +1694,7 @@ mod tests {
     /// the Queue label on every card the moment someone pressed Rescan.
     #[test]
     fn a_rescan_upsert_cannot_erase_a_known_game_mode() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
 
         let id = db
             .insert_recording(&NewRecording {
@@ -1750,7 +1746,7 @@ mod tests {
     /// the recording and zero its size.
     #[test]
     fn patching_a_summary_leaves_everything_it_does_not_own_alone() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = a_finalized_row(&db);
 
         let changed = db
@@ -1796,7 +1792,7 @@ mod tests {
     /// `correct_champion` instead, which the backfill never calls.
     #[test]
     fn a_champion_the_live_client_already_named_is_never_overwritten() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = a_finalized_row(&db);
 
         db.update_match_metadata(
@@ -1819,7 +1815,7 @@ mod tests {
     /// one there is.
     #[test]
     fn a_null_champion_is_filled_in_by_the_patch() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = db
             .insert_recording(&NewRecording {
                 path: "/game.mp4".into(),
@@ -1848,7 +1844,7 @@ mod tests {
     /// not erase them.
     #[test]
     fn a_field_the_summary_could_not_establish_does_not_null_the_column() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = a_finalized_row(&db);
 
         db.update_match_metadata(
@@ -1870,7 +1866,7 @@ mod tests {
     /// gone. That is a no-op, not a failure worth surfacing.
     #[test]
     fn patching_a_row_that_no_longer_exists_changes_nothing_and_is_not_an_error() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let changed = db
             .update_match_metadata(
                 404,
@@ -1887,7 +1883,7 @@ mod tests {
     /// genuinely has an unknown layout — NULL, not a guess.
     #[test]
     fn a_recording_with_no_known_audio_layout_reads_back_as_none() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = db
             .insert_recording(&NewRecording {
                 path: "/imported.mp4".into(),
@@ -1900,7 +1896,7 @@ mod tests {
 
     #[test]
     fn set_pinned_updates_the_row() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = db
             .insert_recording(&NewRecording {
                 path: "/game.mp4".into(),
@@ -1918,7 +1914,7 @@ mod tests {
 
     #[test]
     fn total_size_bytes_sums_across_recordings() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         db.insert_recording(&NewRecording {
             path: "/a.mp4".into(),
             started_at: 1,
@@ -1939,7 +1935,7 @@ mod tests {
 
     #[test]
     fn retention_policy_defaults_and_round_trips() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
 
         // Seeded defaults from the migration — 50 GiB / 30 days, not
         // unlimited (see the migration's comment for why).
@@ -1974,7 +1970,7 @@ mod tests {
     /// selected nothing, and the button did nothing at all.
     #[test]
     fn a_row_with_a_champion_and_a_result_still_needs_its_scoreboard() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = db
             .insert_recording(&NewRecording {
                 path: "/labelled.mp4".into(),
@@ -1997,7 +1993,7 @@ mod tests {
 
     #[test]
     fn a_row_with_everything_is_left_alone() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         db.insert_recording(&NewRecording {
             path: "/complete.mp4".into(),
             started_at: 1,
@@ -2025,7 +2021,7 @@ mod tests {
     /// drop out rather than be retried on every client start forever.
     #[test]
     fn the_resume_sweep_only_looks_at_recent_recordings() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         for (path, started_at) in [("/new.mp4", 10_000i64), ("/old.mp4", 1_000i64)] {
             db.insert_recording(&NewRecording {
                 path: path.into(),
@@ -2047,7 +2043,7 @@ mod tests {
     /// so it must not sit in the sweep being retried at every client start.
     #[test]
     fn the_resume_sweep_skips_recordings_with_no_game_id() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         db.insert_recording(&NewRecording {
             path: "/custom.mp4".into(),
             started_at: 10_000,
@@ -2064,7 +2060,7 @@ mod tests {
     /// game the user has ever recorded.
     #[test]
     fn the_resume_sweep_leaves_a_finished_recording_alone() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         db.insert_recording(&NewRecording {
             path: "/done.mp4".into(),
             started_at: 10_000,
@@ -2086,7 +2082,7 @@ mod tests {
     /// `fill_scoreboard` deliberately would not.
     #[test]
     fn replacing_a_scoreboard_overwrites_one_that_is_already_there() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         db.insert_recording(&NewRecording {
             path: "/live.mp4".into(),
             started_at: 1,
@@ -2109,7 +2105,7 @@ mod tests {
     /// null must never erase a good live value.
     #[test]
     fn replacing_a_scoreboard_without_a_cs_keeps_the_one_already_there() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         db.insert_recording(&NewRecording {
             path: "/live.mp4".into(),
             started_at: 1,
@@ -2126,7 +2122,7 @@ mod tests {
     /// The case #137 is about: complete in every other respect, no curve.
     #[test]
     fn a_row_matched_to_a_game_but_missing_its_gold_curve_is_a_candidate() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         db.insert_recording(&NewRecording {
             path: "/no-curve.mp4".into(),
             started_at: 1,
@@ -2153,7 +2149,7 @@ mod tests {
     /// and must not sit in the candidate list forever asking to be retried.
     #[test]
     fn a_recording_that_never_reached_match_history_is_not_asked_for_gold() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         db.insert_recording(&NewRecording {
             path: "/practice.mp4".into(),
             started_at: 1,
@@ -2190,7 +2186,7 @@ mod tests {
     /// draw a second one on top of it.
     #[test]
     fn replacing_the_gold_series_is_idempotent() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = recording_with_samples(&db, &[sample(10.0, 100.0, 1), sample(20.0, 200.0, 2)]);
 
         for gold in [500.0, 900.0] {
@@ -2221,7 +2217,7 @@ mod tests {
 
     #[test]
     fn get_samples_returns_them_ordered_by_video_time() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         // Inserted out of order — get_samples must sort them, since the
         // graph renderer walks the series assuming monotonic time.
         let id = recording_with_samples(
@@ -2239,7 +2235,7 @@ mod tests {
     /// ever show good news.
     #[test]
     fn sample_diffs_round_trip_with_their_sign_intact() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = recording_with_samples(&db, &[sample(10.0, -2750.5, -3)]);
 
         let row = &db.get_samples(id).unwrap()[0];
@@ -2253,7 +2249,7 @@ mod tests {
     /// still gets a row, with the metrics NULL rather than a guessed side.
     #[test]
     fn sample_with_unknown_team_stores_nulls() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = recording_with_samples(
             &db,
             &[NewSample {
@@ -2271,19 +2267,19 @@ mod tests {
 
     #[test]
     fn get_samples_for_recording_with_none_is_empty() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = recording_with_samples(&db, &[]);
         assert!(db.get_samples(id).unwrap().is_empty());
     }
 
     #[test]
     fn deleting_recording_cascades_to_its_samples() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = recording_with_samples(&db, &[sample(10.0, 100.0, 1)]);
 
         db.delete_recording(id).unwrap();
 
-        let conn = db.conn.lock().unwrap();
+        let conn = db.pool.read();
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM samples", [], |r| r.get(0))
             .unwrap();
@@ -2297,7 +2293,7 @@ mod tests {
     /// is staler, so a second call must lose.
     #[test]
     fn a_rank_is_written_once_and_never_replaced() {
-        let db = Db::open(Path::new(":memory:")).unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = db.insert_recording(&NewRecording {
             path: "/a.mp4".into(),
             started_at: 1,
@@ -2321,7 +2317,7 @@ mod tests {
     /// `lp_after` says the measurement was refused rather than forgotten.
     #[test]
     fn a_measured_game_stores_both_ends_and_the_movement() {
-        let db = Db::open(Path::new(":memory:")).unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = db.insert_recording(&NewRecording {
             path: "/a.mp4".into(),
             started_at: 1,
@@ -2343,7 +2339,7 @@ mod tests {
     /// not cost the row the standing it does know.
     #[test]
     fn a_game_with_no_before_keeps_its_rank_and_no_delta() {
-        let db = Db::open(Path::new(":memory:")).unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = db.insert_recording(&NewRecording {
             path: "/a.mp4".into(),
             started_at: 1,
@@ -2362,7 +2358,7 @@ mod tests {
     /// Master and above have no division, and NULL is how that is said.
     #[test]
     fn an_apex_rank_stores_no_division() {
-        let db = Db::open(Path::new(":memory:")).unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = db.insert_recording(&NewRecording {
             path: "/a.mp4".into(),
             started_at: 1,
@@ -2382,7 +2378,7 @@ mod tests {
     /// game played in another one, and it would look entirely plausible.
     #[test]
     fn the_metadata_patch_cannot_touch_the_rank_columns() {
-        let db = Db::open(Path::new(":memory:")).unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = db.insert_recording(&NewRecording {
             path: "/a.mp4".into(),
             started_at: 1,
@@ -2409,7 +2405,7 @@ mod tests {
     /// deferred patch is allowed to correct the row from it.
     #[test]
     fn a_champion_the_game_got_wrong_is_corrected_from_the_id() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = a_finalized_row(&db);
 
         // What the live path wrote while possessing a Vi.
@@ -2426,7 +2422,7 @@ mod tests {
     /// matches games on the clock rather than by id.
     #[test]
     fn the_shared_patch_still_cannot_rename_a_champion() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = a_finalized_row(&db);
         db.correct_champion(id, "Viego").unwrap();
 

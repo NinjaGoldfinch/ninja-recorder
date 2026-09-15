@@ -415,7 +415,7 @@ mod tests {
     fn ctx() -> Ctx {
         let recorder: Arc<Mutex<Box<dyn Recorder>>> =
             Arc::new(Mutex::new(Box::new(StubRecorder::new())));
-        let db = Arc::new(Db::open_in_memory().unwrap());
+        let db = Arc::new(Db::open_temporary().unwrap());
         let dir = std::env::temp_dir().join(format!(
             "ninja-recorder-dispatch-test-{}",
             std::process::id()

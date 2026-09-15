@@ -209,7 +209,13 @@ workstream should be rewritten to say what it means.
   unit-tested; their wrappers are deliberately too small to hide a bug. Adding
   I/O or a clock read to a pure function removes its test coverage.
 - **Append migrations, never edit them.** Shipped builds have already run the
-  old ones. WS6 changes connection handling, not the schema.
+  old ones. WS6 changed connection handling, not the schema.
+- **A `Db` method reads or it writes, and the connection enforces which.**
+  `db::pool` hands out one writer and four `query_only` readers, so a read path
+  that tries to write fails at the connection. Adding a method means deciding
+  which side it is on; getting it wrong is a test failure, not a rare race.
+  Tests use `Db::open_temporary()`, which is a real file: `:memory:` is private
+  per connection and would leave the readers seeing no tables.
 - **Every ffmpeg spawn goes through `lib.rs::ffmpeg_command`.** It sets
   `CREATE_NO_WINDOW`, and the bundled binary is the **LGPL** build used only
   with `-c copy` — which is what keeps it compatible with a proprietary

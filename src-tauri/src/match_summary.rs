@@ -966,7 +966,7 @@ mod tests {
     /// everything in this module except the HTTP call itself.
     #[test]
     fn a_patched_row_gains_the_lcu_columns_and_keeps_the_live_ones() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = db
             .insert_recording(&NewRecording {
                 path: "/game.mp4".into(),
@@ -1084,7 +1084,7 @@ mod tests {
     /// leaving every patched recording with no lane opponent.
     #[test]
     fn a_position_the_lcu_lacks_is_kept_from_the_live_capture() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = a_row_with_scoreboard(
             &db,
             &[
@@ -1113,7 +1113,7 @@ mod tests {
     /// for a game the poller missed, never a correction.
     #[test]
     fn the_live_position_wins_over_the_lcus_inference() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = a_row_with_scoreboard(&db, &[board_player("Viego", "ORDER", Some("Jungle"))]);
 
         let mut rebuilt = vec![board_player("Viego", "ORDER", Some("Top"))];
@@ -1125,7 +1125,7 @@ mod tests {
     /// position must not erase the inference, which is all there is then.
     #[test]
     fn an_inference_survives_a_live_capture_that_knew_nothing() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = a_row_with_scoreboard(&db, &[board_player("Viego", "ORDER", None)]);
 
         let mut rebuilt = vec![board_player("Viego", "ORDER", Some("Jungle"))];
@@ -1138,7 +1138,7 @@ mod tests {
     /// it as the previous board's and keeps it.
     #[test]
     fn re_running_the_patch_keeps_the_live_position() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = a_row_with_scoreboard(&db, &[board_player("Viego", "ORDER", Some("Jungle"))]);
 
         // First rebuild: the inference is overridden.
@@ -1162,7 +1162,7 @@ mod tests {
     /// position across sides would put the wrong player in the lane.
     #[test]
     fn the_same_champion_on_both_sides_is_matched_by_side() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = a_row_with_scoreboard(
             &db,
             &[
@@ -1185,7 +1185,7 @@ mod tests {
     /// refusal in this file already says.
     #[test]
     fn an_ambiguous_match_carries_nothing() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = a_row_with_scoreboard(
             &db,
             &[
@@ -1203,7 +1203,7 @@ mod tests {
     /// exactly what such a row is waiting for.
     #[test]
     fn a_row_with_no_previous_scoreboard_carries_nothing() {
-        let db = Db::open_in_memory().unwrap();
+        let db = Db::open_temporary().unwrap();
         let id = db
             .insert_recording(&crate::db::NewRecording {
                 path: "/a.mp4".into(),
