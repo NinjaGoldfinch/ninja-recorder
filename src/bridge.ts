@@ -16,20 +16,25 @@
 
 import { createClient } from "./lib/contract/client";
 import type { Transport } from "./lib/transport/index";
-import { assetUrl, IN_TAURI, invokeTransport } from "./lib/transport/invoke";
+import { assetUrl, IN_TAURI } from "./lib/transport/invoke";
 import { mockTransport } from "./lib/transport/mock";
+import { pipeTransport } from "./lib/transport/pipe";
 
 export { assetUrl };
 
 /**
  * Which transport this session is using.
  *
+ * `pipeTransport` since WS3.4: commands run in the daemon, not in the process
+ * hosting this webview. `invokeTransport` is still there and still correct for
+ * a process that owns its own `Ctx`, but nothing selects it any more.
+ *
  * The mock is reachable only from the vite dev server, never from a shipped
  * build: `import.meta.env.DEV` is statically false in production, so the
  * import above tree-shakes out along with every fixture behind it.
  */
 const transport: Transport = IN_TAURI
-  ? invokeTransport
+  ? pipeTransport
   : import.meta.env.DEV
     ? mockTransport
     : {

@@ -341,6 +341,40 @@ When it does move, §5.0.2's "sign out and back in" row is the one that changes,
 and the row to add beside it is that an entry written by an older build still
 says `--hidden` and must keep working.
 
+### 5.0.6 The UI as a client of the daemon
+
+Since WS3.4 the window runs no recorder of its own: every command it issues is
+forwarded to the daemon over the pipe, and the daemon pushes a snapshot and a
+stream of events back. None of this can be checked off Windows, because it
+needs a window.
+
+- [ ] With no daemon running, launch the UI. It starts one (`daemon::spawn`),
+      connects, and the library and settings render normally. Task Manager
+      shows two `ninja-recorder.exe` processes.
+- [ ] `app_data_dir()/logs/` now holds both `ui.log` and `daemon.log`, and
+      neither rotates the other.
+- [ ] **The exit criterion for 3.4.** Start a game and let recording begin.
+      Kill the UI process from Task Manager, then launch it again. Within one
+      reconnect it shows the recording still in flight, with the elapsed time
+      continuing rather than restarting. The VOD is complete and playable
+      afterwards.
+- [ ] Quit the daemon while the UI is open. The UI reports a lost connection
+      rather than hanging, and reconnects when a daemon is started again.
+- [ ] Start a recording, then close the UI window entirely. The recording
+      continues and the row appears in the library when the UI is reopened.
+- [ ] **The exit criterion for 3.7.** With a devtools build, open the dev
+      portal and work through every panel. Each one drives the *daemon's*
+      database, supervisor and recorder: Overview's counts, Database's tables,
+      Simulate's state injection and Log's files should all describe the daemon
+      process, and the Log panel's active file should be `daemon.log`.
+- [ ] Version skew: run the UI from one build against a daemon from another
+      whose `PROTOCOL` differs. The UI must say a restart is required and must
+      **not** ask the daemon to quit, because it might be recording.
+
+**Not verifiable here, and expected to be missing:** desktop notifications for
+recording started, finished and failed. They belong to the daemon, which cannot
+raise them until WS3.3. Do not file these as bugs against this build.
+
 ### 5.1 Capture-backend lifecycle
 
 New with `prepare`/`release`; none of it can be exercised off Windows.

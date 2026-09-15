@@ -1214,18 +1214,29 @@ second one-off notifier would have meant a third later. When the recorder moves
 into its own process this seam becomes a socket write, and there should be
 exactly one place to change it.
 
-### Still to build
+### The split, as it actually stands
 
-The daemon runs and serves clients (§17). What it does not yet have is the tray
-and its Win32 message pump, autostart pointed at `--daemon` rather than
-`--hidden`, the updater, desktop notifications, and the dev portal's commands.
-Those are WS3.3, 3.5, 3.6 and 3.7.
+The daemon runs, serves clients, and owns the recording (§17). The UI is a
+client of it: since WS3.4 `invoke('rpc', ...)` forwards over the pipe rather
+than dispatching in this process, and the window builds no capture backend,
+starts no supervisor, and runs no startup reconcile or retention pass. Killing
+it stops nothing, which is the sentence the whole workstream exists to make
+true.
 
-Until autostart moves, nothing starts the daemon on its own: `--daemon` is
-something a person runs, or something `daemon::spawn` asks for on the UI's
-behalf. The UI still builds its own supervisor, so running both at once means
-two processes watching for the same game and two recorders competing for the
-same capture.
+The UI starts a daemon when none answers (`daemon::spawn`), so a first launch
+on a machine where start-on-login was never enabled still works.
+
+What the daemon does not yet have is the tray and its Win32 message pump
+(WS3.3), the updater (WS3.6), and desktop notifications.
+
+**Notifications are a real gap, not a deferral.** They were raised from the
+supervisor's event notifier, which went to the daemon with the supervisor, and
+the daemon cannot raise them yet: `tauri-plugin-notification` needs an
+`AppHandle` and the daemon builds no Tauri app. Wiring them back into the UI
+would be worse than the gap, because a notification that only appears while a
+window is open is the opposite of what one is for. WS3.3 gives the daemon a
+Win32 presence and takes them over, which is what §3.1's ownership table said
+all along.
 
 ### Why the Run key still says `--hidden`
 
