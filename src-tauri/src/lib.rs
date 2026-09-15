@@ -981,7 +981,7 @@ pub fn run() {
     #[cfg(feature = "devtools")]
     let builder = {
         macro_rules! with_dev_commands {
-            ($($name:ident),* $(,)?) => {
+            ($( $(#[doc = $doc:literal])* $name:ident { $($body:tt)* } )*) => {
                 tauri::generate_handler![
                     rpc,
                     open_recordings_folder,
@@ -989,7 +989,7 @@ pub fn run() {
                 ]
             };
         }
-        builder.invoke_handler(dev_command_list!(with_dev_commands))
+        builder.invoke_handler(dev_command_table!(with_dev_commands))
     };
 
     let builder = builder.on_window_event(|window, event| {

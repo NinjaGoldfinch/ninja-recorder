@@ -11,7 +11,6 @@
 //! client or need a library that only a real recording session produces.
 //! DEVELOPMENT.md §3.3 asked for a fixture replay mode; this is it.
 
-mod commands;
 mod events;
 mod fixtures_api;
 mod info;

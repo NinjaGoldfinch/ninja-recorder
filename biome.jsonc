@@ -16,7 +16,12 @@
       // a generator's output is a loop: Biome reformats, `--check` calls the
       // tree stale, regenerating undoes the formatting. The generator owns the
       // layout of these files; nothing here is hand-edited.
-      "!src/lib/contract"
+      "!src/lib/contract",
+      // Generated too, by the same binary and covered by the same --check.
+      // It lives under src/dev/ rather than with the others because the dev
+      // portal is compiled out of shipped builds and nothing in the app proper
+      // may import it.
+      "!src/dev/commands.generated.ts"
     ]
   },
   "formatter": {

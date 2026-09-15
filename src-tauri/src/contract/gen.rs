@@ -78,7 +78,120 @@ pub fn emit() -> Vec<Emitted> {
         Emitted { path: PathBuf::from("src/lib/contract/events.ts"), contents: events_ts(&cfg) },
         Emitted { path: PathBuf::from("src/lib/contract/client.ts"), contents: client_ts(&cfg) },
         Emitted { path: PathBuf::from("src/lib/contract/index.ts"), contents: index_ts() },
+        Emitted { path: PathBuf::from("src/dev/commands.generated.ts"), contents: portal_ts() },
     ]
+}
+
+/// The dev portal's command catalogue. WS2.7.
+///
+/// This replaces `src/dev/registry.ts`, which was a hand-written copy of the
+/// command surface in TypeScript, and the drift banner that watched it for
+/// disagreement. Both existed only because there were two lists; there is now
+/// one, in Rust, and this is its TypeScript face.
+///
+/// It lands in `src/dev/` rather than `src/lib/contract/` because the dev
+/// portal is compiled out of shipped builds and nothing in the app proper may
+/// import it. `--check` covers it exactly as it covers the others.
+fn portal_ts() -> String {
+    use crate::core::dispatch::command_descriptions;
+    use crate::contract::portal::{dev_command_manifest, production_form_manifest};
+
+    let descriptions: std::collections::HashMap<&str, &str> =
+        command_descriptions().iter().copied().collect();
+
+    let mut out = String::from(HEADER);
+    out.push('\n');
+    out.push_str(
+        r#"export interface PortalArg {
+  name: string;
+  kind: "string" | "number" | "boolean" | "json";
+  /** Pre-filled into the form. Empty means no default. */
+  default: string;
+  /** Rendered under the input. Empty when nobody has written one. */
+  help: string;
+  optional: boolean;
+}
+
+export interface PortalCommand {
+  name: string;
+  group: string;
+  /** `dev_*` commands are compiled out of shipped builds. */
+  dev: boolean;
+  /** Writes, deletes, or otherwise cannot simply be re-run. */
+  danger: boolean;
+  description: string;
+  args: PortalArg[];
+}
+
+"#,
+    );
+
+    let _ = writeln!(out, "export const COMMANDS: PortalCommand[] = [");
+    for (spec, is_dev) in production_form_manifest()
+        .iter()
+        .map(|s| (s, false))
+        .chain(dev_command_manifest().iter().map(|s| (s, true)))
+    {
+        // A production command's help text lives on its `dispatch_table!` row;
+        // a dev command's lives on its row here. One home each, neither copied.
+        // `/// text` captures `" text"`, and a multi-line comment concatenates
+        // with those spaces still in, so the prose is normalised here rather
+        // than every row being written to work around the macro.
+        let raw = if is_dev {
+            spec.description
+        } else {
+            descriptions.get(spec.name).copied().unwrap_or("")
+        };
+        let description: String =
+            raw.split_whitespace().collect::<Vec<_>>().join(" ");
+        let _ = writeln!(out, "  {{");
+        let _ = writeln!(out, "    name: {},", quote(spec.name));
+        let _ = writeln!(out, "    group: {},", quote(spec.group));
+        let _ = writeln!(out, "    dev: {is_dev},");
+        let _ = writeln!(out, "    danger: {},", spec.danger);
+        let _ = writeln!(out, "    description: {},", quote(&description));
+        if spec.args.is_empty() {
+            let _ = writeln!(out, "    args: [],");
+        } else {
+            let _ = writeln!(out, "    args: [");
+            for a in spec.args {
+                let _ = writeln!(
+                    out,
+                    "      {{ name: {}, kind: {}, default: {}, help: {}, optional: {} }},",
+                    quote(a.name),
+                    quote(a.kind),
+                    quote(a.default),
+                    quote(a.help),
+                    a.optional
+                );
+            }
+            let _ = writeln!(out, "    ],");
+        }
+        let _ = writeln!(out, "  }},");
+    }
+    let _ = writeln!(out, "];");
+    out
+}
+
+/// A TypeScript double-quoted string literal.
+///
+/// Hand-rolled rather than via `serde_json`, which would be a dependency taken
+/// for one function and would still need the same escapes checked.
+fn quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// The barrel.
