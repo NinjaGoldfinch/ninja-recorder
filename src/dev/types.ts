@@ -1,11 +1,15 @@
 /**
  * TypeScript mirrors of the Rust structs the portal reads.
  *
- * Hand-written, like every other type in this project — see
- * `registry.ts` for why, and for the drift check that partially
- * compensates. Field names stay snake_case because serde does not rename
- * them on the way out; only *argument* names are camelCased by Tauri on
- * the way in.
+ * Still hand-written. The portal's *command catalogue* is generated from the
+ * Rust declaration since WS2.7 and lives in `commands.generated.ts`, which is
+ * what replaced `registry.ts` and the drift banner; these are the response
+ * shapes those commands return, which the generated contract in
+ * `src/lib/contract/` does not cover because the portal is compiled out of
+ * shipped builds.
+ *
+ * Field names stay snake_case because serde does not rename them on the way
+ * out; only *argument* names are camelCased on the way in.
  */
 
 export type GameState = "Idle" | "ClientRunning" | "WaitingForGame" | "Recording" | "Finalizing";

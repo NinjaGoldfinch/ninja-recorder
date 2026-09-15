@@ -973,57 +973,24 @@ pub fn run() {
     #[cfg(not(feature = "devtools"))]
     let builder = builder.invoke_handler(tauri::generate_handler![rpc, open_recordings_folder]);
 
+    // The list lives in `dev::commands`, and this is the callback that turns
+    // it into a `generate_handler!` invocation. `generate_handler!` cannot host
+    // a macro expansion inside its brackets, but it can be the *output* of one,
+    // which is what lets the registration and the portal's manifest come from
+    // the same tokens instead of two hand-written lists (#74, WS2.7).
     #[cfg(feature = "devtools")]
-    let builder = builder.invoke_handler(tauri::generate_handler![
-        rpc,
-        open_recordings_folder,
-        dev::dev_open_portal,
-        dev::dev_env_info,
-        dev::dev_health,
-        dev::dev_registered_commands,
-        dev::dev_open_data_dir,
-        dev::dev_log_files,
-        dev::dev_read_log,
-        dev::dev_schema,
-        dev::dev_table_page,
-        dev::dev_sql_query,
-        dev::dev_insert_row,
-        dev::dev_update_row,
-        dev::dev_delete_row,
-        dev::dev_reset_db,
-        dev::dev_seed_library,
-        dev::dev_clear_seeded,
-        dev::dev_retention_preview,
-        dev::dev_dispatch_state_event,
-        dev::dev_inject_snapshot,
-        dev::dev_session_snapshot,
-        dev::dev_replay_start,
-        dev::dev_replay_stop,
-        dev::dev_replay_status,
-        dev::dev_lcu_get,
-        dev::dev_champion_name,
-        dev::dev_fetch_match_summary,
-        dev::dev_patch_match_summary,
-        dev::dev_live_client_probe,
-        dev::dev_fixtures_state,
-        dev::dev_shape_report,
-        dev::dev_recording_report,
-        dev::dev_recording_vs_lcu,
-        dev::dev_backfill_recording,
-        dev::dev_reveal_recording,
-        dev::dev_open_fixture,
-        dev::dev_ranked_stats,
-        dev::dev_lobby_rank,
-        dev::dev_lp_delta,
-        dev::dev_event_capture_start,
-        dev::dev_event_capture_stop,
-        dev::dev_event_capture_status,
-        dev::dev_event_uris,
-        dev::dev_fixture_read,
-        dev::dev_fixture_write,
-        dev::dev_set_fixture_recording,
-        dev::dev_trim_lead_in,
-    ]);
+    let builder = {
+        macro_rules! with_dev_commands {
+            ($( $(#[doc = $doc:literal])* $name:ident { $($body:tt)* } )*) => {
+                tauri::generate_handler![
+                    rpc,
+                    open_recordings_folder,
+                    $( dev::$name, )*
+                ]
+            };
+        }
+        builder.invoke_handler(dev_command_table!(with_dev_commands))
+    };
 
     let builder = builder.on_window_event(|window, event| {
         let tauri::WindowEvent::CloseRequested { api, .. } = event else {

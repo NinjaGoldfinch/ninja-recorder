@@ -150,7 +150,10 @@ macro_rules! is_async_arm {
 }
 
 macro_rules! dispatch_table {
-    ($( $kind:ident $name:ident ( $($arg:ident : $ty:ty),* $(,)? ) -> $ret:ty ; )*) => {
+    ($(
+        $(#[doc = $doc:literal])*
+        $kind:ident $name:ident ( $($arg:ident : $ty:ty),* $(,)? ) -> $ret:ty ;
+    )*) => {
         /// Every command this dispatcher answers to, in table order.
         ///
         /// The dev portal's drift banner reads this instead of a hand-written
@@ -229,6 +232,21 @@ macro_rules! dispatch_table {
         /// Every type in the table must therefore implement `TS`. That is a
         /// compile error here rather than a runtime surprise in the generator,
         /// which is where it belongs.
+        /// What each command does, in one line, taken from the doc comment on
+        /// its table row.
+        ///
+        /// This is where the dev portal's command help comes from since WS2.7.
+        /// It used to be a `description` field in `src/dev/registry.ts`, a
+        /// second hand-written list; a doc comment is the one place a reader
+        /// already looks, and `cargo doc` renders it too.
+        ///
+        /// Empty for a row with no doc comment, which is a row whose help text
+        /// nobody has written rather than an error.
+        #[cfg_attr(not(test), allow(dead_code))]
+        pub fn command_descriptions() -> &'static [(&'static str, &'static str)] {
+            &[ $( (stringify!($name), concat!($($doc),*)), )* ]
+        }
+
         #[cfg_attr(not(test), allow(dead_code))]
         pub fn contract_manifest_ts(cfg: &ts_rs::Config) -> Vec<CommandTsSpec> {
             vec![
@@ -324,34 +342,63 @@ fn parse<T: serde::de::DeserializeOwned>(args: Value, command: &str) -> Result<T
 // text and arg specs a macro can't produce) — the two hand-written
 // `generate_handler!` lists and `dev_registered_commands` no longer repeat it.
 dispatch_table! {
+    /// Starts the active capture backend, after a free-space preflight. Races the state machine's own automatic start, because the supervisor does not know about this call.
     ctx_result  start_recording() -> ();
+    /// Stops capture and returns the path of the file produced.
     ctx_result  stop_recording() -> String;
+    /// Whether the backend believes it is capturing right now.
     ctx_result  is_recording() -> bool;
+    /// Every row in the VOD library, newest first.
     ctx_result  list_recordings() -> Vec<crate::db::RecordingRow>;
+    /// Reconciles rows against the folder: drops rows whose file is gone, imports untracked .mp4/.mkv files. Deletes rows.
     ctx_result  rescan_recordings() -> crate::db::reconcile::ReconcileReport;
+    /// Timeline markers for one recording, ordered by video time.
     ctx_result  get_recording_markers(recording_id: i64) -> Vec<crate::db::MarkerRow>;
+    /// Advantage-curve samples for one recording. An empty array means the recording predates sampling, not an error.
     ctx_result  get_recording_samples(recording_id: i64) -> Vec<crate::db::SampleRow>;
+    /// Total library bytes, recording count, and free space on the recordings volume.
     ctx_result  get_disk_usage() -> crate::core::DiskUsage;
+    /// The saved policy. null on either field means that dimension is unbounded.
     ctx_result  get_retention_policy() -> crate::db::RetentionPolicy;
+    /// Saves the policy AND immediately enforces it, which deletes files. Use dev_retention_preview first.
     ctx_result  set_retention_policy(policy: crate::db::RetentionPolicy) -> crate::retention::EnforcementReport;
+    /// Pins or unpins a recording. Pinned rows are exempt from retention deletion.
     ctx_result  set_pinned(recording_id: i64, pinned: bool) -> ();
+    /// Dry run of enforcement under the given policy. Writes nothing; the safe counterpart to set_retention_policy.
     ctx_result  preview_retention_policy(policy: crate::db::RetentionPolicy) -> crate::retention::EnforcementReport;
+    /// Deletes one recording's row and its file on disk.
     ctx_result  delete_recording(recording_id: i64) -> ();
+    /// Absolute path of the recordings directory.
     ctx_plain   get_recordings_dir() -> String;
+    /// Every key/value in the settings_kv store (theme, default sort, …).
     ctx_result  get_ui_prefs() -> std::collections::HashMap<String, String>;
+    /// Writes one UI preference. Unseeded store: a missing key means 'use the frontend default'.
     ctx_result  set_ui_pref(key: String, value: String) -> ();
+    /// Whether the app is registered to start on login, read live from the platform (HKCU\...\Run on Windows) rather than from settings_kv. `supported: false` means this build has no autostart control.
     ctx_result  get_autostart() -> crate::core::AutostartStatus;
+    /// Adds or removes the login entry for this executable, then returns what the platform says afterwards, which is not always what was asked for. Writes outside the app's own data: enabling here really does register the running binary, dev build included.
     ctx_result  set_autostart(enabled: bool) -> crate::core::AutostartStatus;
+    /// The audio capture preset. Unlike the settings_kv prefs, this is parsed and validated backend-side: it decides what gets recorded.
     ctx_result  get_audio_preset() -> crate::recorder::audio::AudioPreset;
+    /// Chooses what gets captured and how it is split across mp4 audio tracks. Track 0 is always the combined mix.
     ctx_result  set_audio_preset(preset: crate::recorder::audio::AudioPreset) -> ();
+    /// Audio input devices for the microphone picker, default first. Empty off Windows.
     bare_result list_audio_inputs() -> Vec<crate::recorder::audio::AudioInputDevice>;
+    /// Extracts one audio stem to a cached sidecar so the review player can play it. Rejects track 0, which plays from the video itself.
     ctx_result  extract_audio_track(recording_path: String, track_index: usize) -> String;
+    /// One-shot LCU check: lockfile discovery, auth, gameflow phase, summoner. Infallible; failures come back in the `error` field.
     bare_async  lcu_status() -> crate::core::LcuStatus;
+    /// Matches every recording with no champion or result against the client's match history, by when it was played. Refuses a recording that overlaps more than one game rather than guessing. Needs the League Client running.
     ctx_async   backfill_match_metadata() -> crate::backfill::BackfillReport;
+    /// Cached Data Dragon art for a page of rows: champions by display name, items and runes by id, spells by display name. Fetches whatever is not cached yet. Anything that could not be resolved is absent from the result rather than null.
     ctx_async   resolve_icons(request: crate::ddragon::IconRequest) -> crate::ddragon::IconSet;
+    /// Current supervisor state and the last finalized recording.
     ctx_plain   game_state_status() -> crate::state_machine::SupervisorStatus;
+    /// What the last background check found, with installability recomputed against live state. `unsupported` in a devtools build, this one included, because the update seam is never wired there.
     ctx_result  get_update_status() -> crate::update::UpdateStatus;
+    /// Asks for a check now rather than waiting for the six-hourly one. Returns as soon as the request is handed over; the answer arrives on the `update-status-changed` event. Refuses in a devtools build.
     ctx_result  check_for_update() -> ();
+    /// Downloads the offered installer and hands the machine over to it, which ends the process. Refuses while anything is being recorded, and refuses outright in a devtools build.
     ctx_result  install_update() -> ();
 }
 
@@ -506,10 +553,19 @@ mod tests {
 
     /// The whole point of the table: every command must be reachable by name
     /// with the arguments the frontend really sends, and must not fail
-    /// *argument parsing*. A command is free to return a business error — a
-    /// missing recording, no ffmpeg — but "bad arguments for …" means the
+    /// *argument parsing*. A command is free to return a business error, a
+    /// missing recording or no ffmpeg, but "bad arguments for …" means the
     /// camelCase mapping or a type is wrong, which is exactly the class of bug
     /// the Tauri macro used to catch at compile time.
+    ///
+    /// **WS2.7 kept this deliberately.** The task deletes the things that
+    /// existed because two hand-written lists could disagree, and
+    /// `gen-contract --check` replaces those. It does not replace this: the
+    /// generator proves the emitted TypeScript matches the declaration, which
+    /// is a statement about two files, while this proves `dispatch` can
+    /// actually parse what that client sends, which is a statement about
+    /// runtime. Deleting it would trade a guarded failure for an unguarded
+    /// one.
     #[tokio::test]
     async fn every_command_round_trips() {
         let ctx = ctx();

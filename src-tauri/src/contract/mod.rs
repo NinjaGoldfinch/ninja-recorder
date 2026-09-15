@@ -12,6 +12,7 @@
 //! | `mod.rs` | 2.1 | Re-exports; `contract_manifest()` emitted by the `dispatch_table!` macro. `#[contract::command]` functions stay in `core` |
 //! | `events.rs` | 2.3 | `#[derive(ContractEvent)] enum Event` — the event half, which v1 has no declaration of at all |
 //! | `snapshot.rs` | 2.4 | `Snapshot`, the whole of the daemon's state in one message |
+//! | `portal.rs` | 2.7 | The dev portal's command surface, replacing `src/dev/registry.ts` |
 //! | `gen.rs` | 2.5 | The TypeScript emitter, run as `cargo run --bin gen-contract` |
 //!
 //! WS2.5 puts `cargo run --bin gen-contract -- --check` in CI, which is what
@@ -22,6 +23,7 @@
 //! collected by the generator rather than by `#[ts(export)]`.
 
 pub mod events;
+pub mod portal;
 pub mod snapshot;
 pub mod types;
 // `r#gen`, not `gen`: `gen` is a reserved keyword in edition 2024 (it is the
