@@ -36,9 +36,7 @@ mod update;
 // this file *is* the crate root, and `#[macro_export]` already puts the
 // macros in its macro namespace. Importing them would collide with the
 // definitions themselves (E0255).
-#[cfg(not(target_os = "windows"))]
-use recorder::stub::StubRecorder;
-use recorder::Recorder;
+use recorder::{FailedRecorder, Recorder};
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
@@ -179,24 +177,20 @@ pub(crate) fn ffmpeg_command(path: &std::path::Path) -> std::process::Command {
 /// test over every command.
 #[tauri::command]
 async fn rpc(
-    state: tauri::State<'_, AppState>,
+    link: tauri::State<'_, ui::link::DaemonLink>,
     command: String,
     args: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let ctx = state.clone_ctx();
-
-    // Only `lcu_status`, `backfill_match_metadata` and `champion_icon` await
-    // anything; every other command is blocking work — SQLite, a directory
-    // scan, ffmpeg — and running it on an async worker would occupy that
-    // worker for the duration.
-    // Tauri used to make this choice per command by whether it was declared
-    // `async`; now the dispatch table carries it.
-    if core::is_async_command(&command) {
-        return core::dispatch(&ctx, &command, args).await;
-    }
-    tauri::async_runtime::spawn_blocking(move || core::dispatch_blocking(&ctx, &command, args))
-        .await
-        .map_err(|e| e.to_string())?
+    // Forwarded, not dispatched. This used to run the command in this process
+    // against this process's `Ctx`; since WS3.4 the command runs in the daemon,
+    // which is the process that owns the supervisor, the recorder and every
+    // write. The name and the JSON are unchanged, which is what lets every view
+    // keep working across the move.
+    //
+    // `is_async_command` and `spawn_blocking` went with it: whether a command
+    // blocks is a question for the process that runs it, and `daemon::rpc`
+    // answers it there.
+    link.call(&command, args).await
 }
 
 /// Reveals the recordings folder in Finder/Explorer. Deliberately **not** in
@@ -617,43 +611,25 @@ pub fn run() {
                 Err(e) => eprintln!("[log] no app data directory, so no log file: {e}"),
             }
 
-            let backend: Box<dyn Recorder> = {
-                #[cfg(target_os = "windows")]
-                {
-                    use tauri::path::BaseDirectory;
-                    let ffmpeg = ffmpeg_path(app.handle());
-                    // Only the *path* can fail here now. libobs itself no
-                    // longer starts during setup — it comes up when the
-                    // state machine sees the League client, and reports its
-                    // own failure through `backend_name`/`start`. Either
-                    // way this must not take the whole app down: the
-                    // library, review UI and LCU polling don't need capture.
-                    match app
-                        .path()
-                        .resolve("libobs/extprocess_recorder.exe", BaseDirectory::Resource)
-                    {
-                        Ok(path) => Box::new(recorder::libobs::LibObsRecorder::new(path, ffmpeg)),
-                        Err(e) => {
-                            error!(
-                                "recorder",
-                                "could not locate the libobs worker, recording disabled: {e}"
-                            );
-                            Box::new(recorder::FailedRecorder(e.to_string()))
-                        }
-                    }
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    Box::new(StubRecorder::new())
-                }
-            };
-            // Which backend you get depends on the target OS and on
-            // whether the worker binary was found, and the difference
-            // decides whether recording works at all — worth one line at
-            // startup rather than only being discoverable by trying to
-            // record. On Windows this now says "idle" rather than "ready":
-            // libobs comes up with the League client, not with the app.
-            info!("recorder", "backend: {}", backend.backend_name());
+            // **The UI links no capture backend.** It used to build the real
+            // one here, which is what made killing the window kill the
+            // recording. The daemon owns the `Recorder` now (§3.1's ownership
+            // table).
+            //
+            // `FailedRecorder` rather than `StubRecorder`, and rather than
+            // restructuring `Ctx` to make the backend optional. It refuses
+            // every call with the reason, which is what this process should do:
+            // the stub *fabricates* a recording by copying a fixture, so
+            // anything that reached for it here would quietly produce a file
+            // rather than say it was in the wrong process. `backend_name()`
+            // reports the message, so the portal's Overview shows it too.
+            //
+            // It is also the type that compiles everywhere: `stub` is gated to
+            // non-Windows plus `cfg(test)`, which CI caught and this box could
+            // not.
+            let backend: Box<dyn Recorder> = Box::new(FailedRecorder(
+                "this process does not record; the daemon does".to_string(),
+            ));
 
             let recorder: Arc<Mutex<Box<dyn Recorder>>> = Arc::new(Mutex::new(backend));
             let dir = recordings_dir(app.handle())?;
@@ -676,6 +652,17 @@ pub fn run() {
 
             let db_path = app.path().app_data_dir()?.join("library.sqlite3");
             std::fs::create_dir_all(db_path.parent().expect("db path always has a parent"))?;
+            // **The UI opens the library, and writes nothing to it.** Every
+            // command that could write is forwarded to the daemon now, and the
+            // startup reconcile and retention pass went with it; what is left
+            // reaching for this connection is the portal's UI-side commands.
+            //
+            // It is still a full `Db`, which means a writer connection this
+            // process never uses. The plan's §4.4 wants `query_only = ON` here
+            // so the rule is enforced by SQLite rather than by convention, and
+            // that needs a read-only `Db::open`, which is its own change.
+            // Noted rather than assumed: two writer connections are safe under
+            // WAL, and only one of them is ever asked to write.
             let db = Arc::new(match db::Db::open(&db_path) {
                 Ok(db) => db,
                 // Returning `Err` here would hand this to Tauri's setup
@@ -708,214 +695,29 @@ pub fn run() {
                 }
             });
 
-            // Bound to a local rather than inlined: the probe borrows from
-            // it for the length of the call.
-            let reconcile_ffmpeg = ffmpeg_path(app.handle());
-            match db::reconcile::reconcile(&db, &dir, reconcile_ffmpeg.as_deref()) {
-                Ok(report) if report.orphans_removed > 0 || report.imported > 0 => {
-                    info!(
-                        "db",
-                        "startup reconcile: removed {} orphan row(s), imported {} untracked file(s)",
-                        report.orphans_removed, report.imported
-                    );
-                }
-                Ok(_) => {}
-                Err(e) => error!("db", "startup reconcile failed: {e}"),
-            }
+            // **The startup reconcile and the retention pass are the daemon's.**
+            // Both write, and every write belongs to the process that owns the
+            // writer connection (§3.1). They used to run here, and running them
+            // in both processes would mean two folder scans racing to import
+            // the same untracked file and two retention passes each deciding
+            // what to delete from a list the other was deleting from.
+            //
+            // `daemon::serve` runs them in the same order, at the same point in
+            // startup, and publishes what they found.
 
-            // Retention (DEVELOPMENT.md §6): enforced here and
-            // again after every finalize (state_machine::supervisor), so a
-            // policy set while the app was closed — or last session's
-            // finalize enforcement never running because the app crashed
-            // — still gets applied on the next launch.
-            match db.get_retention_policy() {
-                Ok(policy) => match retention::enforce_now(&db, &policy) {
-                    Ok(report) if !report.deleted.is_empty() => info!(
-                        "retention",
-                        "startup enforcement: removed {} recording(s), freed {} bytes",
-                        report.deleted.len(),
-                        report.freed_bytes
-                    ),
-                    Ok(_) => {}
-                    Err(e) => error!("retention", "startup enforcement failed: {e}"),
-                },
-                Err(e) => error!("retention", "failed to load policy: {e}"),
-            }
-
+            // **Nothing here drives the supervisor any more.** It used to be
+            // built, wired to five callbacks and started, which is what made
+            // this process the recorder. The daemon does all of that since
+            // WS3.2 (`daemon::run`), including the contract event sink, the
+            // notifications, the trim and the deferred match-summary patch.
+            //
+            // A supervisor is still constructed because `Ctx` holds one and the
+            // portal's UI-side commands read through it, but `start()` is never
+            // called: no lockfile watch, no gameflow watch, no Live Client
+            // poll, and so no second state machine racing the daemon's for the
+            // same game.
             let supervisor =
                 state_machine::Supervisor::new(Arc::clone(&recorder), dir.clone(), Arc::clone(&db));
-            // The emit lives here, not in the supervisor: `run()` is dead
-            // code in a `cargo test` build and gets stripped, which keeps
-            // Tauri's Wry window machinery — and with it the Win32 GUI
-            // import stack — out of the test binary. See
-            // `Supervisor::on_library_changed` for what happens when it
-            // isn't kept out.
-            // The contract sink, installed here and not in the supervisor for
-            // exactly the reason the notifier below is: `run()` is dead code in
-            // a `cargo test` build and gets stripped, which is what keeps
-            // Tauri's Wry window machinery out of the test binary.
-            let sink_handle = app.handle().clone();
-            supervisor.set_event_sink(Box::new(move |event| {
-                use tauri::Emitter;
-                // Serialized here rather than passed as a typed payload: the
-                // wire shape is the contract, and `Event`'s serde tagging is
-                // what the generated client switches on. A Tauri payload of the
-                // enum itself would serialize identically today and silently
-                // stop doing so if anyone reached for `#[serde(untagged)]`.
-                if let Err(e) = sink_handle.emit(CONTRACT_EVENT, &event) {
-                    warn!("contract", "failed to emit a contract event: {e}");
-                }
-            }));
-
-            let notify_handle = app.handle().clone();
-            supervisor.set_event_notifier(Box::new(move |event| {
-                use state_machine::SupervisorEvent;
-                use tauri::{Emitter, Manager};
-
-                // Anything the frontend needs to react to still goes out as a
-                // Tauri event; the notifications are extra, and only reach the
-                // user when they have no window open to look at.
-                let notify_for = |kind: core::NotifyKind, title: &str, body: &str| {
-                    let ctx = notify_handle.state::<AppState>().clone_ctx();
-                    notify::notify(&notify_handle, &ctx, kind, title, body);
-                };
-
-                match event {
-                    SupervisorEvent::LibraryChanged => {
-                        if let Err(e) = notify_handle.emit(LIBRARY_CHANGED_EVENT, ()) {
-                            warn!("state_machine", "failed to emit library-changed: {e}");
-                        }
-                    }
-                    SupervisorEvent::RecordingStarted => notify_for(
-                        core::NotifyKind::RecordingStarted,
-                        "Recording started",
-                        "ninja-recorder is capturing this game.",
-                    ),
-                    SupervisorEvent::Finalized(finalized) => {
-                        if let Err(e) = notify_handle.emit(LIBRARY_CHANGED_EVENT, ()) {
-                            warn!("state_machine", "failed to emit library-changed: {e}");
-                        }
-                        let name = std::path::Path::new(&finalized.path)
-                            .file_stem()
-                            .map(|s| s.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| finalized.path.clone());
-                        let markers = finalized.markers.len();
-                        // No champion or KDA here: those columns are still
-                        // NULL on real recordings (DEVELOPMENT.md §3.4), so
-                        // the toast says what is actually known.
-                        let body = if markers == 1 {
-                            format!("{name} — 1 marker")
-                        } else {
-                            format!("{name} — {markers} markers")
-                        };
-                        notify_for(
-                            core::NotifyKind::RecordingFinished,
-                            "Recording saved",
-                            &body,
-                        );
-                    }
-                    SupervisorEvent::RecordingFailed(message) => notify_for(
-                        core::NotifyKind::RecordingFailed,
-                        "Recording problem",
-                        &message,
-                    ),
-                }
-            }));
-            // The other half of the finalize: `stop_recording` writes the
-            // row from what Live Client Data established, then hands the
-            // game's identifiers here so the LCU's post-game columns can
-            // be filled in once the client actually has them. Installed
-            // from `run()` for the same reason the notifier above is —
-            // this is where the async runtime is allowed to be reachable
-            // from.
-            // The loading screen comes off the file itself, on a blocking
-            // thread rather than inline: it is a stream copy of something
-            // that can be gigabytes, and `stop_recording` calls this under
-            // the recorder lock — where holding on would block the header's
-            // 1 Hz `is_recording` poll and the start of the next game.
-            //
-            // A build with no ffmpeg installs nothing and keeps the whole
-            // file, which is what every recording did before this existed.
-            if let Some(ffmpeg) = ffmpeg_path(app.handle()) {
-                let trim_db = Arc::clone(&db);
-                let trim_handle = app.handle().clone();
-                supervisor.set_trim_requester(Box::new(move |recording_id| {
-                    let db = Arc::clone(&trim_db);
-                    let ffmpeg = ffmpeg.clone();
-                    let handle = trim_handle.clone();
-                    tauri::async_runtime::spawn_blocking(move || {
-                        use tauri::Emitter;
-                        match trim::trim_recording(&db, &ffmpeg, recording_id) {
-                            Ok(report) => {
-                                // Both ends named separately: only the head
-                                // shifts markers, so if a rebase ever looks
-                                // wrong this line says which number to blame.
-                                info!("trim",
-                                    "cut {:.1}s off recording {recording_id} \
-                                     ({:.1}s loading screen, {:.1}s post-game)",
-                                    report.removed_s,
-                                    report.head_removed_s,
-                                    report.tail_removed_s
-                                );
-                                // The card's length and size both changed.
-                                if let Err(e) = handle.emit(LIBRARY_CHANGED_EVENT, ()) {
-                                    warn!("trim", "failed to emit library-changed: {e}");
-                                }
-                            }
-                            // Includes the ordinary "nothing to cut", which
-                            // is what a reconnect and a client that reported
-                            // the game late both look like.
-                            Err(e) => {
-                                debug!("trim", "no trim for recording {recording_id}: {e}")
-                            }
-                        }
-                    });
-                }));
-            }
-
-            let summary_db = Arc::clone(&db);
-            let summary_handle = app.handle().clone();
-            // Finishes patches an app exit interrupted, once a client is
-            // reachable again (#137). The gold curve in particular is written
-            // by the deferred patch and by nothing else, so without this a
-            // quit — or an in-app update, which exits by design — inside its
-            // one-minute window loses it for good.
-            let resume_db = Arc::clone(&db);
-            let resume_handle = app.handle().clone();
-            supervisor.set_summary_resumer(Box::new(move |lockfile| {
-                let db = Arc::clone(&resume_db);
-                let handle = resume_handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    use tauri::Emitter;
-                    let now_ms = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_millis() as i64)
-                        .unwrap_or(0);
-                    if match_summary::resume_pending(&db, &lockfile, now_ms).await > 0 {
-                        // Rows changed minutes or days after the library last
-                        // looked at them.
-                        if let Err(e) = handle.emit(LIBRARY_CHANGED_EVENT, ()) {
-                            warn!("match-summary", "failed to emit library-changed: {e}");
-                        }
-                    }
-                });
-            }));
-
-            supervisor.set_summary_fetcher(Box::new(move |request| {
-                let db = Arc::clone(&summary_db);
-                let handle = summary_handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    use tauri::Emitter;
-                    if match_summary::patch(&db, &request).await {
-                        // Nothing else will tell the frontend: the row
-                        // changed minutes after the library last refreshed.
-                        if let Err(e) = handle.emit(LIBRARY_CHANGED_EVENT, ()) {
-                            warn!("match-summary", "failed to emit library-changed: {e}");
-                        }
-                    }
-                });
-            }));
-            supervisor.start();
 
             // `ffmpeg` and `recordings_dir` are resolved once here rather
             // than per call from an `AppHandle`, which is what the three
@@ -940,8 +742,17 @@ pub fn run() {
             }));
 
             app.manage(AppState(Arc::new(ctx)));
-            #[cfg(feature = "devtools")]
-            app.manage(dev::DevState::default());
+
+            // The link to the daemon, and with it everything this process used
+            // to do for itself. Starts connecting immediately and starts a
+            // daemon if none answers; `rpc` below is a forward across it.
+            match daemon::Paths::resolve() {
+                Ok(paths) => ui::link::attach(app.handle(), daemon::rpc::endpoint(&paths.data)),
+                // Nothing works without it: every command the frontend makes
+                // goes over this. Said once, loudly, rather than as a failure
+                // per call.
+                Err(e) => error!("ui", "cannot work out where the daemon listens: {e}"),
+            }
 
             // After `manage`, because the check reads `AppState` back off the
             // handle to record what it found.
@@ -971,7 +782,13 @@ pub fn run() {
     // everything except the shell-driving commands goes through `rpc`, and
     // `core::command_names()` is the one list of what that reaches.
     #[cfg(not(feature = "devtools"))]
-    let builder = builder.invoke_handler(tauri::generate_handler![rpc, open_recordings_folder]);
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        rpc,
+        ui::link::rpc_call,
+        ui::link::rpc_subscribe,
+        ui::link::rpc_health,
+        open_recordings_folder
+    ]);
 
     // The list lives in `contract::portal`, and this is the callback that turns
     // it into a `generate_handler!` invocation. `generate_handler!` cannot host
@@ -990,6 +807,9 @@ pub fn run() {
             ($( $(#[doc = $doc:literal])* $name:ident { $($body:tt)* } )*) => {
                 tauri::generate_handler![
                     rpc,
+                    ui::link::rpc_call,
+                    ui::link::rpc_subscribe,
+                    ui::link::rpc_health,
                     open_recordings_folder,
                     $( dev::$name, )*
                 ]

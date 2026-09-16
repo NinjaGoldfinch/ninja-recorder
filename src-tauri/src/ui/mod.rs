@@ -17,3 +17,4 @@
 //! daemon rather than assume one.
 
 pub mod client;
+pub mod link;
