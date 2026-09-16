@@ -92,6 +92,39 @@ VOD is playable:
 Record: pass/fail per case, and what the output VOD looked like for any
 failure (gap, corruption, truncation).
 
+### 4.1 The daemon dying under the UI (WS3.8)
+
+The recorder is a separate process since WS3.2, so it can go away on its own:
+the updater replaces it, someone quits it from the tray, it crashes. The UI is
+disposable and the recording is not, which makes this the case worth being
+deliberate about.
+
+CI covers the part that needs no game. `scripts/smoke-ui.ps1` kills the daemon
+out from under a connected UI on every push and asserts that the window notices,
+starts another, and reconnects, without dying itself. Killed rather than asked
+to stop, because a clean shutdown says goodbye on the wire and a crash says
+nothing at all.
+
+What needs a game, and a person:
+
+- [ ] Start a recording. Kill **the daemon** from Task Manager mid-game.
+- [ ] The window says the recorder is not running, in a strip under the app bar
+      that stays until it is no longer true. It must not be a toast that
+      vanishes while the problem persists.
+- [ ] The UI starts another daemon and the strip clears by itself.
+- [ ] The **recording file is playable**. A fragmented MP4 is valid up to the
+      point it was cut off, which is the guarantee that survives a crash.
+- [ ] The row is reconciled on the next startup scan: it appears in the library
+      with a duration read back from the file, rather than being lost.
+- [ ] Nothing is lost that was already written. Markers up to the kill are in
+      the row.
+
+And the version-skew case, which is the one that does **not** recover:
+
+- [ ] Run a UI from one build against a daemon from another whose `PROTOCOL`
+      differs. The strip says a restart is required and offers nothing else. It
+      must **not** ask the daemon to quit, because the daemon may be recording.
+
 ## 5. Resource measurements
 
 First real measurement against the targets in

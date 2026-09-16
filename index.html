@@ -92,6 +92,12 @@
       </div>
     </header>
 
+    <!-- The recorder's own state, not the app's: shown when the daemon is not
+         there and hidden when it is. Above `main` rather than inside a view,
+         because it is true of the whole window regardless of which view is
+         showing (WS3.8). -->
+    <div id="daemon-strip" class="daemon-strip" role="status" aria-live="polite" hidden></div>
+
     <main class="container">
       <section id="library-view">
         <section class="stats-bar" id="stats-bar">

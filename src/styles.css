@@ -1894,6 +1894,23 @@ button.small {
 
 /* --- Toast ------------------------------------------------------- */
 
+/* The daemon's absence, said once and kept until it is no longer true. Full
+   width under the app bar rather than floating, because it is a condition
+   rather than an event and has to stay out of the way of everything else. */
+.daemon-strip {
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--border-strong);
+  background-color: color-mix(in srgb, var(--text-muted) 12%, var(--bg-surface));
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
+.daemon-strip[data-kind="error"] {
+  background-color: color-mix(in srgb, var(--loss-fg) 14%, var(--bg-surface));
+  border-bottom-color: color-mix(in srgb, var(--loss-fg) 50%, transparent);
+}
+
 .toast {
   position: fixed;
   left: 50%;
