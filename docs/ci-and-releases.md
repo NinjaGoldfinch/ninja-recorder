@@ -33,7 +33,7 @@ flowchart TB
 
 ### What `test` runs
 
-Ten steps, and the order is part of the design: the cheap gates run first, so
+Eleven steps, and the order is part of the design: the cheap gates run first, so
 a formatting mistake fails in seconds rather than after a four-minute compile.
 The last one is the odd one out and runs last for the same reason, from the
 other end: it needs everything already compiled.
@@ -50,6 +50,7 @@ other end: it needs everything already compiled.
 | 8 | `cargo test`, `cargo test --features devtools` | Rust tests, both feature sets | v1 |
 | 9 | `cargo clippy -- -D warnings`, and again with `--features devtools` | Rust lints, both feature sets | v1 |
 | 10 | `scripts/smoke-daemon.ps1` | the daemon actually runs | WS3.3 |
+| 11 | `scripts/smoke-ui.ps1` | the UI starts and finds it | WS3.3 |
 
 Step 4 is a commented placeholder in `ci.yml`, sitting in its final
 position so that turning it on is uncommenting a block rather than deciding
@@ -155,7 +156,7 @@ behind `cfg(not(target_os = "windows"))` are what make `cargo test` work on a
 dev box, and a break in them surfaces there rather than here. Accepted rather
 than overlooked: the dev loop hits it within seconds of the change.
 
-### Step 10 starts the binary, which nothing else does
+### Steps 10 and 11 start the binary, which nothing else does
 
 Steps 1 to 9 are claims about types, units and framing. None of them runs the
 app. The daemon, though, is a *process*: `main.rs`, `Paths::resolve`, the
@@ -180,9 +181,23 @@ and narrowing it took an hour of remote PowerShell against a machine nobody
 could see. A job that starts the thing answers that class of question in the
 four minutes this job already spends compiling.
 
-**It does not replace [windows-verification.md](windows-verification.md).** The
-tray, the notifications and the capture backend need a desktop and a person.
-What this covers is the part that does not.
+Step 11 asks the other half of the question. The daemon smoke asks whether the
+recorder runs; `smoke-ui.ps1` asks whether the *window* process reaches its own
+startup, starts a daemon when none is listening, and completes a handshake over
+the pipe. `ui::link` logs the connection's health, so "daemon connection:
+Connected" in `ui.log` is WS3.4's whole path proving itself: window process,
+spawn, pipe, hello.
+
+It was added because of the failure it is shaped around. A UI that dies before
+`log::init` leaves no log, and a windowed build throws away the stderr that
+would have said why, so the only symptom in the field was a window that flashed
+and closed. A redirected stderr and an exit code are precisely what a CI step
+can keep and a desktop cannot.
+
+**Neither replaces [windows-verification.md](windows-verification.md).** A
+headless runner is not a desktop: nothing here asserts that anything is *drawn*.
+The tray's menu, the notifications and the capture backend need a person in
+front of a screen. What these cover is everything that does not.
 
 The step runs under `powershell` rather than the default `pwsh`, because
 `PipeStream.GetAccessControl` is an instance method in Windows PowerShell and
