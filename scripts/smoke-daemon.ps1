@@ -155,11 +155,24 @@ if ($log -match 'the tray will be invisible') {
 }
 
 # --- a second daemon must leave quietly, and say nothing --------------------
-$before = if (Test-Path $logFile) { (Get-Item $logFile).Length } else { 0 }
+#
+# Compared by *reading* the file rather than by `(Get-Item).Length`. Windows
+# serves a directory entry's size from cached metadata that can lag behind a
+# file another process still holds open, so the stat version reported bytes that
+# were written before it was ever called: it failed on one run and passed on
+# another with identical code, which is worse than either.
+function Read-Log { if (Test-Path $logFile) { Get-Content $logFile -Raw } else { "" } }
+
+$before = Read-Log
 $second = Start-Process -FilePath $Exe -ArgumentList '--daemon' -PassThru -NoNewWindow -Wait
 if ($second.ExitCode -eq 0) { Note "a second daemon exited 0" } else { Fail "a second daemon exited $($second.ExitCode); expected 0" }
-$after = if (Test-Path $logFile) { (Get-Item $logFile).Length } else { 0 }
-if ($after -eq $before) { Note "and wrote nothing to the log" } else { Fail "a second daemon wrote $($after - $before) bytes to the log" }
+$after = Read-Log
+if ($after -eq $before) {
+    Note "and wrote nothing to the log"
+} else {
+    $added = $after.Substring([Math]::Min($before.Length, $after.Length))
+    Fail "a second daemon added to the log: $($added.Trim())"
+}
 
 Stop-Process -Id $daemon.Id -Force -EA SilentlyContinue
 
