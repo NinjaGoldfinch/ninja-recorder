@@ -758,12 +758,12 @@ pub fn run() {
             // handle to record what it found.
             spawn_update_poll(app.handle());
 
-            // Before the window: the tray is what makes a `--hidden` start
-            // reachable at all, so it must exist even if window creation
-            // fails.
-            if let Err(e) = tray::build(app.handle()) {
-                error!("tray", "could not create the tray icon: {e}");
-            }
+            // **No tray here.** The daemon owns it (§3.1, WS3.3), and this
+            // process building a second one meant two identical icons in the
+            // notification area whenever both were running, which since WS3.4
+            // is whenever the window is open at all. What reached the tray from
+            // this side — showing the window, and the close button's Quit —
+            // is still in `tray.rs`; what is gone is the icon.
 
             // Last, so the window never renders against half-built state:
             // the frontend starts polling as soon as it loads.

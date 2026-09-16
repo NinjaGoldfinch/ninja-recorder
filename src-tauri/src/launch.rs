@@ -34,34 +34,37 @@ pub const DAEMON_FLAG: &str = "--daemon";
 
 /// The arguments written into `HKCU\...\Run` when the user ticks start-on-login.
 ///
-/// ## Why this is still `--hidden` when the daemon works
+/// ## `--daemon`, since WS3.5
 ///
-/// WS3.5's exit criterion is that login starts a daemon and nothing else, and
-/// the daemon has run since WS3.2 — so the obvious change is to put
-/// `DAEMON_FLAG` here. It is deliberately not made yet, because today it would
-/// leave an autostart user worse off than before:
+/// Login starts the recorder and nothing else. No window, no WebView2, and
+/// nothing that costs anything until the user asks for it: the daemon is the
+/// process that must outlive the UI, so it is the one worth starting.
 ///
-/// - The daemon has no tray icon and no notifications until WS3.3 builds its
-///   Win32 message pump. A login start would be a recorder with no window, no
-///   icon and no way to reach it short of the Start menu.
-/// - The UI still builds a supervisor of its own until the rest of WS3.4 moves
-///   it onto the pipe. Opening the app after a daemon had started at login
-///   would mean two state machines watching for the same game and two
-///   recorders reaching for the same capture device.
+/// It waited for two things, and both are now true. The daemon has a tray
+/// (WS3.3), so a login start is reachable — which `--hidden` provided and its
+/// replacement had to as well. And the UI stopped building a supervisor of its
+/// own (WS3.4), so opening the app after a login start no longer means two
+/// state machines watching one game.
 ///
-/// So the flag moves when those two are true, and this function plus the test
-/// below is what makes that a one-line change in a place that is checked rather
-/// than a string to go and find in `lib.rs`'s builder.
+/// ## `--hidden` never stops working
+///
+/// The registry holds whatever was written the day the box was ticked, and
+/// Windows hands it back to whatever build is installed years later. Every user
+/// who enabled autostart before this change still has `--hidden` in their `Run`
+/// key, and will until they toggle it off and on.
+///
+/// So `Launch::UiHidden` is permanent, not transitional. Such a start gives a
+/// UI with no window, which then finds no daemon listening and starts one
+/// (`daemon::spawn`), and recording works. It costs one extra process compared
+/// with a fresh install, which is the price of not stranding anybody.
 ///
 /// ## Why it is a function and not a `const`
 ///
-/// The registry holds whatever was written the day the box was ticked, and
-/// hands it back to whatever build is installed years later. That makes the
-/// value an on-disk contract, and a contract is worth stating in one place that
-/// a test can reach. `lib.rs` registers what this returns; nothing else decides
-/// it.
+/// The value is an on-disk contract, and a contract is worth stating in one
+/// place that a test can reach. `lib.rs` registers what this returns; nothing
+/// else decides it.
 pub fn autostart_args() -> Vec<&'static str> {
-    vec![HIDDEN_FLAG]
+    vec![DAEMON_FLAG]
 }
 
 /// What this process should do.
@@ -187,21 +190,26 @@ mod tests {
     /// changing its value is not: an installed `HKCU\...\Run` entry written
     /// by an older build would stop meaning anything, and start-on-login would
     /// silently open a window instead of going to the tray.
-    /// The deferral, pinned. This is not a test that `--hidden` is *right* —
-    /// it is a test that changing it is a decision someone made on purpose,
-    /// having read why it was left alone. When WS3.3 and WS3.4 land, this test
-    /// and `autostart_args` change together.
+    /// What login starts. Pinned because it is an on-disk contract: the value
+    /// is written into the registry once and handed back years later, so
+    /// changing it is a decision to make on purpose rather than a tidy-up.
     #[test]
-    fn autostart_still_registers_the_ui_rather_than_the_daemon() {
-        assert_eq!(
-            autostart_args(),
-            vec![HIDDEN_FLAG],
-            "flipping this to DAEMON_FLAG needs the daemon's tray (WS3.3) and a UI that \
-             stops running its own supervisor (WS3.4) — see autostart_args"
-        );
-        // And whatever is registered has to parse back to a mode that does not
-        // open a window, or start-on-login becomes start-a-window-on-login.
+    fn autostart_registers_the_daemon() {
+        assert_eq!(autostart_args(), vec![DAEMON_FLAG]);
+        // And whatever is registered has to parse back to a mode that opens no
+        // window, or start-on-login becomes start-a-window-on-login.
         assert!(!Launch::from_args(autostart_args()).creates_window());
+    }
+
+    /// The other half of that contract, and the reason `--hidden` cannot be
+    /// deleted: every user who enabled autostart before WS3.5 still has it in
+    /// their `Run` key, and a build that stopped understanding it would strand
+    /// them with a login entry that does nothing.
+    #[test]
+    fn a_hidden_entry_written_by_an_older_build_still_works() {
+        let mode = Launch::from_args([HIDDEN_FLAG]);
+        assert_eq!(mode, Launch::UiHidden);
+        assert!(!mode.creates_window(), "it must still start without a window");
     }
 
     #[test]

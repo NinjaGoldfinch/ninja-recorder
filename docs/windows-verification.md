@@ -221,14 +221,23 @@ Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' |
 - [ ] A fresh install registers **nothing**: the key is absent and the
       Settings checkbox is off before it is ever touched.
 - [ ] Ticking it creates the value, and it holds the installed exe's full path
-      **followed by `--hidden`**. A path with no flag means a login start that
-      opens a window.
+      **followed by `--daemon`** (WS3.5). A path with no flag means a login
+      start that opens a window; `--hidden` means a build from before WS3.5,
+      which still works but starts a UI rather than a daemon.
 - [ ] Unticking it removes the value entirely.
 - [ ] The setting survives a restart of the app: reopen Settings and confirm
       the checkbox still reflects the key.
-- [ ] **Sign out and back in.** The app comes up with no window and no taskbar
-      button, the tray icon is there, and the recorder is live. Start a game
-      without opening the window and confirm it records.
+- [ ] **Sign out and back in.** Task Manager shows **one** `ninja-recorder.exe`
+      and it is the daemon: no window, no taskbar button, and no
+      `msedgewebview2.exe`. The tray icon is there, and the recorder is live.
+      Start a game without opening the window and confirm it records. This is
+      WS3.5's exit criterion: login starts a daemon only.
+- [ ] Open the app from that tray icon. Now there are two processes and still
+      **one** tray icon, because the UI no longer builds its own (WS3.5).
+- [ ] An entry written by an older build (`--hidden`) still works: set the value
+      by hand, sign out and back in, and confirm the app records. It starts a UI
+      with no window, which starts a daemon itself, so Task Manager shows two
+      processes rather than one. Expected, and the reason `--hidden` is kept.
 - [ ] Delete the entry from **Task Manager → Startup** with the app running,
       then reopen Settings: the checkbox must now read *off*. This is the case
       the "no `settings_kv` mirror" decision exists for
