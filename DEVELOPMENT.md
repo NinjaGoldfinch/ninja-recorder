@@ -1871,10 +1871,25 @@ up through the same directory scan that already finds `libobs.log`.
 
 ### Startup and shutdown order
 
-The endpoint is bound first, before the log and before the database, because
-binding it is the single-instance check and a second daemon should cost nothing
-and say nothing. Opening a log file it is about to abandon would rotate the
-running daemon's history for it.
+The log is opened first, before anything that can fail. That is a correction:
+it used to come *after* the bind, so that a second daemon finding the endpoint
+owned would touch nothing at all.
+
+The cost of that ordering was found the hard way. A daemon that died before the
+bind left no trace anywhere, and on Windows `main.rs`'s stderr goes nowhere in a
+release build, so the only symptom was a window that flashed and closed. An hour
+went into diagnosing that from a machine that cannot run the binary, and the
+answer was never in a log because there was no log.
+
+The property the old ordering protected is kept anyway. Rotation happens on
+*write*, past 5 MiB, and the quiet path writes nothing: it opens the file, finds
+the endpoint owned, and exits. The "logging to ..." line is emitted after the
+bind succeeds rather than at `init`, which is what keeps the second daemon
+silent, and which was itself found by measuring rather than by reasoning about
+it.
+
+The endpoint is still bound before the database, because binding it is the
+single-instance check.
 
 Shutdown runs the other way: stop accepting, publish `DaemonShuttingDown` so a
 connected UI can say why it is about to lose its connection instead of showing a

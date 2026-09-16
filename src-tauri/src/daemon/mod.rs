@@ -203,6 +203,11 @@ fn backend() -> Box<dyn Recorder> {
 /// (implementation plan §3.2, startup rule 3). Exiting non-zero would make a
 /// perfectly correct login start look like a failure.
 pub fn run() -> Result<(), DaemonError> {
+    // The one failure with nowhere to go. Everything after this point is
+    // recorded in `daemon.log`; a `Paths::resolve` that fails means there is no
+    // directory to put a log in, so `main.rs`'s stderr is all there is, and in
+    // a release build that is nowhere. It needs `dirs::data_dir()` to return
+    // `None`, which on Windows means a profile with no `%APPDATA%`.
     let paths = Paths::resolve()?;
 
     // The runtime before anything that touches the endpoint: creating a named
@@ -368,28 +373,44 @@ async fn start(paths: Paths) -> Result<Option<Started>, DaemonError> {
     std::fs::create_dir_all(&paths.data)
         .map_err(|source| DaemonError::DataDir { path: paths.data.clone(), source })?;
 
-    let endpoint = rpc::endpoint(&paths.data);
+    // **The log comes first, before anything that can fail.**
+    //
+    // It used to come after the bind, so that a second daemon finding the
+    // endpoint owned would touch nothing. The cost of that ordering was
+    // discovered the hard way: a daemon that died before the bind left no
+    // trace anywhere, and on Windows `main.rs`'s stderr goes nowhere in a
+    // release build, so the only symptom was a window that flashed and closed.
+    // An hour went into finding that out, from a machine that could not run it.
+    //
+    // Opening the file is not what would have disturbed a running daemon's
+    // history anyway. Rotation happens on *write*, past 5 MiB, and the quiet
+    // path below writes nothing: it opens the file, finds the endpoint owned,
+    // and exits. So the property that ordering protected is kept, and every
+    // failure after this line is recorded.
+    //
+    // **Opened here, announced after the bind.** Saying "logging to ..." at
+    // this point would put a line in the file on the quiet path too, which is
+    // the property this is meant to keep. Found by checking rather than by
+    // reasoning: a second daemon grew the log by 112 bytes.
+    let log_file = log::init(&paths.logs, log::Process::Daemon);
+    if log_file.is_none() {
+        eprintln!("[log] could not open a log file; this session logs to stderr only");
+    }
 
-    // First, and before the log: a second daemon must cost nothing and say
-    // nothing. Opening a log file it is about to abandon would rotate the
-    // running daemon's history for it.
+    let endpoint = rpc::endpoint(&paths.data);
     let listener = match rpc::Listener::bind(&endpoint) {
         Ok(Some(listener)) => listener,
+        // Another daemon owns it. Nothing is written, which is the whole of
+        // what the old ordering was protecting.
         Ok(None) => return Ok(None),
         Err(source) => {
-            // Opened here rather than before the bind, so that the *quiet*
-            // outcome above stays quiet. A bind that failed for any other
-            // reason is worth a line, and in a release build with no console
-            // this is the only place one can be written.
-            log::init(&paths.logs, log::Process::Daemon);
             error!("daemon", "cannot listen on {}: {source}", endpoint.display());
             return Err(DaemonError::Listen { endpoint: endpoint.display().to_string(), source });
         }
     };
 
-    match log::init(&paths.logs, log::Process::Daemon) {
-        Some(path) => info!("daemon", "logging to {}", path.display()),
-        None => eprintln!("[log] could not open a log file; this session logs to stderr only"),
+    if let Some(path) = log_file {
+        info!("daemon", "logging to {}", path.display());
     }
     info!("daemon", "listening on {}", endpoint.display());
 
