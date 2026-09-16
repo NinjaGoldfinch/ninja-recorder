@@ -221,17 +221,24 @@ mod win32 {
 
     /// The tray icon, from wherever this build put it.
     ///
-    /// Three places, in order of how much they can be trusted:
+    /// Four places, in order of how much they can be trusted:
     ///
     /// 1. The executable's own resources, which is where `tauri-build` embeds
     ///    `icon.ico`. Ordinal 1 is what its generated resource script uses.
     /// 2. By resource *name*, in case that ordinal ever changes.
-    /// 3. `icons/icon.ico` beside the executable, which is where a
-    ///    `cargo run` build has it rather than embedded.
+    /// 3. `icons/icon.ico` beside the executable.
+    /// 4. The copy compiled into this binary, written out to disk.
     ///
     /// Tried in that order rather than picking one, because which of them works
-    /// is a property of how the binary was built, and a daemon started from an
-    /// installer and one started from `cargo` should both get an icon.
+    /// is a property of how the binary was built: a daemon started from an
+    /// installer, from `cargo run`, or from a CI job should all get an icon.
+    ///
+    /// **The fourth is there because CI proved the first three are not enough.**
+    /// The opening run of `scripts/smoke-daemon.ps1` on a `cargo build` binary
+    /// logged all three failing and "the tray will be invisible": a plain cargo
+    /// build embeds no resource, and `target/debug` has no `icons/` beside it.
+    /// An invisible tray is the one failure this process cannot survive, since
+    /// the tray is the only way to reach the app.
     fn icon() -> Option<Icon> {
         if let Ok(icon) = Icon::from_resource(1, None) {
             return Some(icon);
@@ -240,15 +247,40 @@ mod win32 {
             return Some(icon);
         }
 
-        let beside_exe = std::env::current_exe()
-            .ok()?
-            .parent()?
-            .join("icons")
-            .join("icon.ico");
-        match Icon::from_path(&beside_exe, None) {
+        if let Some(beside_exe) = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|dir| dir.join("icons").join("icon.ico")))
+            && let Ok(icon) = Icon::from_path(&beside_exe, None)
+        {
+            return Some(icon);
+        }
+
+        embedded_icon()
+    }
+
+    /// The icon this binary carries, written somewhere `LoadImageW` can read it.
+    ///
+    /// `tray-icon` loads from a path or from a resource, and a given build may
+    /// have neither. It does have the bytes: `include_bytes!` puts
+    /// `icons/icon.ico` in the binary, 85 KB against a 600 KB executable, and
+    /// buys a daemon that always has an icon.
+    ///
+    /// Written on every start rather than only when absent, because a truncated
+    /// file left by an earlier run would fail in exactly the way this exists to
+    /// prevent, and 85 KB to the temp directory once per start is nothing next
+    /// to being unreachable.
+    fn embedded_icon() -> Option<Icon> {
+        const ICO: &[u8] = include_bytes!("../../icons/icon.ico");
+
+        let path = std::env::temp_dir().join("ninja-recorder-tray.ico");
+        if let Err(e) = std::fs::write(&path, ICO) {
+            warn!("tray", "could not write the embedded icon to {}: {e}", path.display());
+            return None;
+        }
+        match Icon::from_path(&path, None) {
             Ok(icon) => Some(icon),
             Err(e) => {
-                warn!("tray", "no icon at {}: {e}", beside_exe.display());
+                warn!("tray", "the embedded icon would not load from {}: {e}", path.display());
                 None
             }
         }

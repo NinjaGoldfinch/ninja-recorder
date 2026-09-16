@@ -135,6 +135,25 @@ try {
     Fail "talking to the daemon threw: $_"
 }
 
+# --- the tray got an icon --------------------------------------------------
+#
+# A tray with no icon is an invisible click target, and the tray is the only way
+# to reach a daemon that has no window. The daemon says so rather than failing,
+# because recording matters more than being reachable, which means nothing would
+# ever notice unless something read the log. This does.
+#
+# The first run of this script is what turned that from a worry into a fact: a
+# `cargo build` binary has no embedded resource and no `icons/` beside it, so
+# every lookup failed.
+$log = Get-Content $logFile -EA SilentlyContinue
+if ($log -match 'the tray will be invisible') {
+    Fail "no icon could be loaded; the tray would be invisible"
+} elseif ($log -match 'tray icon up') {
+    Note "the tray came up with an icon"
+} else {
+    Note "no tray line in the log at all; this build may not have one"
+}
+
 # --- a second daemon must leave quietly, and say nothing --------------------
 $before = if (Test-Path $logFile) { (Get-Item $logFile).Length } else { 0 }
 $second = Start-Process -FilePath $Exe -ArgumentList '--daemon' -PassThru -NoNewWindow -Wait
