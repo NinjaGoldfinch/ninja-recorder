@@ -168,12 +168,16 @@ decision. `lib.rs` registers the first, `dev::dispatch` expands the second into
 `match` arms, and the portal's generated catalogue reads both and marks each
 entry `overRpc`.
 
-**The portal does not yet talk to a separate daemon.** Its `invoke('rpc', ...)`
-still lands in the UI process, so what it drives is the UI's own supervisor and
-database connection. Pointing it at the daemon needs the `rpc_call` proxy from
-WS3.4; what WS3.7 did is make every one of those commands *able* to run there,
-which is verifiable today by invoking them on a running `--daemon` over the
-pipe.
+**The portal drives the daemon.** Its `invoke('rpc', ...)` reaches `lib.rs`'s
+`rpc`, which since WS3.4 forwards over the pipe rather than dispatching in the
+UI process. So Overview's counts, Database's tables, Simulate's state injection
+and Log's files all describe the daemon: the process that owns the library, the
+supervisor and the recorder. The Log panel's active file is `daemon.log`, and
+`ui.log` shows up in the same list through the directory scan that already
+finds `libobs.log`.
+
+The six UI-table commands are the exception and are meant to be: they report or
+act on *this* process, which is the one with a window.
 
 ## Known limits
 

@@ -36,7 +36,7 @@ disposable.** Killing it must not stop a recording or lose a marker.
 | Log file | owns `daemon.log` | owns `ui.log`; both under `app_data_dir()/logs/` |
 | Desktop notifications | owns | — |
 | `open_recordings_folder`, window management | — | owns |
-| Dev portal (`devtools` feature) | serves `dev_*` over the pipe | hosts `dev.html` |
+| Dev portal (`devtools` feature) | serves `dev_*` over the pipe | hosts `dev.html`, and owns the six that need a window or the shell |
 
 ### Stub directories are empty on purpose
 

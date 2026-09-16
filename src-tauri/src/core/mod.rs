@@ -260,6 +260,19 @@ pub const NOTIFY_FAILED_KEY: &str = "notifyRecordingFailed";
 pub const NOTICE_CLOSE_TO_TRAY_KEY: &str = "notice.closeToTray.seen";
 
 /// What a notification is about.
+///
+/// **Three of these have no producer between WS3.4 and WS3.3.** They were
+/// raised from the supervisor's event notifier, which lived in `lib.rs` and
+/// went to the daemon with the supervisor; the daemon cannot raise them yet
+/// because `tauri-plugin-notification` needs an `AppHandle` and it builds no
+/// Tauri app. Wiring them back into the UI would be worse than the gap: a
+/// notification that only appears while a window is open is the opposite of
+/// what one is for. WS3.3 gives the daemon a Win32 presence and takes them
+/// over, which is what the ownership table said all along.
+///
+/// `CloseToTray` still has its producer, because it is about the window and
+/// belongs to the process that owns one.
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotifyKind {
     /// A recording began. Off by default — the header already shows it, and

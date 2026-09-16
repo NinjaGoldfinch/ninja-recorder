@@ -24,7 +24,7 @@ flowchart TB
     UPDATE["update.ts<br/><small>owns: the update row + badge</small>"]
     DESK["desktop.ts<br/><small>owns: the browser behaviours we suppress</small>"]
     BRIDGE["bridge.ts<br/><small>composition root: picks a transport,<br/>exposes the generated client</small>"]
-    TRANSPORT["lib/transport/<br/><small>invoke.ts · mock.ts<br/>pipe.ts is WS3.6</small>"]
+    TRANSPORT["lib/transport/<br/><small>pipe.ts (live) · mock.ts<br/>invoke.ts unused since WS3.4</small>"]
     CONTRACT["lib/contract/<br/><small>GENERATED from Rust</small>"]
     BRIDGE --> TRANSPORT
     BRIDGE --> CONTRACT
@@ -82,16 +82,29 @@ Since WS2.6 `bridge.ts` is a composition root rather than an implementation. It
 picks a transport and exposes the generated client over it.
 
 ```
-view  ->  client (generated)  ->  Transport  ->  invoke("rpc", …)   in Tauri
-                                            ->  fixtures            in the vite dev server
+view  ->  client (generated)  ->  Transport  ->  invoke("rpc_call", …)  ->  daemon
+                                            ->  fixtures                    in the vite dev server
 ```
 
-**The transport is an interface with three implementations.** `invoke.ts` is
-the Tauri one and is what v1 did all along: every production command goes
-through the single `rpc` passthrough, with a short direct-command list for the
-three that drive the desktop shell. `mock.ts` is in-memory. `pipe.ts` is WS3.6
-and does not exist yet; when it lands, no caller changes, which is the point of
-there being an interface at this seam before the daemon needs one.
+**The transport is an interface with three implementations, and the live one
+changed under every caller without one of them noticing.** `pipe.ts` is what a
+Tauri session uses since WS3.4: commands go to `rpc_call`, which forwards them
+over the pipe to the daemon, and the short direct-command list stays here for
+the ones that drive the desktop shell. `mock.ts` is in-memory. `invoke.ts` is
+the old Tauri transport, which ran commands in the process hosting the webview;
+nothing selects it any more, and it is kept because it is still the correct
+transport for a process that owns its own `Ctx`.
+
+That swap is the whole argument for having put an interface at this seam before
+the daemon needed one. The views, the generated client and `call` are unchanged
+by it.
+
+**`pipe.ts` also carries the other direction**, which `invoke.ts` never had to.
+`subscribe` listens on three channels: `snapshot` replaces the frontend's world
+on every handshake, `event` updates it, and `daemon-health` says whether there
+is a connection at all. A snapshot is not an event and they are deliberately not
+one channel: folding a fresh world in as though it were an update would merge it
+into a stale one.
 
 **The mock is a transport now, not a branch inside `call`.** It used to be two
 thirds of `bridge.ts`, reachable only by being outside Tauri with

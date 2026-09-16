@@ -95,6 +95,7 @@ flowchart TB
 | `daemon/snapshot.rs` | The event stream's position and the state a `hello` is answered with | `Stream`, `Stream::source` |
 | `daemon/spawn.rs` | Connecting to the daemon, and starting one when nothing answers | `connect_or_start` |
 | `ui/client.rs` | The UI's side of the pipe: reply routing, reconnect, version-skew refusal | `spawn`, `Client` |
+| `ui/link.rs` | That client hung off a Tauri app: the `rpc_call` proxy, and the daemon's pushes re-emitted to the webview | `attach`, `rpc_call`, `rpc_subscribe` |
 | `tray.rs` | The tray icon and its Open / Settings / Quit menu. No tests, deliberately | `build`, `request_quit` |
 | `notify.rs` | Desktop notifications, best-effort. No tests, deliberately | `notify`, `close_to_tray_notice` |
 | `lib.rs` | Tauri setup, app state, the `rpc` command, and main-window creation | `run` |
@@ -172,16 +173,32 @@ surface.
 
 ```mermaid
 flowchart LR
-    subgraph P["ninja-recorder.exe"]
+    subgraph U["ninja-recorder.exe (UI)"]
         W1["Main window<br/>index.html"]
         W2["Dev portal window<br/>dev.html<br/><small>devtools feature only</small>"]
-        RT["Rust core + tokio runtime"]
+        LINK["ui::link<br/><small>rpc_call · snapshot · events</small>"]
     end
-    W1 -. invoke .-> RT
-    W2 -. dev_* invoke .-> RT
-    RT -. library-changed event .-> W1
-    RT -. notifications .-> OS["Tray + desktop notifications"]
+    subgraph D["ninja-recorder.exe --daemon"]
+        SUP["Supervisor · Recorder · SQLite writer"]
+    end
+    W1 -. invoke rpc .-> LINK
+    W2 -. invoke rpc .-> LINK
+    LINK -- "pipe" --> SUP
+    SUP -- "snapshot · events" --> LINK
+    LINK -. snapshot / event / daemon-health .-> W1
 ```
+
+Since WS3.4 the window is a client. `invoke('rpc', ...)` reaches `ui::link`,
+which forwards the name and arguments over the pipe and returns what the daemon
+answered; nothing the frontend sends changed shape, which is what let every view
+survive the move. In the other direction the daemon pushes: a snapshot on every
+handshake and a stream of events after it, re-emitted to the webview as
+`snapshot`, `event` and `daemon-health`.
+
+**What the UI process no longer does.** It builds no capture backend, starts no
+supervisor, runs no lockfile or gameflow watch, and performs no startup
+reconcile or retention pass. Those all write or record, and both belong to the
+process that outlives the window. Killing the UI now stops nothing.
 
 The main window is built in `lib.rs`'s `setup` rather than declared in
 `tauri.conf.json`, whose `app.windows` is empty: Tauri creates config windows
