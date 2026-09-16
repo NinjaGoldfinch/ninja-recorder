@@ -46,6 +46,21 @@ use crate::{info, warn};
 #[cfg_attr(not(test), allow(dead_code))]
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long to leave a started daemon alone before starting another.
+///
+/// **The bug this exists for.** `connect_or_start` is handed to
+/// `ui::client::spawn` as its *connect factory*, and that factory is called
+/// again on every reconnect: a connect with a side effect, which was a mistake.
+/// With a daemon that starts, nothing notices. With one that fails to start,
+/// the UI spawned a fresh process every backoff round, each of which flashed a
+/// console window and died, forever.
+///
+/// Fifteen seconds is long enough that a person sees at most one flash rather
+/// than a strobe, and short enough that a daemon killed mid-game is back before
+/// the next one starts. Between attempts the client's own backoff keeps trying
+/// to *connect*, which is what recovers when the daemon is merely slow.
+const RESTART_COOLDOWN: Duration = Duration::from_secs(15);
+
 /// The gap between attempts while waiting for it to come up.
 ///
 /// Flat rather than exponential, unlike `ui::client`'s reconnect backoff, and
@@ -58,7 +73,7 @@ const RETRY_EVERY: Duration = Duration::from_millis(100);
 /// Connects to the daemon, starting one if nothing answers.
 #[cfg_attr(not(test), allow(dead_code))]
 pub async fn connect_or_start(endpoint: &Path) -> io::Result<impl ClientStream + use<>> {
-    connect_or_start_with(endpoint, START_TIMEOUT, start_daemon).await
+    connect_or_start_with(endpoint, START_TIMEOUT, may_start_daemon(), start_daemon).await
 }
 
 /// The testable half: the same logic, with the spawn and the deadline supplied.
@@ -69,10 +84,11 @@ pub async fn connect_or_start(endpoint: &Path) -> io::Result<impl ClientStream +
 async fn connect_or_start_with<F>(
     endpoint: &Path,
     within: Duration,
+    may_start: bool,
     start: F,
 ) -> io::Result<impl ClientStream + use<F>>
 where
-    F: FnOnce() -> io::Result<()>,
+    F: FnOnce() -> io::Result<Option<std::process::Child>>,
 {
     // The common case, and the only one that costs nothing: a daemon started at
     // login is already listening.
@@ -80,8 +96,22 @@ where
         return Ok(stream);
     }
 
+    // Nothing answered, but something was started recently enough that another
+    // would just be a second process racing the first to the same endpoint.
+    // Report the failure and let the caller's backoff come round again.
+    //
+    // Passed in rather than read here, because the cooldown is process-global
+    // state and this function is the part with tests: a global consulted inside
+    // it would make every test depend on which ran first.
+    if !may_start {
+        return Err(io::Error::new(
+            io::ErrorKind::NotConnected,
+            "no daemon is listening, and one was started too recently to start another",
+        ));
+    }
+
     info!("daemon", "no daemon is listening on {}; starting one", endpoint.display());
-    start()?;
+    let mut child = start()?;
 
     // `Instant` rather than a fixed attempt count: what matters is how long a
     // person has been waiting, and an attempt that takes a moment to fail
@@ -96,16 +126,57 @@ where
         tokio::time::sleep(RETRY_EVERY).await;
     }
 
-    // The daemon was asked for and never answered. Reported rather than
-    // retried forever: something is wrong that waiting will not fix, and the
-    // caller can say so while the reconnect loop keeps trying in the
-    // background.
+    // The daemon was asked for and never answered. Before reporting a timeout,
+    // ask the process itself: a daemon that *exited* is a different problem
+    // from one that is slow, and its exit code is the only thing this side can
+    // learn about why.
+    //
+    // Without this the symptom is a console window that flashes and closes,
+    // and nothing anywhere saying what happened. With it there is a line naming
+    // the code, which points at `daemon.log` and the reason it recorded.
+    if let Some(child) = child.as_mut()
+        && let Ok(Some(status)) = child.try_wait()
+    {
+        warn!("daemon", "the daemon exited immediately ({status}); see daemon.log");
+        return Err(io::Error::other(format!(
+            "the recorder exited straight away ({status}). Its log is in \
+             app_data_dir()/logs/daemon.log"
+        )));
+    }
+
+    // Still running, but not answering. Reported rather than retried forever:
+    // something is wrong that waiting will not fix, and the caller can say so
+    // while the reconnect loop keeps trying in the background.
     let why = last.unwrap_or_else(|| io::Error::other("no connection attempt was made"));
     warn!("daemon", "a daemon was started but never answered: {why}");
     Err(io::Error::new(
         io::ErrorKind::TimedOut,
         format!("started a daemon but it did not answer within {within:?}: {why}"),
     ))
+}
+
+/// Whether enough time has passed to start another daemon.
+///
+/// Records the attempt as a side effect, so two callers racing cannot both get
+/// `true`. See `RESTART_COOLDOWN` for the failure this prevents.
+fn may_start_daemon() -> bool {
+    static LAST: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+    let mut last = match LAST.lock() {
+        Ok(last) => last,
+        // A poisoned lock means a panic while holding it, which nothing on this
+        // path can do. Refusing to start is the safe side of the trade: the
+        // alternative is the spawn loop this exists to stop.
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let now = std::time::Instant::now();
+    match *last {
+        Some(when) if now.duration_since(when) < RESTART_COOLDOWN => false,
+        _ => {
+            *last = Some(now);
+            true
+        }
+    }
 }
 
 /// Launches this same executable with `--daemon`, detached.
@@ -115,7 +186,7 @@ where
 /// and the UI can never be different builds by accident, which is the failure
 /// `hello`'s protocol check exists to catch and would rather not have to.
 #[cfg_attr(not(test), allow(dead_code))]
-fn start_daemon() -> io::Result<()> {
+fn start_daemon() -> io::Result<Option<std::process::Child>> {
     let exe = std::env::current_exe()?;
     let mut command = std::process::Command::new(exe);
     command
@@ -145,12 +216,12 @@ fn start_daemon() -> io::Result<()> {
         command.creation_flags(DETACHED_PROCESS);
     }
 
-    // The handle is dropped on purpose: nothing here waits on the daemon, and
-    // nothing should. On Unix that leaves a zombie entry until the UI exits,
-    // which is a dev-box concern only — Windows has no such thing, and the
-    // process this actually ships on is Windows.
-    command.spawn()?;
-    Ok(())
+    // The handle is **kept**, so that a daemon which exits immediately can be
+    // asked what its exit code was rather than leaving a console flash as the
+    // only evidence. It is dropped once this call is done either way: nothing
+    // here waits on the daemon and nothing should. On Unix dropping it leaves a
+    // zombie entry until the UI exits, which is a dev-box concern only.
+    Ok(Some(command.spawn()?))
 }
 
 /// Starts the UI, from the daemon.
@@ -225,9 +296,9 @@ mod tests {
 
         let started = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&started);
-        let stream = connect_or_start_with(&endpoint, Duration::from_secs(5), move || {
+        let stream = connect_or_start_with(&endpoint, Duration::from_secs(5), true, move || {
             counter.fetch_add(1, Ordering::Relaxed);
-            Ok(())
+            Ok(None)
         })
         .await;
 
@@ -245,11 +316,11 @@ mod tests {
         let held = Arc::new(std::sync::Mutex::new(None));
         let keep = Arc::clone(&held);
 
-        let stream = connect_or_start_with(&endpoint, Duration::from_secs(5), move || {
+        let stream = connect_or_start_with(&endpoint, Duration::from_secs(5), true, move || {
             // Held for the length of the test: a listener dropped here would
             // take the endpoint away again before the retry could reach it.
             *keep.lock().unwrap() = Listener::bind(&bound)?;
-            Ok(())
+            Ok(None)
         })
         .await;
 
@@ -265,7 +336,7 @@ mod tests {
         let endpoint = test_endpoint();
         let started = std::time::Instant::now();
 
-        let result = connect_or_start_with(&endpoint, Duration::from_secs(30), || {
+        let result = connect_or_start_with(&endpoint, Duration::from_secs(30), true, || {
             Err(io::Error::new(io::ErrorKind::NotFound, "no such executable"))
         })
         .await;
@@ -278,6 +349,36 @@ mod tests {
         );
     }
 
+    /// The gate itself, which is what stops the UI spawning a daemon every
+    /// backoff round when one cannot start.
+    ///
+    /// The only test that touches the process-global cooldown, deliberately:
+    /// a second one would depend on which ran first, which is the property the
+    /// gate was made a parameter to avoid everywhere else.
+    #[test]
+    fn a_second_start_is_refused_until_the_cooldown_passes() {
+        assert!(may_start_daemon(), "the first attempt is allowed");
+        assert!(!may_start_daemon(), "a second straight away is not");
+        assert!(!may_start_daemon(), "and still is not");
+    }
+
+    /// Asking, and being refused, still refuses rather than waiting out the
+    /// timeout: the caller's own backoff is what tries again, and blocking here
+    /// would stall the reconnect loop behind a daemon nobody started.
+    #[tokio::test]
+    async fn a_refused_start_reports_at_once() {
+        let endpoint = test_endpoint();
+        let started = std::time::Instant::now();
+
+        let result = connect_or_start_with(&endpoint, Duration::from_secs(30), false, || {
+            panic!("nothing should be started while the cooldown holds")
+        })
+        .await;
+
+        assert_eq!(result.err().map(|e| e.kind()), Some(io::ErrorKind::NotConnected));
+        assert!(started.elapsed() < Duration::from_secs(5), "it must not wait out the timeout");
+    }
+
     /// And a daemon that was started but never came up gives up, rather than
     /// leaving the UI waiting on a process that is not going to answer.
     #[tokio::test]
@@ -285,7 +386,7 @@ mod tests {
         let endpoint = test_endpoint();
 
         let result =
-            connect_or_start_with(&endpoint, Duration::from_millis(300), || Ok(())).await;
+            connect_or_start_with(&endpoint, Duration::from_millis(300), true, || Ok(None)).await;
 
         let error = result.err().expect("nothing ever listened");
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);

@@ -1226,8 +1226,23 @@ true.
 The UI starts a daemon when none answers (`daemon::spawn`), so a first launch
 on a machine where start-on-login was never enabled still works.
 
-What the daemon does not yet have is the updater (WS3.6) and desktop
-notifications.
+**A connect factory with a side effect was a mistake, and this is the fix.**
+`connect_or_start` is handed to `ui::client::spawn` as the thing it calls to
+open a connection, and the reconnect loop calls it again on every backoff round.
+With a daemon that starts, nobody notices. With a daemon that *cannot* start,
+the UI spawned a fresh process every round, each of which flashed a console
+window and died, with nothing anywhere saying why.
+
+Two changes, because the loop was only half of it. A cooldown means at most one
+daemon is started every fifteen seconds, so a failure is one flash rather than a
+strobe, and a daemon killed mid-game still comes back quickly. And the spawned
+child's handle is kept long enough to ask `try_wait()` when nothing ever
+answers: a daemon that *exited* is a different problem from one that is slow,
+and its exit code is the only thing the UI side can learn about why. The error
+now names the code and points at `daemon.log`, which is where the reason
+actually is.
+
+What the daemon does not yet have is the updater (WS3.6).
 
 ### The tray owns the main thread
 
@@ -1260,14 +1275,23 @@ request. The alternative was a second channel between the two processes, which
 is a worse answer to "how does one process ask another for a window" than the
 channel that already exists.
 
-**Notifications are a real gap, not a deferral.** They were raised from the
-supervisor's event notifier, which went to the daemon with the supervisor, and
-the daemon cannot raise them yet: `tauri-plugin-notification` needs an
-`AppHandle` and the daemon builds no Tauri app. Wiring them back into the UI
-would be worse than the gap, because a notification that only appears while a
-window is open is the opposite of what one is for. WS3.3 gives the daemon a
-Win32 presence and takes them over, which is what §3.1's ownership table said
-all along.
+**Notifications took two commits to land, and the gap between them is worth
+recording.** They were raised from the supervisor's event notifier, which went
+to the daemon with the supervisor in WS3.4; for those two commits nothing could
+raise one, because `tauri-plugin-notification`'s API hangs off an `AppHandle`
+and the daemon builds no Tauri app.
+
+Wiring them back into the UI was considered and rejected: a notification that
+only appears while a window is open is the opposite of what one is for. So
+WS3.3 rebuilt the notifier on `notify-rust` directly, which is the crate the
+plugin wraps and was already in the tree through it, and the daemon raises them
+now. That is what §3.1's ownership table said all along.
+
+The one platform difference is the `System.AppUserModel.ID`, which exists only
+on Windows and is set only for an installed build, because Windows resolves it
+through a Start-menu shortcut that a `cargo run` binary does not have. That rule
+is the plugin's and it was kept, because it is a fact about Windows rather than
+about Tauri.
 
 ### Why the Run key still says `--hidden`
 
