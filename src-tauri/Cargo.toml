@@ -98,6 +98,11 @@ rusqlite_migration = "1"
 # (DEVELOPMENT.md §6) — std has no such API.
 fs2 = "0.4"
 tauri-plugin-notification = "2"
+# The daemon's notifications (`daemon/notify.rs`). This is the crate the plugin
+# above wraps, and it was already in the tree through it, so naming it here adds
+# no crate. The daemon needs it directly because the plugin's API hangs off an
+# `AppHandle` and the daemon builds no Tauri app.
+notify-rust = "4"
 # Start-on-login. Windows is the one that matters (it writes the app's path
 # plus `--hidden` into `HKCU\...\Run`); the plugin covers macOS and Linux
 # too, which is what makes the flag testable in the macOS dev loop. The

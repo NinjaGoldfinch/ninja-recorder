@@ -249,17 +249,32 @@ Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' |
 
 ### 5.0.3 Notifications
 
-**None of this can be checked before installing.** The plugin only sets the
-`System.AppUserModel.ID` for a non-`target/debug|release` exe, and Windows
-resolves it through the Start-menu shortcut NSIS creates, so a dev run shows
-nothing and that is expected. The decision logic (which kinds are enabled, the
-one-time notice) is unit tested; presentation is not testable anywhere but here.
+**None of this can be checked before installing.** The
+`System.AppUserModel.ID` is only set for a non-`target/debug|release` exe, and
+Windows resolves it through the Start-menu shortcut NSIS creates, so a dev run
+shows nothing and that is expected. The decision logic (which kinds are enabled,
+the one-time notice) is unit tested; presentation is not testable anywhere but
+here.
+
+**Three of the four now come from the daemon** (WS3.3), because a notification
+is for the moment nobody is looking at a window. So the rows below about
+recordings must hold **with no UI process running at all**: close the window
+first, and check them against a daemon on its own. The "still running in the
+tray" notice is the exception and stays in the UI, because it is about the
+window.
+
+They were missing for two commits, between WS3.4 moving the supervisor out of
+the UI and WS3.3 rebuilding the notifier on `notify-rust`. If a build predates
+that, this section is expected to fail entirely.
 
 - [ ] Closing the window the first time shows the "still running in the tray"
       notice, and closing it again does **not**.
 - [ ] Settings → Notifications → Reset makes that notice appear once more.
 - [ ] Finishing a game shows "Recording saved" with the file name and marker
-      count.
+      count, **with the window closed**. This is the one that says the split
+      worked: the process that noticed the game ended is the one that told you.
+- [ ] Starting a game shows "Recording started" when that kind is enabled, again
+      with no window open.
 - [ ] Turning the master switch off silences everything, including the
       one-time notice, and greys out the other three checkboxes.
 - [ ] A recording that fails to start (try filling the disk below 1 GiB) shows
@@ -269,6 +284,10 @@ one-time notice) is unit tested; presentation is not testable anywhere but here.
 - [ ] Both product names get their own Start-menu shortcut and therefore their
       own AUMID; confirm `ninja-recorder` and `ninja-recorder-dev` do not
       collide.
+- [ ] A notification that cannot be shown must not touch the recording. There
+      is no easy way to break the toast subsystem on purpose, so this one is
+      checked by reading `daemon.log`: any `WARN [notify]` line should sit
+      beside a recording that continued regardless.
 
 ### 5.0.4 In-app updates
 
