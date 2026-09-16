@@ -1226,6 +1226,22 @@ true.
 The UI starts a daemon when none answers (`daemon::spawn`), so a first launch
 on a machine where start-on-login was never enabled still works.
 
+**A connect factory with a side effect was a mistake, and this is the fix.**
+`connect_or_start` is handed to `ui::client::spawn` as the thing it calls to
+open a connection, and the reconnect loop calls it again on every backoff round.
+With a daemon that starts, nobody notices. With a daemon that *cannot* start,
+the UI spawned a fresh process every round, each of which flashed a console
+window and died, with nothing anywhere saying why.
+
+Two changes, because the loop was only half of it. A cooldown means at most one
+daemon is started every fifteen seconds, so a failure is one flash rather than a
+strobe, and a daemon killed mid-game still comes back quickly. And the spawned
+child's handle is kept long enough to ask `try_wait()` when nothing ever
+answers: a daemon that *exited* is a different problem from one that is slow,
+and its exit code is the only thing the UI side can learn about why. The error
+now names the code and points at `daemon.log`, which is where the reason
+actually is.
+
 What the daemon does not yet have is the updater (WS3.6).
 
 ### The tray owns the main thread
