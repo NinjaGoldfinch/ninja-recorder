@@ -137,6 +137,12 @@ impl Events {
     fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.0.subscribe()
     }
+
+    /// How many sessions are attached. See `snapshot::Stream::has_subscribers`
+    /// for what asks and why.
+    pub fn subscriber_count(&self) -> usize {
+        self.0.receiver_count()
+    }
 }
 
 impl Default for Events {

@@ -87,7 +87,12 @@ pub(crate) fn build(app: &AppHandle) -> tauri::Result<()> {
 /// Both cases are real: `--hidden` starts with no window at all, and
 /// `CloseAction::CloseWindow` destroys it. `view` routes the frontend once
 /// it's up.
-fn show_window(app: &AppHandle, view: Option<&str>) {
+///
+/// `pub(crate)` since WS3.3, because the tray that calls it is in the *daemon*
+/// now. Its Open and Settings items arrive here as an `Event::ShowUi` off the
+/// pipe (`ui::link`), which is the same request this has always answered,
+/// asked from another process.
+pub(crate) fn show_window(app: &AppHandle, view: Option<&str>) {
     if let Some(window) = app.get_webview_window(crate::MAIN_WINDOW_LABEL) {
         let _ = window.show();
         let _ = window.unminimize();
