@@ -1776,6 +1776,40 @@ survive that. Two daemons cannot: they would bind the same name, and whichever
 started first would silently own the other's clients, which means a dev portal
 driving the release daemon's recorder, or the reverse.
 
+### The pipe's ACL is explicit, not inherited
+
+A named pipe created with no security attributes gets the creating process's
+default DACL, which on a normal account grants that user and `SYSTEM` full
+control. That is nearly what is wanted, and "nearly" is doing real work here:
+the default comes from the token, can be widened by policy, differs for a
+service account, and is written down nowhere a reader of this code would find
+it.
+
+So the daemon builds one: `D:P(A;;GA;;;<user>)(A;;GA;;;SY)(A;;GA;;;BA)`. A
+protected DACL, so nothing is inherited and the list is the whole list, allowing
+this user, Local System and the built-in administrators group. No `Everyone` and
+no `Authenticated Users`, because another account signed in to the same machine
+is exactly who this keeps out. System and Administrators are in rather than out
+because both can take ownership of anything on the machine regardless, so
+excluding them would buy nothing and would stop an administrator diagnosing a
+stuck daemon.
+
+It matters because the daemon is not a passive thing to connect to. Whoever
+opens that pipe can start a recording, delete recordings, and run everything in
+the command table.
+
+**SDDL rather than hand-built ACLs.** `InitializeAcl` plus `AddAccessAllowedAce`
+plus `SetSecurityDescriptorDacl` is four allocations and three chances to get a
+length wrong, in `unsafe`, for what SDDL says in one line. The string is also
+checkable against the live pipe with one PowerShell command, which is worth a
+lot for something only verifiable on Windows
+([docs/windows-verification.md](docs/windows-verification.md) §5.0.5).
+
+**A failure degrades rather than refuses.** If the SID lookup or the descriptor
+fails, the daemon logs it and creates the pipe with default attributes, which is
+what it did before this existed. Refusing to start because it could not look up
+its own SID would be the worse outcome.
+
 ### Paths without an `AppHandle`
 
 The daemon builds no `tauri::App`, so it cannot ask one where anything is. It

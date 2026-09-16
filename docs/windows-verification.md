@@ -313,6 +313,26 @@ backend is libobs, and this section is what stands in for that.
       `[System.IO.Directory]::GetFiles("\\.\pipe\") -match "ninja-recorder"`
       should list `ninja-recorder.com.ninjarecorder.app.release`, or
       `...devtools` for a devtools build.
+- [ ] **The pipe's ACL grants this user and nobody else.** The daemon will
+      start and delete recordings for anyone who can open it, so this is the
+      one row here that is a security property rather than a behaviour.
+
+      ```powershell
+      $p = [System.IO.Pipes.NamedPipeClientStream]::new('.', 'ninja-recorder.com.ninjarecorder.app.release')
+      $p.Connect(2000)
+      $p.GetAccessControl().Access | Format-Table IdentityReference, FileSystemRights, AccessControlType
+      ```
+
+      Expect three allow entries: this account, `NT AUTHORITY\SYSTEM` and
+      `BUILTIN\Administrators`. **No `Everyone`, and no `NT AUTHORITY\Authenticated
+      Users`.** If `daemon.log` carries a line about using the default pipe ACL,
+      the descriptor could not be built and the pipe fell back to the process
+      default, which is the thing this replaced: report that line's reason
+      rather than the ACL.
+- [ ] A second Windows account signed in at the same time cannot drive this
+      user's daemon. With fast user switching, sign in as another account and
+      run the same connect: it must fail with access denied rather than
+      connecting.
 - [ ] A devtools build and a release build can run at the same time without
       either taking the other's clients. Their pipe names differ by that last
       segment; the database and the recordings folder are still shared.

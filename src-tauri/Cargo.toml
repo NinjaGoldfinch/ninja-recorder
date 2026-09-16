@@ -137,6 +137,14 @@ windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Media_Audio",
     "Win32_System_Com",
+    # The daemon's pipe ACL (daemon/pipe_acl.rs). `Win32_Security` is the
+    # token and `SECURITY_ATTRIBUTES` half, `..._Authorization` is the SDDL
+    # pair that turns a string into a descriptor and a SID into a string, and
+    # `Win32_System_Threading` is `OpenProcessToken`, which lives there rather
+    # than under Security.
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Threading",
     # SetStdHandle, for pointing the libobs worker's inherited stderr at a
     # file it can actually be read from (recorder/libobs/worker_log.rs).
     "Win32_System_Console",
