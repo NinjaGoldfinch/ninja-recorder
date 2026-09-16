@@ -503,6 +503,16 @@ impl Db {
         Ok(Self { pool: pool::Pool::open(path, Self::init)? })
     }
 
+    /// The same library, opened by a process that must not write to it.
+    ///
+    /// The UI's connection since WS3.4: it reads the library directly and
+    /// forwards everything else to the daemon, which owns every write and every
+    /// migration. See `pool::Pool::open_read_only` for why the writer is handed
+    /// out as a `query_only` connection rather than withheld.
+    pub fn open_read_only(path: &Path) -> Result<Self, DbError> {
+        Ok(Self { pool: pool::Pool::open_read_only(path)? })
+    }
+
     /// `pub(crate)` rather than private: other modules' tests (e.g.
     /// `state_machine::supervisor`) need this too, but it must never be
     /// reachable outside `#[cfg(test)]` builds.
