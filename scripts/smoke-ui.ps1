@@ -116,6 +116,51 @@ if ($connected) {
 
 if ($ui.HasExited) { Fail "the UI exited with code $($ui.ExitCode) while we watched" }
 
+# --- the daemon going away, and coming back (WS3.8) ------------------------
+#
+# The daemon can vanish for ordinary reasons: the updater replaces it, someone
+# quits it from the tray, it crashes. The UI is disposable but a recording is
+# not, so what the window must do is notice, say so, and recover — never sit
+# there showing a library that has quietly stopped answering.
+#
+# Killed rather than asked to stop, because that is the case worth testing: a
+# clean shutdown says goodbye on the wire first, and a crash says nothing at
+# all.
+if (-not $connected) {
+    Note "skipping the recovery check: there was no connection to lose"
+} else {
+    $daemon = Get-Process ninja-recorder -EA SilentlyContinue |
+        Where-Object { $_.Id -ne $ui.Id }
+    if (-not $daemon) {
+        Fail "no daemon process to kill; the UI reported connected without one"
+    } else {
+        $mark = (Get-Content $uiLog -Raw).Length
+        $daemon | Stop-Process -Force
+        Note "killed the daemon the UI was talking to"
+
+        # Two things have to happen, in order: the UI has to *notice*, and it
+        # has to come back. Noticing is what the strip in the window is for;
+        # coming back is `connect_or_start` starting a new one.
+        $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+        $noticed = $false
+        $recovered = $false
+        while ((Get-Date) -lt $deadline) {
+            $since = (Get-Content $uiLog -Raw -EA SilentlyContinue)
+            if ($since.Length -gt $mark) {
+                $tail = $since.Substring($mark)
+                if ($tail -match 'daemon connection: Reconnecting') { $noticed = $true }
+                if ($tail -match 'daemon connection: Connected') { $recovered = $true; break }
+            }
+            if ($ui.HasExited) { break }
+            Start-Sleep -Milliseconds 500
+        }
+
+        if ($noticed) { Note "the UI noticed it was gone" } else { Fail "the UI never reported losing the daemon" }
+        if ($recovered) { Note "and started another, and reconnected" } else { Fail "the UI never reconnected" }
+        if ($ui.HasExited) { Fail "the UI died when the daemon did; it is supposed to be the disposable one" }
+    }
+}
+
 Show-Everything
 Get-Process ninja-recorder -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
 

@@ -99,6 +99,14 @@ That swap is the whole argument for having put an interface at this seam before
 the daemon needed one. The views, the generated client and `call` are unchanged
 by it.
 
+**`daemon.ts` is the one thing that renders the connection itself.** A strip
+under the app bar, shown when the daemon is not there and hidden when it is,
+because that is a *state* rather than an event: a toast that vanished while the
+recorder was still missing would be worse than saying nothing. Version skew gets
+its own message and no button, since a UI and a daemon from different builds
+cannot be made to agree by waiting, and the one thing the window must not do is
+tell the daemon to quit while it may be recording.
+
 **`pipe.ts` also carries the other direction**, which `invoke.ts` never had to.
 `subscribe` listens on three channels: `snapshot` replaces the frontend's world
 on every handshake, `event` updates it, and `daemon-health` says whether there
