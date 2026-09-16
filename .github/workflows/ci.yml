@@ -290,6 +290,21 @@ jobs:
         shell: powershell
         run: ./scripts/smoke-daemon.ps1
 
+      # The other half, and a different question. The daemon smoke asks whether
+      # the recorder runs; this asks whether the *window* process gets as far as
+      # its own startup, starts a daemon when none is listening, and completes a
+      # handshake over the pipe.
+      #
+      # A headless runner is not a desktop, so nothing here asserts that
+      # anything is drawn. What it does assert is the failure that was reported
+      # from the field and could not be diagnosed: a UI that exits before
+      # `log::init` leaves no log, and a windowed build throws away the stderr
+      # that would have said why. A redirected stderr and an exit code are
+      # exactly what CI can keep.
+      - name: Smoke test the UI
+        shell: powershell
+        run: ./scripts/smoke-ui.ps1
+
   # Pull requests do not build at all. Three Tauri bundles — two of them
   # Windows, each ~6min — are the overwhelming majority of this workflow's
   # minute spend and its artifact storage, and nothing consumes a PR's
