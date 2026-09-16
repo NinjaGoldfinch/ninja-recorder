@@ -45,6 +45,14 @@ use crate::warn;
 
 /// A security descriptor, and the `SECURITY_ATTRIBUTES` pointing at it.
 ///
+/// **Not `Send`, and deliberately not made so.** It owns raw pointers, and the
+/// only correct lifetime for it is the `CreateNamedPipe` call: Windows copies
+/// the descriptor into the pipe object, so nothing needs it afterwards. A
+/// caller that holds one across an `await` makes its future non-`Send`, which
+/// is a compile error at the `tokio::spawn` rather than something to paper over
+/// with an `unsafe impl` — and the fix, scoping it to the call, is what should
+/// have been written anyway.
+///
 /// Owns the descriptor so it outlives the `CreateNamedPipe` call and is freed
 /// afterwards: Windows copies the descriptor into the object, so it is needed
 /// only for the duration of the call, and leaking it once per pipe instance

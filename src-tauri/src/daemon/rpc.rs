@@ -461,10 +461,21 @@ impl Listener {
             // security descriptor, and one shared `SECURITY_ATTRIBUTES` handed
             // out as a `*mut` from several places is the kind of aliasing this
             // is not worth risking to save a SID lookup.
-            let mut security = crate::daemon::pipe_acl::PipeSecurity::current_user_only();
+            //
+            // **Each one is scoped so it never crosses the `await` below, and
+            // that is load-bearing rather than tidy.** `PipeSecurity` owns raw
+            // pointers and so is not `Send`; a non-`Send` value held across an
+            // await makes the whole future non-`Send`, and `accept` is called
+            // from a `tokio::spawn`. The descriptor is only needed for the
+            // length of the create call anyway, because Windows copies it into
+            // the pipe object. Found by CI, which is the only thing that
+            // compiles this branch.
             let idle = match self.idle.take() {
                 Some(idle) => idle,
-                None => create_instance(&self.name, false, security.as_mut())?,
+                None => {
+                    let mut security = crate::daemon::pipe_acl::PipeSecurity::current_user_only();
+                    create_instance(&self.name, false, security.as_mut())?
+                }
             };
             idle.connect().await?;
 
@@ -473,8 +484,10 @@ impl Listener {
             // a client is already connected, and failing the accept to report
             // that the *next* instance could not be made would drop a session
             // over a problem the next `accept` will retry anyway.
-            let mut security = crate::daemon::pipe_acl::PipeSecurity::current_user_only();
-            self.idle = create_instance(&self.name, false, security.as_mut()).ok();
+            {
+                let mut security = crate::daemon::pipe_acl::PipeSecurity::current_user_only();
+                self.idle = create_instance(&self.name, false, security.as_mut()).ok();
+            }
             Ok(idle)
         }
         #[cfg(unix)]
