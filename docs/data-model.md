@@ -20,7 +20,12 @@ schema.
 | | Count | Pragmas | Who |
 |---|---|---|---|
 | Writer | 1 | `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5s`, `foreign_keys=ON` | the daemon: every insert, update and delete |
-| Readers | 4 | the same, plus `query_only=ON` | the library grid, the review timeline, the stats bar, the dev portal |
+| Readers | 4 | the same, plus `query_only=ON` | the daemon's own reads: status polls, retention preview |
+| UI, all 5 | 1 + 4 | `query_only=ON` on every one | the library grid, the review timeline, the stats bar, the dev portal |
+
+Two processes open the same file. The daemon opens a `Pool` and owns the writer;
+the UI opens `Pool::open_read_only`, where even the connection `write()` hands
+out is `query_only`.
 
 **One writer, because SQLite allows exactly one.** A second write connection
 would buy nothing and would turn a `Mutex` wait into an `SQLITE_BUSY` we have to
@@ -42,16 +47,26 @@ at 1 Hz for the length of every game, to buy durability against power loss.
 on a power cut. What it cannot lose is the *recording*: the file on disk is the
 source of truth and reconciliation rebuilds a missing row from it.
 
-**`query_only=ON` on the readers is a tripwire, not a formality.** A read path
-that tries to write fails at the connection instead of quietly racing the
-writer, so a method filed on the wrong side of the split is a test failure
-rather than a rare interleaving nobody can reproduce. It is also what the UI
-process gets once WS3 splits it out: the daemon owns every write and the UI
-reads the same file directly.
+**`query_only=ON` is a tripwire, not a formality.** A read path that tries to
+write fails at the connection instead of quietly racing the writer, so a method
+filed on the wrong side of the split is a test failure rather than a rare
+interleaving nobody can reproduce.
 
-Four tests hold this up, in `db/pool.rs`: the file is in WAL mode, a write on a
-reader is refused, a long-held read does not block a write, and a writer and
-three readers hammering the database together record zero `SQLITE_BUSY`.
+**The UI gets it on every connection, including the writer** (WS3.4, §4.4).
+Withholding the writer and panicking when something asked for it would be a
+crash in a shipped window for what is a programming error, and it would fire
+before SQLite ever saw the statement. A `query_only` writer refuses the
+statement instead, leaving the caller an error to report. The UI also runs **no
+migrations**: those are writes, the daemon owns them, and a second process
+running them would be a race as well as a contradiction. A UI that opens the
+library before the daemon has created it sees no tables, and SQLite hands them
+to that same open connection as soon as the daemon migrates.
+
+Seven tests hold this up, in `db/pool.rs`: the file is in WAL mode, a write on a
+reader is refused, a long-held read does not block a write, a writer and three
+readers hammering the database together record zero `SQLITE_BUSY`, a read-only
+pool refuses a write on every connection, it still sees what the writer commits,
+and one opened before the schema existed recovers when it appears.
 
 **Tests run against a real file, not `:memory:`.** Each pool gets a throwaway
 directory that it removes when it drops. An in-memory database is private to its

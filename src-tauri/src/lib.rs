@@ -652,18 +652,18 @@ pub fn run() {
 
             let db_path = app.path().app_data_dir()?.join("library.sqlite3");
             std::fs::create_dir_all(db_path.parent().expect("db path always has a parent"))?;
-            // **The UI opens the library, and writes nothing to it.** Every
-            // command that could write is forwarded to the daemon now, and the
-            // startup reconcile and retention pass went with it; what is left
-            // reaching for this connection is the portal's UI-side commands.
+            // **Read-only, and SQLite is what enforces it** (§4.4). Every
+            // command that could write is forwarded to the daemon, and the
+            // startup reconcile and retention pass went with it; what still
+            // reads this connection is the portal's UI-side commands and,
+            // in time, the library grid.
             //
-            // It is still a full `Db`, which means a writer connection this
-            // process never uses. The plan's §4.4 wants `query_only = ON` here
-            // so the rule is enforced by SQLite rather than by convention, and
-            // that needs a read-only `Db::open`, which is its own change.
-            // Noted rather than assumed: two writer connections are safe under
-            // WAL, and only one of them is ever asked to write.
-            let db = Arc::new(match db::Db::open(&db_path) {
+            // `open_read_only` runs no migrations. The daemon owns those, and
+            // a second process running them would be both a write and a race.
+            // Opening before the daemon has created the file yields a
+            // connection that sees no tables, which resolves itself the moment
+            // the daemon migrates.
+            let db = Arc::new(match db::Db::open_read_only(&db_path) {
                 Ok(db) => db,
                 // Returning `Err` here would hand this to Tauri's setup
                 // hook, which `expect`s on it — and because that runs

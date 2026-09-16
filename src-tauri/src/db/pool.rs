@@ -101,6 +101,50 @@ impl Pool {
         })
     }
 
+    /// A pool that cannot write, for a process that must not. WS3.4, §4.4.
+    ///
+    /// The UI reads the library directly rather than pulling a thousand rows
+    /// over the pipe, and every write belongs to the daemon (§3.1). Until now
+    /// that was a convention held up by care: the UI opened a full pool and
+    /// simply never used the writer. This makes it a property of the
+    /// connections, so a write path that appears in the wrong process fails at
+    /// SQLite with `attempt to write a readonly database` rather than racing
+    /// the daemon.
+    ///
+    /// ## Every connection, including the one `write()` hands out
+    ///
+    /// Rather than leaving the writer `None` and panicking when something asks
+    /// for it. A panic would be a crash in a shipped UI for what is a
+    /// programming error, and it would fire before SQLite ever saw the
+    /// statement. A `query_only` writer refuses the *statement*, which is the
+    /// same way a reader on the wrong side of the split already fails, and it
+    /// leaves the caller with an error to report rather than a dead process.
+    ///
+    /// ## No migrations, deliberately
+    ///
+    /// `init` is not run and cannot be: migrations write. The daemon owns them
+    /// and has already run them by the time anything here reads, or is about
+    /// to. Opening before that yields connections that see no tables yet, and
+    /// SQLite hands the tables to an open connection as soon as another one
+    /// creates them, so this recovers on its own rather than needing a retry.
+    pub fn open_read_only(path: &Path) -> Result<Self, DbError> {
+        let writer = Connection::open(path)?;
+        configure_reader(&writer)?;
+
+        let mut readers = Vec::with_capacity(READERS);
+        for _ in 0..READERS {
+            let reader = Connection::open(path)?;
+            configure_reader(&reader)?;
+            readers.push(Mutex::new(reader));
+        }
+        Ok(Self {
+            writer: Some(Mutex::new(writer)),
+            readers,
+            next: AtomicUsize::new(0),
+            temp_dir: None,
+        })
+    }
+
     /// A pool on a throwaway database file, for tests.
     ///
     /// **A file, not `:memory:`, and the name says so.** A plain
@@ -358,5 +402,102 @@ mod tests {
         // Guards against the test passing because nothing actually ran.
         assert!(written > 10, "the writer only managed {written} inserts");
         assert!(read > 100, "the readers only managed {read} queries");
+    }
+
+    // --- the read-only pool -------------------------------------------------
+
+    /// A number no other test in this process will use. The tests run
+    /// concurrently and each wants its own database file; sharing one would
+    /// make a failure depend on which ran first.
+    fn next_dir() -> usize {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// A pool on a throwaway file, opened the way the UI opens the library.
+    ///
+    /// Two pools over one file, which is the arrangement being tested: the
+    /// daemon's writer made the schema, and the UI's connections can only read
+    /// it.
+    fn two_process_pools() -> (Pool, Pool, std::path::PathBuf) {
+        let dir = std::env::temp_dir()
+            .join(format!("ninja-recorder-ro-{}-{}", std::process::id(), next_dir()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("library.sqlite");
+
+        let daemon = Pool::open(&path, schema).unwrap();
+        let ui = Pool::open_read_only(&path).unwrap();
+        (daemon, ui, dir)
+    }
+
+    /// The point of the whole change: the UI's *writer* refuses too.
+    ///
+    /// It is handed out rather than withheld so that a write path appearing in
+    /// the wrong process is an error the caller can report, not a panic that
+    /// takes the window down. What must not happen is the write succeeding.
+    #[test]
+    fn a_read_only_pool_refuses_a_write_on_every_connection() {
+        let (_daemon, ui, dir) = two_process_pools();
+
+        let error = ui
+            .write()
+            .execute("INSERT INTO t (v) VALUES (1)", [])
+            .expect_err("the UI's writer must refuse a write");
+        assert!(
+            error.to_string().contains("readonly"),
+            "SQLite should be what refuses it, got: {error}"
+        );
+
+        let error = ui
+            .read()
+            .execute("INSERT INTO t (v) VALUES (1)", [])
+            .expect_err("a reader must refuse a write");
+        assert!(error.to_string().contains("readonly"), "got: {error}");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// And it still *reads*, including rows the other process wrote after it
+    /// opened. That is the half that makes the UI's library grid work without
+    /// pulling a thousand rows over the pipe.
+    #[test]
+    fn a_read_only_pool_sees_what_the_writer_commits() {
+        let (daemon, ui, dir) = two_process_pools();
+
+        daemon.write().execute("INSERT INTO t (v) VALUES (42)", []).unwrap();
+
+        let value: i64 =
+            ui.read().query_row("SELECT v FROM t LIMIT 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(value, 42, "the UI reads the daemon's writes from the same file");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The UI can open the library before the daemon has created it, because
+    /// the UI is what starts the daemon. The tables appear on the connection
+    /// that was already open, without it being reopened.
+    #[test]
+    fn opening_before_the_schema_exists_recovers_when_it_appears() {
+        let dir = std::env::temp_dir()
+            .join(format!("ninja-recorder-ro-early-{}-{}", std::process::id(), next_dir()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("library.sqlite");
+
+        // The UI first, on a path with nothing behind it.
+        let ui = Pool::open_read_only(&path).unwrap();
+        assert!(
+            ui.read().query_row("SELECT v FROM t LIMIT 1", [], |r| r.get::<_, i64>(0)).is_err(),
+            "there is no schema yet"
+        );
+
+        // Then the daemon, which migrates.
+        let daemon = Pool::open(&path, schema).unwrap();
+        daemon.write().execute("INSERT INTO t (v) VALUES (7)", []).unwrap();
+
+        let value: i64 =
+            ui.read().query_row("SELECT v FROM t LIMIT 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(value, 7, "the same connection sees the table once it exists");
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
