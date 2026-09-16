@@ -1293,30 +1293,40 @@ through a Start-menu shortcut that a `cargo run` binary does not have. That rule
 is the plugin's and it was kept, because it is a fact about Windows rather than
 about Tauri.
 
-### Why the Run key still says `--hidden`
+### Login starts the daemon, and `--hidden` never stops working
 
-WS3.5 is "login starts a daemon only", the daemon has worked since 3.2, and the
-change is one string. It is deliberately not made yet, and `launch::autostart_args`
-is where the reason lives so that flipping it is a decision rather than a tidy-up.
+The Run key points at `--daemon` since WS3.5. Login starts the recorder and
+nothing else: no window, no WebView2, nothing costing anything until the user
+asks for it.
 
-Two things have to be true first, and neither is:
+It waited for two things, and both had to be true rather than nearly true. The
+daemon needed a **reachable** tray, which WS3.3 built and which CI then showed
+was invisible on a build with no embedded icon resource, so the icon gained a
+fourth fallback compiled into the binary. And the UI had to stop building a
+supervisor, which WS3.4 did, so opening the app after a login start no longer
+means two state machines watching one game.
 
-1. **The daemon needs its tray** (3.3). A login start today would be a recorder
-   with no window, no tray icon and no notifications, reachable only by finding
-   the app in the Start menu. The `--hidden` start it replaces has a tray, which
-   is the whole reason that mode exists.
-2. **The UI needs to stop running a supervisor** (the rest of 3.4). Otherwise
-   opening the app after a login-started daemon gives two state machines
-   watching one game and two recorders reaching for one capture device. Running
-   both processes is possible today, but it is something a person does on
-   purpose; the Run key would make it what happens to everyone who ticked a box.
+The argument list is an on-disk contract. `tauri-plugin-autostart` writes it
+once, when the box is ticked, and Windows hands it back to whatever build is
+installed years later. Every user who enabled autostart before this change still
+has `--hidden` in their `Run` key and will until they toggle it off and on, so
+`Launch::UiHidden` is **permanent, not transitional**.
 
-The argument list is also an on-disk contract. `tauri-plugin-autostart` writes
-it once, when the box is ticked, and Windows hands it back to whatever build is
-installed years later, so a flag that changes meaning strands every user who
-enabled autostart before the change. `--hidden` therefore keeps working
-whatever else happens, and `Launch::UiHidden` is not going away when the flag
-moves: entries written by older builds will still be arriving at that door.
+Such a start still works: a UI with no window, which finds no daemon listening
+and starts one, and records. It costs one extra process against a fresh install,
+which is the price of stranding nobody. A test pins that door open.
+
+### The tray icon is the daemon's, and only the daemon's
+
+The UI built one too, until WS3.5 removed it. Two processes each building an
+identical icon meant two icons in the notification area whenever both were
+running, which since WS3.4 is whenever the window is open at all. §3.1's
+ownership table always said the tray was the daemon's; this is that being true
+rather than nearly true.
+
+What stayed in `tray.rs` is what the window still needs: showing itself, and the
+close button's Quit. Those are still the tray's requests, they just arrive from
+another process now as an `Event::ShowUi` off the pipe.
 
 ---
 

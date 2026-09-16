@@ -1,86 +1,35 @@
-//! The system tray icon and its menu.
+//! What the window still needs from what used to be the tray.
+//!
+//! **The tray icon is the daemon's** (§3.1, WS3.3). It lives in
+//! `daemon::pump`, on that process's own Win32 message loop, because the
+//! process that must outlive the window is the one worth reaching. This file is
+//! what stayed behind: showing the window, and the close button's Quit.
+//!
+//! The name is now a little wrong and is kept anyway, because the two functions
+//! in it are still the tray's requests — they just arrive from another process
+//! as an `Event::ShowUi` off the pipe rather than from a menu callback in this
+//! one.
 //!
 //! **No tests live in this file, and none should.** It is reachable only from
-//! `lib.rs`'s `run()`, which is dead code in a `cargo test` build and gets
-//! stripped — that is what keeps Tauri's Wry window machinery, and with it the
-//! whole Win32 GUI import stack, out of the test binary. A `cargo test` binary
-//! carries no application manifest, so Windows resolves `comctl32.dll` to the
-//! v5 side-by-side assembly and the binary dies at load with
-//! `STATUS_ENTRYPOINT_NOT_FOUND` before running anything. See
+//! `lib.rs`'s `run()` and `ui::link`, which are dead code in a `cargo test`
+//! build and get stripped — that is what keeps Tauri's Wry window machinery,
+//! and with it the whole Win32 GUI import stack, out of the test binary. A
+//! `cargo test` binary carries no application manifest, so Windows resolves
+//! `comctl32.dll` to the v5 side-by-side assembly and the binary dies at load
+//! with `STATUS_ENTRYPOINT_NOT_FOUND` before running anything. See
 //! `state_machine::supervisor::on_library_changed`, which documents the
 //! incident. Anything here worth testing — `CloseAction` parsing — belongs in
 //! `core`, which names no `tauri` type.
-//!
-//! The menu is deliberately three items. A "Start/Stop recording" entry was
-//! considered and rejected: `start_recording` races the state machine, which
-//! doesn't know about the call (`src/dev/registry.ts` says so, and
-//! `Supervisor::start_recording` spells out the divergence), so promoting it
-//! from a dev affordance to a shipped one would ship a known bug.
 
-use crate::{error, info, warn};
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
-use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+use crate::{error, info};
 use tauri::{AppHandle, Manager};
 
-const MENU_OPEN: &str = "tray-open";
-const MENU_SETTINGS: &str = "tray-settings";
-const MENU_QUIT: &str = "tray-quit";
-
 /// Emitted to the frontend to ask it to switch views. Carries the view name.
-/// The window may have just been created, in which case the frontend isn't
+///
+/// The window may have just been created, in which case the frontend is not
 /// listening yet — `show_window` handles that by passing the view through the
 /// URL instead.
 pub(crate) const NAVIGATE_EVENT: &str = "navigate";
-
-pub(crate) fn build(app: &AppHandle) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, MENU_OPEN, "Open ninja-recorder", true, None::<&str>)?;
-    let settings = MenuItem::with_id(app, MENU_SETTINGS, "Settings", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, MENU_QUIT, "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(
-        app,
-        &[
-            &open,
-            &PredefinedMenuItem::separator(app)?,
-            &settings,
-            &PredefinedMenuItem::separator(app)?,
-            &quit,
-        ],
-    )?;
-
-    let mut tray = TrayIconBuilder::with_id("main")
-        .tooltip("ninja-recorder")
-        .menu(&menu)
-        // Left-click opens the window; the menu is the right-click gesture,
-        // which is what every other tray app on Windows does.
-        .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id().as_ref() {
-            MENU_OPEN => show_window(app, None),
-            MENU_SETTINGS => show_window(app, Some("settings")),
-            MENU_QUIT => request_quit(app),
-            _ => {}
-        })
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
-                button: tauri::tray::MouseButton::Left,
-                button_state: tauri::tray::MouseButtonState::Up,
-                ..
-            } = event
-            {
-                show_window(tray.app_handle(), None);
-            }
-        });
-
-    // Reuses the icon already decoded from the bundle, so no `image-png` /
-    // `image-ico` Cargo feature is needed. Without an icon the tray would be
-    // an invisible click target, so skip it rather than ship that.
-    if let Some(icon) = app.default_window_icon().cloned() {
-        tray = tray.icon(icon);
-        tray.build(app)?;
-    } else {
-        warn!("tray", "no bundled window icon, skipping the tray icon");
-    }
-    Ok(())
-}
 
 /// Brings the UI up, creating the window if it isn't there.
 ///
