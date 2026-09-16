@@ -200,6 +200,12 @@ supervisor, runs no lockfile or gameflow watch, and performs no startup
 reconcile or retention pass. Those all write or record, and both belong to the
 process that outlives the window. Killing the UI now stops nothing.
 
+It also cannot write to the library: `Db::open_read_only` gives it connections
+with `query_only = ON`, including the one `write()` hands out, so a write path
+that appeared in the wrong process would be refused by SQLite rather than
+quietly racing the daemon. It runs no migrations either, for the same reason
+and because migrations are a write.
+
 The main window is built in `lib.rs`'s `setup` rather than declared in
 `tauri.conf.json`, whose `app.windows` is empty: Tauri creates config windows
 automatically before `setup`, and a `--hidden` start needs to create none at
