@@ -1242,7 +1242,60 @@ and its exit code is the only thing the UI side can learn about why. The error
 now names the code and points at `daemon.log`, which is where the reason
 actually is.
 
-What the daemon does not yet have is the updater (WS3.6).
+The daemon checks for updates and installs them since WS3.6.
+
+### The check moved because the refusal has to
+
+`tauri-plugin-updater` ran the check in the UI, and its API hangs off an
+`AppHandle`, so the daemon could not use it. It also should not: the question
+"may this install run now" is answered by whether a game is being recorded, and
+the daemon is the process that knows.
+
+What replaced it is two pure functions and a fetch. `update::evaluate` reads the
+manifest Tauri's format already publishes and decides what it means;
+`update::is_newer` compares with semver rather than as text, which is the bug
+that would otherwise have shipped: `0.10.0` sorts before `0.9.0` as a string, so
+the first double-digit minor version would have silently stopped offering
+updates to everybody. Both are tested against documents rather than a network.
+
+**It was also already broken, in a way nothing reported.** WS3.4 forwarded every
+command to the daemon, so `get_update_status` was answered from the daemon's
+cell, which nothing had ever filled because the check ran in the UI. The status
+was "Checking" forever while a perfectly good check ran in the wrong
+process and wrote to a cell nobody read.
+
+The stable endpoint is now written in Rust as well as in `tauri.conf.json`,
+because the daemon cannot read the plugin's config. A test pins the two
+together, the same way `daemon::IDENTIFIER` is pinned: a mismatch would not
+crash, it would quietly check the wrong place forever.
+
+### Installing one
+
+`reqwest` fetches the artifact, `minisign-verify` checks it against the baked
+public key, `zip` unpacks the installer out of it, and the daemon runs it with
+`/S /UPDATE` and exits.
+
+Three things about that order are deliberate.
+
+**The manifest is re-read rather than remembered.** It owns the download URL and
+its signature, and holding one for up to six hours across a release means
+installing something the endpoint has moved on from.
+
+**Nothing is written where it could be run until it verifies.** A download that
+does not verify is not an update, it is whatever happened to be served. The
+public key is a second copy of what `tauri.conf.json` carries, pinned by a test:
+a mismatch fails closed, which is the right way round, and is still worth
+checking rather than hoping.
+
+**The archive is remote input.** Only the final component of an entry's name is
+used, so an entry called `..\..\something.exe` writes into the temp directory
+chosen here rather than wherever it pointed. There is a test for it.
+
+The refusal while recording is `core::install_update`'s gate, unchanged, and it
+is the reason the whole updater is in this process: `installable` takes the
+supervisor's view *and* the recorder's own, and either saying yes is enough to
+refuse. The cost of a needless refusal is one more click; the cost of a wrong
+permit is the game the user was in.
 
 ### The tray owns the main thread
 

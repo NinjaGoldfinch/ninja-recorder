@@ -42,6 +42,7 @@ pub mod notify;
 pub mod pump;
 pub mod rpc;
 pub mod snapshot;
+pub mod update;
 pub mod spawn;
 
 use std::path::PathBuf;
@@ -490,24 +491,35 @@ async fn start(paths: Paths) -> Result<Option<Started>, DaemonError> {
     wire_finalize_work(&supervisor, &events, &db, paths.ffmpeg.clone());
     supervisor.start();
 
-    let mut ctx = core::Ctx::new(
-        recorder,
-        Arc::clone(&supervisor),
-        db,
-        paths.recordings.clone(),
-        paths.assets.clone(),
-        paths.ffmpeg.clone(),
-    );
-    {
-        let events = events.clone();
-        ctx.set_library_changed_notifier(Box::new(move || {
-            // `Edited` because this seam is the one a *command* pulls: the
-            // finalize, reconcile and retention paths publish their own reason
-            // rather than coming through here.
-            events.publish(Event::LibraryChanged { reason: LibraryChangeReason::Edited });
-        }));
-    }
-    let ctx = Arc::new(ctx);
+    // **`new_cyclic`, because one of the seams needs the `Ctx` it lives in.**
+    // The update requester has to reach the supervisor and the database to
+    // decide and to install, and `Ctx` owns the closure, so an owning handle
+    // would be a cycle that neither end ever drops. `new_cyclic` hands out a
+    // `Weak` before the value exists, which is the one way to close that loop
+    // without leaking it.
+    let ctx = Arc::new_cyclic(|weak: &std::sync::Weak<core::Ctx>| {
+        let mut ctx = core::Ctx::new(
+            recorder,
+            Arc::clone(&supervisor),
+            db,
+            paths.recordings.clone(),
+            paths.assets.clone(),
+            paths.ffmpeg.clone(),
+        );
+        {
+            let events = events.clone();
+            ctx.set_library_changed_notifier(Box::new(move || {
+                // `Edited` because this seam is the one a *command* pulls: the
+                // finalize, reconcile and retention paths publish their own
+                // reason rather than coming through here.
+                events.publish(Event::LibraryChanged { reason: LibraryChangeReason::Edited });
+            }));
+        }
+        if crate::updates_enabled() {
+            ctx.set_update_requester(update::requester(weak.clone(), events.clone()));
+        }
+        ctx
+    });
 
     // What a person is told about a game. The daemon's job for the reason the
     // split exists: a notification is for the moment nobody is looking at a
@@ -527,6 +539,11 @@ async fn start(paths: Paths) -> Result<Option<Started>, DaemonError> {
             }
         }));
     }
+
+    // The update check, which belongs here for the reason the whole split
+    // does: whether an install may run is decided by whether a game is being
+    // recorded, and this is the process that knows.
+    update::spawn_checks(Arc::clone(&ctx), events.clone());
 
     Ok(Some(Started { listener, ctx, events }))
 }
