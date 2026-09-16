@@ -219,10 +219,147 @@ pub fn run() -> Result<(), DaemonError> {
     // the only line in this file that names `tauri` at all.
     tauri::async_runtime::set(runtime.handle().clone());
 
-    runtime.block_on(serve(paths))
+    // Setup on the runtime, because binding the endpoint registers it with the
+    // reactor. What comes back is everything the rest of this function needs.
+    let Some(daemon) = runtime.block_on(start(paths))? else {
+        // Another daemon owns the endpoint. Startup rule 3: leave quietly.
+        return Ok(());
+    };
+
+    // The accept loop runs on the runtime for the daemon's whole life. It ends
+    // when `shutdown` fires, which is the only thing that ends it.
+    let (shutdown, ends) = tokio::sync::oneshot::channel::<ShutdownReason>();
+    let serving = runtime.spawn(accept_until_shutdown(
+        daemon.listener,
+        Arc::clone(&daemon.ctx),
+        daemon.events.clone(),
+        ends,
+    ));
+
+    // **The main thread belongs to whoever needs it.** On Windows that is the
+    // Win32 message pump, because a tray icon's messages arrive on the thread
+    // that created it and nothing else may own that thread. Everywhere else
+    // there is no tray, so the main thread just waits for Ctrl-C.
+    let reason = wait_for_shutdown(&runtime, &daemon.ctx, &daemon.events, shutdown);
+
+    runtime.block_on(async move {
+        // Stop taking clients before saying goodbye, so nothing connects
+        // between the two and is told nothing.
+        let _ = serving.await;
+        finish(&daemon.ctx, &daemon.events, reason).await;
+    });
+    Ok(())
 }
 
-async fn serve(paths: Paths) -> Result<(), DaemonError> {
+/// A daemon that is up: everything the main thread needs a handle on.
+struct Started {
+    listener: rpc::Listener,
+    ctx: Arc<core::Ctx>,
+    events: snapshot::Stream,
+}
+
+/// Blocks the main thread until something asks the daemon to stop, and returns
+/// why.
+///
+/// Signalling `shutdown` is what ends the accept loop; this owns the only
+/// sender, so there is exactly one way out.
+fn wait_for_shutdown(
+    runtime: &tokio::runtime::Runtime,
+    ctx: &Arc<core::Ctx>,
+    events: &snapshot::Stream,
+    shutdown: tokio::sync::oneshot::Sender<ShutdownReason>,
+) -> ShutdownReason {
+    let reason = pump_until_quit(runtime, ctx, events);
+    let _ = shutdown.send(reason);
+    reason
+}
+
+/// The tray, on the main thread, until Quit.
+///
+/// Every menu click arrives here as a `TrayCommand`; the work each one implies
+/// is handed elsewhere, because this thread is the message queue and anything
+/// slow on it freezes the tray.
+///
+/// Compiled on every platform, with `pump::run` reporting "no tray here" off
+/// Windows and this falling through to the Ctrl-C wait. That is not politeness
+/// to other platforms: it is what puts this function in front of the compiler
+/// on the box it is written on, which four Windows-only build failures in one
+/// day argued for.
+fn pump_until_quit(
+    runtime: &tokio::runtime::Runtime,
+    ctx: &Arc<core::Ctx>,
+    events: &snapshot::Stream,
+) -> ShutdownReason {
+    let (tx, rx) = std::sync::mpsc::channel::<pump::TrayCommand>();
+
+    // The commands are handled on a thread of their own rather than inline in
+    // the pump: `pump::run` does not return until `WM_QUIT`, so there is no
+    // "after the loop" to drain them in.
+    let handler_ctx = Arc::clone(ctx);
+    let handler_events = events.clone();
+    std::thread::spawn(move || {
+        for command in rx {
+            match command {
+                pump::TrayCommand::ShowUi(view) => {
+                    show_ui(&handler_events, view);
+                }
+                pump::TrayCommand::Quit => {
+                    // `is_recording` locks the recorder and returns; no runtime
+                    // needed, and no `await` to hold anything across.
+                    let recording = crate::core::is_recording(&handler_ctx).unwrap_or(false);
+                    if pump::should_confirm_quit(recording)
+                        && !pump::confirm_quit_while_recording()
+                    {
+                        info!("tray", "quit cancelled: a recording is in flight");
+                        continue;
+                    }
+                    pump::stop();
+                }
+            }
+        }
+    });
+
+    if let Err(e) = pump::run(tx) {
+        // On Windows this is a failure: no tray means no way to reach the app,
+        // though the daemon still records, which is the thing worth keeping.
+        // Off Windows it is the expected answer and not worth an ERROR in a
+        // log someone is reading for real problems.
+        if cfg!(windows) {
+            error!("tray", "{e}");
+        } else {
+            info!("tray", "{e}");
+        }
+        // Without a pump there is nothing to end, so wait the way a
+        // trayless platform does.
+        match runtime.block_on(tokio::signal::ctrl_c()) {
+            Ok(()) => info!("daemon", "interrupted, shutting down"),
+            Err(e) => {
+                error!("daemon", "cannot listen for Ctrl-C either: {e}");
+                runtime.block_on(std::future::pending::<()>());
+            }
+        }
+    }
+    ShutdownReason::Quit
+}
+
+/// Asks whatever UI is listening to show itself, or starts one.
+///
+/// Published rather than sent, because the daemon does not track which client
+/// is the main window. If nothing is subscribed there is no UI to ask, and the
+/// tray's Open has to mean "start one" or it means nothing at all.
+fn show_ui(events: &snapshot::Stream, view: Option<String>) {
+    if events.has_subscribers() {
+        events.publish(Event::ShowUi { view });
+        return;
+    }
+
+    info!("tray", "no UI is connected; starting one");
+    if let Err(e) = spawn::start_ui() {
+        error!("tray", "could not start the UI: {e}");
+    }
+}
+
+async fn start(paths: Paths) -> Result<Option<Started>, DaemonError> {
     // Before the endpoint, because on a dev box the endpoint is a socket
     // *inside* this directory and `bind` fails with a bare `No such file or
     // directory` if it is not there — which on a fresh machine is every first
@@ -238,7 +375,7 @@ async fn serve(paths: Paths) -> Result<(), DaemonError> {
     // running daemon's history for it.
     let listener = match rpc::Listener::bind(&endpoint) {
         Ok(Some(listener)) => listener,
-        Ok(None) => return Ok(()),
+        Ok(None) => return Ok(None),
         Err(source) => {
             // Opened here rather than before the bind, so that the *quiet*
             // outcome above stays quiet. A bind that failed for any other
@@ -351,21 +488,25 @@ async fn serve(paths: Paths) -> Result<(), DaemonError> {
     }
     let ctx = Arc::new(ctx);
 
-    accept_until_shutdown(listener, &ctx, &events).await;
+    Ok(Some(Started { listener, ctx, events }))
+}
 
-    // The plan's shutdown order: stop taking clients, say why, then finalize.
-    // A recording in flight is worth more than a fast exit — losing it would
-    // leave a fragmented MP4 with no row, recoverable only by the next
-    // startup's reconcile and stripped of its markers.
-    events.publish(Event::DaemonShuttingDown { reason: ShutdownReason::Quit });
+/// Says goodbye and finalizes, in that order.
+///
+/// The plan's shutdown order: stop taking clients (the caller has already), say
+/// why, then finalize. A recording in flight is worth more than a fast exit,
+/// because losing it would leave a fragmented MP4 with no row, recoverable only
+/// by the next startup's reconcile and stripped of its markers.
+async fn finish(ctx: &Arc<core::Ctx>, events: &snapshot::Stream, reason: ShutdownReason) {
+    events.publish(Event::DaemonShuttingDown { reason });
     // Long enough for the session tasks to write that frame. They each own
     // their own connection and are dropped with the runtime the moment this
-    // function returns, so without a pause the goodbye is a frame that was
-    // published and never sent — and a UI that is told nothing shows a dead
-    // pipe instead of a reason.
+    // returns, so without a pause the goodbye is a frame that was published and
+    // never sent, and a UI that is told nothing shows a dead pipe instead of a
+    // reason.
     tokio::time::sleep(GOODBYE_GRACE).await;
 
-    let supervisor = Arc::clone(&supervisor);
+    let supervisor = Arc::clone(&ctx.supervisor);
     let finalized = tokio::task::spawn_blocking(move || supervisor.finalize_for_shutdown())
         .await
         .unwrap_or(false);
@@ -373,18 +514,23 @@ async fn serve(paths: Paths) -> Result<(), DaemonError> {
         info!("daemon", "finalized an in-flight recording before exiting");
     }
     info!("daemon", "stopped");
-    Ok(())
 }
 
 /// Serves clients until something asks the process to stop.
 ///
-/// Ctrl-C is the only such thing today; 3.3's tray adds Quit, and 3.6's
-/// updater adds "an installer is about to replace this binary".
+/// **What "something" is belongs to the caller**, which owns the main thread
+/// and therefore knows: a tray Quit on Windows, Ctrl-C everywhere else, and
+/// WS3.6's "an installer is about to replace this binary". This loop only needs
+/// to hear that it happened.
 async fn accept_until_shutdown(
     mut listener: rpc::Listener,
-    ctx: &Arc<core::Ctx>,
-    events: &snapshot::Stream,
+    ctx: Arc<core::Ctx>,
+    events: snapshot::Stream,
+    ends: tokio::sync::oneshot::Receiver<ShutdownReason>,
 ) {
+    let ctx = &ctx;
+    let events = &events;
+    tokio::pin!(ends);
     loop {
         tokio::select! {
             accepted = listener.accept() => match accepted {
@@ -405,19 +551,10 @@ async fn accept_until_shutdown(
                 // log makes visible.
                 Err(e) => warn!("rpc", "could not accept a client: {e}"),
             },
-            signalled = tokio::signal::ctrl_c() => {
-                match signalled {
-                    Ok(()) => info!("daemon", "interrupted, shutting down"),
-                    // No handler could be installed. Returning would exit the
-                    // daemon over a missing signal handler, which is worse
-                    // than running without one.
-                    Err(e) => {
-                        error!("daemon", "cannot listen for Ctrl-C: {e}");
-                        std::future::pending::<()>().await;
-                    }
-                }
-                return;
-            }
+            // A closed channel means the sender went away without sending,
+            // which nothing does on purpose; treat it as a stop rather than
+            // looping on a dead future.
+            _ = &mut ends => return,
         }
     }
 }

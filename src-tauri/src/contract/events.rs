@@ -107,7 +107,10 @@ pub enum StopOutcome {
 /// without `--all-targets`, so `-D warnings` would fail on it meanwhile.
 #[cfg_attr(not(test), allow(dead_code))]
 // `Deserialize` too: WS3.4 reads these back off the pipe in the UI process.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, ts_rs::TS, serde::Deserialize)]
+// `Copy` since WS3.3: the shutdown path passes one of these from the thread
+// that decided to stop, through a channel, to the code that publishes it, and a
+// fieldless three-variant enum should not need a clone at each step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ShutdownReason {
     /// The user chose Quit.
@@ -318,6 +321,22 @@ contract_events! {
     /// The client fell behind the broadcast buffer and events were dropped.
     /// The transport handles this by re-`hello`ing rather than showing it.
     Lagged { dropped: u32 } => Daemon,
+
+    /// Someone asked for the window, from outside the window.
+    ///
+    /// The tray lives in the daemon since WS3.3, and its Open and Settings
+    /// items have to reach a UI in another process. This is that reach: a UI
+    /// that is connected shows itself, and if none is connected the daemon
+    /// starts one instead (`daemon::pump`).
+    ///
+    /// **Not a command.** It is published to every subscriber rather than sent
+    /// to one, because the daemon does not track which client is the main
+    /// window, and a portal window receiving it and ignoring it costs nothing.
+    ShowUi {
+        /// The view to land on, in `router.ts`'s vocabulary, or `None` for
+        /// wherever the window was. `Some("settings")` is the Settings item.
+        view: Option<String>,
+    } => Daemon,
 }
 
 #[cfg(test)]
@@ -341,10 +360,17 @@ mod tests {
     /// The table is the contract, so its size is worth stating out loud: a
     /// variant appearing or disappearing should be a deliberate diff, not a
     /// silent one.
+    ///
+    /// **Thirteen, where the plan's Appendix B drafts twelve.** `ShowUi` is the
+    /// addition, and it is one WS3.3 forced rather than one anybody wanted: the
+    /// tray moved into the daemon, so Open and Settings have to reach a window
+    /// in another process, and the pipe is the only channel between them.
+    /// Appendix B calls itself a draft; this is what it looks like to depart
+    /// from it on purpose.
     #[test]
-    fn the_event_surface_is_the_twelve_variants_appendix_b_names() {
-        assert_eq!(event_names().len(), 12);
-        assert_eq!(event_manifest().len(), 12);
+    fn the_event_surface_is_thirteen_variants() {
+        assert_eq!(event_names().len(), 13);
+        assert_eq!(event_manifest().len(), 13);
     }
 
     /// Two lists generated from one table cannot disagree — but they can both
@@ -525,6 +551,7 @@ mod tests {
             "String",
             "f64",
             "Option<i64>",
+            "Option<String>",
             "Vec<i64>",
         ];
 

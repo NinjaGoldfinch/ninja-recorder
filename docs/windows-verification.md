@@ -142,6 +142,40 @@ process is what needs confirming.
 
 ### 5.0.1 Tray and the close button
 
+**The tray moved to the daemon in WS3.3.** Everything below is now a property of
+`ninja-recorder.exe --daemon`, not of the window, and the rows about the close
+button remain the UI's. Start a daemon before working through these; the icon
+belongs to that process and disappears when it quits.
+
+- [ ] The icon appears when the daemon starts and disappears when it quits. If
+      `daemon.log` says "no icon could be loaded", the tray is there but
+      invisible: report that line, because the icon is loaded from three
+      different places in order and which one worked is the useful fact.
+- [ ] Right-click shows exactly three items: Open ninja-recorder, Settings,
+      Quit, with separators around Settings.
+- [ ] Left-click opens the window; left-click does **not** show the menu.
+- [ ] With no UI running, Open starts one and the window appears.
+- [ ] With a UI already running, Open focuses the existing window rather than
+      starting a second process. Confirm in Task Manager that there is still
+      one non-daemon `ninja-recorder.exe`.
+- [ ] With the window open but minimised, Open restores it.
+- [ ] With the window closed to the tray (`CloseAction::CloseWindow`), Open
+      creates it again.
+- [ ] Settings does the same and lands on the Settings view, in all three of
+      those states.
+- [ ] **Quit while idle** exits without asking, the icon disappears, and both
+      processes are gone from Task Manager.
+- [ ] **Quit mid-recording asks first.** A modal appears naming the recording;
+      "No" cancels and the recording continues, and the daemon keeps running.
+      "Yes" finalizes before exiting: the VOD is playable and the row is in the
+      library when the app is next opened. This is 3.3's exit criterion.
+- [ ] The tray stays responsive during a recording. Right-click it repeatedly
+      while a game is being captured; the menu must open immediately every time.
+      A slow menu means something is blocking the pump's thread, which is the
+      failure this design exists to avoid.
+
+
+
 Verified off Windows only as far as a script can go: the tray builds without
 error, a default start creates a webview and `--hidden` creates none (0 WebKit
 handles vs 4). **Everything below needs a real click and none of it is covered

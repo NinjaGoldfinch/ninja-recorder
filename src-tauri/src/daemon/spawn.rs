@@ -153,6 +153,42 @@ fn start_daemon() -> io::Result<()> {
     Ok(())
 }
 
+/// Starts the UI, from the daemon.
+///
+/// The other direction of this module: `connect_or_start` is the UI starting a
+/// daemon, and this is the daemon's tray opening a window. Same executable,
+/// same reasoning about which flags mean what, so it lives beside it rather
+/// than in `pump`.
+///
+/// **No flag at all**, which is the whole argument: `Launch::Ui` is the default
+/// and it is what creates a window. `--hidden` would start a UI with no window,
+/// which is the opposite of what a person clicking Open wants.
+///
+/// Nothing here checks whether a UI is already running. The caller does, by
+/// asking whether anything is subscribed to the daemon's events, because a UI
+/// that is running is by definition connected.
+pub fn start_ui() -> io::Result<()> {
+    let exe = std::env::current_exe()?;
+    let mut command = std::process::Command::new(exe);
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // Same flag and the same reason as `start_daemon`: no console, rather
+        // than a new hidden one. The UI is a Windows-subsystem binary in
+        // release and has no console to begin with.
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        command.creation_flags(DETACHED_PROCESS);
+    }
+
+    command.spawn()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

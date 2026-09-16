@@ -1226,8 +1226,39 @@ true.
 The UI starts a daemon when none answers (`daemon::spawn`), so a first launch
 on a machine where start-on-login was never enabled still works.
 
-What the daemon does not yet have is the tray and its Win32 message pump
-(WS3.3), the updater (WS3.6), and desktop notifications.
+What the daemon does not yet have is the updater (WS3.6) and desktop
+notifications.
+
+### The tray owns the main thread
+
+A tray icon is a window-station object: its messages arrive on the thread that
+created it, and that thread must be pumping a message queue or nothing ever
+fires. So the daemon's main thread runs `GetMessage`/`DispatchMessage` and the
+tokio runtime lives beside it. That is the concrete reason `daemon::run` is not
+a `#[tokio::main]`, and it is why startup is split into `start`, which sets
+everything up on the runtime, and a main thread that then waits.
+
+`tray-icon` and `muda` rather than Tauri's wrappers around them, because the
+daemon has no Tauri. They are the same crates by the same authors, already in
+the tree through Tauri, so this adds no dependency.
+
+**Menu handlers must not block.** They run on the pump's thread, inside
+`DispatchMessage`, so each one sends a `TrayCommand` and returns. The exception
+is the quit confirmation, which is a `MessageBoxW` and is supposed to block:
+that is what a modal is, and the question it asks decides whether a game is
+lost.
+
+**Open and Settings cross a process boundary now.** In v1 the tray was in the UI
+and could show a window directly. The daemon publishes `Event::ShowUi` instead,
+which a connected UI answers by showing itself, and starts a UI when none is
+connected. It knows which case it is in by asking whether anything is subscribed
+to its events, because a UI that is running is by definition connected.
+
+That event is the one addition to the plan's Appendix B, which calls itself a
+draft. It is not a state change like everything else on the wire; it is a
+request. The alternative was a second channel between the two processes, which
+is a worse answer to "how does one process ask another for a window" than the
+channel that already exists.
 
 **Notifications are a real gap, not a deferral.** They were raised from the
 supervisor's event notifier, which went to the daemon with the supervisor, and

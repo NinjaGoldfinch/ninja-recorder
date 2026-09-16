@@ -136,6 +136,14 @@ impl DaemonLink {
                         *store.lock().await = Some(*snapshot);
                     }
                     FromDaemon::Event(event) => {
+                        // The tray is in the daemon, so its Open and Settings
+                        // arrive here rather than as a menu callback. Handled
+                        // before the relays because it is a request rather than
+                        // news: nothing downstream needs to see it.
+                        if let crate::contract::events::Event::ShowUi { view } = &event {
+                            crate::tray::show_window(&app, view.as_deref());
+                            continue;
+                        }
                         // The v1 channels first, because the views that listen
                         // on them have not been rewritten yet.
                         relay_legacy(&app, &event);
