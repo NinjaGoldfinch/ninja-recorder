@@ -168,6 +168,16 @@ pub enum FromDaemon {
 /// `connect` is a factory rather than a stream so the loop can call it again
 /// after a drop; it is also what lets the tests hand it a loopback socket where
 /// production hands it a named pipe.
+///
+/// **Must be called with a tokio runtime entered.** It spawns, and `tokio::spawn`
+/// panics with "there is no reactor running" otherwise. That is not a detail: it
+/// shipped, and the UI aborted on every launch, because Tauri's `setup` hook
+/// runs on the main thread outside any runtime. `ui::link` enters Tauri's
+/// before calling this.
+///
+/// The runtime stays the caller's choice rather than being reached for here,
+/// which is what lets the tests drive this under `#[tokio::test]` and the app
+/// drive it under Tauri's.
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn spawn<C, S, F>(
     connect: C,

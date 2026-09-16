@@ -107,6 +107,20 @@ impl DaemonLink {
             crate::contract::events::Topic::Daemon,
         ];
 
+        // **Entered, because `setup` is not inside a runtime.**
+        //
+        // `client::spawn` calls `tokio::spawn`, which panics with "there is no
+        // reactor running" unless a runtime is entered on the calling thread.
+        // Tauri's `setup` hook runs on the main thread before any of that, so
+        // the UI aborted on every single launch: the window never appeared and
+        // the process died a few milliseconds after writing its first log line.
+        //
+        // `client` stays runtime-agnostic on purpose — it is a protocol client,
+        // and which runtime it runs on is the caller's business, exactly as
+        // `daemon::rpc::serve` is called from inside the daemon's. This is the
+        // caller doing its half.
+        let runtime = tauri::async_runtime::handle();
+        let _entered = runtime.inner().enter();
         let client = client::spawn(
             move || {
                 let endpoint = endpoint.clone();
