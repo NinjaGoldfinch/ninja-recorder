@@ -261,18 +261,16 @@ pub const NOTICE_CLOSE_TO_TRAY_KEY: &str = "notice.closeToTray.seen";
 
 /// What a notification is about.
 ///
-/// **Three of these have no producer between WS3.4 and WS3.3.** They were
-/// raised from the supervisor's event notifier, which lived in `lib.rs` and
-/// went to the daemon with the supervisor; the daemon cannot raise them yet
-/// because `tauri-plugin-notification` needs an `AppHandle` and it builds no
-/// Tauri app. Wiring them back into the UI would be worse than the gap: a
-/// notification that only appears while a window is open is the opposite of
-/// what one is for. WS3.3 gives the daemon a Win32 presence and takes them
-/// over, which is what the ownership table said all along.
+/// Three of these are raised by the **daemon** (`daemon::notify`), from the
+/// supervisor's event notifier, because a notification exists to say what
+/// happened while nobody was looking at a window. `CloseToTray` is the
+/// exception and stays in the UI: it is about the window, so it belongs to the
+/// process that has one.
 ///
-/// `CloseToTray` still has its producer, because it is about the window and
-/// belongs to the process that owns one.
-#[cfg_attr(not(test), allow(dead_code))]
+/// They were briefly unreachable, between WS3.4 moving the supervisor out of
+/// the UI and WS3.3 rebuilding the notifier on `notify-rust`. DEVELOPMENT.md
+/// §12 records that gap rather than letting it be forgotten now that it is
+/// closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotifyKind {
     /// A recording began. Off by default — the header already shows it, and

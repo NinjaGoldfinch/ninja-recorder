@@ -38,6 +38,7 @@
 
 #[cfg(windows)]
 pub mod pipe_acl;
+pub mod notify;
 pub mod pump;
 pub mod rpc;
 pub mod snapshot;
@@ -422,8 +423,7 @@ async fn start(paths: Paths) -> Result<Option<Started>, DaemonError> {
     let events = snapshot::Stream::new(rpc::Events::new());
 
     // Every contract event the supervisor produces, onto the wire. This is the
-    // whole of what a connected client sees happen; `lib.rs` emits the same
-    // enum over a Tauri channel, which is the seam WS3.4 replaces.
+    // whole of what a connected client sees happen.
     {
         let events = events.clone();
         supervisor.set_event_sink(Box::new(move |event| events.publish(event)));
@@ -487,6 +487,25 @@ async fn start(paths: Paths) -> Result<Option<Started>, DaemonError> {
         }));
     }
     let ctx = Arc::new(ctx);
+
+    // What a person is told about a game. The daemon's job for the reason the
+    // split exists: a notification is for the moment nobody is looking at a
+    // window, which is exactly when the UI is not running.
+    //
+    // **A `Weak`, not an `Arc`.** `Ctx` holds the supervisor and the supervisor
+    // would hold this closure, so an owning handle would be a cycle: two
+    // objects keeping each other alive for the life of the process and dropped
+    // by neither. Upgrading per event costs nothing at the rate these fire, and
+    // `None` means the daemon is already tearing down, which is not a moment to
+    // raise a toast.
+    {
+        let ctx = Arc::downgrade(&ctx);
+        supervisor.set_event_notifier(Box::new(move |event| {
+            if let Some(ctx) = ctx.upgrade() {
+                notify::on_supervisor_event(&ctx, event);
+            }
+        }));
+    }
 
     Ok(Some(Started { listener, ctx, events }))
 }

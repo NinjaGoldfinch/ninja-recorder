@@ -1,4 +1,10 @@
-//! Desktop notifications.
+//! Desktop notifications, the UI's half.
+//!
+//! **One kind lives here now: `CloseToTray`.** It is about the window, so it
+//! belongs to the process that has one. The three about recordings moved to
+//! `daemon::notify` in WS3.3, because a notification exists to say what
+//! happened while nobody was looking at a window, and the daemon is what is
+//! still running then.
 //!
 //! Like `tray.rs`, this carries **no tests and should never grow any** — it is
 //! reachable only from `lib.rs`'s `run()`, which is dead code in a test build
