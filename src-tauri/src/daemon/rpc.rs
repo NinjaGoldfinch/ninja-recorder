@@ -401,17 +401,9 @@ impl Listener {
     pub fn bind(endpoint: &std::path::Path) -> std::io::Result<Option<Listener>> {
         #[cfg(windows)]
         {
-            use tokio::net::windows::named_pipe::ServerOptions;
-
             let name = endpoint.as_os_str().to_os_string();
-            match ServerOptions::new()
-                .first_pipe_instance(true)
-                // Default, set explicitly because it is a security property
-                // rather than a tuning one: a pipe reachable over SMB would let
-                // a machine on the network drive this one's recorder.
-                .reject_remote_clients(true)
-                .create(&name)
-            {
+            let mut security = crate::daemon::pipe_acl::PipeSecurity::current_user_only();
+            match create_instance(&name, true, security.as_mut()) {
                 Ok(idle) => Ok(Some(Listener { name, idle: Some(idle) })),
                 // The one error that means "someone else got here first".
                 // Every other failure is a real one and is reported.
@@ -454,16 +446,32 @@ impl Listener {
     pub async fn accept(&mut self) -> std::io::Result<impl ClientStream + use<>> {
         #[cfg(windows)]
         {
-            use tokio::net::windows::named_pipe::ServerOptions;
-
             // Rebuilt here rather than assumed, because either line below can
             // leave us without one: a failed `connect` returns before the
             // replacement is made, and the caller's answer to that is to call
             // `accept` again. An `expect` on the `Option` would turn one
             // refused connection into a panicking daemon on the next client.
+            //
+            // The DACL is rebuilt per instance rather than kept on the
+            // `Listener`: every instance of a named pipe carries its own
+            // security descriptor, and one shared `SECURITY_ATTRIBUTES` handed
+            // out as a `*mut` from several places is the kind of aliasing this
+            // is not worth risking to save a SID lookup.
+            //
+            // **Each one is scoped so it never crosses the `await` below, and
+            // that is load-bearing rather than tidy.** `PipeSecurity` owns raw
+            // pointers and so is not `Send`; a non-`Send` value held across an
+            // await makes the whole future non-`Send`, and `accept` is called
+            // from a `tokio::spawn`. The descriptor is only needed for the
+            // length of the create call anyway, because Windows copies it into
+            // the pipe object. Found by CI, which is the only thing that
+            // compiles this branch.
             let idle = match self.idle.take() {
                 Some(idle) => idle,
-                None => ServerOptions::new().reject_remote_clients(true).create(&self.name)?,
+                None => {
+                    let mut security = crate::daemon::pipe_acl::PipeSecurity::current_user_only();
+                    create_instance(&self.name, false, security.as_mut())?
+                }
             };
             idle.connect().await?;
 
@@ -472,7 +480,10 @@ impl Listener {
             // a client is already connected, and failing the accept to report
             // that the *next* instance could not be made would drop a session
             // over a problem the next `accept` will retry anyway.
-            self.idle = ServerOptions::new().reject_remote_clients(true).create(&self.name).ok();
+            {
+                let mut security = crate::daemon::pipe_acl::PipeSecurity::current_user_only();
+                self.idle = create_instance(&self.name, false, security.as_mut()).ok();
+            }
             Ok(idle)
         }
         #[cfg(unix)]
@@ -489,6 +500,45 @@ impl Listener {
 impl Drop for Listener {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Creates one instance of the named pipe.
+///
+/// The single place `ServerOptions` is configured, so the security properties
+/// cannot differ between the first instance and its replacements: a pipe whose
+/// second instance was created with a weaker ACL would be a hole open from the
+/// second client onward, which is exactly the kind of thing that never shows up
+/// in testing.
+///
+/// `security` is `None` when the descriptor could not be built, in which case
+/// the pipe gets the process's default DACL. `pipe_acl` has already said so in
+/// the log.
+#[cfg(windows)]
+fn create_instance(
+    name: &std::ffi::OsStr,
+    first: bool,
+    security: Option<&mut crate::daemon::pipe_acl::PipeSecurity>,
+) -> std::io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
+    use tokio::net::windows::named_pipe::ServerOptions;
+
+    let mut options = ServerOptions::new();
+    options
+        .first_pipe_instance(first)
+        // Default, set explicitly because it is a security property rather than
+        // a tuning one: a pipe reachable over SMB would let a machine on the
+        // network drive this one's recorder.
+        .reject_remote_clients(true);
+
+    match security {
+        // SAFETY: `as_ptr` hands back a pointer to a `SECURITY_ATTRIBUTES` that
+        // `PipeSecurity` owns and keeps alive for the whole call, pointing at a
+        // descriptor it also owns. Windows copies both into the pipe object, so
+        // neither has to outlive this line.
+        Some(security) => unsafe {
+            options.create_with_security_attributes_raw(name, security.as_ptr())
+        },
+        None => options.create(name),
     }
 }
 

@@ -36,6 +36,8 @@
 //! own supervisor. Running both at once means two processes watching for the
 //! same game, which is exactly the state 3.5 exists to end.
 
+#[cfg(windows)]
+pub mod pipe_acl;
 pub mod pump;
 pub mod rpc;
 pub mod snapshot;
