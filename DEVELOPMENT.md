@@ -1242,7 +1242,7 @@ and its exit code is the only thing the UI side can learn about why. The error
 now names the code and points at `daemon.log`, which is where the reason
 actually is.
 
-The daemon **checks** for updates since WS3.6; it does not yet install one.
+The daemon checks for updates and installs them since WS3.6.
 
 ### The check moved because the refusal has to
 
@@ -1269,9 +1269,33 @@ because the daemon cannot read the plugin's config. A test pins the two
 together, the same way `daemon::IDENTIFIER` is pinned: a mismatch would not
 crash, it would quietly check the wrong place forever.
 
-**Install is the rest of WS3.6** and still refuses. `reqwest` to fetch the
-installer, `minisign-verify` against the baked public key, then run it with
-`/S` once nothing is recording.
+### Installing one
+
+`reqwest` fetches the artifact, `minisign-verify` checks it against the baked
+public key, `zip` unpacks the installer out of it, and the daemon runs it with
+`/S /UPDATE` and exits.
+
+Three things about that order are deliberate.
+
+**The manifest is re-read rather than remembered.** It owns the download URL and
+its signature, and holding one for up to six hours across a release means
+installing something the endpoint has moved on from.
+
+**Nothing is written where it could be run until it verifies.** A download that
+does not verify is not an update, it is whatever happened to be served. The
+public key is a second copy of what `tauri.conf.json` carries, pinned by a test:
+a mismatch fails closed, which is the right way round, and is still worth
+checking rather than hoping.
+
+**The archive is remote input.** Only the final component of an entry's name is
+used, so an entry called `..\..\something.exe` writes into the temp directory
+chosen here rather than wherever it pointed. There is a test for it.
+
+The refusal while recording is `core::install_update`'s gate, unchanged, and it
+is the reason the whole updater is in this process: `installable` takes the
+supervisor's view *and* the recorder's own, and either saying yes is enough to
+refuse. The cost of a needless refusal is one more click; the cost of a wrong
+permit is the game the user was in.
 
 ### The tray owns the main thread
 

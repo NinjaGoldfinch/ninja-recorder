@@ -76,6 +76,12 @@ thiserror = "2"
 # `tauri-plugin-updater` did this behind an `AppHandle`, which the daemon does
 # not have. Already in the tree through that plugin, so naming it adds no crate.
 semver = "1"
+# The daemon's update install: `minisign-verify` is what makes a download ours
+# (`update::verify`), and `zip` unpacks the NSIS bundle the updater artifact is.
+# Both are already in the tree through `tauri-plugin-updater`, so naming them
+# adds no crate and no licence.
+minisign-verify = "0.2"
+zip = { version = "4", default-features = false, features = ["deflate"] }
 # The daemon builds no `tauri::App`, so it cannot ask an `AppHandle` where the
 # data directory is — and `app_data_dir()` is `dirs::data_dir()` joined with the
 # identifier. This is the crate Tauri itself uses, at the version it uses, so

@@ -80,14 +80,18 @@ pub fn spawn_checks(ctx: Arc<Ctx>, events: Stream) {
 
 /// One check: fetch the channel's manifest and decide what it means.
 pub async fn check(ctx: &Arc<Ctx>) -> CheckResult {
-    let endpoint = endpoint_for_channel(ctx);
+    check_endpoint(&endpoint_for_channel(ctx)).await
+}
+
+/// One check against a named endpoint, which is the half a test can drive.
+async fn check_endpoint(endpoint: &str) -> CheckResult {
 
     let client = match reqwest::Client::builder().timeout(REQUEST_TIMEOUT).build() {
         Ok(client) => client,
         Err(e) => return CheckResult::Failed(format!("Could not check for updates: {e}")),
     };
 
-    let response = match client.get(&endpoint).send().await {
+    let response = match client.get(endpoint).send().await {
         Ok(response) => response,
         Err(e) => return CheckResult::Failed(format!("Could not check for updates: {e}")),
     };
@@ -147,5 +151,350 @@ fn publish(ctx: &Arc<Ctx>, events: &Stream, found: CheckResult) {
     match crate::core::get_update_status(ctx) {
         Ok(status) => events.publish(Event::UpdateStatus { status }),
         Err(e) => warn!("update", "could not render the update status: {e}"),
+    }
+}
+
+// --- Installing one --------------------------------------------------------
+//
+// The half that replaces the binary, and the reason the whole updater belongs
+// in this process: "may this run now" is answered by whether a game is being
+// recorded, and nothing else knows.
+
+/// The seam `core::install_update` and `core::check_for_update` pull.
+///
+/// Whatever is here **must return immediately**. `core::install_update` calls
+/// it and answers the frontend, which has already moved its row to
+/// "Downloading" and has no other way to learn that this did not happen. So
+/// each arm spawns and returns.
+///
+/// Takes a `Weak` because `Ctx` owns this closure and the closure needs the
+/// `Ctx`: an owning handle would be a cycle neither end ever drops. The caller
+/// builds the `Arc` with `Arc::new_cyclic`, which is what makes a `Weak`
+/// available before the value it points at exists.
+pub fn requester(
+    ctx: std::sync::Weak<Ctx>,
+    events: Stream,
+) -> Box<dyn Fn(update::UpdateRequest) + Send + Sync> {
+    Box::new(move |request| {
+        let Some(ctx) = ctx.upgrade() else { return };
+        let events = events.clone();
+        match request {
+            update::UpdateRequest::Check => {
+                tokio::spawn(async move {
+                    let found = check(&ctx).await;
+                    publish(&ctx, &events, found);
+                });
+            }
+            update::UpdateRequest::Install => {
+                tokio::spawn(async move { install(&ctx, &events).await });
+            }
+        }
+    })
+}
+
+/// Fetches, verifies and runs the installer. Does not return on success.
+///
+/// Every path that is not a successful launch records a status and publishes
+/// it, because the frontend moved its own row to "Downloading" the moment the
+/// button was pressed and this is the only thing that can move it back.
+pub async fn install(ctx: &Arc<Ctx>, events: &Stream) {
+    // Re-checked rather than taken from the last poll. The manifest owns the
+    // download URL and its signature, and holding one for up to six hours
+    // across a release means installing something the endpoint has moved on
+    // from.
+    let endpoint = endpoint_for_channel(ctx);
+    let platform = match fetch_platform(&endpoint).await {
+        Ok(platform) => platform,
+        Err(why) => return fail(ctx, events, why),
+    };
+
+    info!("update", "downloading {}", platform.url);
+    let bytes = match download(&platform.url).await {
+        Ok(bytes) => bytes,
+        Err(why) => return fail(ctx, events, why),
+    };
+
+    // Before anything is written where it could be run. A download that does
+    // not verify is not an update, it is whatever happened to be served.
+    if let Err(why) = update::verify(&bytes, &platform.signature) {
+        return fail(ctx, events, why);
+    }
+    info!("update", "signature verified, {} bytes", bytes.len());
+
+    let installer = match unpack_installer(&bytes) {
+        Ok(path) => path,
+        Err(why) => return fail(ctx, events, why),
+    };
+
+    // Said before the process goes away, so a connected UI shows "an update is
+    // being installed" rather than a dead pipe. The grace in `daemon::finish`
+    // is not available here: the installer replaces this binary, so there is no
+    // orderly shutdown to run afterwards.
+    events.publish(Event::DaemonShuttingDown {
+        reason: crate::contract::events::ShutdownReason::Update,
+    });
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
+    // The recording, if there is one, gets finalized first. The gate in
+    // `core::install_update` refuses while one is in flight, so this is the
+    // narrow case where a game started between the click and here.
+    let supervisor = Arc::clone(&ctx.supervisor);
+    let _ = tokio::task::spawn_blocking(move || supervisor.finalize_for_shutdown()).await;
+
+    info!("update", "handing over to {}", installer.display());
+    match launch_installer(&installer) {
+        // The installer replaces this binary and restarts the app, so there is
+        // nothing left for this process to do and nothing that should keep it
+        // alive while the file it is running from is replaced.
+        Ok(()) => std::process::exit(0),
+        Err(why) => fail(ctx, events, why),
+    }
+}
+
+/// The current manifest's entry for this platform.
+async fn fetch_platform(endpoint: &str) -> Result<update::ManifestPlatform, String> {
+    let client = reqwest::Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .map_err(|e| format!("Could not reach the update server: {e}"))?;
+    let body = client
+        .get(endpoint)
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach the update server: {e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("Could not read the update manifest: {e}"))?;
+
+    let manifest: update::Manifest = serde_json::from_str(&body)
+        .map_err(|e| format!("Could not read the update manifest: {e}"))?;
+    manifest
+        .platforms
+        .get(update::PLATFORM)
+        .cloned()
+        .ok_or_else(|| format!("This release has nothing for {}", update::PLATFORM))
+}
+
+/// The artifact, in memory.
+///
+/// Held rather than streamed to disk because it has to be verified as a whole
+/// before any of it is written somewhere it could be executed, and an NSIS
+/// bundle is tens of megabytes rather than hundreds.
+async fn download(url: &str) -> Result<Vec<u8>, String> {
+    // No timeout on this one, unlike the check: a slow connection downloading
+    // 60 MB is not a failure, and cutting it off at twenty seconds would make
+    // updates impossible on exactly the connections that most need them to be
+    // resumable rather than abandoned.
+    let response = reqwest::get(url)
+        .await
+        .map_err(|e| format!("Could not download the update: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Could not download the update: the server answered {}", response.status()));
+    }
+    response
+        .bytes()
+        .await
+        .map(|b| b.to_vec())
+        .map_err(|e| format!("Could not download the update: {e}"))
+}
+
+/// Writes the installer out of the updater artifact.
+///
+/// Tauri's NSIS updater artifact is a zip with the setup executable inside it,
+/// which is why this unpacks rather than running what it downloaded.
+fn unpack_installer(bytes: &[u8]) -> Result<std::path::PathBuf, String> {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+        .map_err(|e| format!("The update is not a readable archive: {e}"))?;
+
+    let name = (0..archive.len())
+        .filter_map(|i| archive.name_for_index(i))
+        .find(|name| name.to_ascii_lowercase().ends_with(".exe"))
+        .map(str::to_string)
+        .ok_or("The update archive has no installer in it")?;
+
+    let mut entry = archive
+        .by_name(&name)
+        .map_err(|e| format!("Could not read {name} from the update: {e}"))?;
+
+    // A directory of our own, named for the process, so two daemons cannot
+    // write the same file and an installer left behind by a failed attempt is
+    // findable rather than anonymous.
+    let dir = std::env::temp_dir().join(format!("ninja-recorder-update-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not prepare {}: {e}", dir.display()))?;
+
+    // The file name from the archive is remote input, so only its final
+    // component is used: an entry called `..\\..\\something.exe` must not be
+    // able to write outside the directory chosen above.
+    let file_name = std::path::Path::new(&name)
+        .file_name()
+        .ok_or("The update archive names no file")?;
+    let path = dir.join(file_name);
+
+    let mut out = std::fs::File::create(&path)
+        .map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+    std::io::copy(&mut entry, &mut out)
+        .map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+    Ok(path)
+}
+
+/// Runs the installer and returns, leaving it to replace this binary.
+///
+/// `/S` is NSIS's silent mode and `/UPDATE` is what the bundle's own script
+/// reads to know it is replacing an install rather than making one. Detached,
+/// for the reason `daemon::spawn` detaches: the process it belongs to is about
+/// to stop existing.
+fn launch_installer(path: &std::path::Path) -> Result<(), String> {
+    let mut command = std::process::Command::new(path);
+    command.args(["/S", "/UPDATE"]);
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        command.creation_flags(DETACHED_PROCESS);
+    }
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Could not start the installer: {e}"))
+}
+
+/// Records a failure and tells the frontend, which is waiting on one answer or
+/// the other.
+fn fail(ctx: &Arc<Ctx>, events: &Stream, why: String) {
+    warn!("update", "{why}");
+    publish(ctx, events, CheckResult::Failed(why));
+}
+
+#[cfg(test)]
+mod tests {
+    //! Against a local HTTP server rather than GitHub.
+    //!
+    //! What is worth testing here is the *decisions* either side of the
+    //! network: which endpoint gets asked, what a manifest means, and whether a
+    //! download that does not verify is refused. A test that reached the real
+    //! endpoint would be testing GitHub's uptime and would go red the day a
+    //! release was cut.
+
+    use super::*;
+    use crate::db::Db;
+    use crate::recorder::Recorder;
+    use crate::recorder::stub::StubRecorder;
+    use crate::state_machine;
+    use std::sync::Mutex;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn ctx() -> Arc<Ctx> {
+        let recorder: Arc<Mutex<Box<dyn Recorder>>> =
+            Arc::new(Mutex::new(Box::new(StubRecorder::new())));
+        let db = Arc::new(Db::open_temporary().unwrap());
+        let dir = std::env::temp_dir().join(format!("nr-update-test-{}", std::process::id()));
+        let supervisor =
+            state_machine::Supervisor::new(Arc::clone(&recorder), dir.clone(), Arc::clone(&db));
+        Arc::new(Ctx::new(recorder, supervisor, db, dir.clone(), dir.join("ddragon"), None))
+    }
+
+    /// Serves one response and returns the URL it is at.
+    ///
+    /// Hand-rolled rather than a test-server crate: this is four lines of HTTP
+    /// and the alternative is a dependency in the shipped tree for the benefit
+    /// of one test module.
+    async fn serve_once(status: &'static str, body: String) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut scratch = [0u8; 1024];
+            let _ = socket.read(&mut scratch).await;
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+        });
+        format!("http://{addr}/manifest.json")
+    }
+
+    #[tokio::test]
+    async fn a_manifest_offering_something_newer_is_an_offer() {
+        let body = format!(
+            r#"{{"version":"999.0.0","platforms":{{"{}":{{"signature":"s","url":"u"}}}}}}"#,
+            update::PLATFORM
+        );
+        let url = serve_once("200 OK", body).await;
+
+        let platform = fetch_platform(&url).await.expect("the manifest names this platform");
+        assert_eq!(platform.url, "u");
+    }
+
+    /// A release with no Windows bundle is a real state, and the message has to
+    /// name the platform rather than say "not found".
+    #[tokio::test]
+    async fn a_manifest_without_this_platform_says_which_one_is_missing() {
+        let body =
+            r#"{"version":"999.0.0","platforms":{"linux-x86_64":{"signature":"s","url":"u"}}}"#;
+        let url = serve_once("200 OK", body.to_string()).await;
+
+        let error = fetch_platform(&url).await.expect_err("nothing for us here");
+        assert!(error.contains(update::PLATFORM), "got: {error}");
+    }
+
+    /// The endpoint being gone is the failure that would otherwise be silent:
+    /// an app that stops updating and never says so.
+    #[tokio::test]
+    async fn a_404_is_reported_rather_than_read_as_nothing_newer() {
+        let url = serve_once("404 Not Found", "no".to_string()).await;
+        let found = check_endpoint(&url).await;
+        assert!(
+            matches!(&found, CheckResult::Failed(why) if why.contains("404")),
+            "got: {found:?}"
+        );
+    }
+
+    /// The channel preference decides which manifest is read, and a missing or
+    /// unreadable preference has to mean stable rather than nothing.
+    #[test]
+    fn the_channel_preference_chooses_the_endpoint() {
+        let ctx = ctx();
+        assert_eq!(endpoint_for_channel(&ctx), update::STABLE_ENDPOINT, "default is stable");
+
+        ctx.db.set_ui_pref(update::CHANNEL_PREF_KEY, "alpha").unwrap();
+        assert_eq!(endpoint_for_channel(&ctx), update::ALPHA_ENDPOINT);
+
+        ctx.db.set_ui_pref(update::CHANNEL_PREF_KEY, "nonsense").unwrap();
+        assert_eq!(
+            endpoint_for_channel(&ctx),
+            update::STABLE_ENDPOINT,
+            "an unreadable preference must fall back to the conservative channel"
+        );
+    }
+
+    /// The zip is remote input. An entry naming a path outside the directory
+    /// must not be able to write there.
+    #[test]
+    fn an_installer_path_in_the_archive_cannot_escape() {
+        let mut buffer = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buffer));
+            zip.start_file::<_, ()>("../../evil.exe", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            use std::io::Write as _;
+            zip.write_all(b"not really an installer").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let written = unpack_installer(&buffer).expect("the archive has an .exe in it");
+        assert_eq!(
+            written.file_name().and_then(|n| n.to_str()),
+            Some("evil.exe"),
+            "only the final component of the archived name is used"
+        );
+        assert!(
+            written.starts_with(std::env::temp_dir()),
+            "it must land under the temp directory, not wherever the name pointed: {}",
+            written.display()
+        );
+        let _ = std::fs::remove_file(written);
     }
 }

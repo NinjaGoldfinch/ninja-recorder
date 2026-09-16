@@ -96,7 +96,7 @@ flowchart TB
 | `daemon/spawn.rs` | Connecting to the daemon, and starting one when nothing answers; and the reverse, the daemon starting a UI | `connect_or_start`, `start_ui` |
 | `daemon/pump.rs` | The tray and the Win32 message loop it needs | `run`, `should_confirm_quit` |
 | `daemon/notify.rs` | Desktop notifications, from the process that noticed | `notify`, `on_supervisor_event` |
-| `daemon/update.rs` | The six-hourly update check, and what it publishes | `spawn_checks`, `check` |
+| `daemon/update.rs` | The update check, and the download-verify-install path | `spawn_checks`, `install` |
 | `ui/client.rs` | The UI's side of the pipe: reply routing, reconnect, version-skew refusal | `spawn`, `Client` |
 | `ui/link.rs` | That client hung off a Tauri app: the `rpc_call` proxy, and the daemon's pushes re-emitted to the webview | `attach`, `rpc_call`, `rpc_subscribe` |
 | `tray.rs` | The tray icon and its Open / Settings / Quit menu. No tests, deliberately | `build`, `request_quit` |

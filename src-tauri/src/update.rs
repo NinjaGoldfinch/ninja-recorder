@@ -49,6 +49,20 @@ pub const CHANNEL_PREF_KEY: &str = "updateChannel";
 /// build — see `ci.yml`'s "Publish the alpha manifest" step. It cannot be
 /// `/releases/latest/download/`, because GitHub excludes prereleases from
 /// `latest`, which is exactly what keeps the stable channel clean.
+/// The minisign public key every update is checked against.
+///
+/// The second half of the same copy problem `STABLE_ENDPOINT` has, and the more
+/// serious one: this is what makes an update *ours*. It is base64 of the
+/// minisign public key file, exactly as `tauri.conf.json` carries it under
+/// `plugins.updater.pubkey`, and `the_public_key_matches_tauri_conf` pins the
+/// two together.
+///
+/// **A mismatch here is not a broken feature, it is a broken guarantee.** The
+/// daemon would verify downloads against a key the release workflow does not
+/// sign with, which fails closed (nothing installs) rather than open. That is
+/// the right way round, and still worth a test rather than a hope.
+pub const PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc2NjJDRkY2QjdCRTlBNUQKUldSZG1yNjM5czlpZHNBTFRqNHFTRkZpUW1zRm1LOHJzVU5NaytkbXFSMGFmNHNVSkNxQUxKckIK";
+
 /// Where the stable channel's manifest lives.
 ///
 /// **A second copy of a URL that is also in `tauri.conf.json`**, under
@@ -462,6 +476,47 @@ pub fn evaluate(body: &str, current: &str) -> CheckResult {
     })
 }
 
+/// The public key, decoded.
+///
+/// Base64 of the key *file*, which is a comment line and then the key itself,
+/// so it is decoded to text and handed to `PublicKey::decode` rather than to
+/// `from_base64`. That is the shape `tauri.conf.json` carries and the shape the
+/// release workflow signs with; getting it wrong fails every install.
+pub fn public_key() -> Result<minisign_verify::PublicKey, String> {
+    use base64::Engine as _;
+
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(PUBLIC_KEY)
+        .map_err(|e| format!("the bundled public key is not base64: {e}"))?;
+    let text = std::str::from_utf8(&decoded)
+        .map_err(|e| format!("the bundled public key is not text: {e}"))?;
+    minisign_verify::PublicKey::decode(text)
+        .map_err(|e| format!("the bundled public key is not a minisign key: {e}"))
+}
+
+/// Whether `bytes` is the file the manifest says it is.
+///
+/// `signature` is the manifest's field: base64 of a minisign `.sig` file, which
+/// is itself a comment line and the signature. Legacy signatures are allowed
+/// for the reason `tauri-plugin-updater` allows them, which is that releases
+/// signed by older tooling exist and refusing them would strand the users on
+/// them.
+pub fn verify(bytes: &[u8], signature: &str) -> Result<(), String> {
+    use base64::Engine as _;
+
+    let key = public_key()?;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(signature)
+        .map_err(|e| format!("the update's signature is not base64: {e}"))?;
+    let text = std::str::from_utf8(&decoded)
+        .map_err(|e| format!("the update's signature is not text: {e}"))?;
+    let signature = minisign_verify::Signature::decode(text)
+        .map_err(|e| format!("the update's signature could not be read: {e}"))?;
+
+    key.verify(bytes, &signature, true)
+        .map_err(|_| "the update's signature does not match; refusing to install it".to_string())
+}
+
 #[cfg(test)]
 mod manifest_tests {
     use super::*;
@@ -554,8 +609,80 @@ mod manifest_tests {
         );
     }
 
+    /// The key that decides whether an update is ours, pinned against the file
+    /// the bundle is built from.
+    #[test]
+    fn the_public_key_matches_tauri_conf() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(
+            conf["plugins"]["updater"]["pubkey"].as_str(),
+            Some(PUBLIC_KEY),
+            "update::PUBLIC_KEY and tauri.conf.json must be the same key"
+        );
+    }
+
+    /// And it has to be a key `minisign-verify` can actually use, or every
+    /// install fails at the last step with the download already on disk.
+    #[test]
+    fn the_public_key_is_a_usable_minisign_key() {
+        assert!(public_key().is_ok(), "{:?}", public_key().err());
+    }
+
     #[test]
     fn this_builds_own_version_parses() {
         assert!(semver::Version::parse(current_version()).is_ok(), "{}", current_version());
+    }
+}
+
+#[cfg(test)]
+mod verify_tests {
+    use super::*;
+
+    /// A well-formed signature made by a **different key** must be refused,
+    /// and the message must say so in words a person can act on.
+    ///
+    /// Built here rather than fabricated loosely, so the refusal is a *key*
+    /// decision rather than a parse failure: anyone can produce a syntactically
+    /// valid signature, and the whole point of this is that only one key's
+    /// signatures count. The first attempt at this test used two made-up lines
+    /// and passed for the wrong reason.
+    #[test]
+    fn a_signature_from_another_key_is_refused() {
+        use base64::Engine as _;
+
+        // The minisign `.sig` shape: a comment, then algorithm (2) + key id (8)
+        // + signature (64), then a trusted comment, then the global signature.
+        let mut bin1 = vec![0x45, 0x64];
+        bin1.extend_from_slice(&[0xAA; 8]); // a key id that is not ours
+        bin1.extend_from_slice(&[0x00; 64]);
+        let sig_file = format!(
+            "untrusted comment: signature from a key that is not ours\n{}\ntrusted comment: nope\n{}\n",
+            base64::engine::general_purpose::STANDARD.encode(&bin1),
+            base64::engine::general_purpose::STANDARD.encode([0x00; 64]),
+        );
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&sig_file);
+
+        let error = verify(b"anything", &encoded).expect_err("a foreign signature must be refused");
+        assert!(
+            error.contains("does not match"),
+            "it should fail on the key rather than the shape, got: {error}"
+        );
+    }
+
+    /// Garbage in the signature field fails before any key work, and says
+    /// which step it failed at rather than "invalid".
+    #[test]
+    fn a_signature_that_is_not_base64_says_so() {
+        let error = verify(b"anything", "!!! not base64 !!!").expect_err("must be refused");
+        assert!(error.contains("not base64"), "got: {error}");
+    }
+
+    #[test]
+    fn a_signature_that_is_base64_but_not_a_signature_says_so() {
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD.encode("hello");
+        let error = verify(b"anything", &encoded).expect_err("must be refused");
+        assert!(error.contains("could not be read"), "got: {error}");
     }
 }
