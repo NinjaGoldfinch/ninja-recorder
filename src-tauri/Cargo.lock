@@ -2517,6 +2517,7 @@ dependencies = [
  "libobs-recorder",
  "muda",
  "native-tls",
+ "notify-rust",
  "reqwest",
  "rusqlite",
  "rusqlite_migration",
