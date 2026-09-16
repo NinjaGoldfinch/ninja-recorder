@@ -14,7 +14,7 @@ is skipped until a commit reaches `main`.
 ```mermaid
 flowchart TB
     subgraph PR["Pull request"]
-        T1["<b>Test</b> (windows-latest)<br/>biome ci · tsc --noEmit · vitest<br/>cargo deny check · gen-contract --check<br/>cargo test ×2<br/>cargo clippy ×2<br/><small>±devtools, no --all-targets</small>"]
+        T1["<b>Test</b> (windows-latest)<br/>biome ci · tsc --noEmit · vitest<br/>cargo deny check · gen-contract --check<br/>cargo test ×2<br/>cargo clippy ×2<br/>smoke-daemon.ps1<br/><small>±devtools, no --all-targets</small>"]
     end
     subgraph MAIN["Push to main / manual dispatch"]
         T["<b>Test</b> (windows-latest)"]
@@ -33,8 +33,10 @@ flowchart TB
 
 ### What `test` runs
 
-Nine steps, and the order is part of the design: the cheap gates run first, so
+Ten steps, and the order is part of the design: the cheap gates run first, so
 a formatting mistake fails in seconds rather than after a four-minute compile.
+The last one is the odd one out and runs last for the same reason, from the
+other end: it needs everything already compiled.
 
 | # | Step | Gate | Added by |
 |---|---|---|---|
@@ -47,6 +49,7 @@ a formatting mistake fails in seconds rather than after a four-minute compile.
 | 7 | `cargo run --bin gen-contract -- --check` | contract drift | WS2.5 |
 | 8 | `cargo test`, `cargo test --features devtools` | Rust tests, both feature sets | v1 |
 | 9 | `cargo clippy -- -D warnings`, and again with `--features devtools` | Rust lints, both feature sets | v1 |
+| 10 | `scripts/smoke-daemon.ps1` | the daemon actually runs | WS3.3 |
 
 Step 4 is a commented placeholder in `ci.yml`, sitting in its final
 position so that turning it on is uncommenting a block rather than deciding
@@ -151,6 +154,40 @@ compiles the non-Windows code paths any more**: `StubRecorder` and everything
 behind `cfg(not(target_os = "windows"))` are what make `cargo test` work on a
 dev box, and a break in them surfaces there rather than here. Accepted rather
 than overlooked: the dev loop hits it within seconds of the change.
+
+### Step 10 starts the binary, which nothing else does
+
+Steps 1 to 9 are claims about types, units and framing. None of them runs the
+app. The daemon, though, is a *process*: `main.rs`, `Paths::resolve`, the
+single-instance check, the log file and the pipe's security descriptor only
+exist once something is launched, and every one of those had shipped unrun.
+
+`scripts/smoke-daemon.ps1` launches `--daemon` on the runner and asserts what
+can be asserted without a person at a desktop:
+
+- it stays running rather than exiting, and if it exits, its code and its
+  stderr are printed instead of being lost
+- the named pipe appears, under the name the build identity implies
+- `hello` is answered, with the snapshot riding along
+- a command dispatches and comes back `ok`
+- the pipe's ACL grants the user who created it, and does **not** grant
+  `Everyone`, `Authenticated Users` or `BUILTIN\Users`
+- a second daemon exits 0 and writes nothing to the log
+
+It exists because of a specific failure. The first report from a real Windows
+box was "a console window appears and instantly closes", with no log to say why,
+and narrowing it took an hour of remote PowerShell against a machine nobody
+could see. A job that starts the thing answers that class of question in the
+four minutes this job already spends compiling.
+
+**It does not replace [windows-verification.md](windows-verification.md).** The
+tray, the notifications and the capture backend need a desktop and a person.
+What this covers is the part that does not.
+
+The step runs under `powershell` rather than the default `pwsh`, because
+`PipeStream.GetAccessControl` is an instance method in Windows PowerShell and
+moved to a static helper in .NET Core. The script handles both; the shell that
+needs no fallback is the one to use.
 
 Windows is now the only platform in the whole workflow, which has one
 consequence worth stating for the gates above: **the Windows-only Rust code is

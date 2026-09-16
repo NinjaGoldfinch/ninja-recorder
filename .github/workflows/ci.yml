@@ -262,6 +262,34 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy --features devtools --no-deps -- -D warnings
 
+      # --- Does it actually run? -------------------------------------------
+      #
+      # Everything above is a claim about types, units and framing. None of it
+      # starts the binary, and the daemon is a *process*: `main.rs`,
+      # `Paths::resolve`, the single-instance check, the log file and the pipe's
+      # security descriptor only exist when something is launched.
+      #
+      # That gap was not theoretical. The first report from a real Windows box
+      # was "a console window appears and instantly closes", with no log to say
+      # why, and narrowing it took an hour of remote PowerShell against a
+      # machine nobody could see. This job answers that class of question in the
+      # four minutes it already spends compiling.
+      #
+      # It does not replace `docs/windows-verification.md`. The tray, the
+      # notifications and the capture backend still need a person at a desktop.
+      # What this covers is everything that can be asserted without one.
+      - name: Build the binary to smoke test
+        working-directory: src-tauri
+        run: cargo build --bin ninja-recorder --features devtools
+
+      # `powershell` rather than the default `pwsh`: `PipeStream.GetAccessControl`
+      # is an instance method in Windows PowerShell and moved to a static helper
+      # in .NET Core, and the ACL is the check this step exists for. The script
+      # handles both, but the shell that needs no fallback is the one to use.
+      - name: Smoke test the daemon
+        shell: powershell
+        run: ./scripts/smoke-daemon.ps1
+
   # Pull requests do not build at all. Three Tauri bundles — two of them
   # Windows, each ~6min — are the overwhelming majority of this workflow's
   # minute spend and its artifact storage, and nothing consumes a PR's

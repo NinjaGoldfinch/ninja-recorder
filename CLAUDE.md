@@ -73,7 +73,15 @@ cd src-tauri && cargo test
 cd src-tauri && cargo test --features devtools
 cd src-tauri && cargo clippy --no-deps -- -D warnings
 cd src-tauri && cargo clippy --features devtools --no-deps -- -D warnings
+powershell ./scripts/smoke-daemon.ps1                 # Windows only: it runs
 ```
+
+The last one is the only gate that **starts the binary**, and the only one a
+Linux box cannot run. It launches `--daemon`, waits for the named pipe, does the
+handshake, runs a command, reads the pipe's ACL back, and checks that a second
+daemon leaves quietly. Everything above it is a claim about types and framing;
+the daemon is a process, and `main.rs`, the single-instance check, the log file
+and the security descriptor only exist when something is launched.
 
 One more is a commented placeholder in `ci.yml` until its workstream lands:
 `svelte-check` (WS4.1).
