@@ -1,5 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 
+import { initDaemonStatus } from "./daemon";
 import { initDesktop } from "./desktop";
 import { initDevPortal } from "./devportal";
 import { el } from "./dom";
@@ -28,6 +29,10 @@ window.addEventListener("DOMContentLoaded", () => {
   registerView("settings", el("#settings-view"));
 
   initToast();
+  // Before the views: if the recorder is not running, that is the first thing
+  // worth saying, and the views below will be showing stale or empty data
+  // because of it.
+  initDaemonStatus();
   initLibrary();
   initReview();
   initSettings();
