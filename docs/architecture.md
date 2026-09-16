@@ -93,7 +93,8 @@ flowchart TB
 | `daemon/mod.rs` | The headless process: paths without an `AppHandle`, the startup and shutdown order, and everything the UI's `setup` does minus the window | `run`, `Paths`, `IDENTIFIER` |
 | `daemon/rpc.rs` | The wire protocol, the endpoint's name, the listener that owns it, and the client's way in | `serve`, `endpoint`, `Listener`, `connect` |
 | `daemon/snapshot.rs` | The event stream's position and the state a `hello` is answered with | `Stream`, `Stream::source` |
-| `daemon/spawn.rs` | Connecting to the daemon, and starting one when nothing answers | `connect_or_start` |
+| `daemon/spawn.rs` | Connecting to the daemon, and starting one when nothing answers; and the reverse, the daemon starting a UI | `connect_or_start`, `start_ui` |
+| `daemon/pump.rs` | The tray and the Win32 message loop it needs | `run`, `should_confirm_quit` |
 | `ui/client.rs` | The UI's side of the pipe: reply routing, reconnect, version-skew refusal | `spawn`, `Client` |
 | `ui/link.rs` | That client hung off a Tauri app: the `rpc_call` proxy, and the daemon's pushes re-emitted to the webview | `attach`, `rpc_call`, `rpc_subscribe` |
 | `tray.rs` | The tray icon and its Open / Settings / Quit menu. No tests, deliberately | `build`, `request_quit` |
@@ -216,11 +217,18 @@ all ([DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-
 WS3 splits that one process in two. The daemon now runs: `--daemon` opens the
 library, brings up the supervisor and the capture backend, binds the endpoint
 and serves clients until it is asked to stop. The tray and its message pump
-(3.3), autostart (3.5), the updater (3.6) and the dev portal's commands (3.7)
-are not in it yet. Nothing starts it automatically either: `daemon/spawn.rs`
-knows how to, but the Run key still launches the UI and the UI still holds a
-supervisor of its own. [DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave)
+the updater (3.6) is not in it yet, and nothing starts it automatically: the
+Run key still launches the UI.
+[DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave)
 says what has to be true before that changes.
+
+**The tray runs on the daemon's own message loop** (3.3). A tray icon's
+messages arrive on the thread that created it, so the daemon's main thread
+belongs to Win32 and the tokio runtime lives beside it; that is the concrete
+reason `daemon::run` is not a `#[tokio::main]`. Open and Settings have to reach
+a window in another process, which they do by publishing `Event::ShowUi` when a
+UI is connected and starting one when none is. Quit asks first if a recording is
+in flight, because that is the one thing quitting can lose.
 
 ```mermaid
 flowchart LR

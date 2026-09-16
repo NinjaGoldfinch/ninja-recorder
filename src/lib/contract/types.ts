@@ -70,7 +70,12 @@ recordingId: number | null,
  * the library row ends up with. Publishing a guessed path instead
  * would be a value that is sometimes wrong.
  */
-fileStem: string, startedAtMs: number, } | { "type": "recordingStopped", recordingId: number | null, outcome: StopOutcome, } | { "type": "markerAdded", recordingId: number | null, marker: SessionMarker, } | { "type": "sampleBatch", recordingId: number | null, samples: Array<SessionSample>, } | { "type": "matchSummaryPatched", recordingId: number, } | { "type": "libraryChanged", reason: LibraryChangeReason, } | { "type": "retentionRan", deleted: Array<number>, freedBytes: number, } | { "type": "updateStatus", status: UpdateStatus, } | { "type": "daemonShuttingDown", reason: ShutdownReason, } | { "type": "lagged", dropped: number, };
+fileStem: string, startedAtMs: number, } | { "type": "recordingStopped", recordingId: number | null, outcome: StopOutcome, } | { "type": "markerAdded", recordingId: number | null, marker: SessionMarker, } | { "type": "sampleBatch", recordingId: number | null, samples: Array<SessionSample>, } | { "type": "matchSummaryPatched", recordingId: number, } | { "type": "libraryChanged", reason: LibraryChangeReason, } | { "type": "retentionRan", deleted: Array<number>, freedBytes: number, } | { "type": "updateStatus", status: UpdateStatus, } | { "type": "daemonShuttingDown", reason: ShutdownReason, } | { "type": "lagged", dropped: number, } | { "type": "showUi", 
+/**
+ * The view to land on, in `router.ts`'s vocabulary, or `None` for
+ * wherever the window was. `Some("settings")` is the Settings item.
+ */
+view: string | null, };
 
 export type LibraryChangeReason = "finalized" | "edited" | "reconciled" | "retention";
 

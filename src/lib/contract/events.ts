@@ -23,5 +23,5 @@ export const EVENTS_BY_TOPIC = {
   lcu: ["lcuPhase"],
   library: ["matchSummaryPatched", "libraryChanged", "retentionRan"],
   update: ["updateStatus"],
-  daemon: ["daemonShuttingDown", "lagged"],
+  daemon: ["daemonShuttingDown", "lagged", "showUi"],
 } as const;

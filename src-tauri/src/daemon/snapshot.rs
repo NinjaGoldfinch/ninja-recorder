@@ -144,6 +144,20 @@ impl Stream {
         self.events.clone()
     }
 
+    /// Whether any client is attached.
+    ///
+    /// The tray's Open needs to know: with a UI connected the answer is "ask it
+    /// to show itself", and with none it is "start one". Getting that backwards
+    /// either opens a second UI process or publishes into the void, and the
+    /// second is the one a person would report as "the tray does nothing".
+    ///
+    /// Racy by nature, and not worth making otherwise: a client can disconnect
+    /// between this returning `true` and the publish. The cost is one ignored
+    /// event, and the user clicking Open again.
+    pub fn has_subscribers(&self) -> bool {
+        self.events.subscriber_count() > 0
+    }
+
     /// The closure `hello` answers with.
     ///
     /// ## What it cannot know
