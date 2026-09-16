@@ -401,8 +401,6 @@ impl Listener {
     pub fn bind(endpoint: &std::path::Path) -> std::io::Result<Option<Listener>> {
         #[cfg(windows)]
         {
-            use tokio::net::windows::named_pipe::ServerOptions;
-
             let name = endpoint.as_os_str().to_os_string();
             let mut security = crate::daemon::pipe_acl::PipeSecurity::current_user_only();
             match create_instance(&name, true, security.as_mut()) {
@@ -448,8 +446,6 @@ impl Listener {
     pub async fn accept(&mut self) -> std::io::Result<impl ClientStream + use<>> {
         #[cfg(windows)]
         {
-            use tokio::net::windows::named_pipe::ServerOptions;
-
             // Rebuilt here rather than assumed, because either line below can
             // leave us without one: a failed `connect` returns before the
             // replacement is made, and the caller's answer to that is to call
