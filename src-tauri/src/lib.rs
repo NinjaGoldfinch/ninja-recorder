@@ -63,16 +63,9 @@ pub(crate) const UPDATE_STATUS_EVENT: &str = "update-status-changed";
 /// for (§4.1).
 pub(crate) const CONTRACT_EVENT: &str = "event";
 
-/// How long after startup the first update check runs. Late enough that it
-/// is never competing with the recorder backend coming up, the database
-/// opening or the first paint — none of which should wait on a network
-/// round-trip to GitHub.
-const UPDATE_FIRST_CHECK_DELAY: std::time::Duration = std::time::Duration::from_secs(30);
-
-/// And how often after that. Deliberately slack: CI publishes a release for
-/// every commit that lands on `main`, so "something newer exists" is true
-/// most days, and a tighter loop would only re-discover the same answer.
-const UPDATE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+// The check's schedule moved to `daemon::update` with the check (WS3.6). The
+// two constants that named it went with it rather than being left here for a
+// caller that no longer exists.
 
 /// Tauri's managed state: a handle on the `core::Ctx` that actually holds
 /// everything.
@@ -460,7 +453,7 @@ async fn run_update_install(app: tauri::AppHandle) {
 /// `Ctx`'s two update setters constructed by nothing, which is dead code that
 /// `-D warnings` fails the devtools clippy run over (CLAUDE.md). This way both
 /// configurations compile the same code and only the behaviour differs.
-fn updates_enabled() -> bool {
+pub(crate) fn updates_enabled() -> bool {
     !cfg!(feature = "devtools")
 }
 
@@ -492,24 +485,15 @@ fn wire_updates(app: &tauri::AppHandle, ctx: &mut core::Ctx) {
     }));
 }
 
-/// Starts the six-hourly check.
-///
-/// Called *after* `manage`, not with `wire_updates`: `run_update_check` reads
-/// `AppState` back off the handle, and a task spawned before the state exists
-/// would be relying on its own start-up delay to paper over the ordering.
-fn spawn_update_poll(app: &tauri::AppHandle) {
-    if !updates_enabled() {
-        return;
-    }
-    let handle = app.clone();
-    tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(UPDATE_FIRST_CHECK_DELAY).await;
-        loop {
-            run_update_check(handle.clone()).await;
-            tokio::time::sleep(UPDATE_CHECK_INTERVAL).await;
-        }
-    });
-}
+// The six-hourly check moved to `daemon::update` (WS3.6). It used to run here
+// and record what it found in this process's `Ctx`, which stopped being read
+// the moment WS3.4 forwarded every command to the daemon: the About block asks
+// `get_update_status`, that goes over the pipe, and the daemon answered from a
+// cell nothing had ever filled. So the status was "Checking" forever while a
+// perfectly good check ran in the wrong process.
+//
+// The *install* half is still here and still unreachable for the same reason.
+// It is the rest of WS3.6, and `daemon::update`'s header says what it becomes.
 
 /// The main window's label. Matches `capabilities/default.json`'s
 /// `"windows": ["main"]`, which is what Tauri would have used implicitly when
@@ -753,10 +737,6 @@ pub fn run() {
                 // per call.
                 Err(e) => error!("ui", "cannot work out where the daemon listens: {e}"),
             }
-
-            // After `manage`, because the check reads `AppState` back off the
-            // handle to record what it found.
-            spawn_update_poll(app.handle());
 
             // **No tray here.** The daemon owns it (§3.1, WS3.3), and this
             // process building a second one meant two identical icons in the

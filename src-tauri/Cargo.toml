@@ -72,6 +72,10 @@ serde_json = "1"
 # `audio_presets_keep_every_variant` pins this exact case.
 ts-rs = { version = "12", features = ["no-serde-warnings"] }
 thiserror = "2"
+# Version comparison for the daemon's update check (`update::is_newer`).
+# `tauri-plugin-updater` did this behind an `AppHandle`, which the daemon does
+# not have. Already in the tree through that plugin, so naming it adds no crate.
+semver = "1"
 # The daemon builds no `tauri::App`, so it cannot ask an `AppHandle` where the
 # data directory is — and `app_data_dir()` is `dirs::data_dir()` joined with the
 # identifier. This is the crate Tauri itself uses, at the version it uses, so

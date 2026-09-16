@@ -42,6 +42,7 @@ pub mod notify;
 pub mod pump;
 pub mod rpc;
 pub mod snapshot;
+pub mod update;
 pub mod spawn;
 
 use std::path::PathBuf;
@@ -527,6 +528,11 @@ async fn start(paths: Paths) -> Result<Option<Started>, DaemonError> {
             }
         }));
     }
+
+    // The update check, which belongs here for the reason the whole split
+    // does: whether an install may run is decided by whether a game is being
+    // recorded, and this is the process that knows.
+    update::spawn_checks(Arc::clone(&ctx), events.clone());
 
     Ok(Some(Started { listener, ctx, events }))
 }

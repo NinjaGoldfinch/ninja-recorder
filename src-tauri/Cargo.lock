@@ -2521,6 +2521,7 @@ dependencies = [
  "reqwest",
  "rusqlite",
  "rusqlite_migration",
+ "semver",
  "serde",
  "serde_json",
  "tauri",

@@ -49,6 +49,19 @@ pub const CHANNEL_PREF_KEY: &str = "updateChannel";
 /// build — see `ci.yml`'s "Publish the alpha manifest" step. It cannot be
 /// `/releases/latest/download/`, because GitHub excludes prereleases from
 /// `latest`, which is exactly what keeps the stable channel clean.
+/// Where the stable channel's manifest lives.
+///
+/// **A second copy of a URL that is also in `tauri.conf.json`**, under
+/// `plugins.updater.endpoints`, and that was worth avoiding until the daemon
+/// needed one: it builds no Tauri app, so it cannot read the plugin's config.
+///
+/// The copy is pinned rather than trusted. `the_stable_endpoint_matches_tauri_conf`
+/// reads the config back and fails if the two ever differ, the same way
+/// `daemon::IDENTIFIER` is pinned, and for the same reason: a mismatch would
+/// not crash anything. It would quietly check the wrong place forever.
+pub const STABLE_ENDPOINT: &str =
+    "https://github.com/NinjaGoldfinch/ninja-recorder-v2/releases/latest/download/latest.json";
+
 pub const ALPHA_ENDPOINT: &str =
     "https://github.com/NinjaGoldfinch/ninja-recorder-v2/releases/download/alpha/alpha.json";
 
@@ -344,5 +357,205 @@ mod tests {
                 error: "no network".into()
             }
         );
+    }
+}
+
+// --- The manifest an endpoint serves ---------------------------------------
+//
+// WS3.6. `tauri-plugin-updater` fetched and parsed this, and it needs an
+// `AppHandle`, so the daemon cannot use it. What the daemon needs instead is
+// the two decisions the plugin was making on our behalf: is this document
+// well-formed, and is the version in it newer than ours.
+//
+// Both are pure, so both are tested here rather than against a network.
+
+/// What an update endpoint serves, as much of it as matters.
+///
+/// The shape is Tauri's, because the files are already published in it and a
+/// v2.0 client has to keep reading what v1 wrote. Unknown fields are ignored
+/// rather than refused: the publisher is us, but a future field added for a
+/// newer client must not stop an older one checking.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Manifest {
+    pub version: String,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub pub_date: Option<String>,
+    pub platforms: std::collections::HashMap<String, ManifestPlatform>,
+}
+
+/// One platform's entry: where to get it, and what proves it is ours.
+///
+/// Neither field is read yet, and both are declared now on purpose. They are
+/// what the *install* half of WS3.6 needs — the URL to fetch and the signature
+/// to check it against — and a manifest type that described only the half
+/// already in use would have to be widened by whoever writes that, at which
+/// point the shape stops being a statement about the document and becomes a
+/// record of what happened to be needed. Clippy runs without `--all-targets`,
+/// so `-D warnings` would fail on them meanwhile.
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ManifestPlatform {
+    /// The minisign signature over the file at `url`, base64 as minisign
+    /// writes it. Checked at install time, not at check time.
+    pub signature: String,
+    pub url: String,
+}
+
+/// The only platform this app ships on (DEVELOPMENT.md §14).
+///
+/// A manifest with no entry for it is not an error: it is what any build made
+/// off Windows sees, and what a release that skipped the Windows bundle would
+/// serve. "Nothing for you" and "something went wrong" are different answers.
+pub const PLATFORM: &str = "windows-x86_64";
+
+/// What this build is, for comparing against a manifest.
+///
+/// From Cargo rather than from `tauri.conf.json`: the two are kept in step by
+/// the release workflow, and this is the one the binary actually carries.
+pub fn current_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+/// Whether `offered` is a version worth telling someone about.
+///
+/// Semver rather than string comparison, because `0.10.0` sorts before `0.9.0`
+/// as text and that would silently stop offering updates the first time a minor
+/// version reached double digits.
+///
+/// Unparseable on either side answers `false`. A version we cannot read is not
+/// one to invite somebody to install, and the alternative — treating "unknown"
+/// as "newer" — offers an update to every user on every check.
+pub fn is_newer(offered: &str, current: &str) -> bool {
+    let (Ok(offered), Ok(current)) = (
+        semver::Version::parse(offered.trim_start_matches('v')),
+        semver::Version::parse(current.trim_start_matches('v')),
+    ) else {
+        return false;
+    };
+    offered > current
+}
+
+/// Reads a manifest and says what it means for this build.
+///
+/// The whole of the check's decision half, with the network on one side of it
+/// and `UpdateStatus` on the other.
+pub fn evaluate(body: &str, current: &str) -> CheckResult {
+    let manifest: Manifest = match serde_json::from_str(body) {
+        Ok(manifest) => manifest,
+        Err(e) => return CheckResult::Failed(format!("Could not read the update manifest: {e}")),
+    };
+
+    // No entry for us is "nothing newer", not a failure. See `PLATFORM`.
+    if !manifest.platforms.contains_key(PLATFORM) {
+        return CheckResult::NothingNewer;
+    }
+    if !is_newer(&manifest.version, current) {
+        return CheckResult::NothingNewer;
+    }
+
+    CheckResult::Found(UpdateOffer {
+        version: manifest.version,
+        notes: manifest.notes,
+        pub_date: manifest.pub_date,
+    })
+}
+
+#[cfg(test)]
+mod manifest_tests {
+    use super::*;
+
+    fn manifest(version: &str) -> String {
+        format!(
+            r#"{{"version":"{version}","notes":"n","pub_date":"d",
+               "platforms":{{"windows-x86_64":{{"signature":"s","url":"u"}}}}}}"#
+        )
+    }
+
+    #[test]
+    fn a_newer_version_is_offered() {
+        let found = evaluate(&manifest("2.1.0"), "2.0.0");
+        match found {
+            CheckResult::Found(offer) => {
+                assert_eq!(offer.version, "2.1.0");
+                assert_eq!(offer.notes.as_deref(), Some("n"));
+            }
+            other => panic!("expected an offer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_same_version_is_nothing_newer() {
+        assert!(matches!(evaluate(&manifest("2.0.0"), "2.0.0"), CheckResult::NothingNewer));
+    }
+
+    #[test]
+    fn an_older_version_is_nothing_newer() {
+        assert!(matches!(evaluate(&manifest("1.9.9"), "2.0.0"), CheckResult::NothingNewer));
+    }
+
+    /// The bug string comparison would have shipped: `0.10.0` sorts before
+    /// `0.9.0` as text, so the first double-digit minor version would have
+    /// silently stopped offering updates to everyone.
+    #[test]
+    fn ten_is_newer_than_nine() {
+        assert!(is_newer("0.10.0", "0.9.0"));
+        assert!(is_newer("2.10.0", "2.9.5"));
+        assert!(!is_newer("0.9.0", "0.10.0"));
+    }
+
+    /// A manifest with no entry for this platform is what a build made off
+    /// Windows sees, and what a release that skipped the Windows bundle would
+    /// serve. Not an error to report to anybody.
+    #[test]
+    fn no_entry_for_this_platform_is_nothing_newer() {
+        let body = r#"{"version":"9.9.9","platforms":{"linux-x86_64":{"signature":"s","url":"u"}}}"#;
+        assert!(matches!(evaluate(body, "2.0.0"), CheckResult::NothingNewer));
+    }
+
+    #[test]
+    fn a_manifest_that_is_not_json_fails_rather_than_offering() {
+        assert!(matches!(evaluate("<html>404</html>", "2.0.0"), CheckResult::Failed(_)));
+    }
+
+    /// Treating "unknown" as newer would offer an update to every user on
+    /// every check, forever.
+    #[test]
+    fn an_unreadable_version_is_not_newer() {
+        assert!(!is_newer("not-a-version", "2.0.0"));
+        assert!(!is_newer("2.0.0", "also-not"));
+    }
+
+    /// Fields a newer client adds must not stop an older one checking.
+    #[test]
+    fn unknown_fields_are_ignored() {
+        let body = r#"{"version":"9.9.9","surprise":true,
+                       "platforms":{"windows-x86_64":{"signature":"s","url":"u","extra":1}}}"#;
+        assert!(matches!(evaluate(body, "2.0.0"), CheckResult::Found(_)));
+    }
+
+    /// The version in the binary has to be readable by the comparison that
+    /// decides whether to offer an update, or nothing is ever offered.
+    /// The one URL written in two places, pinned against the file Tauri reads.
+    ///
+    /// A mismatch would not crash: the daemon would check one endpoint while
+    /// the bundle advertised another, and updates would simply stop arriving
+    /// with nothing to show for it.
+    #[test]
+    fn the_stable_endpoint_matches_tauri_conf() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let configured = conf["plugins"]["updater"]["endpoints"][0].as_str();
+        assert_eq!(
+            configured,
+            Some(STABLE_ENDPOINT),
+            "update::STABLE_ENDPOINT and tauri.conf.json name the same manifest"
+        );
+    }
+
+    #[test]
+    fn this_builds_own_version_parses() {
+        assert!(semver::Version::parse(current_version()).is_ok(), "{}", current_version());
     }
 }
