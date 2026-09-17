@@ -273,9 +273,10 @@ flowchart TB
     W3 --> W4["Stage ffmpeg for faststart remux<br/><small>static build from BtbN/FFmpeg-Builds</small>"]
     W2 -->|"yes"| W5
     W4 --> W5["tauri build → NSIS installer"]
-    W5 --> U["Upload artifact (7-day retention)"]
+    W5 --> C["Assert the installer's shortcut starts the app<br/><small>MAINBINARYNAME in the generated installer.nsi</small>"]
+    C --> U["Upload artifact (7-day retention)"]
     W5 -.->|"push / manual only"| W6["Second bundle: --features devtools"]
-    W6 --> U
+    W6 --> C
 ```
 
 **Why the libobs runtime is staged outside Cargo.** The upstream reference
@@ -292,6 +293,22 @@ throughout.
 `LibObsRecorder::new` resolves it at runtime via Tauri's path resolver.
 ffmpeg is resolved with `.ok()`: optional, so a failed download degrades to
 unseekable-but-playable recordings rather than a broken build.
+
+### The installer's shortcut is checked against what was built
+
+`tauri build` writes a generated `installer.nsi` under
+`src-tauri/target/release`, and that file is where the shortcut is decided:
+the template defines `MAINBINARYNAME` from the config's `mainBinaryName`, and
+every `CreateShortcut` targets `$INSTDIR\${MAINBINARYNAME}.exe`. The step
+after the build reads it back and fails the job if it names anything but the
+app.
+
+It is asserted here rather than as a Rust test because nothing in the Rust
+gates runs late enough to see it. The binary set comes from Cargo, the choice
+of main binary comes from the bundler, and both happen after `cargo test` and
+`cargo clippy` have gone green. A release whose Start Menu entry launched
+`gen-contract.exe` passed every other gate in this file, which is the whole
+argument for the step. DEVELOPMENT.md §15 records what that cost.
 
 > Working on the capture backend locally on the Windows box means running the
 > same clone-build-copy sequence by hand before `cargo run`. It is not
