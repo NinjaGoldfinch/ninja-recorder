@@ -22,6 +22,20 @@
  * be made to agree by waiting — so it says restart and offers nothing else.
  * `connected` hides the strip.
  *
+ * ## It is also where "is the recorder reachable" is answered
+ *
+ * `whenDaemonReachable` exists because a cold start is a race the window
+ * loses. `DaemonLink::connect` returns immediately and keeps connecting in the
+ * background, so the first paint happens before the handshake — and on a first
+ * launch after an install, the UI is starting the daemon itself, which takes
+ * seconds. Anything that fetched on load got `not connected to the recorder`
+ * back and reported it as a failure, which is how a red error box came to
+ * greet a perfectly healthy install.
+ *
+ * Waiting is the fix rather than swallowing the error. A call that is not made
+ * cannot fail spuriously, and a call that fails while the connection is up is
+ * a real failure that should still be said out loud.
+ *
  * WS4 replaces this with a store the snapshot and event stream feed. Until
  * then it is a listener and an element, which is what the rest of this
  * frontend is.
@@ -33,13 +47,32 @@ import { type DaemonHealth, daemonHealth, subscribe } from "./lib/transport/pipe
 
 let strip: HTMLElement | null = null;
 
+/**
+ * The last health reported, or `undefined` before the first answer arrives.
+ *
+ * The three-way distinction matters: "not yet known" is not "not connected".
+ * Treating it as connected would race the handshake, and treating it as
+ * disconnected would be a claim nothing has made yet.
+ */
+let current: DaemonHealth | undefined;
+
+/** Run whenever the connection becomes available. See `whenDaemonReachable`. */
+const reachable = new Set<() => void>();
+
 export function initDaemonStatus() {
   strip = el("#daemon-strip");
 
   // Outside Tauri there is no daemon and no pipe, and the mock transport
   // answers everything. Showing "the recorder is not running" against the
   // fixtures would be true and useless.
-  if (!IN_TAURI) return;
+  if (!IN_TAURI) {
+    // Said explicitly rather than left unknown, so `whenDaemonReachable` runs
+    // its callers straight away in the browser. A frontend developer working
+    // against the fixtures must not be made to wait on a handshake that will
+    // never happen.
+    current = { state: "connected" };
+    return;
+  }
 
   // Asked once as well as subscribed, because a window that opens while the
   // daemon is already down would otherwise wait for the next change before
@@ -50,7 +83,30 @@ export function initDaemonStatus() {
   subscribe({ onHealth: render });
 }
 
+/**
+ * Runs `run` once the daemon is reachable, and again on every reconnect.
+ *
+ * Both halves are load-bearing. The first is the cold start: the window paints
+ * before the handshake, so a fetch issued on load fails for a reason that is
+ * not a failure. The second is recovery — `ui::client` reconnects and the
+ * strip clears itself, but nothing re-read the library, so a window that lost
+ * its daemon kept showing whatever it had when the connection died.
+ *
+ * Registering while already connected runs `run` immediately, so a caller
+ * never has to ask which of the two cases it is in.
+ */
+export function whenDaemonReachable(run: () => void): void {
+  reachable.add(run);
+  if (current?.state === "connected") run();
+}
+
 function render(health: DaemonHealth) {
+  // Before the early return below: whether the connection came back is not a
+  // question about the strip, and a missing element must not swallow it.
+  const cameBack = health.state === "connected" && current?.state !== "connected";
+  current = health;
+  if (cameBack) for (const run of reachable) run();
+
   if (!strip) return;
 
   switch (health.state) {
