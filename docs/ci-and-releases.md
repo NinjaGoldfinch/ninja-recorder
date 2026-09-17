@@ -46,7 +46,7 @@ other end: it needs everything already compiled.
 | 4 | *(`npx svelte-check`)* | types `tsc` cannot see | **WS4.1: commented** |
 | 5 | `npx vitest run` | frontend unit tests | WS5.5 |
 | 6 | `cargo deny check` | licences + advisories | WS5.3 |
-| 7 | `cargo run --bin gen-contract -- --check` | contract drift | WS2.5 |
+| 7 | `cargo run --features contract-gen --bin gen-contract -- --check` | contract drift | WS2.5 |
 | 8 | `cargo test`, `cargo test --features devtools` | Rust tests, both feature sets | v1 |
 | 9 | `cargo clippy -- -D warnings`, and again with `--features devtools` | Rust lints, both feature sets | v1 |
 | 10 | `scripts/smoke-daemon.ps1` | the daemon actually runs | WS3.3 |
@@ -309,6 +309,13 @@ of main binary comes from the bundler, and both happen after `cargo test` and
 `cargo clippy` have gone green. A release whose Start Menu entry launched
 `gen-contract.exe` passed every other gate in this file, which is the whole
 argument for the step. DEVELOPMENT.md §15 records what that cost.
+
+The emitter is also no longer built by default, so there is nothing to choose:
+`gen-contract` carries `required-features = ["contract-gen"]`, which is why
+step 7 and the devtools clippy run name that feature. The two halves are
+deliberate. Not building it keeps it out of the installer; naming the main
+binary decides the shortcut, and would still be needed the day this package
+grows a second binary that does have to ship.
 
 > Working on the capture backend locally on the Windows box means running the
 > same clone-build-copy sequence by hand before `cargo run`. It is not

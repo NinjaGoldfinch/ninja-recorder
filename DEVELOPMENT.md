@@ -1804,7 +1804,16 @@ decided by the bundler after every Rust gate has passed, and no test of ours
 runs late enough to see it.
 
 The narrower lesson is worth keeping too: a second `[[bin]]` in a Tauri crate
-is not free. It gets installed, and without this field it can be chosen.
+is not free. The bundler collects every bin target the package produces and
+installs them all, so without this field one of them can be chosen, and with it
+the others are still there.
+
+So `gen-contract` now carries `required-features = ["contract-gen"]`, a feature
+nothing enables but CI and a regeneration. Cargo does not build it, so Tauri
+cannot install it, and the install directory holds the application and the
+things it needs to run. That is the half of the fix that does not depend on a
+config field being right; `mainBinaryName` is the half that still would be, the
+day this package grows a second binary that genuinely has to ship.
 
 ---
 

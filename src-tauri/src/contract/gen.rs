@@ -2,7 +2,7 @@
 //!
 //! Walks the two declarations, `core::dispatch`'s table and
 //! `contract::events`' table, and writes `src/lib/contract/{types,client,
-//! events}.ts`. Run as `cargo run --bin gen-contract`; `--check` re-emits into
+//! events}.ts`. Run as `cargo run --features contract-gen --bin gen-contract`; `--check` re-emits into
 //! a buffer and fails if it differs from what is committed, which is the CI
 //! gate.
 //!
@@ -49,7 +49,7 @@ use crate::core::dispatch::contract_manifest_ts;
 const HEADER: &str = "\
 // GENERATED FILE. Do not edit by hand.
 //
-// Regenerate with:  cargo run --bin gen-contract   (from src-tauri/)
+// Regenerate with:  cargo run --features contract-gen --bin gen-contract   (from src-tauri/)
 // CI runs the same binary with --check and fails if this file is stale.
 //
 // The declaration lives in Rust:

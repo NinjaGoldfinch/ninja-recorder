@@ -68,11 +68,13 @@ npx biome ci .                                        # lint + format
 npx tsc --noEmit                                      # types
 npx vitest run                                        # frontend tests
 cd src-tauri && cargo deny check                      # licences + advisories
-cd src-tauri && cargo run --bin gen-contract -- --check  # contract drift
+# contract drift. `contract-gen` is opt-in so the emitter is never built into
+# a bundle; see "The emitter is not built by default" below.
+cd src-tauri && cargo run --features contract-gen --bin gen-contract -- --check
 cd src-tauri && cargo test
 cd src-tauri && cargo test --features devtools
 cd src-tauri && cargo clippy --no-deps -- -D warnings
-cd src-tauri && cargo clippy --features devtools --no-deps -- -D warnings
+cd src-tauri && cargo clippy --features devtools,contract-gen --no-deps -- -D warnings
 powershell ./scripts/smoke-daemon.ps1                 # Windows only: it runs
 powershell ./scripts/smoke-ui.ps1                     # Windows only: and finds it
 ```
@@ -94,9 +96,18 @@ One more is a commented placeholder in `ci.yml` until its workstream lands:
 
 `gen-contract --check` re-emits `src/lib/contract/` from the Rust declaration
 and fails if it differs from what is committed. **Regenerate and commit** with
-`cargo run --bin gen-contract` whenever a command, an event or a boundary type
-changes; the generated files are not hand-edited and Biome does not format
-them.
+`cargo run --features contract-gen --bin gen-contract` whenever a command, an
+event or a boundary type changes; the generated files are not hand-edited and
+Biome does not format them.
+
+### The emitter is not built by default
+
+`gen-contract` carries `required-features = ["contract-gen"]`, so the two
+commands above are the only things that build it. Tauri's bundler installs
+**every** bin target this package produces, and a release once shipped
+`gen-contract.exe` into the install directory and pointed the Start Menu
+shortcut at it. Leave the feature off anywhere else, and do not add it to
+`devtools` — that feature ships a bundle of its own.
 
 ### Clippy runs without `--all-targets`, deliberately
 
@@ -246,9 +257,10 @@ workstream should be rewritten to say what it means.
   live in `core/dispatch.rs`'s `dispatch_table!` and are reached through the
   single `rpc` command, so add a row there **with a doc comment**, give it form
   metadata in `contract::portal`'s `production_form_table!`, and run
-  `cargo run --bin gen-contract`. The doc comment is the help text the dev
-  portal shows; there is no TypeScript list to keep in step any more, and
-  `--check` fails the build if the generated files are stale.
+  `cargo run --features contract-gen --bin gen-contract`. The doc comment is
+  the help text the dev portal shows; there is no TypeScript list to keep in
+  step any more, and `--check` fails the build if the generated files are
+  stale.
 - **A `dev_*` command is declared in `contract::portal` and nowhere else, in
   one of two tables.** `dev_rpc_command_table!` is for commands that run
   wherever the library does, which is the daemon: they carry a `call:` giving
