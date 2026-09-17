@@ -107,6 +107,23 @@ its own message and no button, since a UI and a daemon from different builds
 cannot be made to agree by waiting, and the one thing the window must not do is
 tell the daemon to quit while it may be recording.
 
+**It also decides when the views may fetch.** `whenDaemonReachable` runs its
+caller once the daemon is reachable and again on every reconnect, and `main.ts`
+puts the whole startup batch behind it: the library, the disk usage and the
+preferences. They used to run on load, which is a race the window loses.
+`DaemonLink::connect` returns immediately and keeps connecting in the
+background, so the first paint happens before the handshake, and on a first
+launch after an install the window is starting the daemon itself. Every one of
+those fetches came back with "not connected to the recorder" and reported it as
+a failure, so a healthy install opened with a red error box that cleared itself
+a moment later.
+
+Not making the call is the fix rather than swallowing its error, which keeps a
+genuine failure on a live connection loud. The reconnect half is the part that
+never worked at all: the strip cleared itself when the daemon came back and
+nothing re-read anything, so a window that lost its recorder went on showing
+whatever it held at the moment the connection died.
+
 **`pipe.ts` also carries the other direction**, which `invoke.ts` never had to.
 `subscribe` listens on three channels: `snapshot` replaces the frontend's world
 on every handshake, `event` updates it, and `daemon-health` says whether there

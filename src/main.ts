@@ -1,6 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 
-import { initDaemonStatus } from "./daemon";
+import { initDaemonStatus, whenDaemonReachable } from "./daemon";
 import { initDesktop } from "./desktop";
 import { initDevPortal } from "./devportal";
 import { el } from "./dom";
@@ -57,14 +57,27 @@ window.addEventListener("DOMContentLoaded", () => {
     void refreshDiskUsage();
   }).catch((err) => console.warn("library-changed listener unavailable:", err));
 
-  void refreshLibrary();
-  void refreshDiskUsage();
+  // **Not on load: on connect.** Every one of these is an RPC to the daemon,
+  // and on a cold start the window paints before the handshake finishes — on a
+  // first launch after an install it is starting the daemon itself, which
+  // takes seconds. Fetching here got `not connected to the recorder` back and
+  // reported it as an error, so a healthy install greeted its owner with a red
+  // box that cleared itself moments later.
+  //
+  // It runs on every *re*connect too, which is the half that was missing
+  // entirely: WS3.8 made the strip clear itself when the daemon came back, but
+  // nothing re-read the library, so a window that lost its recorder went on
+  // showing whatever it held when the connection died.
+  whenDaemonReachable(() => {
+    void refreshLibrary();
+    void refreshDiskUsage();
 
-  // Preferences come from SQLite, so they land a beat after the first
-  // paint. Both consumers re-apply rather than waiting on them.
-  void loadPrefs().then((prefs) => {
-    applyThemePref(prefs.theme);
-    syncSettingsFromPrefs();
-    applyDefaultSort();
+    // Preferences come from SQLite, so they land a beat after the first
+    // paint. Both consumers re-apply rather than waiting on them.
+    void loadPrefs().then((prefs) => {
+      applyThemePref(prefs.theme);
+      syncSettingsFromPrefs();
+      applyDefaultSort();
+    });
   });
 });
