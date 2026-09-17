@@ -133,6 +133,46 @@ impl Launch {
 mod tests {
     use super::*;
 
+    /// The bundle has to name which binary is the application, because this
+    /// crate builds two: `ninja-recorder` from `main.rs`, and `gen-contract`,
+    /// the contract emitter in `src/bin/`. Tauri bundles every binary Cargo
+    /// produces, and the installer's Start Menu shortcut points at whichever
+    /// one it considers the main one.
+    ///
+    /// **This is not hypothetical.** With `mainBinaryName` absent, an
+    /// installed build's shortcut pointed at `gen-contract.exe`: a
+    /// console-subsystem binary with no `windows_subsystem` attribute, which
+    /// opens a console, writes its TypeScript to a repo path that does not
+    /// exist on a user's machine, and exits. From outside it is a console
+    /// window that appears and closes, with no app and nothing logged anywhere
+    /// — the application it was supposed to start never ran. The devtools
+    /// config always set the field, which is why only release installs were
+    /// affected, and why it looked like a crash rather than a shortcut.
+    ///
+    /// Pinned against `CARGO_PKG_NAME` rather than a literal: the default bin
+    /// target takes the package's name, so these are the same string by
+    /// construction and renaming the package cannot leave the config behind.
+    #[test]
+    fn the_bundle_names_the_application_as_its_main_binary() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(
+            conf["mainBinaryName"].as_str(),
+            Some(env!("CARGO_PKG_NAME")),
+            "the installer's shortcut points at whatever this names"
+        );
+    }
+
+    /// And the devtools bundle names its own, which is what `productName`
+    /// alone could not do: both configs install side by side, so a shortcut
+    /// naming the wrong one would launch the other build's binary.
+    #[test]
+    fn the_devtools_bundle_names_its_own_main_binary() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.devtools.conf.json")).unwrap();
+        assert_eq!(conf["mainBinaryName"].as_str(), conf["productName"].as_str());
+    }
+
     #[test]
     fn no_arguments_is_a_normal_ui_start() {
         assert_eq!(Launch::from_args(Vec::<String>::new()), Launch::Ui);

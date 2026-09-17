@@ -1773,6 +1773,39 @@ backwards, which NSIS has never been asked to do here.
 
 **An alpha release per commit accumulates.** Nothing prunes them yet.
 
+### The installer's shortcut names a binary, and this crate builds two
+
+`main.rs` produces `ninja-recorder`, and `src/bin/gen-contract.rs` produces
+`gen-contract`, the emitter CI runs with `--check` to catch contract drift.
+Cargo builds both, and Tauri's bundler installs every binary it finds. Which
+one the Start Menu entry points at is decided by exactly one field:
+`mainBinaryName`. The NSIS template defines `MAINBINARYNAME` from it, and every
+`CreateShortcut` in the template targets `$INSTDIR\${MAINBINARYNAME}.exe`.
+
+That field was missing from `tauri.conf.json`, and present in
+`tauri.devtools.conf.json`, which had a consequence nobody would guess from
+reading either file. The devtools installer's shortcut started the app. The
+release installer's shortcut started `gen-contract.exe`, which has no
+`windows_subsystem` attribute, so Windows gave it a console. It resolved a repo
+root that does not exist on an installed machine, wrote nothing, and exited.
+
+The report it produced was "the app opens a console window for a moment and
+then closes", and every part of that was true except the word "app". Nothing
+was wrong with the application, which is why there was no crash to find, no log
+anywhere, and no `app_data_dir()` at all: the binary that creates it had never
+been launched. Roughly a day went into looking for a startup crash that did not
+exist.
+
+Two things came out of it. `mainBinaryName` is now set in both configs and
+pinned by a test in `launch.rs`, against `CARGO_PKG_NAME` rather than a
+literal, so renaming the package cannot leave the config behind. And CI asserts
+it against the generated `installer.nsi` on every build, because this is
+decided by the bundler after every Rust gate has passed, and no test of ours
+runs late enough to see it.
+
+The narrower lesson is worth keeping too: a second `[[bin]]` in a Tauri crate
+is not free. It gets installed, and without this field it can be chosen.
+
 ---
 
 ## 17. Contract and transport

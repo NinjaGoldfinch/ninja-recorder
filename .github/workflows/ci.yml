@@ -577,6 +577,37 @@ jobs:
           fi
           npm run tauri build -- "${args[@]}"
 
+      # The generated NSIS script is where `mainBinaryName` becomes a shortcut.
+      # Tauri's template defines `MAINBINARYNAME` from it and every
+      # `CreateShortcut` points at `$INSTDIR\${MAINBINARYNAME}.exe`, so with the
+      # field absent the bundler picked the first binary it found. That is
+      # `gen-contract`, not the app: an installed release's Start Menu entry
+      # launched a console tool that opened a window, failed to find a repo to
+      # write to, and exited, while the app it was meant to start never ran.
+      #
+      # No Rust gate can see this. It is decided by the bundler, after all of
+      # them, which is why it is asserted here against what was actually built
+      # rather than against the config that asked for it.
+      - name: The installer's shortcut starts the app
+        shell: pwsh
+        env:
+          DEVTOOLS: ${{ matrix.devtools && '1' || '' }}
+        run: |
+          $nsi = Get-ChildItem src-tauri/target/release -Recurse -Filter installer.nsi -EA SilentlyContinue |
+                 Select-Object -First 1
+          if (-not $nsi) { throw "no generated installer.nsi under src-tauri/target/release" }
+          $m = [regex]::Match((Get-Content $nsi.FullName -Raw), '!define\s+MAINBINARYNAME\s+"([^"]+)"')
+          if (-not $m.Success) {
+            Select-String -Path $nsi.FullName -Pattern '^!define' | ForEach-Object { $_.Line }
+            throw "installer.nsi defines no MAINBINARYNAME; this check needs updating"
+          }
+          $named = $m.Groups[1].Value
+          $expected = if ($env:DEVTOOLS) { 'ninja-recorder-dev' } else { 'ninja-recorder' }
+          if ($named -ne $expected) {
+            throw "the installer's shortcut would start $named.exe, not $expected.exe"
+          }
+          Write-Host "the installer's shortcut starts $named.exe"
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
         with:
