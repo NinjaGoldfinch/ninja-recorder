@@ -547,6 +547,36 @@ pub fn run() {
     // mobile entry point below still has one argument-free way in.
     let mode = launch::Launch::from_env();
 
+    // **Before the builder, not inside `setup`.** This is the correction the
+    // daemon already got (`daemon::start`): open the log before anything that
+    // can fail, because a process that dies earlier than its first log line
+    // leaves no trace anywhere.
+    //
+    // The UI never got it, and it is the process with the most that can fail
+    // before `setup` runs — four plugin initialisations, the context, the
+    // whole of `build()` — every one of them reporting through a stderr that a
+    // `windows_subsystem = "windows"` build sends nowhere. The symptom is an
+    // app that flashes and closes with `app_data_dir()` not existing at all,
+    // which is exactly the state where the only evidence would have been in a
+    // file that was never opened.
+    //
+    // `Paths::resolve` rather than `app.path()`, because there is no `app`
+    // yet. It is the same `dirs::data_dir()` join that Tauri's own
+    // `app_data_dir()` performs — see its header for why that is one rule
+    // rather than two implementations of one.
+    match daemon::Paths::resolve() {
+        Ok(paths) => match log::init(&paths.logs, log::Process::Ui) {
+            Some(path) => info!("log", "logging to {}", path.display()),
+            // Only reachable via stderr, which in a release build is nowhere
+            // — but in `tauri:dev` it is exactly where someone would look.
+            None => {
+                eprintln!("[log] could not open a log file; this session logs to stderr only")
+            }
+        },
+        Err(e) => eprintln!("[log] no app data directory, so no log file: {e}"),
+    }
+    info!("launch", "the window process is starting ({mode:?})");
+
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
@@ -568,32 +598,11 @@ pub fn run() {
         // what it serves live in `tauri.conf.json` under `plugins.updater`.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
-            // First thing in setup, and deliberately before the recorder
-            // backend and the database: a release build has no console
-            // (`main.rs`), so until this runs, anything that goes wrong
-            // goes nowhere. Failing to open the library is one of the
-            // failures most worth having a record of.
-            // WS3: pipe name and mutex must be scoped by build identity.
-            //
-            // `app_data_dir()` is derived from `identifier` in
-            // `tauri.conf.json`, and `tauri.devtools.conf.json` overrides
-            // `productName` but *not* `identifier` — so a devtools build and a
-            // release build already share this directory, the database and the
-            // recordings folder. That is survivable for one process. It is not
-            // survivable for two: a dev daemon and a release daemon would bind
-            // the same pipe and hold the same single-instance mutex, and
-            // whichever started first would silently own the other's client.
-            // Scope both names by build identity when WS3 creates them.
-            match app.path().app_data_dir() {
-                Ok(data_dir) => match log::init(&data_dir.join("logs"), log::Process::Ui) {
-                    Some(path) => info!("log", "logging to {}", path.display()),
-                    // Only reachable via stderr, which in a release build
-                    // is nowhere — but in `tauri:dev` it is exactly where
-                    // someone would be looking.
-                    None => eprintln!("[log] could not open a log file; this session logs to stderr only"),
-                },
-                Err(e) => eprintln!("[log] no app data directory, so no log file: {e}"),
-            }
+            // The log is already open — `run` does it above, before the
+            // builder, so that everything between there and here is recorded
+            // too. `app_data_dir()` below resolves to the same directory it
+            // was opened under, which `Paths::resolve` is written to
+            // guarantee and `daemon`'s identifier test pins.
 
             // **The UI links no capture backend.** It used to build the real
             // one here, which is what made killing the window kill the
@@ -835,7 +844,20 @@ pub fn run() {
 
     builder
         .build(tauri::generate_context!())
-        .expect("error while building tauri application")
+        // `expect` here aborted with a message only stderr could carry, which
+        // in a windowed build is nowhere. A plugin that failed to initialise,
+        // a context that would not load and a `setup` that returned `Err` all
+        // looked identical from outside: an app that closed as soon as it was
+        // opened. The log is open by this point, so now they do not.
+        //
+        // Exit code 3, beside `daemon::run`'s 2 and the library's 1, so the
+        // three fatal starts are still told apart by a caller that can only
+        // see a number.
+        .unwrap_or_else(|e| {
+            error!("launch", "could not build the application: {e}");
+            eprintln!("[launch] could not build the application: {e}");
+            std::process::exit(3);
+        })
         .run(|_app, event| {
             // `code: None` means the exit came from user interaction — here,
             // the last window closing. That must not end the process: the

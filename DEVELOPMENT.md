@@ -1773,6 +1773,39 @@ backwards, which NSIS has never been asked to do here.
 
 **An alpha release per commit accumulates.** Nothing prunes them yet.
 
+### The installer's shortcut names a binary, and this crate builds two
+
+`main.rs` produces `ninja-recorder`, and `src/bin/gen-contract.rs` produces
+`gen-contract`, the emitter CI runs with `--check` to catch contract drift.
+Cargo builds both, and Tauri's bundler installs every binary it finds. Which
+one the Start Menu entry points at is decided by exactly one field:
+`mainBinaryName`. The NSIS template defines `MAINBINARYNAME` from it, and every
+`CreateShortcut` in the template targets `$INSTDIR\${MAINBINARYNAME}.exe`.
+
+That field was missing from `tauri.conf.json`, and present in
+`tauri.devtools.conf.json`, which had a consequence nobody would guess from
+reading either file. The devtools installer's shortcut started the app. The
+release installer's shortcut started `gen-contract.exe`, which has no
+`windows_subsystem` attribute, so Windows gave it a console. It resolved a repo
+root that does not exist on an installed machine, wrote nothing, and exited.
+
+The report it produced was "the app opens a console window for a moment and
+then closes", and every part of that was true except the word "app". Nothing
+was wrong with the application, which is why there was no crash to find, no log
+anywhere, and no `app_data_dir()` at all: the binary that creates it had never
+been launched. Roughly a day went into looking for a startup crash that did not
+exist.
+
+Two things came out of it. `mainBinaryName` is now set in both configs and
+pinned by a test in `launch.rs`, against `CARGO_PKG_NAME` rather than a
+literal, so renaming the package cannot leave the config behind. And CI asserts
+it against the generated `installer.nsi` on every build, because this is
+decided by the bundler after every Rust gate has passed, and no test of ours
+runs late enough to see it.
+
+The narrower lesson is worth keeping too: a second `[[bin]]` in a Tauri crate
+is not free. It gets installed, and without this field it can be chosen.
+
 ---
 
 ## 17. Contract and transport
@@ -1984,3 +2017,33 @@ dead pipe, then finalize whatever recording is in flight. That last step is the
 one worth the wait. Killing a daemon mid-game leaves a fragmented MP4 with no
 row, recoverable only by the next startup's reconcile and stripped of its
 markers, so a clean stop finalizes first and exits second.
+
+### The UI opens its log before the builder, for the same reason
+
+The daemon's ordering above was corrected first, and the UI was left as it was:
+`log::init` ran as the opening statement of Tauri's `setup` hook. That reads
+like the earliest point there is, and it is not. Four plugins initialise before
+it, the generated context loads before it, and the whole of
+`tauri::Builder::build` runs before it, the windowing runtime included. Every
+one of those reports a failure that reached
+`.expect("error while building tauri application")`, which aborts with a
+message on a stderr that a `windows_subsystem = "windows"` build sends nowhere.
+
+The symptom was the same one, reported from the field a second time: an app
+that flashed and closed, with `app_data_dir()` not existing at all. The missing
+directory is not incidental, it is the diagnosis. `log::init` creates it, so
+its absence proves the process died before the first line of `setup`, which is
+exactly the window the UI had no logging for.
+
+So `run` opens the log itself, before the builder, through
+`daemon::Paths::resolve` rather than `app.path()`: there is no app yet, and
+resolving those paths without one is what that function exists for. `build()`'s
+failure is no longer an `expect` either. It logs the reason and exits 3, beside
+`daemon::run`'s 2 and the library's 1, so the three fatal starts stay
+distinguishable to a caller that can see nothing but an exit code.
+
+What this cannot cover is a process that dies in the loader, before `main` runs
+at all. That leaves no log by construction, whoever opens it. The difference is
+that the silence is now itself a result: a launch that still writes nothing has
+ruled out everything after the loader, which is the half of the search space
+this could not previously separate.
