@@ -75,9 +75,13 @@ mod win32 {
 
     use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
     use tray_icon::{Icon, TrayIconBuilder, TrayIconEvent};
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, GetMessageW, MB_ICONWARNING, MB_YESNO, IDYES, MSG, MessageBoxW,
-        PostQuitMessage, TranslateMessage,
+        PostThreadMessageW, TranslateMessage, WM_QUIT,
     };
     use windows::core::{HSTRING, PCWSTR};
 
@@ -89,6 +93,17 @@ mod win32 {
     const MENU_OPEN: &str = "tray-open";
     const MENU_SETTINGS: &str = "tray-settings";
     const MENU_QUIT: &str = "tray-quit";
+
+    /// The thread running `message_loop`, so `stop` can reach it.
+    ///
+    /// **Zero means the pump is not running**, which is a real state rather
+    /// than an impossible one: `run` can fail before the loop starts, and off
+    /// Windows there is no loop at all.
+    ///
+    /// A thread id rather than a handle or a window, because `WM_QUIT` is a
+    /// thread message. It has no window, cannot be sent with `PostMessageW`,
+    /// and is what `GetMessageW` returns 0 for.
+    static PUMP_THREAD: AtomicU32 = AtomicU32::new(0);
 
     /// Builds the tray and runs the message loop until Quit.
     ///
@@ -154,15 +169,25 @@ mod win32 {
         }
         let _tray = builder.build().map_err(|e| format!("cannot create the tray icon: {e}"))?;
 
+        // Recorded before the loop and cleared after it, so `stop` can tell a
+        // running pump from one that never started or has already ended.
+        // SAFETY: no preconditions; it reads the calling thread's own id.
+        PUMP_THREAD.store(unsafe { GetCurrentThreadId() }, Ordering::SeqCst);
+
         info!("tray", "tray icon up; pumping messages");
         message_loop();
+        PUMP_THREAD.store(0, Ordering::SeqCst);
         Ok(())
     }
 
     /// The loop itself.
     ///
-    /// `GetMessageW` returns 0 on `WM_QUIT`, which is what `PostQuitMessage`
-    /// below posts, and -1 on error. Anything else is a message to dispatch.
+    /// `GetMessageW` returns 0 on `WM_QUIT`, which is what `stop` below posts
+    /// to this thread, and -1 on error. Anything else is a message to dispatch.
+    ///
+    /// A null window handle asks for messages for *any* window on this thread
+    /// and for thread messages, which is what makes a posted `WM_QUIT` with no
+    /// window of its own arrive here at all.
     fn message_loop() {
         let mut message = MSG::default();
         loop {
@@ -186,13 +211,43 @@ mod win32 {
         }
     }
 
-    /// Ends the message loop, from the thread running it.
+    /// Ends the message loop, from any thread.
     ///
-    /// Called from a menu handler, which is already on that thread.
+    /// **This used to be `PostQuitMessage`, and that was a bug.** That function
+    /// posts `WM_QUIT` to the *calling* thread's queue, and its only caller is
+    /// the tray command handler, which `daemon::pump_until_quit` runs on a
+    /// thread of its own precisely because the pump thread is blocked inside
+    /// `GetMessageW`. So the quit was posted to a thread with no message loop,
+    /// where it sat forever, and the pump went on pumping. Tray Quit showed its
+    /// confirmation, took "yes" for an answer, and did nothing: the daemon kept
+    /// running and kept recording, and the only way to stop it was Task
+    /// Manager.
+    ///
+    /// It survived because the two halves are tested separately and the seam
+    /// between them is a thread boundary. `should_confirm_quit` is a pure
+    /// function with tests; the message loop is Windows-only and has none; and
+    /// the failure needs a real tray, a real click, and someone to answer
+    /// "yes", which is the one combination nothing in CI or the dev loop
+    /// reaches.
+    ///
+    /// `PostThreadMessageW` addresses the pump thread by id instead. `WM_QUIT`
+    /// is a thread message with no window, so this is the posting function for
+    /// it; `PostMessageW` refuses it outright.
     pub fn stop() {
-        // SAFETY: no preconditions; it posts `WM_QUIT` to the calling thread's
-        // own queue.
-        unsafe { PostQuitMessage(0) };
+        let pump = PUMP_THREAD.load(Ordering::SeqCst);
+        if pump == 0 {
+            // Nothing to stop. Worth a line rather than silence: it means the
+            // tray never came up, and the caller believes it just quit.
+            warn!("tray", "asked to stop, but no message loop is running");
+            return;
+        }
+        // SAFETY: `pump` is a thread id this process recorded from
+        // `GetCurrentThreadId`, and `WM_QUIT` carries no pointers in either
+        // parameter. A thread that has since exited makes this fail, which is
+        // handled below rather than being undefined.
+        if let Err(e) = unsafe { PostThreadMessageW(pump, WM_QUIT, WPARAM(0), LPARAM(0)) } {
+            error!("tray", "could not ask the message loop to stop: {e}");
+        }
     }
 
     /// Asks before quitting mid-recording.
