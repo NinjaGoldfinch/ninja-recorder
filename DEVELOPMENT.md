@@ -2017,3 +2017,33 @@ dead pipe, then finalize whatever recording is in flight. That last step is the
 one worth the wait. Killing a daemon mid-game leaves a fragmented MP4 with no
 row, recoverable only by the next startup's reconcile and stripped of its
 markers, so a clean stop finalizes first and exits second.
+
+### The UI opens its log before the builder, for the same reason
+
+The daemon's ordering above was corrected first, and the UI was left as it was:
+`log::init` ran as the opening statement of Tauri's `setup` hook. That reads
+like the earliest point there is, and it is not. Four plugins initialise before
+it, the generated context loads before it, and the whole of
+`tauri::Builder::build` runs before it, the windowing runtime included. Every
+one of those reports a failure that reached
+`.expect("error while building tauri application")`, which aborts with a
+message on a stderr that a `windows_subsystem = "windows"` build sends nowhere.
+
+The symptom was the same one, reported from the field a second time: an app
+that flashed and closed, with `app_data_dir()` not existing at all. The missing
+directory is not incidental, it is the diagnosis. `log::init` creates it, so
+its absence proves the process died before the first line of `setup`, which is
+exactly the window the UI had no logging for.
+
+So `run` opens the log itself, before the builder, through
+`daemon::Paths::resolve` rather than `app.path()`: there is no app yet, and
+resolving those paths without one is what that function exists for. `build()`'s
+failure is no longer an `expect` either. It logs the reason and exits 3, beside
+`daemon::run`'s 2 and the library's 1, so the three fatal starts stay
+distinguishable to a caller that can see nothing but an exit code.
+
+What this cannot cover is a process that dies in the loader, before `main` runs
+at all. That leaves no log by construction, whoever opens it. The difference is
+that the silence is now itself a result: a launch that still writes nothing has
+ruled out everything after the loader, which is the half of the search space
+this could not previously separate.
