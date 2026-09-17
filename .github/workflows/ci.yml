@@ -691,6 +691,15 @@ jobs:
 
           ---
 
+          **This build is not fully verified.** v2 rebuilt the process model:
+          the recorder is now a headless daemon and the window is a client of
+          it. CI starts both processes on Windows on every push and checks the
+          pipe, its permissions, the handshake, the tray and the reconnect, but
+          nothing involving a real game, a GPU, a visible menu or a toast has
+          been confirmed on a desktop yet. Expect rough edges, and see
+          https://github.com/NinjaGoldfinch/ninja-recorder-v2/issues/130 for
+          what is still being checked.
+
           Unsigned build: Windows SmartScreen will warn on first run. No
           code-signing certificate is configured yet.
           CAVEATS

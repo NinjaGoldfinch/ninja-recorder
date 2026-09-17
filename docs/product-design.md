@@ -337,3 +337,83 @@ issues:
 
 New code should not reintroduce phase numbers. Describe the behaviour, and
 link to the document that explains it.
+
+---
+
+## 6. What v2 has changed so far, against v1
+
+v2 is v1 with things replaced underneath it, one workstream at a time. This is
+what has actually changed at the time of writing, and, as importantly, what has
+not.
+
+### The process model
+
+v1 was one process. The window, the state machine, the recorder, every SQLite
+write, the tray, autostart and the updater all lived in it, so closing the
+window closed the recorder with it, and a crash in the UI took a recording with
+it.
+
+v2 is two. A headless daemon owns everything that must outlive the window, and
+the window is a client of it over a named pipe. **Killing the UI now stops
+nothing.** That is the whole sentence the workstream exists to make true, and
+everything below is in service of it.
+
+| | v1 | v2 |
+|---|---|---|
+| Recorder, state machine, watchers | in the window's process | the daemon |
+| Every SQLite write, every migration | the window | the daemon; the UI opens the library `query_only` |
+| Tray icon and its menu | Tauri's event loop in the UI | the daemon, on its own Win32 message pump |
+| Desktop notifications | the UI | the daemon, which is what is running when no window is |
+| Start on login | starts the UI hidden | starts the daemon alone |
+| Update check and install | the UI, via `tauri-plugin-updater` | the daemon, which is the process that knows whether a game is being recorded |
+| Dev portal's commands | the UI | the daemon, except six that need a window |
+
+### The contract between frontend and backend
+
+v1 hand-wrote the surface three times: a `generate_handler!` list in Rust, a
+registry in TypeScript, and the calls themselves. They drifted, and a drift
+banner in the dev portal existed to make that visible rather than to prevent it.
+
+v2 declares commands and events once, in Rust, and generates the TypeScript
+client from that declaration. CI fails if the generated files are stale. The
+frontend reaches the backend through one `rpc` call routed by name, and since
+the split that call is forwarded over the pipe without any view knowing.
+
+### Persistence
+
+v1 held a single `Mutex<Connection>`: correct for one process and wrong for two,
+because the UI's library query would block the daemon's marker write. v2 opens
+one writer and four `query_only` readers under WAL, and the UI opens the same
+file read-only, so a write appearing in the wrong process fails at SQLite rather
+than racing.
+
+### The gates
+
+v1 had 447 Rust tests and **zero** frontend tests, against 12,797 lines of
+TypeScript. v2 adds Biome, Vitest, `cargo-deny`, a pinned toolchain, edition
+2024, and a contract-drift check.
+
+It also adds the two gates that matter most for a two-process app: CI now
+**starts the binary**, on Windows, on every push. Everything before them was a
+claim about types and framing, and the daemon and the UI are processes.
+
+### What has *not* changed
+
+- **The capture backend.** Still libobs with WGC, still GPL-2.0, still the
+  reason this repository is. Option B is WS1 and has not started.
+- **The frontend.** Still vanilla TypeScript. The Svelte migration is WS4.
+- **The licence.** GPL-2.0-only until libobs goes (WS8).
+- **The recording pipeline.** The state machine, the marker tracker and the
+  alignment logic are v1's, unchanged, and deliberately so: they were the part
+  that worked.
+
+### What is not verified
+
+Most of the above has never run on a Windows desktop. CI starts both processes
+on every push and checks a meaningful amount: the pipe, its ACL, the handshake,
+the tray coming up, the UI connecting, and recovering from a killed daemon. But
+nothing involving a game, a GPU, a visible menu or a toast has been seen
+working.
+
+[Issue #130](https://github.com/NinjaGoldfinch/ninja-recorder-v2/issues/130)
+is the plan for finding out, in the order worth doing it.
