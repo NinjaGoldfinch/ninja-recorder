@@ -12,12 +12,25 @@ a disposable UI), the quality gates (none on the frontend to five in CI), and
 the capture backend (embedded libobs to an own WGC/D3D11/Media Foundation
 backend): that last one being what eventually lets the licence change.
 
-> **Pre-alpha. v1-equivalent, gates only.**
+> **Alpha. The process model has changed, and the loop runs on real hardware.**
 >
-> This repository is byte-for-byte v1 at `32dcd41` plus edition 2024, a pinned
-> toolchain, the quality gates, and empty directories for the workstreams that
-> have not started. **Nothing user-visible has changed yet.** For a working
-> build, use [ninja-recorder](https://github.com/NinjaGoldfinch/ninja-recorder).
+> This repository started as byte-for-byte v1 at `32dcd41` plus edition 2024, a
+> pinned toolchain and the quality gates. It is no longer that. The recorder is
+> a headless daemon and the window is a client of it over a named pipe, the
+> command and event surface is declared once in Rust and generated into
+> TypeScript, and the capture backend no longer injects into the game.
+>
+> As of `v2.0.0-alpha.40` the whole loop has run on a live ranked game on
+> Windows: the client detected, the game captured, markers placed, the row in
+> the library, playback and seeking in the review player, notifications raised
+> by a daemon with no window open, and a recording that carried on after the
+> window was closed.
+>
+> **What that does not yet cover** is in
+> [docs/windows-verification.md](docs/windows-verification.md), which is
+> specific about it: the recorder being killed mid-game, the in-app updater's
+> install half, and the resource budgets. The frontend is still v1's, until WS4
+> replaces it. Expect rough edges and read the release notes.
 >
 > Provenance: [docs/provenance.md](docs/provenance.md) ·
 > Plan: [ninja-recorder-v2-plan](https://github.com/NinjaGoldfinch/ninja-recorder-v2-plan)
