@@ -483,7 +483,7 @@ pub fn file_names() -> Vec<String> {
 /// Something went wrong and the user may notice.
 #[macro_export]
 macro_rules! error {
-    ($tag:expr_2021, $($arg:tt)*) => {
+    ($tag:expr, $($arg:tt)*) => {
         $crate::log::write($crate::log::Level::Error, $tag, &format!($($arg)*))
     };
 }
@@ -491,7 +491,7 @@ macro_rules! error {
 /// Something went wrong and the app carried on regardless.
 #[macro_export]
 macro_rules! warn {
-    ($tag:expr_2021, $($arg:tt)*) => {
+    ($tag:expr, $($arg:tt)*) => {
         $crate::log::write($crate::log::Level::Warn, $tag, &format!($($arg)*))
     };
 }
@@ -499,7 +499,7 @@ macro_rules! warn {
 /// A thing happened that a human reading the log would want confirmed.
 #[macro_export]
 macro_rules! info {
-    ($tag:expr_2021, $($arg:tt)*) => {
+    ($tag:expr, $($arg:tt)*) => {
         $crate::log::write($crate::log::Level::Info, $tag, &format!($($arg)*))
     };
 }
@@ -508,7 +508,7 @@ macro_rules! info {
 /// tracking — that would otherwise rotate real errors out of the file.
 #[macro_export]
 macro_rules! debug {
-    ($tag:expr_2021, $($arg:tt)*) => {
+    ($tag:expr, $($arg:tt)*) => {
         $crate::log::write($crate::log::Level::Debug, $tag, &format!($($arg)*))
     };
 }
