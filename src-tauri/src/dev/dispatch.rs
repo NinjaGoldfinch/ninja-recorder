@@ -39,27 +39,27 @@ use crate::core::Ctx;
 
 /// Invokes one command, parsing `args` into whatever the table says it takes.
 macro_rules! invoke_dev {
-    (ctx_result $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {{
+    (ctx_result $name:ident, $ret:ty, $ctx:expr, $a:expr, $($arg:ident,)*) => {{
         let out: $ret = super::$name($ctx, $($a.$arg,)*)?;
         serde_json::to_value(out).map_err(|e| e.to_string())
     }};
-    (ctx_plain $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {{
+    (ctx_plain $name:ident, $ret:ty, $ctx:expr, $a:expr, $($arg:ident,)*) => {{
         let out: $ret = super::$name($ctx, $($a.$arg,)*);
         serde_json::to_value(out).map_err(|e| e.to_string())
     }};
-    (ctx_async_result $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {{
+    (ctx_async_result $name:ident, $ret:ty, $ctx:expr, $a:expr, $($arg:ident,)*) => {{
         let out: $ret = super::$name($ctx, $($a.$arg,)*).await?;
         serde_json::to_value(out).map_err(|e| e.to_string())
     }};
-    (bare_result $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {{
+    (bare_result $name:ident, $ret:ty, $ctx:expr, $a:expr, $($arg:ident,)*) => {{
         let out: $ret = super::$name($($a.$arg,)*)?;
         serde_json::to_value(out).map_err(|e| e.to_string())
     }};
-    (bare_plain $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {{
+    (bare_plain $name:ident, $ret:ty, $ctx:expr, $a:expr, $($arg:ident,)*) => {{
         let out: $ret = super::$name($($a.$arg,)*);
         serde_json::to_value(out).map_err(|e| e.to_string())
     }};
-    (bare_async_result $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {{
+    (bare_async_result $name:ident, $ret:ty, $ctx:expr, $a:expr, $($arg:ident,)*) => {{
         let out: $ret = super::$name($($a.$arg,)*).await?;
         serde_json::to_value(out).map_err(|e| e.to_string())
     }};
@@ -69,15 +69,15 @@ macro_rules! invoke_dev {
 /// blocking form and says so rather than being silently unreachable, exactly as
 /// `core::dispatch` does.
 macro_rules! invoke_dev_blocking {
-    (ctx_async_result $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {{
+    (ctx_async_result $name:ident, $ret:ty, $ctx:expr, $a:expr, $($arg:ident,)*) => {{
         $( let _ = &$a.$arg; )*
         Err(format!("{} is async and must go through dispatch()", stringify!($name)))
     }};
-    (bare_async_result $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {{
+    (bare_async_result $name:ident, $ret:ty, $ctx:expr, $a:expr, $($arg:ident,)*) => {{
         $( let _ = &$a.$arg; )*
         Err(format!("{} is async and must go through dispatch()", stringify!($name)))
     }};
-    ($kind:ident $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {
+    ($kind:ident $name:ident, $ret:ty, $ctx:expr, $a:expr, $($arg:ident,)*) => {
         invoke_dev!($kind $name, $ret, $ctx, $a, $($arg,)*)
     };
 }
