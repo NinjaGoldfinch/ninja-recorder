@@ -13,9 +13,9 @@
 //! | `events.rs` | 2.3 | `#[derive(ContractEvent)] enum Event` — the event half, which v1 has no declaration of at all |
 //! | `snapshot.rs` | 2.4 | `Snapshot`, the whole of the daemon's state in one message |
 //! | `portal.rs` | 2.7 | The dev portal's command surface, replacing `src/dev/registry.ts` |
-//! | `gen.rs` | 2.5 | The TypeScript emitter, run as `cargo run --bin gen-contract` |
+//! | `gen.rs` | 2.5 | The TypeScript emitter, run as `cargo run --features contract-gen --bin gen-contract` |
 //!
-//! WS2.5 puts `cargo run --bin gen-contract -- --check` in CI, which is what
+//! WS2.5 puts `cargo run --features contract-gen --bin gen-contract -- --check` in CI, which is what
 //! replaces `every_command_round_trips` and the dev portal's drift banner.
 //! WS2 deletes that test; the import commit keeps it.
 //!

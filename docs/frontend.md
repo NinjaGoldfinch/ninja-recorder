@@ -661,9 +661,10 @@ a shipped build.
 > corrected and a test pins it.
 
 > **This whole table is now generated, and `src/lib/contract/` is the output.**
-> Since WS2.5 `cargo run --bin gen-contract` emits `types.ts`, `client.ts`,
-> `events.ts` and a barrel from the Rust declaration, and CI runs the same
-> binary with `--check`, so a command added without regenerating cannot merge.
+> Since WS2.5 `cargo run --features contract-gen --bin gen-contract` emits
+> `types.ts`, `client.ts`, `events.ts` and a barrel from the Rust declaration,
+> and CI runs the same binary with `--check`, so a command added without
+> regenerating cannot merge.
 > The generated files are committed, which is what lets a frontend developer
 > work without a Rust toolchain and makes a contract change reviewable as a
 > diff. Biome does not format them: a formatter rewriting a generator's output

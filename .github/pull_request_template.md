@@ -28,7 +28,8 @@ Closes #
       (`biome ci .` · `tsc --noEmit` · `vitest run` · `cargo deny check` ·
       `gen-contract --check` · `cargo test` ×2 · `cargo clippy -D warnings` ×2)
 - [ ] If a command, an event or a boundary type changed, `src/lib/contract/`
-      is regenerated and committed (`cargo run --bin gen-contract`)
+      is regenerated and committed
+      (`cargo run --features contract-gen --bin gen-contract`)
 - [ ] **The docs that describe this behaviour are updated in this PR.**
       `CLAUDE.md` has the table of which document goes with which change, and
       a diagram that lies is worse than no diagram

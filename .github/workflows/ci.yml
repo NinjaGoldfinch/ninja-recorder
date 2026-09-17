@@ -240,7 +240,7 @@ jobs:
       # because deleting them is that task's exit criterion, not this one's.
       - name: Contract drift
         working-directory: src-tauri
-        run: cargo run --bin gen-contract -- --check
+        run: cargo run --features contract-gen --bin gen-contract -- --check
 
       - name: Run Rust tests
         working-directory: src-tauri
@@ -258,9 +258,13 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy --no-deps -- -D warnings
 
+      # `contract-gen` rides along here rather than earning a fourth clippy
+      # run. Gating the emitter out of the default build took it out of
+      # `-D warnings` with everything else, and a lint failure in a file CI
+      # still compiles should not wait to be found by whoever regenerates next.
       - name: Clippy (devtools)
         working-directory: src-tauri
-        run: cargo clippy --features devtools --no-deps -- -D warnings
+        run: cargo clippy --features devtools,contract-gen --no-deps -- -D warnings
 
       # --- Does it actually run? -------------------------------------------
       #
@@ -588,11 +592,19 @@ jobs:
       # No Rust gate can see this. It is decided by the bundler, after all of
       # them, which is why it is asserted here against what was actually built
       # rather than against the config that asked for it.
-      - name: The installer's shortcut starts the app
+      - name: The installer ships the app, and starts it
         shell: pwsh
         env:
           DEVTOOLS: ${{ matrix.devtools && '1' || '' }}
         run: |
+          # The bundler installs every binary it finds beside the app, so the
+          # emitter being absent from the build directory is the whole of what
+          # keeps it out of the installer. `required-features` is what makes
+          # that true; this is the assertion that it stayed true.
+          if (Test-Path src-tauri/target/release/gen-contract.exe) {
+            throw "gen-contract.exe was built into target/release, and everything there gets installed"
+          }
+
           $nsi = Get-ChildItem src-tauri/target/release -Recurse -Filter installer.nsi -EA SilentlyContinue |
                  Select-Object -First 1
           if (-not $nsi) { throw "no generated installer.nsi under src-tauri/target/release" }
@@ -606,7 +618,7 @@ jobs:
           if ($named -ne $expected) {
             throw "the installer's shortcut would start $named.exe, not $expected.exe"
           }
-          Write-Host "the installer's shortcut starts $named.exe"
+          Write-Host "the installer ships the app alone, and its shortcut starts $named.exe"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v7

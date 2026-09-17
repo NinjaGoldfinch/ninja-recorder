@@ -1,6 +1,6 @@
 // GENERATED FILE. Do not edit by hand.
 //
-// Regenerate with:  cargo run --bin gen-contract   (from src-tauri/)
+// Regenerate with:  cargo run --features contract-gen --bin gen-contract   (from src-tauri/)
 // CI runs the same binary with --check and fails if this file is stale.
 //
 // The declaration lives in Rust:
