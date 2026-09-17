@@ -1,8 +1,8 @@
 //! Writes the generated TypeScript client, or checks that it is current.
 //!
 //! ```text
-//! cargo run --bin gen-contract              # write the files
-//! cargo run --bin gen-contract -- --check   # fail if they are stale
+//! cargo run --features contract-gen --bin gen-contract              # write the files
+//! cargo run --features contract-gen --bin gen-contract -- --check   # fail if they are stale
 //! ```
 //!
 //! The emitter itself is `contract::r#gen`; this is only argv, file I/O and an
@@ -51,7 +51,7 @@ fn main() -> ExitCode {
             eprintln!("  {line}");
         }
         eprintln!();
-        eprintln!("Run `cargo run --bin gen-contract` from src-tauri/ and commit the result.");
+        eprintln!("Run `cargo run --features contract-gen --bin gen-contract` from src-tauri/ and commit the result.");
         return ExitCode::FAILURE;
     }
 

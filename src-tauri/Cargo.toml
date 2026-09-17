@@ -33,6 +33,27 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # way to say why.
 devtools = ["tauri/devtools"]
 
+# The contract emitter, `src/bin/gen-contract.rs`. Off by default because a
+# binary Cargo builds is a binary Tauri installs: the bundler collects every
+# bin target this package produces and puts them all beside the app.
+#
+# That is how a repo tool ended up in a user's install directory, and once it
+# is there, `mainBinaryName` is the only thing deciding it is not what the
+# Start Menu launches. Not building it is the half of that fix which does not
+# depend on getting a config field right.
+#
+# It is not `devtools`: that feature ships a bundle of its own, and this
+# belongs in neither. Nothing outside CI and a regeneration needs it, and both
+# ask for it by name.
+contract-gen = []
+
+# Declared rather than auto-discovered, which is what lets `required-features`
+# be attached to it. `src/main.rs` is still found on its own.
+[[bin]]
+name = "gen-contract"
+path = "src/bin/gen-contract.rs"
+required-features = ["contract-gen"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
