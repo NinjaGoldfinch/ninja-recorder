@@ -93,23 +93,23 @@ pub struct CommandSpec {
 /// no context at all, and three are async — two of those with a context and
 /// one without.
 macro_rules! invoke_one {
-    (ctx_result $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {{
+    (ctx_result $name:ident, $ret:ty, $ctx:expr, $a:expr, $($arg:ident,)*) => {{
         let out: $ret = super::$name($ctx, $($a.$arg,)*)?;
         serde_json::to_value(out).map_err(|e| e.to_string())
     }};
-    (ctx_plain $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {{
+    (ctx_plain $name:ident, $ret:ty, $ctx:expr, $a:expr, $($arg:ident,)*) => {{
         let out: $ret = super::$name($ctx, $($a.$arg,)*);
         serde_json::to_value(out).map_err(|e| e.to_string())
     }};
-    (bare_result $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021,) => {{
+    (bare_result $name:ident, $ret:ty, $ctx:expr, $a:expr,) => {{
         let out: $ret = super::$name()?;
         serde_json::to_value(out).map_err(|e| e.to_string())
     }};
-    (bare_async $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021,) => {{
+    (bare_async $name:ident, $ret:ty, $ctx:expr, $a:expr,) => {{
         let out: $ret = super::$name().await;
         serde_json::to_value(out).map_err(|e| e.to_string())
     }};
-    (ctx_async $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {{
+    (ctx_async $name:ident, $ret:ty, $ctx:expr, $a:expr, $($arg:ident,)*) => {{
         let out: $ret = super::$name($ctx, $($a.$arg,)*).await?;
         serde_json::to_value(out).map_err(|e| e.to_string())
     }};
@@ -118,26 +118,26 @@ macro_rules! invoke_one {
 /// The same rows, for the synchronous entry point. An async command has no
 /// blocking form, so it reports that rather than being silently unreachable.
 macro_rules! invoke_one_blocking {
-    (ctx_result $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {{
+    (ctx_result $name:ident, $ret:ty, $ctx:expr, $a:expr, $($arg:ident,)*) => {{
         let out: $ret = super::$name($ctx, $($a.$arg,)*)?;
         serde_json::to_value(out).map_err(|e| e.to_string())
     }};
-    (ctx_plain $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {{
+    (ctx_plain $name:ident, $ret:ty, $ctx:expr, $a:expr, $($arg:ident,)*) => {{
         let out: $ret = super::$name($ctx, $($a.$arg,)*);
         serde_json::to_value(out).map_err(|e| e.to_string())
     }};
-    (bare_result $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021,) => {{
+    (bare_result $name:ident, $ret:ty, $ctx:expr, $a:expr,) => {{
         let out: $ret = super::$name()?;
         serde_json::to_value(out).map_err(|e| e.to_string())
     }};
-    (bare_async $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021,) => {
+    (bare_async $name:ident, $ret:ty, $ctx:expr, $a:expr,) => {
         Err(format!("{} is async and must go through dispatch()", stringify!($name)))
     };
     // Reads the parsed arguments before refusing. This arm does not invoke
     // anything, and the first async command to take an argument made the
     // generated `Args` field dead code here — which `-D warnings` fails on,
     // from inside a macro, pointing at the table rather than the command.
-    (ctx_async $name:ident, $ret:ty, $ctx:expr_2021, $a:expr_2021, $($arg:ident,)*) => {{
+    (ctx_async $name:ident, $ret:ty, $ctx:expr, $a:expr, $($arg:ident,)*) => {{
         $( let _ = &$a.$arg; )*
         Err(format!("{} is async and must go through dispatch()", stringify!($name)))
     }};
