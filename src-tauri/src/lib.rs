@@ -63,6 +63,17 @@ pub(crate) const UPDATE_STATUS_EVENT: &str = "update-status-changed";
 /// for (§4.1).
 pub(crate) const CONTRACT_EVENT: &str = "event";
 
+/// Raised when the close button means "quit everything", so the frontend can
+/// run that flow.
+///
+/// The decision is Rust's, because only this side sees the native close. What
+/// happens next is the frontend's, because it owns the one thing this process
+/// cannot do well from here: ask the person, in the window they just clicked,
+/// with a dialog that belongs to it. The daemon's own confirmation is a
+/// `MessageBoxW` with no owner window, which is right for a tray click and
+/// would appear behind the app for this one.
+pub(crate) const QUIT_REQUESTED_EVENT: &str = "quit-requested";
+
 // The check's schedule moved to `daemon::update` with the check (WS3.6). The
 // two constants that named it went with it rather than being left here for a
 // caller that no longer exists.
@@ -197,6 +208,26 @@ async fn rpc(
 /// plain call with no ACL involved. The folder is only created on the first
 /// recording, so create it first — `open_path` stats the path and fails on a
 /// fresh install otherwise.
+/// Ends this process, and only this one.
+///
+/// The recorder is stopped separately, by `quit_recorder` over the pipe, and
+/// the frontend calls them in that order. Split in two because they are two
+/// processes and the answer for each is different: the window always goes, the
+/// recorder only goes if the person said so.
+///
+/// No finalize here, deliberately. `tray::request_quit` used to run one
+/// through this process's supervisor, which since WS3.4 is never started and
+/// holds a `FailedRecorder`, so it protected nothing while reading as though
+/// it did. What finalizes a recording is the daemon, on its own way out.
+#[tauri::command]
+fn exit_ui(app: tauri::AppHandle) {
+    info!("launch", "the window process is exiting; the recorder was handled separately");
+    // `exit` rather than closing the last window: `RunEvent::ExitRequested`
+    // vetoes `code: None`, which is what keeps a closed window from ending the
+    // process, and an explicit exit arrives as `Some(_)` and is let through.
+    app.exit(0);
+}
+
 #[tauri::command]
 fn open_recordings_folder(state: tauri::State<AppState>) -> Result<(), String> {
     std::fs::create_dir_all(&state.recordings_dir).map_err(|e| e.to_string())?;
@@ -776,7 +807,8 @@ pub fn run() {
         ui::link::rpc_call,
         ui::link::rpc_subscribe,
         ui::link::rpc_health,
-        open_recordings_folder
+        open_recordings_folder,
+        exit_ui
     ]);
 
     // The list lives in `contract::portal`, and this is the callback that turns
@@ -800,6 +832,7 @@ pub fn run() {
                     ui::link::rpc_subscribe,
                     ui::link::rpc_health,
                     open_recordings_folder,
+                    exit_ui,
                     $( dev::$name, )*
                 ]
             };
@@ -833,11 +866,24 @@ pub fn run() {
                 api.prevent_close();
                 let _ = window.hide();
             }
-            // Route through the tray's own quit so an in-flight recording is
-            // finalized rather than dropped.
+            // **Handed to the frontend, which owns the rest of it.** This
+            // used to call `tray::request_quit`, which finalized through a
+            // supervisor that has not been started since WS3.4 and then exited
+            // this process, leaving the daemon recording with its tray icon
+            // still sitting there. Quit closed the window and the app went on
+            // running, which is the opposite of what the setting says (#136).
+            //
+            // What replaces it is two calls in the right order, made from the
+            // frontend: stop the recorder over the pipe, ask the person first
+            // if a game is in flight, then end this process.
             core::CloseAction::Quit => {
                 api.prevent_close();
-                tray::request_quit(&window.app_handle().clone());
+                use tauri::Emitter;
+                if let Err(e) = window.emit(QUIT_REQUESTED_EVENT, ()) {
+                    // Nothing is listening, so nothing will quit. Say so rather
+                    // than leaving a close button that does nothing at all.
+                    error!("launch", "could not ask the window to quit: {e}");
+                }
             }
         }
     });
