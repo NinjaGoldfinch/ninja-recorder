@@ -716,23 +716,22 @@ jobs:
             fi
           } > changelog.md
 
+          # **Each paragraph below is one line, and has to stay one line.**
+          # A GitHub release body renders a single newline as a line break
+          # rather than folding it, so prose wrapped at 80 columns arrives on
+          # the Releases page broken at 80 columns: ragged right edge, a URL
+          # stranded mid-sentence, and a paragraph that reads as though it were
+          # verse. Wrapping these to match the rest of this file is the obvious
+          # tidy-up and it is the bug.
           {
             cat changelog.md
             cat <<'CAVEATS'
 
           ---
 
-          **This build is not fully verified.** v2 rebuilt the process model:
-          the recorder is now a headless daemon and the window is a client of
-          it. CI starts both processes on Windows on every push and checks the
-          pipe, its permissions, the handshake, the tray and the reconnect, but
-          nothing involving a real game, a GPU, a visible menu or a toast has
-          been confirmed on a desktop yet. Expect rough edges, and see
-          https://github.com/NinjaGoldfinch/ninja-recorder-v2/issues/130 for
-          what is still being checked.
+          **This build is not fully verified.** v2 rebuilt the process model: the recorder is now a headless daemon and the window is a client of it. CI starts both processes on Windows on every push and checks the pipe, its permissions, the handshake, the tray and the reconnect, but nothing involving a real game, a GPU, a visible menu or a toast has been confirmed on a desktop yet. Expect rough edges, and see https://github.com/NinjaGoldfinch/ninja-recorder-v2/issues/130 for what is still being checked.
 
-          Unsigned build: Windows SmartScreen will warn on first run. No
-          code-signing certificate is configured yet.
+          Unsigned build: Windows SmartScreen will warn on first run. No code-signing certificate is configured yet.
           CAVEATS
           } > notes.md
           echo "--- changelog.md (goes to the app) ---"
