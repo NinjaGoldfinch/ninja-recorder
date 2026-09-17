@@ -178,6 +178,8 @@ export type DiskUsage = { total_bytes: number, recording_count: number, free_byt
 
 export type LcuStatus = { connected: boolean, phase: string | null, summoner: string | null, error: string | null, };
 
+export type QuitOutcome = { "outcome": "shuttingDown" } | { "outcome": "recordingInFlight" };
+
 export type MarkerRow = { id: number, recording_id: number, game_time_s: number, video_time_s: number, kind: string, payload_json: string, };
 
 export type RecordingRow = { id: number, path: string, started_at: number, duration_s: number | null, game_id: number | null, queue: number | null, champion: string | null, role: string | null, win: boolean | null, kda_k: number | null, kda_d: number | null, kda_a: number | null, patch: string | null, pinned: boolean, size_bytes: number, 

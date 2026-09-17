@@ -98,6 +98,13 @@ pub struct Ctx {
     /// unit tests rely on that: an `install_update` that worked under `cargo
     /// test` would try to restart the test binary into an installer.
     on_update_request: Option<Box<dyn Fn(UpdateRequest) + Send + Sync>>,
+    /// How this process stops itself. Set by the daemon to end its message
+    /// loop; `None` everywhere else, including the UI and every unit test.
+    ///
+    /// Type-erased for the same reason as the others, and unset by default for
+    /// a sharper one: a `quit_recorder` that worked under `cargo test` would
+    /// shut down the test binary partway through the suite.
+    on_quit_request: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl Ctx {
@@ -120,6 +127,7 @@ impl Ctx {
             autostart: None,
             update: Mutex::new(CheckResult::Pending),
             on_update_request: None,
+            on_quit_request: None,
         }
     }
 
@@ -147,6 +155,12 @@ impl Ctx {
     }
 
     /// Called once from `lib.rs`'s `setup`, for the same reason as
+    /// How the daemon is asked to stop. Set once, by the daemon, to whatever
+    /// ends its message loop. See `quit_recorder`.
+    pub fn set_quit_requester(&mut self, request: Box<dyn Fn() + Send + Sync>) {
+        self.on_quit_request = Some(request);
+    }
+
     /// `set_library_changed_notifier`.
     pub fn set_update_requester(&mut self, request: Box<dyn Fn(UpdateRequest) + Send + Sync>) {
         self.on_update_request = Some(request);
@@ -702,6 +716,55 @@ pub fn install_update(ctx: &Ctx) -> Result<(), String> {
     }
     request(UpdateRequest::Install);
     Ok(())
+}
+
+/// What `quit_recorder` did, or declined to do.
+///
+/// An outcome rather than an error, because "a game is being recorded" is an
+/// answer to the question and not a failure to answer it: the caller's next
+/// move is to ask the person, and an `Err` would have it render a red box
+/// instead.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+pub enum QuitOutcome {
+    /// The recorder is going down. Any recording in flight is finalized on the
+    /// way out, which is why this can take a few seconds to finish happening.
+    ShuttingDown,
+    /// Nothing was stopped: a game is being recorded and `force` was not set.
+    RecordingInFlight,
+}
+
+/// Stops the recorder, and with it any chance of recording in the background.
+///
+/// **This is the whole app, not this window.** Since WS3 the recorder is a
+/// separate process that outlives the window, so a window that exited on its
+/// own left the daemon recording and its tray icon sitting there, which is
+/// what made the `Quit` close action a lie (#136).
+///
+/// `force` is the answer to the question this returns. Called with `false` it
+/// refuses while a game is being recorded and says so; the caller asks the
+/// person and calls again with `true` if they accept. The check is here rather
+/// than only in the caller for `install_update`'s reason: the button was
+/// rendered at some earlier moment, and a game can start between a glance and
+/// a click.
+///
+/// Returns as soon as the request is handed over. The shutdown itself is the
+/// daemon's, runs on its own thread, and finalizes before it exits.
+pub fn quit_recorder(ctx: &Ctx, force: bool) -> Result<QuitOutcome, String> {
+    let request = ctx
+        .on_quit_request
+        .as_ref()
+        .ok_or("this process does not own the recorder, so it cannot stop it")?;
+
+    // `unwrap_or(true)` so a recorder that cannot be asked counts as busy. The
+    // safe side of this trade is refusing to quit, which costs a second click;
+    // the other side loses a game.
+    if !force && is_recording(ctx).unwrap_or(true) {
+        return Ok(QuitOutcome::RecordingInFlight);
+    }
+
+    request();
+    Ok(QuitOutcome::ShuttingDown)
 }
 
 /// The audio capture preset, read and written through `serde` rather than

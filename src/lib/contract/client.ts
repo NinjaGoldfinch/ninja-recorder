@@ -8,7 +8,7 @@
 //   events    src-tauri/src/contract/events.rs (contract_events!)
 //   types     src-tauri/src/contract/types.rs  (the boundary list)
 
-import type { AudioInputDevice, AudioPreset, AutostartStatus, BackfillReport, DiskUsage, EnforcementReport, IconRequest, IconSet, LcuStatus, MarkerRow, ReconcileReport, RecordingRow, RetentionPolicy, SampleRow, SupervisorStatus, UpdateStatus } from "./types";
+import type { AudioInputDevice, AudioPreset, AutostartStatus, BackfillReport, DiskUsage, EnforcementReport, IconRequest, IconSet, LcuStatus, MarkerRow, QuitOutcome, ReconcileReport, RecordingRow, RetentionPolicy, SampleRow, SupervisorStatus, UpdateStatus } from "./types";
 
 /**
  * How a command reaches the backend. Supplied by the caller rather
@@ -78,5 +78,7 @@ export function createClient(invoke: Invoke) {
       invoke("check_for_update", {}) as Promise<null>,
     install_update: (): Promise<null> =>
       invoke("install_update", {}) as Promise<null>,
+    quit_recorder: (force: boolean): Promise<QuitOutcome> =>
+      invoke("quit_recorder", { force }) as Promise<QuitOutcome>,
   };
 }

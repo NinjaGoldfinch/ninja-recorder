@@ -415,6 +415,8 @@ dispatch_table! {
     ctx_result  check_for_update() -> ();
     /// Downloads the offered installer and hands the machine over to it, which ends the process. Refuses while anything is being recorded, and refuses outright in a devtools build.
     ctx_result  install_update() -> ();
+    /// Stops the recorder itself, so nothing records in the background afterwards. Answers `recordingInFlight` instead of stopping when a game is being recorded and `force` is false; call again with `force` once the person has agreed.
+    ctx_result  quit_recorder(force: bool) -> crate::core::QuitOutcome;
 }
 
 #[cfg(test)]
@@ -440,6 +442,102 @@ mod tests {
         Ctx::new(recorder, supervisor, db, dir.clone(), dir.join("ddragon"), None)
     }
 
+    /// Quitting is the one command whose whole job is to end the process, so
+    /// what is worth pinning is that it refuses to in every case but the one.
+    mod quitting {
+        use super::*;
+        use crate::core::{QuitOutcome, quit_recorder};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        /// A recorder that says it is mid-game and nothing else.
+        ///
+        /// `StubRecorder` would have to be driven through a real `start` to
+        /// report this, which means a fixture on disk and a config, none of
+        /// which is what these tests are about. What `quit_recorder` reads is
+        /// one boolean, so that is what this supplies.
+        struct Busy;
+
+        impl crate::recorder::Recorder for Busy {
+            fn start(
+                &mut self,
+                _config: crate::recorder::RecordConfig,
+            ) -> Result<(), crate::recorder::RecorderError> {
+                unreachable!("nothing in these tests starts a recording")
+            }
+
+            fn stop(
+                &mut self,
+            ) -> Result<crate::recorder::RecordingOutput, crate::recorder::RecorderError> {
+                unreachable!("nor stops one")
+            }
+
+            fn is_recording(&self) -> bool {
+                true
+            }
+
+            fn backend_name(&self) -> String {
+                "busy".to_string()
+            }
+        }
+
+        /// A `Ctx` whose quit seam counts calls instead of stopping anything.
+        fn ctx_counting(asks: &Arc<AtomicUsize>) -> Ctx {
+            let mut ctx = ctx();
+            let asks = Arc::clone(asks);
+            ctx.set_quit_requester(Box::new(move || {
+                asks.fetch_add(1, Ordering::SeqCst);
+            }));
+            ctx
+        }
+
+        /// The UI forwards every command to the daemon, so this only ever runs
+        /// where the seam is set. A process that answered it anyway would be
+        /// claiming to have stopped a recorder living somewhere else.
+        #[test]
+        fn a_process_that_does_not_own_the_recorder_refuses() {
+            let error = quit_recorder(&ctx(), true).expect_err("no seam, no shutdown");
+            assert!(error.contains("does not own the recorder"), "{error}");
+        }
+
+        #[test]
+        fn an_idle_recorder_is_stopped_without_asking() {
+            let asks = Arc::new(AtomicUsize::new(0));
+            let ctx = ctx_counting(&asks);
+
+            assert_eq!(quit_recorder(&ctx, false), Ok(QuitOutcome::ShuttingDown));
+            assert_eq!(asks.load(Ordering::SeqCst), 1);
+        }
+
+        /// `force` is the answer to the question the refusal asks, so the same
+        /// call with it set has to go through rather than refuse twice.
+        #[test]
+        fn force_stops_it_regardless() {
+            let asks = Arc::new(AtomicUsize::new(0));
+            let ctx = ctx_counting(&asks);
+
+            assert_eq!(quit_recorder(&ctx, true), Ok(QuitOutcome::ShuttingDown));
+            assert_eq!(asks.load(Ordering::SeqCst), 1);
+        }
+
+        /// **The refusal must not be a half-quit.** Returning
+        /// `RecordingInFlight` while having already asked the daemon to stop
+        /// would lose the game the refusal exists to protect, and the caller
+        /// would have no way to tell.
+        #[test]
+        fn a_refusal_stops_nothing() {
+            let asks = Arc::new(AtomicUsize::new(0));
+            let mut ctx = ctx();
+            let counter = Arc::clone(&asks);
+            ctx.set_quit_requester(Box::new(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }));
+            *ctx.recorder.lock().unwrap() = Box::new(Busy);
+
+            assert_eq!(quit_recorder(&ctx, false), Ok(QuitOutcome::RecordingInFlight));
+            assert_eq!(asks.load(Ordering::SeqCst), 0, "a refusal must not have stopped anything");
+        }
+    }
+
     /// A representative argument payload per command, in the **camelCase the
     /// frontend actually sends** — `bridge.ts` passes its args object through
     /// untouched, so this is the real wire shape.
@@ -463,6 +561,11 @@ mod tests {
             // up and the suite never reaches a CDN — this exercises the
             // argument mapping and nothing else.
             "resolve_icons" => json!({ "request": {} }),
+            // `false`, so the round trip exercises the argument and not the
+            // shutdown: the test `Ctx` leaves the quit seam unset, so this
+            // refuses before it can reach anything, which is the same reason
+            // the update commands are safe to drive here.
+            "quit_recorder" => json!({ "force": false }),
             // The three update commands take no arguments and reach no
             // network here: the test `Ctx` leaves the update seam unset, so
             // `check_for_update` and `install_update` both refuse with "not

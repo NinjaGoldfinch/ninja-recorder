@@ -518,6 +518,18 @@ async fn start(paths: Paths) -> Result<Option<Started>, DaemonError> {
         if crate::updates_enabled() {
             ctx.set_update_requester(update::requester(weak.clone(), events.clone()));
         }
+        // How `quit_recorder` stops this process. Ending the message loop is
+        // the whole of it: `pump_until_quit` returns, `wait_for_shutdown`
+        // signals the accept loop, and `finish` finalizes whatever is being
+        // recorded before the process exits. Exactly the path the tray's own
+        // Quit takes, which is the point: there is one way for this daemon to
+        // stop and both doors open onto it.
+        //
+        // Off Windows there is no message loop and `pump::stop` is a no-op, so
+        // the command reports that it is shutting down and the daemon carries
+        // on waiting for Ctrl-C. That is a dev-box shape rather than a shipped
+        // one: `pump::run` already refused on this platform and said so.
+        ctx.set_quit_requester(Box::new(pump::stop));
         ctx
     });
 
