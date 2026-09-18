@@ -10,9 +10,16 @@ from the dev box: it needs real Windows hardware, a real League client and
 Vanguard active
 ([DEVELOPMENT.md §1.1, §9](../DEVELOPMENT.md#11-riot-vanguard-the-constraint-that-shapes-everything)).
 
-**Still open:** the *install* half of the updater (§5.0.4), which has never
-run end to end, and the install-size budget (§5), which is missed rather than
-met. Fill in results inline as each remaining step is done.
+**Still open:** the *install* half of the updater (§5.0.4) and the install-size
+budget (§5), which is missed rather than met. Fill in results inline as each
+remaining step is done.
+
+**2026-09-18: the install half ran for the first time, and failed.** From
+alpha.45, the in-app update reported "The update is not a readable archive:
+invalid Zip archive: Could not find EOCD". The daemon was unzipping an artifact
+that is not an archive: since Tauri v2 the updater artifact is the signed
+installer itself. Fixed, and DEVELOPMENT.md §14 records why nothing caught it.
+The step stays open until an install completes on a build carrying that fix.
 
 ---
 
