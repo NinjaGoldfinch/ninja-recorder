@@ -537,15 +537,15 @@ reported a second launch as already running, and shut down cleanly on Ctrl-C.
 None of that has been run on Windows, where the address is a named pipe and the
 backend is libobs, and this section is what stands in for that.
 
-- [ ] `ninja-recorder.exe --daemon` starts and keeps running. Task Manager
+- [x] `ninja-recorder.exe --daemon` starts and keeps running. Task Manager
       shows one process and **no** `msedgewebview2.exe` alongside it.
-- [ ] `app_data_dir()/logs/daemon.log` is created and names the pipe it bound.
+- [x] `app_data_dir()/logs/daemon.log` is created and names the pipe it bound.
       The UI's own log is `ui.log` beside it, and neither rotates the other.
-- [ ] The pipe exists while the daemon runs. From PowerShell:
+- [x] The pipe exists while the daemon runs. From PowerShell:
       `[System.IO.Directory]::GetFiles("\\.\pipe\") -match "ninja-recorder"`
       should list `ninja-recorder.com.ninjarecorder.app.release`, or
       `...devtools` for a devtools build.
-- [ ] **The pipe's ACL grants this user and nobody else.** The daemon will
+- [x] **The pipe's ACL grants this user and nobody else.** The daemon will
       start and delete recordings for anyone who can open it, so this is the
       one row here that is a security property rather than a behaviour.
 
@@ -557,7 +557,13 @@ backend is libobs, and this section is what stands in for that.
 
       Expect three allow entries: this account, `NT AUTHORITY\SYSTEM` and
       `BUILTIN\Administrators`. **No `Everyone`, and no `NT AUTHORITY\Authenticated
-      Users`.** If `daemon.log` carries a line about using the default pipe ACL,
+      Users`.** **2026-09-18, alpha.49:** exactly three, and the right three.
+      `daemon.log` carries neither `using the default pipe ACL` nor
+      `using the default`, so the descriptor was built and applied rather than
+      fallen back to, which is the one way this row can look right while
+      proving nothing. (`FileSystemRights` renders blank for a pipe handle in
+      PowerShell; the identities and the `Allow` types are the readable part.)
+      If `daemon.log` carries a line about using the default pipe ACL,
       the descriptor could not be built and the pipe fell back to the process
       default, which is the thing this replaced: report that line's reason
       rather than the ACL.
@@ -573,10 +579,10 @@ backend is libobs, and this section is what stands in for that.
       the first daemon's log has nothing new in it.
 - [ ] Kill the daemon with Task Manager, then start it again. It binds the pipe
       on the first try: a killed daemon must not leave the name unusable.
-- [ ] With the daemon running and a game in progress, the recording continues
+- [x] With the daemon running and a game in progress, the recording continues
       with no UI process at all. This is the whole point of the split, and it
       is also §3.2's exit criterion.
-- [ ] Stop the daemon while it is recording. The recording is finalized before
+- [x] Stop the daemon while it is recording. The recording is finalized before
       the process exits, and the row is in the library when it comes back.
 
 **Not in the daemon yet**, so do not look for them: the tray icon (3.3), the
