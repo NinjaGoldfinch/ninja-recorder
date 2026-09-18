@@ -211,14 +211,19 @@ jobs:
       - name: Lint and format check (Biome)
         run: npx biome ci .
 
+      # `npm run typecheck`, not `npx tsc`: two packages in this tree ship a
+      # `tsc` binary — `typescript` (6.x, which svelte-check's language service
+      # needs) and `@typescript/native` (7.x, the fast native checker) — and
+      # which one `node_modules/.bin/tsc` points at is decided by install
+      # order. The script names the checker it means by path.
       - name: Type-check frontend
-        run: npx tsc --noEmit
+        run: npm run typecheck
 
-      # WS4.1: uncomment when the first `.svelte` file lands. `tsc` does not
-      # see `.svelte` files at all, so without this the type gate silently
-      # narrows to "the TypeScript that is left".
-      # - name: Type-check Svelte
-      #   run: npx svelte-check --tsconfig ./tsconfig.json
+      # WS4.1, and WS5.6's gate. `tsc` does not see `.svelte` files at all, so
+      # without this the type gate silently narrows to "the TypeScript that is
+      # left" as WS4 migrates views across.
+      - name: Type-check Svelte
+        run: npm run check:svelte
 
       - name: Frontend tests
         run: npx vitest run

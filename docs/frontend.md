@@ -1,10 +1,15 @@
 # Frontend
 
-Vanilla TypeScript, no framework, no build-time templating beyond Vite. The
-markup lives in `index.html`; the modules under `src/` wire behaviour onto it.
+Vanilla TypeScript, no build-time templating beyond Vite. The markup lives in
+`index.html`; the modules under `src/` wire behaviour onto it.
 
 The organising principle is **state ownership, not widgets**. Each module owns
 exactly one piece of mutable state and is the only place that writes it.
+
+Since WS4.1 there is also a Svelte 5 root mounted beside those views, and for
+the length of WS4 the window runs both frontends at once. It renders nothing
+yet. [The Svelte seam](#the-svelte-seam) below is what joins them, and which
+views have moved across.
 
 ---
 
@@ -28,11 +33,15 @@ flowchart TB
     CONTRACT["lib/contract/<br/><small>GENERATED from Rust</small>"]
     BRIDGE --> TRANSPORT
     BRIDGE --> CONTRACT
+    APP["lib/App.svelte<br/><small>the Svelte root: empty until WS4.3</small>"]
+    TOKENS["lib/styles/tokens.css<br/><small>every custom property,<br/>imported by styles.css</small>"]
     DOM["dom.ts<br/><small>el, escapeHtml, escapeAttr</small>"]
     FMT["format.ts<br/><small>pure formatters + label fallbacks</small>"]
     TYPES["types.ts<br/><small>mirrors the Rust serde structs</small>"]
 
     MAIN --> ROUTER
+    MAIN --> APP
+    ROUTER -.->|"mountApp / unmountApp"| APP
     MAIN --> THEME
     MAIN --> PREFS
     MAIN --> STATUS
@@ -67,6 +76,8 @@ flowchart TB
     FMT -.->|"type-only"| TYPES
     style MAIN fill:#ede7f6,stroke:#5e35b1
     style BRIDGE fill:#e3f2fd,stroke:#1565c0
+    style APP fill:#fff3e0,stroke:#ef6c00
+    style TOKENS fill:#fff3e0,stroke:#ef6c00
 ```
 
 `types.ts` sits apart deliberately: putting each shape beside its first
@@ -906,7 +917,77 @@ tray has just created, and a `navigate` event for a window that already exists.
 A `#review` fragment is ignored, because the review view with no recording
 loaded is not a state worth restoring into.
 
+## The Svelte seam
+
+WS4 is a strangler, not a rewrite, so the window runs two frontends at once for
+the length of it: the vanilla sections `index.html` still holds, and one Svelte
+5 root mounted beside them in `#svelte-root`, the last child of `.container`.
+
+`router.ts` owns the join, because it already owns the only question the two
+halves have to agree on, which is **which view is showing**. A second module
+toggling `hidden` is the exact failure `showView` was written to end, and a
+Svelte root that hid its own siblings would be that failure with a compiler in
+front of it.
+
+| Export | What it does |
+|---|---|
+| `mountApp(component, host)` | brings the root up, once; a second call is refused rather than duplicating the tree |
+| `unmountApp()` | takes it down, resolving `true` if there was anything to take down |
+| `appMounted()` | whether it is currently up |
+
+**The root goes up once and stays up.** It is deliberately not driven from
+`showView`: `mount` and `unmount` destroy component state, so tying them to
+view changes would throw away a migrated view's scroll position and in-flight
+requests every time the user glanced at Settings. Visibility stays what it has
+always been, the `hidden` attribute on the host. `unmountApp` exists so that
+mounting is reversible, which is what makes the root testable; nothing calls it
+in normal use.
+
+`main.ts` mounts last, after every `init*` has run, so a component throwing on
+the way up cannot take a working frontend down with it.
+
+### What has moved across
+
+| View | Lands in | State |
+|---|---|---|
+| `App.svelte` | WS4.1 | landed, renders nothing |
+| `Library.svelte` and children | WS4.3 | vanilla (`library.ts`) |
+| `Settings.svelte`, `Update.svelte` | WS4.4 | vanilla (`settings.ts`, `update.ts`) |
+| `Review.svelte`, `Timeline.svelte` | WS4.5 | vanilla (`review.ts`) |
+
+Each of those deletes its vanilla counterpart and the markup `index.html` holds
+for it in the same commit, so no view is ever owned by both. The player is
+migrated last and stays an imperative island: it owns real DOM nodes, because
+`<video>` `currentTime` is not state anything should be diffing.
+
+The dev portal (`dev.html`, `src/dev/`) is out of scope and stays vanilla, per
+plan §9, Q6.
+
+### Two type gates, not one
+
+`tsc` does not look inside `.svelte` files at all. `npm run check:svelte` is
+therefore a separate CI gate from `npm run typecheck`, and it landed with the
+first component rather than after it: without it the type gate would narrow
+silently, view by view, as the migration proceeded. See
+[docs/ci-and-releases.md](ci-and-releases.md) for why neither is spelled
+`npx tsc`.
+
+One consequence worth knowing before it costs an afternoon: **a `.svelte` file
+needs a `<script>` block even when it is empty.** `svelte2tsx` emits a typed
+component for a file that has one and an untyped one for a file that does not,
+so deleting an empty block turns the importing module's `import` into an
+implicit `any`. The error is reported against the importer and never mentions
+the component.
+
 ## Theming
+
+Every custom property lives in `src/lib/styles/tokens.css`, which `styles.css`
+pulls in with an `@import` on its first line. WS4.1 moved them there unchanged,
+values, selectors and cascade order alike, so that the components have a token
+source that does not disappear when WS4.6 deletes the stylesheet. **Nothing
+else should load that file.** A second `<link>`, or a JS `import` inside a
+component, arrives after first paint, which is the theme flash the inline boot
+script exists to prevent.
 
 `data-theme` on `<html>` is written by JS and only ever holds `"light"` or
 `"dark"`, and there is no `prefers-color-scheme` query in the stylesheet.

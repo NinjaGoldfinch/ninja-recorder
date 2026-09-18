@@ -14,7 +14,7 @@ is skipped until a commit reaches `main`.
 ```mermaid
 flowchart TB
     subgraph PR["Pull request"]
-        T1["<b>Test</b> (windows-latest)<br/>biome ci · tsc --noEmit · vitest<br/>cargo deny check · gen-contract --check<br/>cargo test ×2<br/>cargo clippy ×2<br/>smoke-daemon.ps1<br/><small>±devtools, no --all-targets</small>"]
+        T1["<b>Test</b> (windows-latest)<br/>biome ci · typecheck · check:svelte · vitest<br/>cargo deny check · gen-contract --check<br/>cargo test ×2<br/>cargo clippy ×2<br/>smoke-daemon.ps1<br/><small>±devtools, no --all-targets</small>"]
     end
     subgraph MAIN["Push to main / manual dispatch"]
         T["<b>Test</b> (windows-latest)"]
@@ -42,8 +42,8 @@ other end: it needs everything already compiled.
 |---|---|---|---|
 | 1 | `npm ci` | none | v1 |
 | 2 | `npx biome ci .` | lint + format, one binary | WS5.4 |
-| 3 | `npx tsc --noEmit` | TypeScript types | v1 |
-| 4 | *(`npx svelte-check`)* | types `tsc` cannot see | **WS4.1: commented** |
+| 3 | `npm run typecheck` | TypeScript types | v1, rewired WS4.1 |
+| 4 | `npm run check:svelte` | types `tsc` cannot see | WS4.1 |
 | 5 | `npx vitest run` | frontend unit tests | WS5.5 |
 | 6 | `cargo deny check` | licences + advisories | WS5.3 |
 | 7 | `cargo run --features contract-gen --bin gen-contract -- --check` | contract drift | WS2.5 |
@@ -52,9 +52,19 @@ other end: it needs everything already compiled.
 | 10 | `scripts/smoke-daemon.ps1` | the daemon actually runs | WS3.3 |
 | 11 | `scripts/smoke-ui.ps1` | the UI starts and finds it | WS3.3 |
 
-Step 4 is a commented placeholder in `ci.yml`, sitting in its final
-position so that turning it on is uncommenting a block rather than deciding
-where it goes.
+Steps 3 and 4 are `npm run` scripts rather than `npx` invocations, and that is
+load-bearing. Two packages in this tree ship a binary called `tsc`:
+`typescript` at 6.x, which is what `svelte-check` peer-requires, and
+`@typescript/native` at 7.x, the native checker, installed under an alias.
+Which one `node_modules/.bin/tsc` resolves to is decided by install order, so
+`npx tsc` picks a checker by accident. Each script names the one it means by
+path.
+
+Step 4 does not pass `--tsgo`. The flag saves about a second and writes a
+shadow TypeScript project into `.svelte-check/`, which is not pruned when a
+component is deleted, so the gate goes on failing over a file that is no
+longer in the tree. A second on a run that takes minutes is not worth a gate
+that can fail against a path that does not exist.
 
 **Why each of the new ones is there.**
 
@@ -65,7 +75,9 @@ where it goes.
 - **`svelte-check`** is not optional once WS4 starts. `tsc` does not look
   inside `.svelte` files at all, so without it the type gate silently narrows
   to "whatever TypeScript is left" as the migration proceeds: the gate would
-  appear to keep passing while covering less each week.
+  appear to keep passing while covering less each week. WS4.1 landed it with
+  the first `.svelte` file rather than after, which is why it is a real step
+  above and no longer a commented one. It carries WS5.6.
 - **Vitest** likewise: 0 tests against 447 on the Rust side is most of why the
   frontend is the half being replaced, and a strangler migration needs tests on
   the code being strangled.

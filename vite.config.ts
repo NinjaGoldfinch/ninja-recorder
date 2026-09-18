@@ -1,3 +1,4 @@
+import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { defineConfig } from "vite";
 import pkg from "./package.json";
 
@@ -6,6 +7,12 @@ const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
+  // WS4's strangler runs both frontends in one bundle: the vanilla modules
+  // `index.html` still wires up, and the Svelte root they hand views to one
+  // at a time. The plugin reads `svelte.config.js`, so the compiler options
+  // here and the ones `svelte-check` enforces are the same object.
+  plugins: [svelte()],
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

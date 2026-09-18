@@ -22,5 +22,11 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  // `.svelte` is spelled out because a bare directory only matches the
+  // extensions TypeScript itself compiles. `svelte-check` reads this list to
+  // decide which components belong to the project, so without the second
+  // pattern it type-checks the `.ts` files and silently skips every component
+  // — which is the exact gap WS4.1 exists to close. `tsc` ignores the entries
+  // it cannot compile, so naming them here costs it nothing.
+  "include": ["src", "src/**/*.svelte"]
 }

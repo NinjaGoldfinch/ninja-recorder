@@ -51,7 +51,7 @@ disagreeing about the same file.
 | `src-tauri/src/ui/` (the Tauri commands; `client` has landed) | WS3 |
 | `src-tauri/src/recorder/own/` | WS1 task 1.6 |
 | `src-tauri/src/db/pool.rs` | WS6 |
-| `src/lib/` (`contract/`, `transport/`, `stores/`, `styles/tokens.css`) | WS2 / WS4 |
+| `src/lib/` (`stores/` only; `contract/`, `transport/`, `styles/tokens.css` and `App.svelte` have landed) | WS2 / WS4 |
 
 `src/lib/contract/` is **generated** once WS2.4 lands — committed and
 CI-checked, never hand-edited.
@@ -65,7 +65,8 @@ CI runs these, in this order, and a change that only passes some of them fails.
 ```bash
 npm ci
 npx biome ci .                                        # lint + format
-npx tsc --noEmit                                      # types
+npm run typecheck                                     # types (.ts)
+npm run check:svelte                                  # types (.svelte)
 npx vitest run                                        # frontend tests
 cd src-tauri && cargo deny check                      # licences + advisories
 # contract drift. `contract-gen` is opt-in so the emitter is never built into
@@ -91,8 +92,29 @@ security descriptor only exist when something is launched. Both scripts are
 runnable by hand on a Windows box, which is the point: they are also the fastest
 way to diagnose a report from one.
 
-One more is a commented placeholder in `ci.yml` until its workstream lands:
-`svelte-check` (WS4.1).
+### Two type-checkers, and why `npx tsc` is not one of them
+
+`typecheck` and `check:svelte` are both type gates and they do not overlap:
+`tsc` does not look inside `.svelte` files at all, so dropping the second one
+narrows the gate to "whatever TypeScript is left" as WS4 migrates views
+across. That is WS5.6's requirement, and WS4.1 carried it.
+
+Run them through **`npm run`, never `npx tsc`**. Two packages here ship a
+binary called `tsc`:
+
+| Package | Version | Used by |
+|---|---|---|
+| `typescript` | 6.x | `svelte-check`, which peer-requires `^5 \|\| ^6` |
+| `@typescript/native` | 7.x, aliased | `npm run typecheck`, the fast native checker |
+
+Which of them `node_modules/.bin/tsc` points at is decided by install order,
+so `npx tsc` is a coin flip between two different checkers. The scripts name
+the one they mean by path.
+
+`check:svelte` deliberately does **not** pass `--tsgo`. That flag is roughly a
+second faster and writes a shadow TypeScript project into `.svelte-check/`,
+which is not cleaned up when a component is deleted: the gate then fails on a
+file that is no longer in the tree, pointing at a path that does not exist.
 
 `gen-contract --check` re-emits `src/lib/contract/` from the Rust declaration
 and fails if it differs from what is committed. **Regenerate and commit** with
@@ -198,8 +220,10 @@ grep -rn 'DEVELOPMENT.md §' src src-tauri
 This applies to `docs/*.md` too — see `windows-verification.md`, where WS0's
 new material is §5.2 rather than a second §5.0, because §5.0 was taken.
 
-v2 adds §16 (capture gate and Option B, measured), §17 (contract and transport)
-and §18 (licensing exit plan). Nothing above them moves.
+v2 adds §16 (capture gate and Option B, measured), §17 (contract and transport),
+§18 (licensing exit plan) and §19 (the Svelte migration). §16 and §18 are
+reserved for WS1 and WS8 and do not exist yet, which is why §19 follows §17.
+Nothing above them moves.
 
 ### Diagrams
 
@@ -297,6 +321,18 @@ workstream should be rewritten to say what it means.
   which is a claim about runtime.
 - **Don't remove `theme.ts`'s matchMedia `change` listener.** It is the only
   thing making the "System" theme follow the OS, and no test covers it.
+- **The tokens live in one file, and `styles.css` imports it on its first
+  line.** WS4.1 moved every custom property to `src/lib/styles/tokens.css`
+  unchanged, so the `.svelte` components have a token source that survives
+  WS4.6 deleting the stylesheet. Loading them anywhere else — a second
+  `<link>`, or a JS `import` in a component — puts them after first paint,
+  which is the theme flash the inline boot script in `index.html` exists to
+  prevent. Keep the `@import` first: CSS requires it, and so does the cascade.
+- **A `.svelte` file needs a `<script>` block even when it is empty.**
+  `svelte2tsx` emits a typed component for a file that has one and an untyped
+  one for a file that does not, so removing an empty block turns the importing
+  module's `import` into an implicit `any` and fails `check:svelte` — reported
+  against the importer, with no mention of the component.
 - **Don't attach the devtools build to a release.** It carries raw SQL,
   arbitrary row writes, a DB wipe and state-machine injection.
 - **Don't estimate a measurement.** An empty cell in
