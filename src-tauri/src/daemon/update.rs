@@ -221,7 +221,7 @@ pub async fn install(ctx: &Arc<Ctx>, events: &Stream) {
     }
     info!("update", "signature verified, {} bytes", bytes.len());
 
-    let installer = match unpack_installer(&bytes) {
+    let installer = match write_installer(&platform.url, &bytes) {
         Ok(path) => path,
         Err(why) => return fail(ctx, events, why),
     };
@@ -298,42 +298,46 @@ async fn download(url: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("Could not download the update: {e}"))
 }
 
-/// Writes the installer out of the updater artifact.
+/// Writes the verified download somewhere it can be run from.
 ///
-/// Tauri's NSIS updater artifact is a zip with the setup executable inside it,
-/// which is why this unpacks rather than running what it downloaded.
-fn unpack_installer(bytes: &[u8]) -> Result<std::path::PathBuf, String> {
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
-        .map_err(|e| format!("The update is not a readable archive: {e}"))?;
-
-    let name = (0..archive.len())
-        .filter_map(|i| archive.name_for_index(i))
-        .find(|name| name.to_ascii_lowercase().ends_with(".exe"))
-        .map(str::to_string)
-        .ok_or("The update archive has no installer in it")?;
-
-    let mut entry = archive
-        .by_name(&name)
-        .map_err(|e| format!("Could not read {name} from the update: {e}"))?;
-
+/// **It is the installer, not an archive containing one.** This unzipped until
+/// it was run for the first time, on the strength of a comment saying Tauri's
+/// NSIS updater artifact is a zip with the setup executable inside it. That was
+/// Tauri v1's shape. Since v2 the updater artifact *is* the installer:
+/// `createUpdaterArtifacts` emits `<app>_<version>_x64-setup.exe` beside a
+/// `.sig` that signs those exact bytes, and the manifest's `url` points
+/// straight at the `.exe`. So the download was a PE, `ZipArchive::new` went
+/// looking for an end-of-central-directory record that a PE does not have, and
+/// every install ended at "The update is not a readable archive: invalid Zip
+/// archive: Could not find EOCD".
+///
+/// The signature is what makes writing these bytes safe, and it has already
+/// been checked by the time this runs. Dropping the unzip also drops a class of
+/// problem with it: an archive's entry names are remote input and had to be
+/// defended against naming a path outside the directory, whereas a file name
+/// derived from our own manifest's URL and reduced to its final component has
+/// nowhere else to go.
+fn write_installer(url: &str, bytes: &[u8]) -> Result<std::path::PathBuf, String> {
     // A directory of our own, named for the process, so two daemons cannot
     // write the same file and an installer left behind by a failed attempt is
     // findable rather than anonymous.
     let dir = std::env::temp_dir().join(format!("ninja-recorder-update-{}", std::process::id()));
     std::fs::create_dir_all(&dir).map_err(|e| format!("Could not prepare {}: {e}", dir.display()))?;
 
-    // The file name from the archive is remote input, so only its final
-    // component is used: an entry called `..\\..\\something.exe` must not be
-    // able to write outside the directory chosen above.
-    let file_name = std::path::Path::new(&name)
-        .file_name()
-        .ok_or("The update archive names no file")?;
-    let path = dir.join(file_name);
+    // The URL is ours, from our own manifest, but only its final component is
+    // used and only if it looks like an executable. Windows runs a file by its
+    // extension, so a name that arrived without one would produce a file
+    // nothing could launch and an error pointing at the wrong thing.
+    let name = url
+        .rsplit('/')
+        .next()
+        .filter(|name| name.to_ascii_lowercase().ends_with(".exe"))
+        .and_then(|name| std::path::Path::new(name).file_name())
+        .and_then(|name| name.to_str())
+        .unwrap_or("ninja-recorder-update.exe");
+    let path = dir.join(name);
 
-    let mut out = std::fs::File::create(&path)
-        .map_err(|e| format!("Could not write {}: {e}", path.display()))?;
-    std::io::copy(&mut entry, &mut out)
-        .map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+    std::fs::write(&path, bytes).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
     Ok(path)
 }
 
@@ -470,31 +474,45 @@ mod tests {
         );
     }
 
-    /// The zip is remote input. An entry naming a path outside the directory
-    /// must not be able to write there.
+    /// The name comes from our own manifest, and only its last component is
+    /// used. Nothing here is a defence against a hostile URL, because a hostile
+    /// manifest would have had to be signed; it is a defence against a URL that
+    /// is merely *odd*, and against writing a file Windows would refuse to run.
     #[test]
-    fn an_installer_path_in_the_archive_cannot_escape() {
-        let mut buffer = Vec::new();
-        {
-            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buffer));
-            zip.start_file::<_, ()>("../../evil.exe", zip::write::SimpleFileOptions::default())
-                .unwrap();
-            use std::io::Write as _;
-            zip.write_all(b"not really an installer").unwrap();
-            zip.finish().unwrap();
-        }
+    fn the_installer_lands_under_temp_with_a_runnable_name() {
+        let path = write_installer(
+            "https://example.invalid/releases/download/v9/../../ninja_9_x64-setup.exe",
+            b"not really an installer",
+        )
+        .expect("the bytes are written");
 
-        let written = unpack_installer(&buffer).expect("the archive has an .exe in it");
         assert_eq!(
-            written.file_name().and_then(|n| n.to_str()),
-            Some("evil.exe"),
-            "only the final component of the archived name is used"
+            path.file_name().and_then(|n| n.to_str()),
+            Some("ninja_9_x64-setup.exe"),
+            "only the final component of the URL is used"
         );
         assert!(
-            written.starts_with(std::env::temp_dir()),
-            "it must land under the temp directory, not wherever the name pointed: {}",
-            written.display()
+            path.starts_with(std::env::temp_dir()),
+            "it must land under the temp directory: {}",
+            path.display()
         );
-        let _ = std::fs::remove_file(written);
+        assert_eq!(std::fs::read(&path).unwrap(), b"not really an installer");
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// A URL that does not end in `.exe` still has to produce something
+    /// runnable, because Windows decides that by extension and the failure
+    /// otherwise arrives as "the installer would not start", nowhere near here.
+    #[test]
+    fn a_url_without_an_exe_name_still_writes_something_runnable() {
+        let path = write_installer("https://example.invalid/download?id=7", b"bytes")
+            .expect("the bytes are written");
+
+        assert_eq!(
+            path.extension().and_then(|e| e.to_str()),
+            Some("exe"),
+            "a file Windows will not launch is not an installer"
+        );
+        let _ = std::fs::remove_file(path);
     }
 }
