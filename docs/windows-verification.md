@@ -54,22 +54,22 @@ flowchart LR
 
 ## 0. Prerequisites
 
-- [ ] Latest `main` has a green CI run on `windows-latest`
-- [ ] League of Legends installed and up to date on the Windows box
-- [ ] **No dev toolchain involved in the app under test.** No `cargo run`, no
+- [x] Latest `main` has a green CI run on `windows-latest`
+- [x] League of Legends installed and up to date on the Windows box
+- [x] **No dev toolchain involved in the app under test.** No `cargo run`, no
       `npm run tauri dev` for this pass. The dev loop already covers
       everything short of a real installer and real Vanguard; this pass exists
       specifically to catch what that loop cannot.
 
 ## 1. Install from a CI artifact
 
-- [ ] Download `ninja-recorder-windows-latest-<sha>` from the latest `main` CI
+- [x] Download `ninja-recorder-windows-latest-<sha>` from the latest `main` CI
       run, or take the installer off that run's Release instead, if
       this pass is also meant to validate what a release actually ships
-- [ ] Run the NSIS installer on a clean-ish user account (not the profile used
+- [x] Run the NSIS installer on a clean-ish user account (not the profile used
       for `cargo run` testing, if avoidable; the goal is to catch anything
       leftover dev state hides)
-- [ ] Launch the installed app from the Start Menu / desktop shortcut, not
+- [x] Launch the installed app from the Start Menu / desktop shortcut, not
       from a terminal
 
 Record: installer filename, version, SmartScreen prompt behaviour (expected on
