@@ -95,6 +95,75 @@ pub enum GameflowError {
     Json(#[from] serde_json::Error),
 }
 
+/// What one connection to the LCU event socket saw, for the line logged when
+/// it closes.
+///
+/// The socket lives two to three minutes and is then re-established, which was
+/// invisible until #142 made the reconnect announce itself, and ambiguous
+/// afterwards: a stream that simply ends returns `Ok(())` and said nothing at
+/// all, so a clean close and a socket that was still up looked identical in
+/// the log (#146).
+///
+/// Counting frame kinds rather than logging each one is deliberate. The
+/// question is whether the client is dropping us and why, which is a property
+/// of a whole connection, and one line per frame at 1 Hz would bury the answer
+/// in the thing it is meant to explain.
+#[derive(Debug, Default, PartialEq)]
+struct FrameTally {
+    text: u32,
+    binary: u32,
+    ping: u32,
+    pong: u32,
+    /// The close frame's code and reason, if the peer sent one. **This is the
+    /// answer to #146's question** and it used to be discarded: the read loop
+    /// matched `Message::Text` and let everything else fall through, so a
+    /// deliberate close carrying `1000` and a reason read the same as a socket
+    /// that vanished.
+    close: Option<String>,
+}
+
+impl FrameTally {
+    fn count(&mut self, msg: &Message) {
+        match msg {
+            Message::Text(_) => self.text += 1,
+            Message::Binary(_) => self.binary += 1,
+            Message::Ping(_) => self.ping += 1,
+            Message::Pong(_) => self.pong += 1,
+            Message::Close(frame) => {
+                self.close = Some(match frame {
+                    Some(f) => format!("code {}, {:?}", u16::from(f.code), f.reason.as_str()),
+                    // A close with no payload. Legal, and less informative.
+                    None => "no code".to_string(),
+                });
+            }
+            // Raw frames are never produced on the read path.
+            Message::Frame(_) => {}
+        }
+    }
+}
+
+impl std::fmt::Display for FrameTally {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} text, {} binary, {} ping, {} pong; {}",
+            self.text,
+            self.binary,
+            self.ping,
+            self.pong,
+            // Pongs are tungstenite's business, not ours: it queues a reply to
+            // every ping and flushes it from inside `read`, which is what
+            // `ws.next()` drives. So a non-zero ping count with no manual
+            // write from us is the socket being kept alive correctly, not the
+            // starvation #146 guessed at.
+            match &self.close {
+                Some(why) => format!("peer closed ({why})"),
+                None => "the stream ended without a close frame".to_string(),
+            }
+        )
+    }
+}
+
 /// Watches gameflow phase changes until the caller's task is aborted.
 /// Prefers the LCU WebSocket event stream (near-instant); if the socket
 /// can't be established or drops, falls back to polling `http` on
@@ -237,8 +306,26 @@ where
         Err(e) => warn!("lcu", "could not read the current gameflow phase: {e}"),
     }
 
-    while let Some(msg) = ws.next().await {
-        if let Message::Text(text) = msg.map_err(Box::new)?
+    // Everything below is accounted for, because the socket's *ending* is the
+    // thing this file could not previously describe (#146). An end-of-stream
+    // falls out of the loop as `Ok(())`, which `watch` treats as nothing worth
+    // mentioning before it sleeps and reconnects, so two of the three closes
+    // in the alpha.49 log produced no line at all and the only evidence they
+    // happened was the next "connected" line.
+    let opened_at = std::time::Instant::now();
+    let mut tally = FrameTally::default();
+
+    let outcome = loop {
+        let msg = match ws.next().await {
+            // The stream ended. Either the peer's close frame has already been
+            // counted by the arm below, or it hung up without one.
+            None => break Ok(()),
+            Some(Err(e)) => break Err(GameflowError::WebSocket(Box::new(e))),
+            Some(Ok(msg)) => msg,
+        };
+        tally.count(&msg);
+
+        if let Message::Text(text) = msg
             && let Some(update) = parse_gameflow_event(&text)
         {
             // De-duplicated like the polling path already does, so the
@@ -250,9 +337,26 @@ where
             last = Some(update.phase.clone());
             on_update(update);
         }
-    }
+    };
 
-    Ok(())
+    // **At info, not debug, and once per connection.** The whole difficulty in
+    // #146 was that the log could not answer "how long did that socket live
+    // and why did it go away" without lining up timestamps by eye, and a line
+    // that only appears when someone has already turned debug on cannot answer
+    // it for a session that has already happened. One line every two or three
+    // minutes is the same cadence as the two lines the connect already writes.
+    //
+    // It is logged on the error path too. `watch` warns and falls back to
+    // polling there, and knowing the socket had run for two minutes and taken
+    // thirty pings first is what separates "the client hung up" from "the
+    // socket never worked".
+    info!(
+        "lcu",
+        "the LCU event socket closed after {:.0}s: {tally}",
+        opened_at.elapsed().as_secs_f64()
+    );
+
+    outcome
 }
 
 // --- Which game is running ------------------------------------------------
@@ -351,6 +455,92 @@ fn parse_gameflow_event(text: &str) -> Option<GameflowUpdate> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+    use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+
+    // --- What one socket's life looked like (#146) ------------------------
+
+    /// The line that was missing. Two of the three closes in the alpha.49 log
+    /// produced no output at all, because the stream simply ended and
+    /// `watch_via_websocket` returned `Ok(())`.
+    #[test]
+    fn a_stream_that_just_ends_says_so() {
+        let tally = FrameTally::default();
+        assert_eq!(
+            tally.to_string(),
+            "0 text, 0 binary, 0 ping, 0 pong; the stream ended without a close frame"
+        );
+    }
+
+    /// **The answer to the question, when the client is willing to give one.**
+    /// A close frame carries a code and a reason, and the read loop used to
+    /// discard both: it matched `Message::Text` and let everything else fall
+    /// through, so a deliberate hang-up and a socket that vanished read the
+    /// same.
+    #[test]
+    fn a_close_frame_is_reported_with_its_code_and_reason() {
+        let mut tally = FrameTally::default();
+        tally.count(&Message::Close(Some(CloseFrame {
+            code: CloseCode::Normal,
+            reason: "idle timeout".into(),
+        })));
+        assert_eq!(
+            tally.to_string(),
+            "0 text, 0 binary, 0 ping, 0 pong; peer closed (code 1000, \"idle timeout\")"
+        );
+    }
+
+    /// A close with no payload is legal and less informative, and the line has
+    /// to be able to say which of the two happened.
+    #[test]
+    fn a_close_frame_with_no_payload_is_distinguishable() {
+        let mut tally = FrameTally::default();
+        tally.count(&Message::Close(None));
+        assert!(tally.to_string().ends_with("peer closed (no code)"));
+    }
+
+    /// The counts that settle #146's hypothesis. It guessed the socket was
+    /// being dropped because nothing ever writes after the subscribe, so a
+    /// ping would go unanswered. Pings are counted here precisely so a real
+    /// session can show whether any arrive; tungstenite queues the pong and
+    /// flushes it from inside `read`, which `ws.next()` drives, so we do not
+    /// send them and must not.
+    #[test]
+    fn frames_are_counted_by_kind() {
+        let mut tally = FrameTally::default();
+        tally.count(&Message::Text("{}".into()));
+        tally.count(&Message::Text("{}".into()));
+        tally.count(&Message::Ping(Vec::new().into()));
+        tally.count(&Message::Pong(Vec::new().into()));
+        tally.count(&Message::Binary(Vec::new().into()));
+
+        assert_eq!(tally.text, 2);
+        assert_eq!(tally.ping, 1);
+        assert_eq!(tally.pong, 1);
+        assert_eq!(tally.binary, 1);
+        assert!(tally.to_string().starts_with("2 text, 1 binary, 1 ping, 1 pong;"));
+    }
+
+    /// The close frame is the last thing a well-behaved peer sends, so the
+    /// counts that preceded it have to survive into the same line. A socket
+    /// that took thirty pings and then closed normally is a very different
+    /// report from one that closed having seen nothing.
+    #[test]
+    fn the_counts_survive_the_close() {
+        let mut tally = FrameTally::default();
+        for _ in 0..30 {
+            tally.count(&Message::Ping(Vec::new().into()));
+        }
+        tally.count(&Message::Close(Some(CloseFrame {
+            code: CloseCode::Away,
+            reason: "".into(),
+        })));
+        assert_eq!(
+            tally.to_string(),
+            "0 text, 0 binary, 30 ping, 0 pong; peer closed (code 1001, \"\")"
+        );
+    }
+
 
     fn session(json: &str) -> SessionDto {
         serde_json::from_str(json).unwrap()
