@@ -235,30 +235,12 @@ fn open_recordings_folder(state: tauri::State<AppState>) -> Result<(), String> {
 }
 
 
-/// `core::Autostart` over `tauri-plugin-autostart`.
-///
-/// Lives here rather than in `core` because `autolaunch()` hangs off an
-/// `AppHandle`, and `core` may not name one (see its header). The manager is
-/// resolved per call rather than cached: it is a cheap state lookup, and the
-/// plugin owns the lifetime.
-struct PluginAutostart(tauri::AppHandle);
-
-impl core::Autostart for PluginAutostart {
-    fn is_enabled(&self) -> Result<bool, String> {
-        use tauri_plugin_autostart::ManagerExt;
-        self.0.autolaunch().is_enabled().map_err(|e| e.to_string())
-    }
-
-    fn enable(&self) -> Result<(), String> {
-        use tauri_plugin_autostart::ManagerExt;
-        self.0.autolaunch().enable().map_err(|e| e.to_string())
-    }
-
-    fn disable(&self) -> Result<(), String> {
-        use tauri_plugin_autostart::ManagerExt;
-        self.0.autolaunch().disable().map_err(|e| e.to_string())
-    }
-}
+// **No `Autostart` here since #151.** `PluginAutostart` lived at this point
+// and wrapped `tauri-plugin-autostart`, which needs an `AppHandle`. It was
+// setting the seam on *this* process's `Ctx`, and WS3.4 moved the commands
+// that read it into the daemon, so it had been answering nobody for several
+// workstreams while the settings row said the feature was unavailable.
+// `daemon::autostart` owns it now, over the crate that plugin wraps.
 
 // ---------------------------------------------------------------- updates
 //
@@ -611,19 +593,12 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        // The argument list is the on-disk contract: it is written into
-        // `HKCU\...\Run` once, when the user ticks the box, and handed
-        // back to whatever build is installed years later. `launch.rs` owns
-        // it for that reason, and `autostart_args` is where the choice of
-        // flag is made and explained — including why it is still the UI's
-        // and not the daemon's now that the daemon runs.
-        //
-        // Nothing is registered by installing; the entry only appears when
-        // the settings toggle is turned on.
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(launch::autostart_args()),
-        ))
+        // **No autostart plugin since #151.** It was registered here so that
+        // `PluginAutostart` could reach `autolaunch()`, and that seam had been
+        // answering nobody since WS3.4 moved the commands into the daemon.
+        // `daemon::autostart` writes the entry now, over the crate this plugin
+        // wraps, and `launch::autostart_args` is still the one place the flag
+        // is chosen.
         // Registered unconditionally; whether it is ever *used* is
         // `updates_enabled`. The endpoint and the public key that verifies
         // what it serves live in `tauri.conf.json` under `plugins.updater`.
@@ -755,7 +730,6 @@ pub fn run() {
                 app.path().app_data_dir()?.join("ddragon"),
                 ffmpeg_path(app.handle()),
             );
-            ctx.set_autostart(Box::new(PluginAutostart(app.handle().clone())));
             wire_updates(app.handle(), &mut ctx);
             let notify_handle = app.handle().clone();
             ctx.set_library_changed_notifier(Box::new(move || {

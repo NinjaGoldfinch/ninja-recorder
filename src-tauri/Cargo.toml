@@ -137,12 +137,19 @@ tauri-plugin-notification = "2"
 # no crate. The daemon needs it directly because the plugin's API hangs off an
 # `AppHandle` and the daemon builds no Tauri app.
 notify-rust = "4"
-# Start-on-login. Windows is the one that matters (it writes the app's path
-# plus `--hidden` into `HKCU\...\Run`); the plugin covers macOS and Linux
-# too, which is what makes the flag testable in the macOS dev loop. The
-# registry entry — not a `settings_kv` row — is the source of truth, so the
-# checkbox can't drift from what Windows will actually do (DEVELOPMENT.md §12).
-tauri-plugin-autostart = "2"
+# Start-on-login (`daemon::autostart`). The registry entry — not a
+# `settings_kv` row — is the source of truth, so the checkbox cannot drift from
+# what Windows will actually do (DEVELOPMENT.md §12).
+#
+# This is the crate `tauri-plugin-autostart` wraps, and it was in the tree
+# through that plugin until #151 replaced it, so naming it directly added no
+# crate and no licence. The plugin itself is gone: its API hangs off an
+# `AppHandle`, the daemon builds no Tauri app, and the daemon is the process
+# that owns this (§3.1). Using the crate underneath keeps the behaviour rather
+# than reimplementing it — including reading Task Manager's own
+# `StartupApproved\Run` override, so an entry switched off from the Startup
+# tab reads as disabled.
+auto-launch = "0.5"
 # In-app updates (DEVELOPMENT.md §14). Windows-only in practice: `latest.json`
 # carries a `windows-x86_64` entry and nothing else, so a macOS build's check
 # simply finds nothing. Registered in `lib.rs` only when the `devtools` feature
