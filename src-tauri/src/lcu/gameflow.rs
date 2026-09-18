@@ -7,7 +7,7 @@
 //! connection yet — no League client is installed on the machine this was
 //! written on (DEVELOPMENT.md §9).
 
-use crate::warn;
+use crate::{info, warn};
 use super::client::{basic_auth_header, LcuClientError, LcuHttpClient};
 use super::lockfile::LockfileInfo;
 use futures_util::{SinkExt, StreamExt};
@@ -187,6 +187,16 @@ where
     .await
     .map_err(Box::new)?;
 
+    // **Said out loud, because the alternative is a log that cannot answer the
+    // question.** Only the failure was ever logged, so one "websocket
+    // unavailable" line could mean the socket never worked or that it worked
+    // for an hour and the client hung up on the way out, and nothing
+    // distinguished them. That ambiguity is the whole of #94: a
+    // `tokio-tungstenite` bump moved six minor versions, no test touches the
+    // socket, and the only evidence a real session leaves is this file's
+    // logging.
+    info!("lcu", "connected to the LCU event socket");
+
     // LCU's WAMP-lite subscribe: [5, "OnJsonApiEvent"] subscribes to every
     // endpoint's change events; we filter to gameflow-phase on receipt.
     // `.into()` since tokio-tungstenite 0.26: `Message::Text` carries
@@ -197,6 +207,12 @@ where
     ))
     .await
     .map_err(Box::new)?;
+
+    // Separately from the connect above: reaching the socket and being
+    // *subscribed* to it are two different claims, and a client that accepts
+    // the connection and then refuses the subscribe would otherwise look
+    // identical to one that works.
+    info!("lcu", "subscribed to gameflow events; phases arrive on the socket");
 
     // Read the current phase *after* subscribing, never before: a change
     // landing between the two would then be delivered by the socket rather
