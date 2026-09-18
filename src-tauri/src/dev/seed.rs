@@ -134,6 +134,11 @@ pub fn dev_seed_library(
             .insert_recording(&db::NewRecording {
                 path: path.display().to_string(),
                 started_at: plan.started_at,
+                // Seeded rows are finished ones: the portal makes library
+                // entries to look at, and an unfinished row is hidden (#150).
+                // `started_at` plus the duration rather than "now", so a
+                // seeded library still sorts and reads like a real one.
+                finished_at: Some(plan.started_at + (plan.duration_s * 1000.0) as i64),
                 duration_s: Some(plan.duration_s),
                 game_id: Some(plan.game_id),
                 queue: plan.queue,

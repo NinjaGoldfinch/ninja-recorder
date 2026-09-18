@@ -281,6 +281,37 @@ static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
         -- directly should win over it.
         ALTER TABLE recordings ADD COLUMN lp_delta INTEGER;
         ",
+    ), M::up(
+        "
+        -- A recording exists before it finishes (#150).
+        --
+        -- Markers used to live in the supervisor's memory for the whole game
+        -- and reach SQLite once, at finalize. A daemon killed mid-game took
+        -- every one of them with it, and the *next* recording inherited them,
+        -- because the Live Client Data API serves the whole game's event list
+        -- rather than the events since the last poll. The file survived; its
+        -- markers did not.
+        --
+        -- So a row is inserted when recording starts and markers are written
+        -- as they arrive. That needs a way to say a row is not finished yet,
+        -- and `duration_s IS NULL` cannot be it: reconcile leaves that null
+        -- for a file it imported but could not probe, which is a different
+        -- state that must stay visible.
+        --
+        -- NULL means recording is still in progress, or was interrupted and
+        -- has not yet been reconciled. `list_recordings` hides those: a row
+        -- with no duration, no champion and a growing file is not something
+        -- to show in a library, and one left behind by a crash would sit
+        -- there forever looking broken.
+        ALTER TABLE recordings ADD COLUMN finished_at INTEGER;
+
+        -- **Every existing row is finished by definition**, because until
+        -- this migration a row was only ever written at finalize or by
+        -- reconcile. Backfilling is not tidiness: without it the column is
+        -- NULL everywhere and the filter above empties every library that
+        -- upgrades.
+        UPDATE recordings SET finished_at = started_at WHERE finished_at IS NULL;
+        ",
     )];
     let count = migrations.len() as i64;
     (Migrations::new(migrations), count)
@@ -320,6 +351,20 @@ pub struct NewRecording {
     /// column of its own because the row sorts on it and CS per minute
     /// wants it beside `duration_s`.
     pub cs: Option<i64>,
+    /// When the recording stopped, or `None` while it is still running.
+    ///
+    /// `None` is what keeps a row out of the library (#150). The supervisor
+    /// inserts one of those the moment recording starts, so markers have
+    /// somewhere to go as they arrive rather than living in memory until a
+    /// finalize that a killed daemon never reaches.
+    ///
+    /// **`reconcile` must set this.** A file the user dropped into the folder
+    /// is finished by the only definition available, and leaving it `None`
+    /// would hide every imported recording.
+    ///
+    /// COALESCEd on upsert like the JSON columns: a rescan landing after a
+    /// finalize must not un-finish the row it just wrote.
+    pub finished_at: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -572,9 +617,10 @@ impl Db {
             "INSERT INTO recordings
                 (path, started_at, duration_s, game_id, queue, champion, role,
                  win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
-                 audio_tracks_json, game_mode, diagnostics_json, scoreboard_json, cs)
+                 audio_tracks_json, game_mode, diagnostics_json, scoreboard_json, cs,
+                 finished_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-                     ?18, ?19)
+                     ?18, ?19, ?20)
              ON CONFLICT(path) DO UPDATE SET
                 started_at = excluded.started_at,
                 duration_s = excluded.duration_s,
@@ -602,7 +648,12 @@ impl Db {
                     COALESCE(excluded.diagnostics_json, recordings.diagnostics_json),
                 scoreboard_json =
                     COALESCE(excluded.scoreboard_json, recordings.scoreboard_json),
-                cs = COALESCE(excluded.cs, recordings.cs)
+                cs = COALESCE(excluded.cs, recordings.cs),
+                -- COALESCEd for the same reason as the columns above, with a
+                -- sharper consequence: a reconcile rescan landing while a
+                -- recording is in flight would otherwise mark it finished and
+                -- put a half-written file in the library.
+                finished_at = COALESCE(excluded.finished_at, recordings.finished_at)
              RETURNING id",
             params![
                 new.path,
@@ -624,6 +675,7 @@ impl Db {
                 new.diagnostics_json,
                 new.scoreboard_json,
                 new.cs,
+                new.finished_at,
             ],
             |row| row.get(0),
         )
@@ -776,7 +828,15 @@ impl Db {
                     win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
                     audio_tracks_json, game_mode, diagnostics_json, scoreboard_json, cs,
                     tier, division, lp_after, lp_before, lp_delta
-             FROM recordings ORDER BY started_at DESC",
+             FROM recordings
+             -- **In-progress recordings are not library entries** (#150). A
+             -- row exists from the moment recording starts so markers have
+             -- somewhere to go, and one left behind by a killed daemon stays
+             -- hidden until the next startup scan finishes it from the file.
+             -- Showing either would put a card with no duration, no champion
+             -- and a growing file in front of someone.
+             WHERE finished_at IS NOT NULL
+             ORDER BY started_at DESC",
         )?;
         let rows = stmt.query_map([], row_to_recording)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
@@ -1397,6 +1457,7 @@ mod tests {
                 path: "/recordings/one.mp4".into(),
                 started_at: 1000,
                 size_bytes: 12345,
+                finished_at: Some(1),
                 ..Default::default()
             })
             .unwrap();
@@ -1416,12 +1477,14 @@ mod tests {
         db.insert_recording(&NewRecording {
             path: "/a.mp4".into(),
             started_at: 100,
+            finished_at: Some(1),
             ..Default::default()
         })
         .unwrap();
         db.insert_recording(&NewRecording {
             path: "/b.mp4".into(),
             started_at: 200,
+            finished_at: Some(1),
             ..Default::default()
         })
         .unwrap();
@@ -1445,6 +1508,7 @@ mod tests {
                 path: "/dup.mp4".into(),
                 started_at: 1,
                 champion: None,
+                finished_at: Some(1),
                 ..Default::default()
             })
             .unwrap();
@@ -1454,6 +1518,7 @@ mod tests {
                 path: "/dup.mp4".into(),
                 started_at: 2,
                 champion: Some("Ahri".into()),
+                finished_at: Some(1),
                 ..Default::default()
             })
             .unwrap();
@@ -1472,6 +1537,7 @@ mod tests {
             .insert_recording(&NewRecording {
                 path: "/game.mp4".into(),
                 started_at: 1,
+                finished_at: Some(1),
                 ..Default::default()
             })
             .unwrap();
@@ -1497,6 +1563,7 @@ mod tests {
             .insert_recording(&NewRecording {
                 path: "/game.mp4".into(),
                 started_at: 1,
+                finished_at: Some(1),
                 ..Default::default()
             })
             .unwrap();
@@ -1519,6 +1586,7 @@ mod tests {
             .insert_recording(&NewRecording {
                 path: "/quiet-game.mp4".into(),
                 started_at: 1,
+                finished_at: Some(1),
                 ..Default::default()
             })
             .unwrap();
@@ -1533,6 +1601,7 @@ mod tests {
             .insert_recording(&NewRecording {
                 path: "/game.mp4".into(),
                 started_at: 1,
+                finished_at: Some(1),
                 ..Default::default()
             })
             .unwrap();
@@ -1553,6 +1622,7 @@ mod tests {
         db.insert_recording(&NewRecording {
             path: "/known.mp4".into(),
             started_at: 1,
+            finished_at: Some(1),
             ..Default::default()
         })
         .unwrap();
@@ -1570,6 +1640,7 @@ mod tests {
                 started_at: 42,
                 champion: Some("Ahri".into()),
                 size_bytes: 1234,
+                finished_at: Some(1),
                 ..Default::default()
             })
             .unwrap();
@@ -1653,6 +1724,7 @@ mod tests {
             path: "/game.mp4".into(),
             started_at: 1,
             audio_tracks_json: Some(json.clone()),
+            finished_at: Some(1),
             ..Default::default()
         })
         .unwrap();
@@ -1680,6 +1752,7 @@ mod tests {
                 path: "/game.mp4".into(),
                 started_at: 1,
                 audio_tracks_json: Some(json.clone()),
+                finished_at: Some(1),
                 ..Default::default()
             })
             .unwrap();
@@ -1689,6 +1762,7 @@ mod tests {
             .insert_recording(&NewRecording {
                 path: "/game.mp4".into(),
                 started_at: 2,
+                finished_at: Some(1),
                 ..Default::default()
             })
             .unwrap();
@@ -1711,6 +1785,7 @@ mod tests {
                 path: "/game.mp4".into(),
                 started_at: 1,
                 game_mode: Some("ARAM".into()),
+                finished_at: Some(1),
                 ..Default::default()
             })
             .unwrap();
@@ -1718,6 +1793,7 @@ mod tests {
         db.insert_recording(&NewRecording {
             path: "/game.mp4".into(),
             started_at: 2,
+            finished_at: Some(1),
             ..Default::default()
         })
         .unwrap();
@@ -1745,6 +1821,7 @@ mod tests {
             pinned: true,
             size_bytes: 4_200_000_000,
             audio_tracks_json: Some(r#"{"tracks":[]}"#.into()),
+            finished_at: Some(1),
             ..Default::default()
         })
         .unwrap()
@@ -1830,6 +1907,7 @@ mod tests {
             .insert_recording(&NewRecording {
                 path: "/game.mp4".into(),
                 started_at: 1,
+                finished_at: Some(1),
                 ..Default::default()
             })
             .unwrap();
@@ -1898,6 +1976,7 @@ mod tests {
             .insert_recording(&NewRecording {
                 path: "/imported.mp4".into(),
                 started_at: 1,
+                finished_at: Some(1),
                 ..Default::default()
             })
             .unwrap();
@@ -1911,6 +1990,7 @@ mod tests {
             .insert_recording(&NewRecording {
                 path: "/game.mp4".into(),
                 started_at: 1,
+                finished_at: Some(1),
                 ..Default::default()
             })
             .unwrap();
@@ -1929,6 +2009,7 @@ mod tests {
             path: "/a.mp4".into(),
             started_at: 1,
             size_bytes: 100,
+            finished_at: Some(1),
             ..Default::default()
         })
         .unwrap();
@@ -1936,6 +2017,7 @@ mod tests {
             path: "/b.mp4".into(),
             started_at: 2,
             size_bytes: 250,
+            finished_at: Some(1),
             ..Default::default()
         })
         .unwrap();
@@ -1992,6 +2074,7 @@ mod tests {
                 queue: Some(420),
                 game_id: Some(7),
                 // Everything the LCU answers for, and no scoreboard.
+                finished_at: Some(1),
                 ..Default::default()
             })
             .unwrap();
@@ -2015,6 +2098,7 @@ mod tests {
             game_id: Some(7),
             scoreboard_json: Some("{}".into()),
             cs: Some(262),
+            finished_at: Some(1),
             ..Default::default()
         })
         .unwrap();
@@ -2037,6 +2121,7 @@ mod tests {
                 path: path.into(),
                 started_at,
                 game_id: Some(7),
+                finished_at: Some(1),
                 ..Default::default()
             })
             .unwrap();
@@ -2058,6 +2143,7 @@ mod tests {
             path: "/custom.mp4".into(),
             started_at: 10_000,
             game_id: None,
+            finished_at: Some(1),
             ..Default::default()
         })
         .unwrap();
@@ -2079,6 +2165,7 @@ mod tests {
             role: Some("Jungle".into()),
             patch: Some("16.17".into()),
             queue: Some(420),
+            finished_at: Some(1),
             ..Default::default()
         })
         .unwrap();
@@ -2098,6 +2185,7 @@ mod tests {
             started_at: 1,
             scoreboard_json: Some(r#"{"from":"live"}"#.into()),
             cs: Some(100),
+            finished_at: Some(1),
             ..Default::default()
         })
         .unwrap();
@@ -2121,6 +2209,7 @@ mod tests {
             started_at: 1,
             scoreboard_json: Some(r#"{"from":"live"}"#.into()),
             cs: Some(100),
+            finished_at: Some(1),
             ..Default::default()
         })
         .unwrap();
@@ -2144,6 +2233,7 @@ mod tests {
             game_id: Some(7),
             scoreboard_json: Some("{}".into()),
             cs: Some(262),
+            finished_at: Some(1),
             ..Default::default()
         })
         .unwrap();
@@ -2171,6 +2261,7 @@ mod tests {
             game_id: None,
             scoreboard_json: Some("{}".into()),
             cs: Some(262),
+            finished_at: Some(1),
             ..Default::default()
         })
         .unwrap();
@@ -2218,6 +2309,7 @@ mod tests {
             .insert_recording(&NewRecording {
                 path: "/game.mp4".into(),
                 started_at: 1,
+                finished_at: Some(1),
                 ..Default::default()
             })
             .unwrap();
@@ -2307,6 +2399,7 @@ mod tests {
         let id = db.insert_recording(&NewRecording {
             path: "/a.mp4".into(),
             started_at: 1,
+            finished_at: Some(1),
             ..Default::default()
         }).unwrap();
 
@@ -2331,6 +2424,7 @@ mod tests {
         let id = db.insert_recording(&NewRecording {
             path: "/a.mp4".into(),
             started_at: 1,
+            finished_at: Some(1),
             ..Default::default()
         }).unwrap();
 
@@ -2353,6 +2447,7 @@ mod tests {
         let id = db.insert_recording(&NewRecording {
             path: "/a.mp4".into(),
             started_at: 1,
+            finished_at: Some(1),
             ..Default::default()
         }).unwrap();
 
@@ -2372,6 +2467,7 @@ mod tests {
         let id = db.insert_recording(&NewRecording {
             path: "/a.mp4".into(),
             started_at: 1,
+            finished_at: Some(1),
             ..Default::default()
         }).unwrap();
 
@@ -2392,6 +2488,7 @@ mod tests {
         let id = db.insert_recording(&NewRecording {
             path: "/a.mp4".into(),
             started_at: 1,
+            finished_at: Some(1),
             ..Default::default()
         }).unwrap();
         db.fill_ranked(id, "GOLD", Some("II"), 44, Some(24), Some(20)).unwrap();
