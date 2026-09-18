@@ -26,24 +26,13 @@ export function initDevPortal() {
   // rather than throwing.
   void hasDevCommands().then((available) => {
     button.hidden = !available;
-    revealRowInspectors(available);
   });
 }
 
-/**
- * Whether this build can inspect a recording, remembered so rows rendered
- * *after* the probe answers get the affordance too.
- *
- * The library re-renders on every `library-changed`, and the probe resolves
- * once. Without this, the buttons would appear on the first paint and vanish
- * on the next one.
- */
-let devAvailable = false;
-
-/** Called by `library.ts` after each render, and by the probe once. */
-export function revealRowInspectors(available = devAvailable) {
-  devAvailable = available;
-  for (const button of document.querySelectorAll<HTMLElement>("[data-inspect]")) {
-    button.hidden = !devAvailable;
-  }
-}
+// `revealRowInspectors` lived here until WS4.3. It remembered the probe's
+// answer and toggled `hidden` on every `[data-inspect]` button in the grid,
+// because `library.ts` rebuilt the rows with `innerHTML` on every
+// `library-changed` and the probe resolves only once, so the buttons would
+// otherwise appear on the first paint and vanish on the next. `Library.svelte`
+// asks `hasDevCommands` itself and passes the answer down as a prop, so the
+// button is simply not rendered rather than rendered and hidden.

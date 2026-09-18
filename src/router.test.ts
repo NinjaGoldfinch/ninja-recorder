@@ -1,5 +1,5 @@
+import type { Component } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import App from "./lib/App.svelte";
 
 /**
  * `router.ts` — WS5 task 5.5, and the module WS4 has to keep honest.
@@ -21,6 +21,16 @@ vi.mock("@tauri-apps/api/event", () => ({ listen }));
 type Router = typeof import("./router");
 
 let router: Router;
+/**
+ * Imported per test, not at the top of the file.
+ *
+ * `vi.resetModules` below gives each test a fresh `router`, and with it a
+ * fresh copy of the Svelte runtime that `mount` comes from. A statically
+ * imported component would still be compiled against the *first* copy, and
+ * its `$effect` would then run with no active effect context: `effect_orphan`,
+ * reported against `App.svelte` with nothing to say about why.
+ */
+let App: Component;
 let views: Record<string, HTMLElement>;
 let host: HTMLElement;
 
@@ -56,6 +66,7 @@ beforeEach(async () => {
   listen.mockResolvedValue(() => {});
   window.location.hash = "";
   router = await import("./router");
+  App = (await import("./lib/App.svelte")).default;
   register(router);
 });
 
@@ -85,6 +96,29 @@ describe("showView", () => {
 
   it("starts on the library", () => {
     expect(router.currentView()).toBe("library");
+  });
+});
+
+describe("registerView", () => {
+  it("hides a view that registers after the router has moved on", () => {
+    // WS4.3: a migrated view registers itself when its component mounts, which
+    // is after `initRouting` has read the URL fragment. A window opened at
+    // `#settings` would otherwise show the settings section and the library
+    // at once, because the library's node was not there for the `showView`
+    // that hid everything else.
+    router.showView("settings");
+
+    const late = document.createElement("div");
+    router.registerView("library", late);
+    expect(late.hidden).toBe(true);
+    expect(router.currentView()).toBe("settings");
+  });
+
+  it("shows a view that registers while it is the current one", () => {
+    const late = document.createElement("div");
+    late.hidden = true;
+    router.registerView("library", late);
+    expect(late.hidden).toBe(false);
   });
 });
 
@@ -192,22 +226,22 @@ describe("the Svelte root", () => {
   it("refuses to mount a second copy over the first", () => {
     // A second root in the same node duplicates the UI rather than throwing,
     // which is the kind of bug that gets diagnosed as a CSS problem. Counting
-    // child nodes rather than elements is what makes this test able to fail:
-    // the component renders nothing, so its footprint is the single anchor
-    // node Svelte leaves behind, and a second mount would make that two.
+    // the library sections is what makes this able to fail: a second mount
+    // would render a second one into the same host.
     router.mountApp(App, host);
-    expect(host.childNodes.length).toBe(1);
+    expect(host.querySelectorAll("#library-view")).toHaveLength(1);
 
     router.mountApp(App, host);
     expect(router.appMounted()).toBe(true);
-    expect(host.childNodes.length).toBe(1);
+    expect(host.querySelectorAll("#library-view")).toHaveLength(1);
   });
 
-  it("renders nothing while it is empty", () => {
-    // Not a tautology: it is what "without affecting the vanilla views" means
-    // in the DOM. WS4.3 is the commit that gets to change this line.
+  it("renders the views that have migrated", () => {
+    // WS4.1 asserted the opposite, that the root rendered nothing, and said
+    // WS4.3 would be the commit to change it. This is that commit: the
+    // library is a Svelte view now, and `library.ts` is gone.
     router.mountApp(App, host);
-    expect(host.innerHTML).toBe("");
+    expect(host.querySelector("#library-view")).not.toBeNull();
   });
 
   it("can go up, come down and go up again", async () => {

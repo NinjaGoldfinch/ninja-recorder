@@ -1,15 +1,14 @@
 # Frontend
 
-Vanilla TypeScript, no build-time templating beyond Vite. The markup lives in
-`index.html`; the modules under `src/` wire behaviour onto it.
+Two frontends, for the length of WS4. The library is Svelte 5, under
+`src/lib/`. Review and settings are still vanilla TypeScript wired onto markup
+in `index.html`. [The Svelte seam](#the-svelte-seam) below is what joins them,
+and which views have moved across.
 
-The organising principle is **state ownership, not widgets**. Each module owns
-exactly one piece of mutable state and is the only place that writes it.
-
-Since WS4.1 there is also a Svelte 5 root mounted beside those views, and for
-the length of WS4 the window runs both frontends at once. It renders nothing
-yet. [The Svelte seam](#the-svelte-seam) below is what joins them, and which
-views have moved across.
+The organising principle is the same on both sides: **state ownership, not
+widgets**. Each module owns exactly one piece of mutable state and is the only
+place that writes it. A store is that rule with runes rather than module
+variables.
 
 ---
 
@@ -22,7 +21,9 @@ flowchart TB
     THEME["theme.ts<br/><small>owns: html[data-theme]</small>"]
     PREFS["prefs.ts<br/><small>owns: the preference cache</small>"]
     STATUS["status.ts<br/><small>owns: the poll timer</small>"]
-    LIB["library.ts<br/><small>owns: the row set + filters</small>"]
+    LIBV["lib/components/library/<br/><small>Library, Row, Toolbar, StatsBar,<br/>Loadout, Matchup, Slot, RowActions</small>"]
+    LIBS["lib/stores/library.svelte.ts<br/><small>owns: the row set + every control</small>"]
+    ICONS["lib/stores/icons.svelte.ts<br/><small>owns: when art has arrived</small>"]
     REVIEW["review.ts<br/><small>owns: the player + timeline</small>"]
     SETTINGS["settings.ts<br/><small>owns: the settings form</small>"]
     TOAST["toast.ts<br/><small>owns: the transient message</small>"]
@@ -47,20 +48,19 @@ flowchart TB
     MAIN --> THEME
     MAIN --> PREFS
     MAIN --> STATUS
-    MAIN --> LIB
     MAIN --> REVIEW
     MAIN --> SETTINGS
     MAIN --> TOAST
     MAIN --> UPDATE
     MAIN --> DESK
     DESK --> BRIDGE
-    STATUS --> LIB
+    STATUS --> LIBS
     STATUS --> UPDATE
-    SETTINGS --> LIB
+    SETTINGS --> LIBS
     SETTINGS --> THEME
     SETTINGS --> PREFS
-    LIB --> REVIEW
-    LIB --> BRIDGE
+    LIBV --> REVIEW
+    LIBS --> BRIDGE
     REVIEW --> BRIDGE
     SETTINGS --> BRIDGE
     STATUS --> BRIDGE
@@ -70,11 +70,14 @@ flowchart TB
     UPDATE --> DOM
     UPDATE --> PREFS
     SETTINGS --> UPDATE
-    LIB --> LIBP
+    LIBV --> LIBP
+    LIBS --> LIBP
+    LIBV --> LIBS
+    LIBV --> ICONS
+    APP --> LIBV
     REVIEW --> TL
-    LIB --> FMT
+    LIBV --> FMT
     REVIEW --> FMT
-    LIB --> DOM
     REVIEW --> DOM
     BRIDGE --> TYPES
     FMT -.->|"type-only"| TYPES
@@ -82,6 +85,9 @@ flowchart TB
     style BRIDGE fill:#e3f2fd,stroke:#1565c0
     style APP fill:#fff3e0,stroke:#ef6c00
     style TOKENS fill:#fff3e0,stroke:#ef6c00
+    style LIBV fill:#fff3e0,stroke:#ef6c00
+    style LIBS fill:#fff3e0,stroke:#ef6c00
+    style ICONS fill:#fff3e0,stroke:#ef6c00
     style TL fill:#e8f5e9,stroke:#2e7d32
     style LIBP fill:#e8f5e9,stroke:#2e7d32
 ```
@@ -941,6 +947,14 @@ front of it.
 | `unmountApp()` | takes it down, resolving `true` if there was anything to take down |
 | `appMounted()` | whether it is currently up |
 
+**A migrated view registers itself.** `main.ts` registers the sections it
+still owns by `el("#id")`; a Svelte view has no id to look up before it
+renders, so `App.svelte` hands its node to `registerView` on mount. That
+happens *after* `initRouting` has read the URL fragment, which is why
+`registerView` sets `hidden` from the current view rather than trusting the
+node's default: a window opened at `#settings` would otherwise show the
+settings section and the library at once.
+
 **The root goes up once and stays up.** It is deliberately not driven from
 `showView`: `mount` and `unmount` destroy component state, so tying them to
 view changes would throw away a migrated view's scroll position and in-flight
@@ -951,6 +965,60 @@ in normal use.
 
 `main.ts` mounts last, after every `init*` has run, so a component throwing on
 the way up cannot take a working frontend down with it.
+
+### What the library looks like now
+
+`library.ts` is gone. 777 lines of it, plus the `#library-view` markup, are
+eight components, a store and the pure modules WS4.2 extracted.
+
+```
+lib/stores/library.svelte.ts   the row set, the disk figure, every control
+lib/stores/icons.svelte.ts     when art has arrived
+lib/components/library/
+  Library.svelte               the view: stats, toolbar, grid, empty states
+  StatsBar.svelte              the four numbers
+  Toolbar.svelte               search, facets, outcome, pinned, sort, actions
+  Row.svelte                   one recording
+  Loadout.svelte               spells, runes, items
+  Matchup.svelte               the lane opponent
+  RowActions.svelte            pin, delete, inspect
+  Slot.svelte                  one art box
+```
+
+**Four things went away rather than being ported.**
+
+`render()` and `pendingRender`. The old module recomputed the visible rows and
+rebuilt the grid with `innerHTML` whenever anything changed, and had to defer
+that by hand while another view was showing, because rebuilding a hidden grid
+is wasted work and doing it as the user navigated back would yank the card they
+came from out from under them. Svelte does not render a component that is not
+mounted.
+
+`paintArt` and `paintAll`. Art is a second pass, still, for the reason it
+always was: the first sighting of any icon is a CDN round trip, and the whole
+thing has to work with no network at all. But `innerHTML` used to throw away
+every image on every re-render, so the old code re-queried the grid by
+`data-id` and re-inserted `<img>` tags by hand. Now `Slot` reads the cache and
+`icons.svelte.ts` publishes a version counter when it grows.
+
+`revealRowInspectors`. The dev-portal probe resolves once and the grid was
+rebuilt many times, so its answer had to be remembered and re-applied by
+querying every `[data-inspect]` button. `Library.svelte` asks `hasDevCommands`
+itself and passes the answer down, so the button is not rendered rather than
+rendered and hidden.
+
+`escapeHtml` / `escapeAttr` on this path. Every one of the row's values used to
+be concatenated into a template string with an escape applied by hand at each
+site, and `vodTitle` falls back to a filename, which is untrusted input.
+Default interpolation replaces both. **`{@html}` anywhere under
+`lib/components/` would opt straight back out of it**, which is what
+`Row.test.ts`'s last two tests exist to catch.
+
+One thing deliberately did not change: a row is a focusable, clickable
+`role="listitem"`, which is what v1's markup did and what the a11y warnings in
+`Row.svelte` are suppressed for. ARIA has no good role for an activatable list
+item, and making every row contain a real button is a UX change rather than a
+migration. It is flagged in the component and worth its own issue.
 
 ### The pure logic comes out first
 
@@ -990,8 +1058,8 @@ supposed to mean.
 
 | View | Lands in | State |
 |---|---|---|
-| `App.svelte` | WS4.1 | landed, renders nothing |
-| `Library.svelte` and children | WS4.3 | vanilla (`library.ts`) |
+| `App.svelte` | WS4.1 | landed |
+| `Library.svelte` and children | WS4.3 | **landed**; `library.ts` deleted |
 | `Settings.svelte`, `Update.svelte` | WS4.4 | vanilla (`settings.ts`, `update.ts`) |
 | `Review.svelte`, `Timeline.svelte` | WS4.5 | vanilla (`review.ts`) |
 
