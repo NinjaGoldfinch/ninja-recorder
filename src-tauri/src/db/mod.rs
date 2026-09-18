@@ -602,15 +602,18 @@ impl Db {
         Ok(())
     }
 
-    /// Upserts on `path` rather than a plain `INSERT`: `reconcile` (folder
-    /// scan, run at startup and on-demand) can't tell an in-progress
-    /// recording's not-yet-finalized file apart from a genuinely untracked
-    /// one, so it may already have imported this exact path as an
-    /// "unknown recording" by the time the real finalize gets here. A
-    /// plain `INSERT` would then fail the `UNIQUE` constraint on `path`
-    /// and silently drop the DB row (`stop_recording`'s `recording_id:
-    /// None` case) even though the recording itself succeeded. The real
-    /// finalize data should win over reconcile's guessed one either way.
+    /// Upserts on `path` rather than a plain `INSERT`, so that two writers
+    /// naming the same file converge on one row instead of failing the
+    /// `UNIQUE` constraint and silently dropping it (`stop_recording`'s
+    /// `recording_id: None` case) even though the recording itself succeeded.
+    ///
+    /// **This is no longer the supervisor's finalize path.** Since #150 a row
+    /// is opened when recording starts and completed by `finish_recording`,
+    /// **by id**, because the path a recording starts with is only a
+    /// prediction of the one it ends with. `insert_recording` remains the
+    /// writer for `reconcile`'s imports, and the finalize's fallback for a
+    /// recording that has no id: one already in flight when this version
+    /// started, or one whose start-insert failed.
     pub fn insert_recording(&self, new: &NewRecording) -> Result<i64, DbError> {
         let conn = self.pool.write();
         conn.query_row(
@@ -680,6 +683,165 @@ impl Db {
             |row| row.get(0),
         )
         .map_err(DbError::from)
+    }
+
+    /// Opens a row for a recording that has just started, and returns its id.
+    ///
+    /// The row is **unfinished**: `finished_at` is NULL, so `list_recordings`
+    /// hides it and retention will not consider it. It exists so that markers
+    /// have an id to be written against as they arrive, rather than living in
+    /// the supervisor's memory until a finalize that a killed daemon never
+    /// reaches (#150).
+    ///
+    /// `path` is `RecordConfig::expected_output_path`, which is a prediction:
+    /// only `Recorder::stop` knows what was really written. Storing it anyway
+    /// is what lets `reconcile` recognise the growing file as ours and skip
+    /// it, instead of importing a half-written recording as an "unknown
+    /// recording". `finish_recording` corrects it afterwards, **by id**.
+    ///
+    /// Upserts rather than failing on a duplicate `path`. A row already
+    /// holding this path is either one `reconcile` imported from an earlier
+    /// crash, or one abandoned by a daemon that died before its recovery pass
+    /// ran; in both cases the file is about to be overwritten by this
+    /// recording, so the row should become this recording. `started_at` moves
+    /// with it and `finished_at` goes back to NULL, which is what re-hides a
+    /// stale row that recovery had already finished.
+    pub fn begin_recording(&self, path: &str, started_at: i64) -> Result<i64, DbError> {
+        let conn = self.pool.write();
+        conn.query_row(
+            "INSERT INTO recordings (path, started_at, pinned, size_bytes, finished_at)
+             VALUES (?1, ?2, 0, 0, NULL)
+             ON CONFLICT(path) DO UPDATE SET
+                started_at  = excluded.started_at,
+                finished_at = NULL
+             RETURNING id",
+            params![path, started_at],
+            |row| row.get(0),
+        )
+        .map_err(DbError::from)
+    }
+
+    /// Completes the row `begin_recording` opened, **by id**.
+    ///
+    /// Deliberately not `insert_recording`. That method upserts on `path`,
+    /// and the path a recording starts with is a prediction while the path it
+    /// ends with is a fact. If the two differ, upserting would leave the
+    /// unfinished row orphaned beside a new finished one: the markers written
+    /// during the game would stay attached to a row nothing ever shows. This
+    /// updates the row that already owns those markers.
+    ///
+    /// Any **other** row holding `new.path` is deleted first, inside the same
+    /// transaction. That is the `reconcile` race the upsert used to absorb: a
+    /// folder scan can import this file while the game is still running, and
+    /// without the delete the `UPDATE` would fail the `UNIQUE` constraint on
+    /// `path` and lose the finalize. Deleting the imported row is right on the
+    /// merits too, since it holds a guessed duration and no metadata, and this
+    /// one holds the session's.
+    ///
+    /// Unlike `insert_recording` nothing here COALESCEs. The caller is the
+    /// finalize, which knows more than any other writer about every column it
+    /// sets, so `None` means "not known" and should land as NULL.
+    pub fn finish_recording(&self, id: i64, new: &NewRecording) -> Result<(), DbError> {
+        let mut conn = self.pool.write();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM recordings WHERE path = ?1 AND id != ?2",
+            params![new.path, id],
+        )?;
+        tx.execute(
+            "UPDATE recordings SET
+                path = ?2, started_at = ?3, duration_s = ?4, game_id = ?5, queue = ?6,
+                champion = ?7, role = ?8, win = ?9, kda_k = ?10, kda_d = ?11, kda_a = ?12,
+                patch = ?13, size_bytes = ?14, audio_tracks_json = ?15, game_mode = ?16,
+                diagnostics_json = ?17, scoreboard_json = ?18, cs = ?19, finished_at = ?20
+             WHERE id = ?1",
+            params![
+                id,
+                new.path,
+                new.started_at,
+                new.duration_s,
+                new.game_id,
+                new.queue,
+                new.champion,
+                new.role,
+                new.win,
+                new.kda_k,
+                new.kda_d,
+                new.kda_a,
+                new.patch,
+                new.size_bytes,
+                new.audio_tracks_json,
+                new.game_mode,
+                new.diagnostics_json,
+                new.scoreboard_json,
+                new.cs,
+                new.finished_at,
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Rows that no finalize ever completed: recording is in flight right now,
+    /// or a daemon died before it could finish one.
+    ///
+    /// `list_recordings` cannot answer this, which is the point of a separate
+    /// method rather than a filter at the call site: it hides exactly these
+    /// rows, so **its orphan sweep cannot see them either**. Recovery is what
+    /// stops an abandoned row from being permanently invisible, holding a file
+    /// that `reconcile` will now skip because `find_by_path` finds it.
+    pub fn unfinished_recordings(&self) -> Result<Vec<RecordingRow>, DbError> {
+        let conn = self.pool.read();
+        let mut stmt = conn.prepare(
+            "SELECT id, path, started_at, duration_s, game_id, queue, champion, role,
+                    win, kda_k, kda_d, kda_a, patch, pinned, size_bytes,
+                    audio_tracks_json, game_mode, diagnostics_json, scoreboard_json, cs,
+                    tier, division, lp_after, lp_before, lp_delta
+             FROM recordings
+             WHERE finished_at IS NULL
+             ORDER BY started_at DESC",
+        )?;
+        let rows = stmt.query_map([], row_to_recording)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+    }
+
+    /// Finishes an abandoned row from what the file on disk can be made to
+    /// say, which is all that is left once the session is gone.
+    ///
+    /// Touches only the four columns a file can answer for. Everything the
+    /// Live Client Data polls had established died with the daemon, and
+    /// writing defaults over those columns would replace "not known" with a
+    /// confident wrong answer. The markers written during the game stay
+    /// exactly as they are; they are the thing this whole path exists to keep.
+    pub fn recover_recording(
+        &self,
+        id: i64,
+        duration_s: Option<f64>,
+        size_bytes: i64,
+        finished_at: i64,
+    ) -> Result<(), DbError> {
+        let conn = self.pool.write();
+        conn.execute(
+            "UPDATE recordings SET duration_s = ?2, size_bytes = ?3, finished_at = ?4
+             WHERE id = ?1",
+            params![id, duration_s, size_bytes, finished_at],
+        )?;
+        Ok(())
+    }
+
+    /// Drops every marker for one recording.
+    ///
+    /// The finalize deletes and re-inserts rather than appending, because the
+    /// markers written during the game were resolved against whatever
+    /// alignment was known at the time. Most were resolved against the first
+    /// proven alignment and will not move; the ones captured during the
+    /// loading screen, before game time ever advanced, were resolved against a
+    /// 1:1 fallback and need the final answer. Re-inserting is how they get
+    /// it (#150).
+    pub fn delete_markers(&self, recording_id: i64) -> Result<(), DbError> {
+        let conn = self.pool.write();
+        conn.execute("DELETE FROM markers WHERE recording_id = ?1", [recording_id])?;
+        Ok(())
     }
 
     /// Patches the post-game columns of one existing row, and nothing
@@ -1447,6 +1609,171 @@ mod tests {
             kind: kind.to_string(),
             payload_json: "{}".to_string(),
         }
+    }
+
+    // --- A row exists before the recording finishes (#150) ----------------
+
+    #[test]
+    fn a_begun_recording_is_hidden_until_it_is_finished() {
+        let db = Db::open_temporary().unwrap();
+        let id = db.begin_recording("C:/vods/recording-1.mp4", 1_000).unwrap();
+
+        assert!(db.list_recordings().unwrap().is_empty(), "not a library entry yet");
+        let open = db.unfinished_recordings().unwrap();
+        assert_eq!(open.len(), 1);
+        // No `finished_at` assertion: the column is not on `RecordingRow`,
+        // which crosses the IPC boundary and has no reason to carry it while
+        // unfinished rows are hidden. Being returned by a method whose whole
+        // filter is `finished_at IS NULL` is the assertion.
+        assert_eq!(open[0].id, id);
+
+        db.finish_recording(
+            id,
+            &NewRecording {
+                path: "C:/vods/recording-1.mp4".into(),
+                started_at: 1_000,
+                duration_s: Some(1800.0),
+                champion: Some("Ahri".into()),
+                finished_at: Some(2_000),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(db.unfinished_recordings().unwrap().is_empty());
+        let rows = db.list_recordings().unwrap();
+        assert_eq!(rows.len(), 1, "finished, and the same row");
+        assert_eq!(rows[0].id, id);
+        assert_eq!(rows[0].champion.as_deref(), Some("Ahri"));
+    }
+
+    /// The reason the finalize updates by id rather than upserting on
+    /// `path`. The path a recording starts with is a prediction of where the
+    /// backend will write; only `Recorder::stop` knows the truth. An upsert
+    /// on a path that moved would finish a *different* row and strand the
+    /// game's markers on an unfinished one nothing ever shows.
+    #[test]
+    fn finishing_by_id_follows_a_path_that_changed() {
+        let db = Db::open_temporary().unwrap();
+        let id = db.begin_recording("C:/vods/predicted.mp4", 1_000).unwrap();
+        db.insert_markers(id, &[marker("kill", 210.5)]).unwrap();
+
+        db.finish_recording(
+            id,
+            &NewRecording {
+                path: "C:/vods/actual.mp4".into(),
+                started_at: 1_000,
+                finished_at: Some(2_000),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let rows = db.list_recordings().unwrap();
+        assert_eq!(rows.len(), 1, "one row, not an orphan plus a new one");
+        assert_eq!(rows[0].id, id);
+        assert_eq!(rows[0].path, "C:/vods/actual.mp4");
+        assert_eq!(
+            db.get_markers(id).unwrap().len(),
+            1,
+            "the markers stayed with the row that owns them"
+        );
+    }
+
+    /// The `reconcile` race the old upsert used to absorb: a folder scan can
+    /// import the in-progress file while the game is still running. Without
+    /// the delete, the finalize's `UPDATE` would fail the `UNIQUE` constraint
+    /// on `path` and lose the whole row.
+    #[test]
+    fn finishing_removes_a_row_reconcile_imported_for_the_same_file() {
+        let db = Db::open_temporary().unwrap();
+        let id = db.begin_recording("C:/vods/recording-3.mp4", 1_000).unwrap();
+        db.insert_markers(id, &[marker("kill", 210.5)]).unwrap();
+
+        // Reconcile, mid-game, importing the growing file under a path that
+        // turns out to be the one the finalize reports.
+        let imported = db
+            .insert_recording(&NewRecording {
+                path: "C:/vods/recording-3.mp4-imported".into(),
+                started_at: 1_500,
+                duration_s: Some(12.0),
+                finished_at: Some(1_500),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_ne!(imported, id);
+
+        db.finish_recording(
+            id,
+            &NewRecording {
+                path: "C:/vods/recording-3.mp4-imported".into(),
+                started_at: 1_000,
+                duration_s: Some(1800.0),
+                champion: Some("Ahri".into()),
+                finished_at: Some(2_000),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let rows = db.list_recordings().unwrap();
+        assert_eq!(rows.len(), 1, "the guessed row gave way to the real one");
+        assert_eq!(rows[0].id, id);
+        assert_eq!(rows[0].duration_s, Some(1800.0), "the session clock, not the probe");
+        assert_eq!(db.get_markers(id).unwrap().len(), 1);
+    }
+
+    /// A row already holding this path is a leftover: an earlier crash's
+    /// import, or an abandoned row recovery already finished. The file is
+    /// about to be overwritten by this recording, so the row should become
+    /// this recording, and go back to being hidden while it runs.
+    #[test]
+    fn beginning_reclaims_a_row_that_already_holds_the_path() {
+        let db = Db::open_temporary().unwrap();
+        let existing = db
+            .insert_recording(&NewRecording {
+                path: "C:/vods/recording-4.mp4".into(),
+                started_at: 1,
+                finished_at: Some(2),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let id = db.begin_recording("C:/vods/recording-4.mp4", 9_000).unwrap();
+        assert_eq!(id, existing, "reclaimed, not duplicated");
+        assert!(db.list_recordings().unwrap().is_empty(), "hidden again while it records");
+        assert_eq!(db.unfinished_recordings().unwrap()[0].started_at, 9_000);
+    }
+
+    #[test]
+    fn deleting_markers_leaves_the_recording_alone() {
+        let db = Db::open_temporary().unwrap();
+        let id = db.begin_recording("C:/vods/recording-5.mp4", 1_000).unwrap();
+        db.insert_markers(id, &[marker("kill", 10.0), marker("death", 20.0)])
+            .unwrap();
+        assert_eq!(db.get_markers(id).unwrap().len(), 2);
+
+        db.delete_markers(id).unwrap();
+        assert!(db.get_markers(id).unwrap().is_empty());
+        assert_eq!(db.unfinished_recordings().unwrap().len(), 1, "the row is still there");
+    }
+
+    /// Recovery writes only what a file can answer for. Everything the
+    /// Live Client Data polls had established died with the daemon, and a
+    /// default would be a confident wrong answer where NULL is a true one.
+    #[test]
+    fn recovering_a_row_sets_only_what_the_file_knows() {
+        let db = Db::open_temporary().unwrap();
+        let id = db.begin_recording("C:/vods/recording-6.mp4", 1_000).unwrap();
+
+        db.recover_recording(id, Some(42.0), 4_096, 5_000).unwrap();
+
+        let rows = db.list_recordings().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].duration_s, Some(42.0));
+        assert_eq!(rows[0].size_bytes, 4_096);
+        assert_eq!(rows[0].champion, None, "nothing was there to learn it from");
+        assert_eq!(rows[0].game_id, None);
     }
 
     #[test]

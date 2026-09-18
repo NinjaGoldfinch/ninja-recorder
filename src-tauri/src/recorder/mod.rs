@@ -38,6 +38,27 @@ pub struct RecordConfig {
     pub audio: AudioPreset,
 }
 
+impl RecordConfig {
+    /// Where the backend is expected to write, so that a caller can name the
+    /// file before it exists.
+    ///
+    /// **A prediction, not a promise.** The trait lets a backend choose its
+    /// own container, and only `Recorder::stop`'s `RecordingOutput::path`
+    /// says what was actually written. Both shipped backends derive the path
+    /// exactly this way and call this method to do it, which is the point:
+    /// the `{stem}.mp4` rule now lives in one place instead of three.
+    ///
+    /// The supervisor uses it to insert a `recordings` row when recording
+    /// starts (#150), so markers have somewhere to go before the finalize a
+    /// killed daemon never reaches. That row is corrected **by id** at
+    /// finalize, from `stop`'s path, so a backend that writes somewhere else
+    /// costs a row that is briefly wrong about its own filename and nothing
+    /// more.
+    pub fn expected_output_path(&self) -> PathBuf {
+        self.output_dir.join(format!("{}.mp4", self.file_stem))
+    }
+}
+
 /// What `Recorder::stop` produced.
 ///
 /// The track layout is reported by the backend rather than assumed from the

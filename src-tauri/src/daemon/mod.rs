@@ -455,6 +455,32 @@ async fn start(paths: Paths) -> Result<Option<Started>, DaemonError> {
     // Startup housekeeping, in the order `lib.rs` does it and for the same
     // reasons: a folder scan the app missed while it was closed, then a
     // retention pass that last session's crash may have skipped.
+
+    // **First, and only here** (#150). A recording in flight when the last
+    // daemon died left a row with no `finished_at`, holding the markers
+    // written during the game. That row is hidden from the library and from
+    // `reconcile`'s orphan sweep, and its file is skipped by the import pass,
+    // so nothing else can ever reach it.
+    //
+    // It runs before the supervisor exists, which is what makes it safe: an
+    // in-progress recording looks exactly like an abandoned one from the
+    // database, and finishing the wrong one would put a half-written file in
+    // the library. At this point in startup there is nothing recording to
+    // confuse it with. The on-demand rescan deliberately does not call this.
+    match db::reconcile::recover_unfinished(&db, paths.ffmpeg.as_deref()) {
+        Ok(report) if report.recovered > 0 || report.abandoned_removed > 0 => {
+            info!(
+                "db",
+                "startup recovery: finished {} interrupted recording(s), removed {} with no file",
+                report.recovered,
+                report.abandoned_removed
+            );
+            events.publish(Event::LibraryChanged { reason: LibraryChangeReason::Reconciled });
+        }
+        Ok(_) => {}
+        Err(e) => error!("db", "startup recovery failed: {e}"),
+    }
+
     match db::reconcile::reconcile(&db, &paths.recordings, paths.ffmpeg.as_deref()) {
         Ok(report) if report.orphans_removed > 0 || report.imported > 0 => {
             info!(

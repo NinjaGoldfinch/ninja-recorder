@@ -158,7 +158,7 @@ impl Recorder for LibObsRecorder {
         }
 
         std::fs::create_dir_all(&config.output_dir)?;
-        let output_path = config.output_dir.join(format!("{}.mp4", config.file_stem));
+        let output_path = config.expected_output_path();
 
         // By the time `Recorder::start` is called, the state machine has
         // already observed Live Client Data responding (DEVELOPMENT.md

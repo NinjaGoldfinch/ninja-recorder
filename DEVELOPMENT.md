@@ -341,9 +341,9 @@ markers:     id, recording_id, game_time_s, video_time_s, kind, payload_json
              --       turret | ace | first_blood | custom
 ```
 
-- A DB row without its file (user deleted the MP4) is cleaned up on scan; a file without a row is imported as "unknown recording." The library must survive users touching the folder.
+- A DB row without its file (user deleted the MP4) is cleaned up on scan; a file without a row is imported as "unknown recording." The library must survive users touching the folder. A recording still in flight is neither of those and is skipped by both halves: its row exists from the start, and is hidden until it is finished (§4.3).
 
-Implemented in `src-tauri/src/db/` (`Db` + `reconcile`), migrations via `rusqlite_migration`, `rusqlite`'s `bundled` feature so no system SQLite is required on a fresh machine. Reconciliation runs once at app startup and on demand (`rescan_recordings` command). The state machine's Finalizing step (§3.4) writes a `recordings` row + its `markers` on every stop. `duration_s` comes from the session clock, read *before* the recorder is stopped so the ffmpeg remux isn't counted as footage. `champion`/`kda_*`/`win`/`game_mode` come from Live Client Data and `game_id`/`queue` from the gameflow session, both captured during the game rather than fetched after it. `role` and `patch` arrive last, from `match_summary::patch` seconds to a minute after the finalize (§3.1). That patch is a plain `UPDATE` and never a re-`insert_recording`: the upsert takes `pinned`, `size_bytes`, `started_at` and `duration_s` from `excluded`, so re-upserting a summary would unpin the recording and zero its size. Every column it writes COALESCEs so a value the LCU could not establish never erases one the live client did, except `champion`, which COALESCEs the other way and may only be filled when NULL. Two writers reach that column, the live client during the game and the id `lcu::champions` resolves afterwards, and both aim at the same display name (`Wukong`, never the internal `MonkeyKing` alias). Filling only when NULL means they cannot disagree *in the column* even if they ever disagree with each other, and one champion under two spellings would split its games in two wherever the library sorts and filters. **That reasoning covers a different spelling, not a different champion, and the two are not the same problem.** Live Client Data reports a possessed Viego as whoever he possessed, so a game that ends mid-possession writes a real champion who is the wrong one, and no rename table can catch it, because the name it wrote is a genuine champion. An id cannot be possessed, so the deferred patch corrects the column from the one the client answers with (`Db::correct_champion`). That correction is a method of its own rather than a flipped `COALESCE`, because the backfill shares the patch and matches games *on the clock*: letting it overwrite a champion would let a mismatched game rename a row that was already right, which is the failure #56 exists to refuse. The exact-id path may correct; the heuristic path may only fill.
+Implemented in `src-tauri/src/db/` (`Db` + `reconcile`), migrations via `rusqlite_migration`, `rusqlite`'s `bundled` feature so no system SQLite is required on a fresh machine. Reconciliation runs once at app startup and on demand (`rescan_recordings` command). A `recordings` row is opened when capture starts and completed by the state machine's Finalizing step (§3.4) on every stop; its `markers` are written as each poll produces them and rewritten at that finalize (§4.3). `duration_s` comes from the session clock, read *before* the recorder is stopped so the ffmpeg remux isn't counted as footage. `champion`/`kda_*`/`win`/`game_mode` come from Live Client Data and `game_id`/`queue` from the gameflow session, both captured during the game rather than fetched after it. `role` and `patch` arrive last, from `match_summary::patch` seconds to a minute after the finalize (§3.1). That patch is a plain `UPDATE` and never a re-`insert_recording`: the upsert takes `pinned`, `size_bytes`, `started_at` and `duration_s` from `excluded`, so re-upserting a summary would unpin the recording and zero its size. Every column it writes COALESCEs so a value the LCU could not establish never erases one the live client did, except `champion`, which COALESCEs the other way and may only be filled when NULL. Two writers reach that column, the live client during the game and the id `lcu::champions` resolves afterwards, and both aim at the same display name (`Wukong`, never the internal `MonkeyKing` alias). Filling only when NULL means they cannot disagree *in the column* even if they ever disagree with each other, and one champion under two spellings would split its games in two wherever the library sorts and filters. **That reasoning covers a different spelling, not a different champion, and the two are not the same problem.** Live Client Data reports a possessed Viego as whoever he possessed, so a game that ends mid-possession writes a real champion who is the wrong one, and no rename table can catch it, because the name it wrote is a genuine champion. An id cannot be possessed, so the deferred patch corrects the column from the one the client answers with (`Db::correct_champion`). That correction is a method of its own rather than a flipped `COALESCE`, because the backfill shares the patch and matches games *on the clock*: letting it overwrite a champion would let a mismatched game rename a row that was already right, which is the failure #56 exists to refuse. The exact-id path may correct; the heuristic path may only fill.
 
 ### 4.1 Decision: imported files get their duration from ffmpeg, not ffprobe
 
@@ -440,6 +440,68 @@ What it cannot do: reach further back than the client's own match history, or
 label a custom game, which never gets a match-history entry at all. Both come
 back as "matched no game", which the report says in as many words rather than
 leaving the user to guess why nothing happened.
+
+### 4.3 Decision: a recording row exists before the recording finishes
+
+Markers used to live in the supervisor's memory for the whole game and reach
+SQLite once, at finalize. That was the only behaviour the code had, not a race:
+`insert_markers` had exactly one production caller, immediately after
+`insert_recording`. So a daemon killed mid-game took every marker with it, while
+leaving a perfectly playable file behind. A fragmented MP4 is valid up to the
+point it was cut off, which is the guarantee the whole process split is built
+on, and the markers had no equivalent.
+
+The half that was worse was the next recording. The Live Client Data API serves
+the game's **whole event list**, not the events since the last poll, so a fresh
+session starting mid-game ingested everything that had already happened and
+attributed it to the file it was writing, at offsets computed against that
+file's start. A recording with no markers is a loss. A recording with another
+recording's markers at invented timestamps is wrong in a way that looks right.
+
+So a row is written when recording starts, and markers are written as each poll
+produces them. Three things follow, and each of them was a decision.
+
+**An in-progress recording is not a library entry.** `finished_at` is NULL until
+a finalize or a recovery pass sets it, and `list_recordings` filters on it. The
+alternative was a row with a status the UI renders, which reads better in the
+abstract and worse in practice: a row left behind by a killed daemon would sit
+in the grid forever looking broken. Today one already appears by accident,
+because `reconcile` imports the growing file as an unknown recording; the row
+existing from the start is also what stops that, since `find_by_path` now finds
+it and the scan skips it.
+
+**The finalize matches by id, not by path.** The path a recording starts with is
+a prediction (`RecordConfig::expected_output_path`) and the path it ends with is
+a fact (`Recorder::stop`). Upserting on a path that moved would finish a
+different row and strand the game's markers on an unfinished one that nothing
+ever shows, which is worse than the bug being fixed. `insert_recording` stays
+for `reconcile`, and as the finalize's fallback for a recording with no id: one
+already in flight when this shipped, or one whose start-insert failed.
+
+**Recovery had to land in the same change.** An abandoned row is hidden from
+`list_recordings`, so `reconcile`'s orphan sweep cannot see it, and its file is
+skipped by the import pass because the row exists. Shipping the start-insert
+without a startup pass that finishes those rows would have made a killed
+recording *invisible*, where before it at least turned up as an unknown
+recording. `recover_unfinished` runs at daemon startup only, which is the one
+moment when nothing is recording: from the database an in-progress recording and
+an abandoned one are the same thing, so a pass that ran on demand would finish
+the row the supervisor was still writing.
+
+The cost is a write per marker rather than one batch per game, which is a few
+dozen writes across a thirty-minute game, and rows that exist for recordings
+that never finish, which is what the recovery pass is for. The markers are
+written twice: once as they arrive, and once at finalize, because a marker
+captured during the loading screen resolves against a 1:1 fallback until the
+clock is first seen to advance. `AlignmentTracker::fallback` returns the
+*first* proven alignment rather than a running average, so every marker after
+that point resolves identically at both writes and only the early ones actually
+move. The finalize deletes and re-inserts rather than working out which.
+
+**Samples are not covered by any of this** and have the identical flaw, tracked
+separately. They are less wrong in the same crash: a sample is pushed from the
+poll that produced it, so a session starting mid-game begins its curve mid-game
+rather than inheriting another recording's.
 
 ## 5. Review player
 
