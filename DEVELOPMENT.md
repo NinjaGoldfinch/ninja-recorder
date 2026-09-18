@@ -1244,6 +1244,39 @@ actually is.
 
 The daemon checks for updates and installs them since WS3.6.
 
+### Moving execution moved the seams, and three of them were left behind
+
+`Ctx` carries type-erased seams for the things `core` may not name itself: the
+library-changed notifier, the autostart implementation, the update requester,
+and since #136 the quit requester. Each is set by the process that can provide
+it, and `core` refuses when one is absent.
+
+WS3.4 moved every command into the daemon. The seams did not all follow, and
+because an unset seam refuses with a *message* rather than failing to compile,
+each one shipped as a feature that politely explained it was unavailable.
+
+Three were found by using the app, one at a time, months apart:
+
+- **Quit** had no seam at all. The daemon could not be asked to stop, so the
+  window's Quit ended the window and left the recorder running (#136).
+- **`tray::request_quit`** finalized through the UI's supervisor, which WS3.4
+  stopped starting. It read as protecting a recording and protected nothing.
+- **Start on login** is set only in `lib.rs`, so the daemon answers
+  "start-on-login is not available in this build" on a build where it is
+  (#151).
+
+The pattern is worth naming because it is not a bug in any of those three. It
+is one consequence of a correct change, arriving three times, in code that
+every gate passed. The compiler cannot help: the seams are `Option`s by design,
+and `None` is a legitimate state in the UI, in the tests, and off Windows.
+
+What would help is a check that the daemon sets every seam any command it
+dispatches can reach. The seams are a short list on `Ctx`, the commands are a
+generated table, and `daemon::start` is the single place that fills them, so
+the three facts needed to write that test all already exist in one place each.
+Nothing has written it yet, and until something does, the next seam will be
+found the same way.
+
 ### The check moved because the refusal has to
 
 `tauri-plugin-updater` ran the check in the UI, and its API hangs off an
