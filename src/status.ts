@@ -1,7 +1,7 @@
 import { call } from "./bridge";
 import { el } from "./dom";
 import { formatTime } from "./format";
-import { refreshDiskUsage, refreshLibrary } from "./library";
+import { refreshDiskUsage, refreshLibrary } from "./lib/stores/library.svelte";
 import type { GameState, LcuStatus, SupervisorStatus } from "./types";
 import { refreshUpdateStatus } from "./update";
 

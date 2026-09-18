@@ -5,7 +5,7 @@ import { initDesktop } from "./desktop";
 import { initDevPortal } from "./devportal";
 import { el } from "./dom";
 import App from "./lib/App.svelte";
-import { applyDefaultSort, initLibrary, refreshDiskUsage, refreshLibrary } from "./library";
+import { applyDefaultSort, refreshDiskUsage, refreshLibrary } from "./lib/stores/library.svelte";
 import { loadPrefs } from "./prefs";
 import { initQuit, quitEverything } from "./quit";
 import { initReview } from "./review";
@@ -26,7 +26,8 @@ window.addEventListener("DOMContentLoaded", () => {
   // existing.
   initDesktop();
 
-  registerView("library", el("#library-view"));
+  // The library registers itself from `App.svelte`, because its node does
+  // not exist until that component mounts (WS4.3).
   registerView("review", el("#review-view"));
   registerView("settings", el("#settings-view"));
 
@@ -37,7 +38,6 @@ window.addEventListener("DOMContentLoaded", () => {
   // worth saying, and the views below will be showing stale or empty data
   // because of it.
   initDaemonStatus();
-  initLibrary();
   initReview();
   initSettings();
   initStatus();
@@ -95,7 +95,7 @@ window.addEventListener("DOMContentLoaded", () => {
     void loadPrefs().then((prefs) => {
       applyThemePref(prefs.theme);
       syncSettingsFromPrefs();
-      applyDefaultSort();
+      applyDefaultSort(prefs.defaultSort);
     });
   });
 });

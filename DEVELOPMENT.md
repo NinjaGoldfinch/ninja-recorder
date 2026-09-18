@@ -503,6 +503,62 @@ separately. They are less wrong in the same crash: a sample is pushed from the
 poll that produced it, so a session starting mid-game begins its curve mid-game
 rather than inheriting another recording's.
 
+### 4.4 Decision: the library is the first view to cross, and it crosses whole
+
+WS4 is a strangler, so each task moves one view and deletes its vanilla
+counterpart in the same commit. The library went first because it is the view
+with the most logic behind it and the least coupling to a media element, which
+makes it the one where a half-migration would have been most tempting and most
+expensive.
+
+**It crosses whole or not at all.** `library.ts` is deleted rather than reduced,
+and the `#library-view` markup goes with it. A view rendered by Svelte while its
+data still lived in a module that wrote to elements would be two owners of one
+piece of state, which is the failure the frontend's whole organising principle
+exists to prevent.
+
+Four things were dropped rather than translated, and each was there to work
+around `innerHTML`:
+
+- **`render()` and `pendingRender`.** Rebuilding a grid that is not showing is
+  wasted work, and doing it as the user navigates back would move the card they
+  came from. Svelte does not render an unmounted component.
+- **`paintArt` / `paintAll`.** Art is still a second pass, because the first
+  sighting of an icon is a CDN round trip and the app has to work offline. What
+  has gone is re-finding each row by `data-id` and re-inserting `<img>` tags,
+  which was needed only because every re-render threw the previous ones away.
+- **`revealRowInspectors`.** The devtools probe answers once and the grid was
+  rebuilt many times, so its answer had to be remembered and re-applied to every
+  button. The answer is a prop now.
+- **Hand-applied escaping.** Every value went into a template string with
+  `escapeHtml` or `escapeAttr` around it, chosen per site. Getting that pairing
+  wrong is an injection bug with a plausible trigger, since `vodTitle` falls
+  back to a filename and `reconcile` imports whatever is in the folder. Default
+  interpolation removes the choice.
+
+**The delete confirmation moved from module state to component state**, and that
+is the clearest illustration of why the migration is worth doing. A two-step
+delete needs to remember which button is armed. In `library.ts` that could not
+live on the button, because the grid was rebuilt underneath it, so it was a
+module-level id plus a `querySelector` to find the element again plus a timer to
+clear it. In `RowActions.svelte` it is a `let armed = $state(false)` beside the
+button it describes.
+
+**One thing was deliberately not improved.** A row is a focusable, clickable
+`role="listitem"`, which is what the v1 markup did. ARIA has no good role for an
+activatable list item, and putting a real button inside every row is a UX change
+rather than a migration, so the warnings are suppressed in `Row.svelte` with the
+reasoning written next to them. A parity task is the wrong place for a silent
+redesign.
+
+**Registration changed shape, and that was a bug worth catching before it
+shipped.** A Svelte view has no id to look up before it renders, so it hands its
+node to `registerView` when it mounts, which is after `initRouting` has read the
+URL fragment. A window opened at `#settings` would therefore have shown the
+settings section and the library at once, because the library's node missed the
+`showView` that hid everything else. `registerView` now sets `hidden` from the
+current view rather than trusting the node's default.
+
 ## 5. Review player
 
 - WebView2 `<video>` element: H.264/AAC MP4 decodes natively, so seeking and playback rate are free.

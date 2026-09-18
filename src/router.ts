@@ -14,6 +14,14 @@ let current: View = "library";
 
 export function registerView(name: View, node: HTMLElement) {
   views.set(name, node);
+  // **Adopt the current state, do not assume it.** Views used to be registered
+  // in one run before anything could switch, so a fresh node's `hidden` was
+  // always right by default. Since WS4.3 a migrated view registers itself when
+  // its component mounts, which is after `initRouting` has read the URL
+  // fragment: a window opened at `#settings` would otherwise show the settings
+  // section *and* the library, because the library's node missed the
+  // `showView` that hid everything else.
+  node.hidden = name !== current;
 }
 
 function isView(value: string): value is View {

@@ -2,7 +2,7 @@ import { call } from "./bridge";
 import { whenDaemonReachable } from "./daemon";
 import { el, escapeAttr, escapeHtml } from "./dom";
 import { BYTES_PER_GB, formatBytes } from "./format";
-import { refreshDiskUsage, refreshLibrary } from "./library";
+import { refreshDiskUsage, refreshLibrary } from "./lib/stores/library.svelte";
 import {
   type CloseActionPref,
   getPrefs,
