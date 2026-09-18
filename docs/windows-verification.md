@@ -14,12 +14,26 @@ Vanguard active
 budget (§5), which is missed rather than met. Fill in results inline as each
 remaining step is done.
 
-**2026-09-18: the install half ran for the first time, and failed.** From
-alpha.45, the in-app update reported "The update is not a readable archive:
-invalid Zip archive: Could not find EOCD". The daemon was unzipping an artifact
-that is not an archive: since Tauri v2 the updater artifact is the signed
-installer itself. Fixed, and DEVELOPMENT.md §14 records why nothing caught it.
-The step stays open until an install completes on a build carrying that fix.
+**2026-09-18: the install half ran twice.** The first attempt, from alpha.45,
+reported "The update is not a readable archive: invalid Zip archive: Could not
+find EOCD". The daemon was unzipping an artifact that is not an archive: since
+Tauri v2 the updater artifact is the signed installer itself. Fixed in #141,
+and DEVELOPMENT.md §14 records why nothing caught it.
+
+The second attempt, alpha.48 to alpha.49 on a build carrying that fix,
+**installed correctly**. The offer appeared, the download verified, the
+installer ran and the new version was in place.
+
+**It does not restart afterwards** (#145). The machine is left with no daemon
+and no window and the app has to be started by hand, so the step stays open.
+`launch_installer` passes `/S /UPDATE` and the generated NSIS script also
+parses `/R` and `/ARGS`, which is where a relaunch would come from; what should
+come back, a window or a `--daemon`, is the decision that issue carries.
+
+One more thing to re-test there rather than assume: a window left open during
+an install would, before #148, have respawned a daemon out of the binary being
+replaced. Whether that contributed is unknown and worth knowing before treating
+the missing `/R` as the whole story.
 
 ---
 
@@ -222,41 +236,85 @@ process is what needs confirming.
 button remain the UI's. Start a daemon before working through these; the icon
 belongs to that process and disappears when it quits.
 
-- [ ] The icon appears when the daemon starts and disappears when it quits. If
+- [x] The icon appears when the daemon starts and disappears when it quits. If
       `daemon.log` says "no icon could be loaded", the tray is there but
       invisible: report that line, because the icon is loaded from three
       different places in order and which one worked is the useful fact.
-- [ ] Right-click shows exactly three items: Open ninja-recorder, Settings,
+- [x] Right-click shows exactly three items: Open ninja-recorder, Settings,
       Quit, with separators around Settings.
 - [ ] Left-click opens the window; left-click does **not** show the menu.
-- [ ] With no UI running, Open starts one and the window appears.
-- [ ] With a UI already running, Open focuses the existing window rather than
+      **Failed 2026-09-18: it opens the menu.** `tray-icon` defaults
+      `menu_on_left_click` to true and it was never turned off, so the menu
+      appeared for both buttons while the click handler fired underneath it.
+      Fixed in #147; re-check on a build carrying it.
+- [x] With no UI running, Open starts one and the window appears.
+- [x] With a UI already running, Open focuses the existing window rather than
       starting a second process. Confirm in Task Manager that there is still
       one non-daemon `ninja-recorder.exe`.
-- [ ] With the window open but minimised, Open restores it.
-- [ ] With the window closed to the tray (`CloseAction::CloseWindow`), Open
+- [x] With the window open but minimised, Open restores it.
+- [x] With the window closed to the tray (`CloseAction::CloseWindow`), Open
       creates it again.
-- [ ] Settings does the same and lands on the Settings view, in all three of
+- [x] Settings does the same and lands on the Settings view, in all three of
       those states.
 - [ ] **Quit while idle** exits without asking, the icon disappears, and both
       processes are gone from Task Manager.
-- [ ] **Quit mid-recording asks first.** A modal appears naming the recording;
+      **Failed 2026-09-18: it does not quit.** The daemon stops, the window
+      notices the pipe die, and `connect_or_start` starts a fresh one seconds
+      later. The daemon had always published `DaemonShuttingDown` with a
+      reason; nothing read it. Fixed in #148; re-check on a build carrying it.
+- [x] **Quit mid-recording asks first.** A modal appears naming the recording;
       "No" cancels and the recording continues, and the daemon keeps running.
       "Yes" finalizes before exiting: the VOD is playable and the row is in the
       library when the app is next opened. This is 3.3's exit criterion.
-- [ ] The tray stays responsive during a recording. Right-click it repeatedly
+- [x] The tray stays responsive during a recording. Right-click it repeatedly
       while a game is being captured; the menu must open immediately every time.
       A slow menu means something is blocking the pump's thread, which is the
       failure this design exists to avoid.
 
-**2026-09-17: the modal appears, which is the half that was in doubt.** Tray
-Quit during the alpha.40 ranked recording refused to exit without asking first.
-Cancelling left the recording running, and it finished and landed in the
-library, so "No cancels and the recording continues" holds as well.
+**2026-09-18: the whole row holds, including the half that had never run.**
+Tray Quit during a live recording asked first. No left everything running. Yes
+finalized the recording before exiting, and the resulting VOD is fully viewable
+with its row in the library.
 
-"Yes" was not taken, so the other half of that row, finalizing before exit and
-finding a playable VOD and its row afterwards, is still unchecked. The row stays
-unticked until both halves are, because it is one criterion and not two.
+That is WS3.3's exit criterion, and until #140 it could not have passed:
+`pump::stop` posted `WM_QUIT` to the calling thread rather than the one running
+the message loop, so answering Yes did nothing whatsoever. The 2026-09-17 pass
+reached the modal and answered No, which is the half that worked, and that is
+why the failure survived a manual pass.
+
+The tray also stayed responsive throughout a capture, with repeated right-clicks
+opening the menu immediately every time.
+
+#### The close button's own three options
+
+This section was named for the close button and never had rows for it. WS3
+changed what two of those options mean and #140 changed the third outright, so
+here they are, all verified 2026-09-18 on alpha.49.
+
+- [x] The three options in Settings say what they actually do. "Close the
+      window" and "Hide the window" both keep recording; "Quit ninja-recorder"
+      stops it, and says so.
+- [x] **Close the window** destroys the webview and the process survives, which
+      is what keeps a recording running after the window is gone. Confirmed in
+      §2's run, where Task Manager showed the non-daemon process still there
+      after the window closed.
+- [x] **Hide the window** shows it again without rebuilding it. Distinguishable
+      from the row above by the window reappearing instantly rather than being
+      recreated.
+- [x] **Quit while idle** closes without a dialog and both processes are gone.
+- [x] **Quit mid-recording** shows a dialog **inside the window**, styled like
+      the app. Not a Windows system box, and not behind the window it came
+      from. That was the reason #136 chose a `<dialog>` over reusing the
+      daemon's `MessageBoxW`, which has no owner window.
+- [x] **Escape** and **Keep recording** both mean no: the daemon survives and
+      the recording continues.
+- [x] **Quit anyway** finalizes, both processes go, and the VOD is playable
+      with its row in the library.
+
+Worth noting against §5.0.1's failing rows above: **the window's Quit works and
+the tray's does not**, and they are different code paths. The window calls
+`quit_recorder` and then `exit_ui`, ending both processes explicitly. The tray
+only ever stopped the daemon, and the window restarted it (#148).
 
 
 
@@ -360,13 +418,19 @@ They were missing for two commits, between WS3.4 moving the supervisor out of
 the UI and WS3.3 rebuilding the notifier on `notify-rust`. If a build predates
 that, this section is expected to fail entirely.
 
-**2026-09-17: notifications arrived with no window open**, on the alpha.40
-ranked run. That is the claim this section exists for: the process that noticed
-the game had ended is the one that raised the toast, which is only true because
-the supervisor is in the daemon. Which kinds fired was not recorded row by row,
-so the rows below stay unticked and want a deliberate pass; what is settled is
-that the mechanism works from a windowless process, which is what could not be
-checked anywhere but here.
+**2026-09-18: with no UI process in existence, not merely no window.** The
+non-daemon `ninja-recorder.exe` was ended from Task Manager before the game, so
+one process remained and its command line was `--daemon`. Both "Recording
+started" and "Recording saved" arrived, the second carrying the file name and
+marker count. `daemon.log` holds no `WARN [notify]` lines.
+
+The distinction matters and the 2026-09-17 pass could not make it: closing the
+window destroys the webview and leaves the process alive, because
+`RunEvent::ExitRequested { code: None }` is vetoed. "Window closed" had never
+meant "no UI process", and this is the first run where it did.
+
+Note that **"Recording started" is off by default** (`NotificationPrefs`), so
+its absence on a fresh profile is a setting rather than a fault.
 
 - [ ] Closing the window the first time shows the "still running in the tray"
       notice, and closing it again does **not**.
@@ -553,8 +617,11 @@ raise them until WS3.3. Do not file these as bugs against this build.
 
 New with `prepare`/`release`; none of it can be exercised off Windows.
 
-- [ ] `extprocess_recorder.exe` is absent at app start, appears with the League
+- [x] `extprocess_recorder.exe` is absent at app start, appears with the League
       client, and disappears when the client closes.
+      **2026-09-18:** observed present alongside a running client and gone from
+      Task Manager once the client was closed, which is `prepare`/`release`
+      doing what §2.2 designed them for.
 - [ ] The app log's `[recorder] backend:` line reads `libobs (idle)` at startup,
       not `libobs (ready)`.
 - [ ] **A game recorded minutes after the client opened still works.** The
