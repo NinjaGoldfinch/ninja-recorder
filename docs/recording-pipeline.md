@@ -401,12 +401,24 @@ flowchart TB
     S --> F["finalize: video_time = game_time + alignment<br/><small>alignment ?? first proven ?? 0</small>"]
 ```
 
-**Markers are stored with `game_time_s` and mapped at finalize**, not at
-ingest. A marker seen before the clock ever moved has no alignment yet; it is
-still collected (and still fed to `MarkerTracker`, so its event ID is deduped)
-and resolved at finalize against the first alignment the recording ever
-proved. If the clock never moved at all, meaning the game ended during loading,
-the fallback is a 1:1 mapping. Nothing is dropped.
+**Markers are stored with `game_time_s` and mapped twice.** A marker seen
+before the clock ever moved has no alignment yet; it is still collected (and
+still fed to `MarkerTracker`, so its event ID is deduped) and resolved against
+the first alignment the recording ever proved. If the clock never moved at all,
+meaning the game ended during loading, the fallback is a 1:1 mapping. Nothing
+is dropped.
+
+Twice, because a marker is written to the database as soon as the poll that
+found it returns, against whatever alignment is known then, and rewritten at
+finalize against the alignment the whole game proved (#150). The first write
+is what survives a killed daemon; the second is what makes the position right.
+
+The rewrite is cheap because of what `fallback()` returns. It is the **first**
+alignment the recording proved, not a running average, so once the clock has
+been seen to advance every subsequent marker resolves to the same value at
+both writes. Only the ones captured during the loading screen actually move,
+which is why the finalize deletes and re-inserts rather than trying to work
+out which rows changed.
 
 A reconnect's first poll reports a clock already at, say, 600, which is
 indistinguishable from a frozen one until it ticks. That costs one poll of
@@ -418,6 +430,13 @@ accuracy (sub-second) instead of the minutes a wrong offset would cost.
 entry. It is deliberately fail-soft: every step that can fail logs and
 continues, because losing the footage is worse than losing its metadata.
 
+It is no longer the place the **row** is created. Since #150 the row exists
+from the moment capture starts, hidden from the library by a NULL
+`finished_at`, so that markers have somewhere to go as they arrive. What
+happens here is that the row is completed: see
+[data-model.md](data-model.md), "A recording row outlives the process that
+opened it", for the three writers and why this one matches by id.
+
 ```mermaid
 flowchart TB
     S["take session; read its clock<br/><small>duration_s, before the remux inflates it</small>"] --> A["Recorder::stop()"]
@@ -425,9 +444,10 @@ flowchart TB
     B -->|"no"| Z["log; keep last_finalized empty"]
     B -->|"yes"| C["stat file for size_bytes<br/><small>+ serialize the reported audio layout</small>"]
     C --> D2["assemble RecordingDiagnostics<br/><small>polls, ever_matched, offset, backend</small>"]
-    D2 --> D["db.insert_recording"]
+    D2 --> D["db.finish_recording(id)<br/><small>by id: the row was opened at start.<br/>insert_recording only when there is no id</small>"]
     D -->|"err"| E["log; recording_id = None<br/><small>UI shows DB WRITE FAILED</small>"]
-    D -->|"ok"| F["insert_markers"]
+    D -->|"ok"| F0["delete_markers<br/><small>the ones written during the game</small>"]
+    F0 --> F["insert_markers<br/><small>re-resolved against the final alignment</small>"]
     F --> G["insert_samples"]
     E --> H
     G --> H["last_finalized = {path, markers}"]

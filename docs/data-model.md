@@ -384,13 +384,89 @@ data rather than being an unwritten frontend assumption. `our_team` is `NULL`
 when the player could not be matched; the UI renders that as team-unknown
 rather than risk drawing an inverted line.
 
+## A recording row outlives the process that opened it
+
+A `recordings` row is written **when recording starts**, not when it finishes,
+and `finished_at` is what says which of those has happened. NULL means the
+recording is still running, or was interrupted and has not been recovered yet.
+`list_recordings` hides those rows, so an in-progress recording is not a
+library entry and neither is one a killed daemon left behind (#150).
+
+```mermaid
+stateDiagram-v2
+    [*] --> Open: begin_recording<br/>finished_at = NULL
+    Open --> Finished: finish_recording<br/><small>by id, at finalize</small>
+    Open --> Recovered: recover_unfinished<br/><small>daemon startup, file still there</small>
+    Open --> [*]: recover_unfinished<br/><small>daemon startup, file gone</small>
+    Finished --> [*]: reconcile<br/><small>orphan sweep, file gone</small>
+    Recovered --> [*]: reconcile
+    note right of Open
+        Hidden from the library.
+        Markers are written here,
+        as each poll produces them.
+    end note
+```
+
+**Why the row exists this early.** Markers used to live in the supervisor's
+memory for the whole game and reach SQLite once, at finalize. A daemon killed
+mid-game took every one of them with it, and the *next* recording to finish
+inherited them, because the Live Client Data API serves the whole game's event
+list rather than the events since the last poll. A partial MP4 is playable, and
+before this its markers had no equivalent guarantee.
+
+**Three writers, three different rules.**
+
+| Writer | Method | `finished_at` |
+|---|---|---|
+| Supervisor, at start | `begin_recording` | NULL, and upserts on `path` so a leftover row is reclaimed |
+| Supervisor, at finalize | `finish_recording` | set, and matched **by id** |
+| `reconcile`, importing | `insert_recording` | set from the file's mtime |
+| `recover_unfinished` | `recover_recording` | set from the file's mtime |
+
+The finalize matches by id rather than upserting on `path` because the path a
+recording starts with is a prediction (`RecordConfig::expected_output_path`)
+and the path it ends with is a fact (`Recorder::stop`). Where the two differ,
+an upsert would finish a different row and strand the game's markers on an
+unfinished one that nothing ever shows.
+
+The finalize also **deletes and re-inserts** the markers rather than appending.
+Markers written during the game were resolved against whatever alignment was
+known at the time; the ones captured before game time first advanced used a 1:1
+fallback, and the finalize is where they get the alignment the whole game
+proved. See [recording-pipeline.md](recording-pipeline.md), "Timestamp
+alignment".
+
 ## Reconciliation
 
 Runs at app start and on demand via `rescan_recordings`.
 
+`recover_unfinished` is the other half, and runs at **daemon startup only**.
+The two passes cannot be merged: from the database an in-progress recording and
+an abandoned one are the same thing, a row with no `finished_at` and a file on
+disk, so a pass that finished them on demand would finish the recording the
+supervisor was still writing. Startup is the moment when nothing is recording,
+which is what makes the question safe to not ask.
+
+Recovery is not optional alongside the start-insert. An abandoned row is hidden
+from `list_recordings`, so reconcile's orphan sweep cannot see it, and its file
+is skipped by the import pass because `find_by_path` finds the row. Without
+recovery an interrupted recording would be **invisible**, which is worse than
+the bug that motivated all of this.
+
 ```mermaid
 flowchart TB
-    START["reconcile(db, recordings_dir, ffmpeg)"] --> ROWS["Read all recordings rows"]
+    START["recover_unfinished(db, ffmpeg)<br/><small>daemon startup only</small>"] --> OPEN["unfinished_recordings()<br/><small>finished_at IS NULL</small>"]
+    OPEN --> C0{"File still<br/>on disk?"}
+    C0 -->|"no"| DROP0["Delete the row<br/><small>nothing to show, nothing to keep</small>"]
+    C0 -->|"yes"| PROBE0["probe::duration_s<br/><small>the session clock died with the daemon</small>"]
+    PROBE0 --> FIN["recover_recording<br/><small>duration_s, size_bytes, finished_at from mtime.<br/>Markers untouched; champion and KDA stay NULL</small>"]
+    DROP0 --> REP0["RecoveryReport<br/><small>recovered, abandoned_removed</small>"]
+    FIN --> REP0
+```
+
+```mermaid
+flowchart TB
+    START["reconcile(db, recordings_dir, ffmpeg)"] --> ROWS["list_recordings()<br/><small>finished rows only; unfinished ones<br/>are recover_unfinished's business</small>"]
     START --> FILES["List *.mp4 / *.mkv in the recordings dir"]
     ROWS --> C1{"Row's file<br/>still exists?"}
     C1 -->|"no"| DROP["Delete the row<br/><small>user deleted the MP4</small>"]
@@ -398,7 +474,7 @@ flowchart TB
     FILES --> C2{"File has<br/>a row?"}
     C2 -->|"no"| PROBE["probe::duration_s<br/><small>ffmpeg -i, parse the Duration line;<br/>None on any failure</small>"]
     PROBE --> IMPORT["Insert as an unknown recording<br/><small>started_at from file mtime,<br/>duration_s from the probe,<br/>all match metadata NULL</small>"]
-    C2 -->|"yes"| SKIP["Nothing to do"]
+    C2 -->|"yes"| SKIP["Nothing to do<br/><small>includes a recording in flight:<br/>its row exists from the start now</small>"]
     DROP --> REP["ReconcileReport<br/><small>orphans_removed, imported</small>"]
     KEEP --> REP
     IMPORT --> REP

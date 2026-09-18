@@ -41,7 +41,7 @@ impl Recorder for StubRecorder {
         let config = self.active.take().ok_or(RecorderError::NotRecording)?;
         thread::sleep(Duration::from_millis(150)); // simulated finalize/mux
 
-        let dest = config.output_dir.join(format!("{}.mp4", config.file_stem));
+        let dest = config.expected_output_path();
         match fixture_path() {
             Some(fixture) => {
                 fs::copy(fixture, &dest)?;

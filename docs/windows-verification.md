@@ -173,6 +173,17 @@ itself, and the partial file is playable. The rows about the row and its markers
 fail, for the reason #150 sets out: markers are only written at finalize, so
 killing the daemon loses every one.
 
+**#150 has since landed and these rows are open again, not passed.** A row is
+now written when recording starts and markers are written as each poll produces
+them, so a killed daemon leaves both behind; daemon startup finishes the
+abandoned row from the file. That is covered by unit tests, including one that
+kills a recording by simply never finalizing it, but **no part of it has been
+run on hardware**. The four rows below about the library, the row and its
+markers are the observable form of the fix, and are what the next session
+should test. The second recording in particular
+matters: the inherited-markers half of the bug only shows on the recording
+*after* the one that was killed.
+
 - [ ] Start a recording. Kill **the daemon** from Task Manager mid-game.
 - [ ] The window says the recorder is not running, in a strip under the app bar
       that stays until it is no longer true. It must not be a toast that
@@ -180,18 +191,23 @@ killing the daemon loses every one.
 - [ ] The UI starts another daemon and the strip clears by itself.
 - [ ] The **recording file is playable**. A fragmented MP4 is valid up to the
       point it was cut off, which is the guarantee that survives a crash.
-- [ ] The row is reconciled on the next startup scan: it appears in the library
-      with a duration read back from the file, rather than being lost.
-- [ ] ~~Nothing is lost that was already written. Markers up to the kill are in
-      the row.~~ **This row was wrong and is retained struck through rather than
-      deleted, because it was tested against and it failed.** Nothing *is*
-      written until finalize: `insert_markers` has one caller, in the
-      supervisor's finalize path, and markers live in memory for the whole game
-      until then. A killed daemon loses all of them, and the next recording to
-      finish inherits them at offsets belonging to the killed one, because the
-      Live Client Data API serves the whole game's event list rather than the
-      events since the last poll. Tracked in #150, which is where the fix is
-      being designed; replace this row when it lands.
+- [ ] The recording does **not** appear in the library while the daemon is
+      down. Its row exists but is unfinished, and an unfinished row is not a
+      library entry.
+- [ ] The row appears on the next daemon start, with a duration read back from
+      the file. Champion, KDA and outcome are blank, which is honest: the polls
+      that knew them died with the daemon.
+- [ ] **Markers up to the kill are in the row.** This is the row that failed on
+      alpha.49 and the reason #150 exists. Open the recording and check the
+      timeline has marker glyphs on it, at positions that match what happened
+      before the kill.
+- [ ] **Record a second game to completion afterwards. Its markers are its
+      own.** This is the half that looked right while being wrong: the Live
+      Client Data API serves the whole game's event list rather than the events
+      since the last poll, so a session starting mid-game used to ingest
+      everything that had already happened and attribute it to the file it was
+      writing. A second recording carrying markers from the killed one, at
+      offsets that belong to neither, is a regression.
 
 And the version-skew case, which is the one that does **not** recover:
 
