@@ -81,6 +81,14 @@ that can fail against a path that does not exist.
 - **Vitest** likewise: 0 tests against 447 on the Rust side is most of why the
   frontend is the half being replaced, and a strangler migration needs tests on
   the code being strangled.
+
+  `npm run coverage` is the same suite with a v8 coverage report and an 80%
+  line floor, scoped to `src/lib/`. **It is not a CI step**, deliberately: the
+  gate list above is what must pass for a change to merge, and a coverage
+  percentage is a property of the tree rather than of a change. The floor is
+  there so that running it locally answers WS4.2's exit criterion instead of
+  needing a flag remembered from an issue. Wiring it in is one block in
+  `ci.yml` if that stops being the right call.
 - **cargo-deny** is the instrument of the v2.1 licence exit, not hygiene. See
   [the licences and advisories gate](#licences-and-advisories) below.
 - **`gen-contract --check`** re-emits `src/lib/contract/` from the Rust

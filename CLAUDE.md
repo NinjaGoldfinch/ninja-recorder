@@ -68,6 +68,8 @@ npx biome ci .                                        # lint + format
 npm run typecheck                                     # types (.ts)
 npm run check:svelte                                  # types (.svelte)
 npx vitest run                                        # frontend tests
+# not a gate: `npm run coverage` is the same suite with an 80% line floor
+# over src/lib/. See docs/ci-and-releases.md.
 cd src-tauri && cargo deny check                      # licences + advisories
 # contract drift. `contract-gen` is opt-in so the emitter is never built into
 # a bundle; see "The emitter is not built by default" below.

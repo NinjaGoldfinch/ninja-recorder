@@ -25,6 +25,15 @@ import {
   spellIcon,
   spellIconById,
 } from "./icons";
+import {
+  ANY,
+  anyFilterActive,
+  filterRows,
+  type LibraryFilters,
+  NONE,
+  VALUE_PREFIX,
+} from "./lib/library/filters";
+import { byLane, byName, byPatchDesc, sortRows } from "./lib/library/sort";
 import { getPrefs } from "./prefs";
 import { openReview } from "./review";
 import { currentView, onViewChange } from "./router";
@@ -165,14 +174,9 @@ function findRow(id: number): RecordingRow | undefined {
 // filters leave. A facet that narrows as you use its neighbours is how a
 // person ends up with a selection they can no longer see the way out of.
 
-/** Every named value carries this prefix, so no label can collide with the
- *  two reserved option values below. */
-const VALUE_PREFIX = "v:";
-/** No filtering on this facet. Shared with `#filter-outcome`'s own markup. */
-const ANY = "all";
-/** Rows whose column is empty — offered only when there are some. */
-const NONE = "none";
-
+// `ANY`, `NONE`, `VALUE_PREFIX` and the comparators moved to
+// `lib/library/` in WS4.2. A `Facet` is the DOM half that stayed: the pure
+// half is `FacetSelection`, which is what `visibleRows` builds below.
 interface Facet {
   select: HTMLSelectElement;
   /** Which bucket a row falls in, or null when its column is empty. */
@@ -183,47 +187,6 @@ interface Facet {
 
 // Built in `initLibrary`, once the elements exist.
 let facets: Facet[] = [];
-
-function byName(a: string, b: string): number {
-  return a.localeCompare(b);
-}
-
-// The order the game lists them in, not alphabetical: nobody scans a lane
-// picker for "Bottom, Jungle, Middle, Support, Top".
-const LANE_ORDER = ["Top", "Jungle", "Middle", "Bottom", "Support"];
-
-function byLane(a: string, b: string): number {
-  const ia = LANE_ORDER.indexOf(a);
-  const ib = LANE_ORDER.indexOf(b);
-  // `position()` only ever writes those five, but `role` is a TEXT column
-  // and the LCU is not guaranteed to stay its only writer. Anything else
-  // sorts after them rather than being dropped from the list.
-  if (ia === -1 && ib === -1) return byName(a, b);
-  if (ia === -1) return 1;
-  if (ib === -1) return -1;
-  return ia - ib;
-}
-
-/** `"15.10"` → `[15, 10]`, or null if it is not a run of numbers. */
-function patchParts(label: string): number[] | null {
-  const parts = label.split(".").map(Number);
-  return parts.every((n) => Number.isFinite(n)) ? parts : null;
-}
-
-// Newest first, compared component-wise as numbers — "15.9" sorts *older*
-// than "15.10", which is exactly what comparing them as strings gets
-// wrong. `patchLabel` passes a malformed patch through untouched, so a
-// label that is not a version still has to order somehow.
-function byPatchDesc(a: string, b: string): number {
-  const pa = patchParts(a);
-  const pb = patchParts(b);
-  if (pa === null || pb === null) return byName(a, b);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const diff = (pb[i] ?? 0) - (pa[i] ?? 0);
-    if (diff !== 0) return diff;
-  }
-  return 0;
-}
 
 /**
  * Rebuilds the three derived filters from the rows now in the library,
@@ -269,12 +232,7 @@ function refreshFacets() {
 }
 
 function filtersActive(): boolean {
-  return (
-    els.champion.value.trim() !== "" ||
-    els.outcome.value !== ANY ||
-    els.pinned.checked ||
-    facets.some((facet) => facet.select.value !== ANY)
-  );
+  return anyFilterActive(currentFilters());
 }
 
 // Sort is deliberately left alone: it is not a filter, it hides nothing,
@@ -321,43 +279,18 @@ async function rescanRecordings() {
   }
 }
 
+/** The controls, read once, as the plain data `lib/library/filters` wants. */
+function currentFilters(): LibraryFilters {
+  return {
+    champion: els.champion.value,
+    outcome: els.outcome.value,
+    pinnedOnly: els.pinned.checked,
+    facets: facets.map((facet) => ({ selected: facet.select.value, key: facet.key })),
+  };
+}
+
 function visibleRows(): RecordingRow[] {
-  const championFilter = els.champion.value.trim().toLowerCase();
-  const outcome = els.outcome.value;
-  const pinnedOnly = els.pinned.checked;
-
-  const rows = allRecordings.filter((row) => {
-    if (championFilter && !vodTitle(row).toLowerCase().includes(championFilter)) {
-      return false;
-    }
-    if (outcome === "wins" && row.win !== true) return false;
-    if (outcome === "losses" && row.win !== false) return false;
-    if (pinnedOnly && !row.pinned) return false;
-    for (const facet of facets) {
-      const selected = facet.select.value;
-      if (selected === ANY) continue;
-      const key = facet.key(row);
-      if (selected === NONE) {
-        if (key !== null) return false;
-      } else if (key === null || VALUE_PREFIX + key !== selected) {
-        return false;
-      }
-    }
-    return true;
-  });
-
-  return rows.sort((a, b) => {
-    switch (els.sort.value) {
-      case "oldest":
-        return a.started_at - b.started_at;
-      case "longest":
-        return (b.duration_s ?? 0) - (a.duration_s ?? 0);
-      case "champion":
-        return (a.champion ?? "").localeCompare(b.champion ?? "");
-      default:
-        return b.started_at - a.started_at;
-    }
-  });
+  return sortRows(filterRows(allRecordings, currentFilters(), vodTitle), els.sort.value);
 }
 
 function render() {

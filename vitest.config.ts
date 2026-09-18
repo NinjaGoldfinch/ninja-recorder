@@ -43,5 +43,34 @@ export default defineConfig({
     // leaves it on the vanilla stack (plan §9, Q6), so it is out of scope
     // here rather than untested by accident.
     exclude: ["src/dev/**", "node_modules/**", "dist/**"],
+
+    // `npm run coverage`. Scoped to `src/lib/`, and that is the whole point:
+    // measuring the vanilla modules would report a number dominated by
+    // `review.ts` and `library.ts`, which are DOM wiring being strangled and
+    // are not the thing WS4 is putting under test. What the percentage has to
+    // mean is "the extracted logic is covered", so the denominator is the
+    // extracted logic.
+    //
+    // Generated and stub files are excluded for the same reason: `contract/`
+    // is emitted from Rust and CI-checked by `gen-contract --check`, and a
+    // module whose whole body is `export {}` would otherwise report as a
+    // perfect score and flatter the average.
+    coverage: {
+      provider: "v8",
+      // No HTML report: it writes a few hundred files of vendored istanbul
+      // assets for a number that fits on one line.
+      reporter: ["text", "lcov"],
+      include: ["src/lib/**"],
+      exclude: [
+        "**/*.test.ts",
+        "src/lib/contract/**",
+        "src/lib/index.ts",
+        "src/lib/stores/index.ts",
+      ],
+      // WS4.2's exit criterion. A floor, not a target: it fails a change that
+      // adds logic to `src/lib/` without tests, rather than asking anyone to
+      // chase the last few percent.
+      thresholds: { lines: 80 },
+    },
   },
 });
