@@ -55,27 +55,49 @@ an unsigned build).
 Use Practice Tool first: 30-second launch, on-demand kills and objectives.
 Never iterate against real queued games.
 
-- [ ] League client launch is detected (lockfile discovery)
-- [ ] Gameflow phase transitions drive the state machine into `Recording` when
+- [x] League client launch is detected (lockfile discovery)
+- [x] Gameflow phase transitions drive the state machine into `Recording` when
       a Practice Tool game starts
-- [ ] Recording file appears and grows during the game
-- [ ] Markers are captured (kills, objectives) and time-aligned
-- [ ] On game end the VOD and its markers land in the library: SQLite row,
+- [x] Recording file appears and grows during the game
+- [x] Markers are captured (kills, objectives) and time-aligned
+- [x] On game end the VOD and its markers land in the library: SQLite row,
       visible in the review UI
-- [ ] Playback works in the review UI and markers seek correctly
+- [x] Playback works in the review UI and markers seek correctly
 
-Record: any step that didn't fire, or fired late or wrong.
+Record: nothing failed, fired late, or fired wrong.
+
+**2026-09-17, v2.0.0-alpha.40, on a live Ranked Solo game rather than Practice
+Tool.** Patch 16.18, Viego jungle, 25:46, a loss. The loop ran unattended from
+end to end: the client was found, the state machine reached `Recording` without
+being asked, the VOD and its markers landed in the library with the match
+summary filled in (KDA, CS, rank and patch all present on the row), and the
+review player plays it back with the kill markers on the gold-diff track
+seeking where they are clicked.
+
+Two things this run does not say, recorded so they are not read into it. The
+first two rows were observed only by their effect: a recording that started on
+its own proves the lockfile was found and the gameflow drove the machine, but
+neither was watched happening. And marker *alignment* rests on the review
+player looking right rather than on a frame comparison against the game, so
+what is confirmed is that markers are captured and that seeking to one works.
 
 ## 3. Vanguard-protected game
 
 - [ ] The Practice Tool run above completed with Vanguard active and no flags
       or warnings from Vanguard or Riot
-- [ ] Repeat the full loop once during a **live queued game**, not just
+- [x] Repeat the full loop once during a **live queued game**, not just
       Practice Tool. This confirms behaviour under real matchmaking timing
       (champ select, dodges) per the documented state machine edge cases in
       [recording-pipeline.md](recording-pipeline.md#2-the-state-machine)
 
-Record: queue type, and anything that differed from Practice Tool.
+Record: Ranked Solo. Nothing differed from Practice Tool because there was no
+Practice Tool run.
+
+**The first row stays empty on purpose.** It asks about a Practice Tool run and
+there has not been one: the first capture on real hardware went straight to a
+queued game, which is the stronger case and not the one that row describes.
+Vanguard was active throughout, since League does not start without it, and no
+flag, warning or client complaint followed.
 
 ## 4. Capture resilience
 
@@ -106,6 +128,19 @@ to stop, because a clean shutdown says goodbye on the wire and a crash says
 nothing at all.
 
 What needs a game, and a person:
+
+**2026-09-17: the ordinary half holds, the violent half is untested.** On the
+alpha.40 ranked run the window was closed normally mid-game and the recording
+carried on to a complete, playable VOD with its markers, which is the claim the
+whole split exists to make. Nothing was killed from Task Manager, so every row
+below is still open, and so is the harder question they ask: a clean close is
+the case the code is most likely to survive.
+
+**One known defect applies to these rows before they are attempted.** When the
+daemon comes back, the strip clears itself and nothing re-reads the library, so
+the window will show whatever it held when the connection died. That is fixed
+in #135; on a build without it, a stale grid after a reconnect is expected
+rather than a new finding.
 
 - [ ] Start a recording. Kill **the daemon** from Task Manager mid-game.
 - [ ] The window says the recorder is not running, in a strip under the app bar
@@ -206,6 +241,15 @@ belongs to that process and disappears when it quits.
       while a game is being captured; the menu must open immediately every time.
       A slow menu means something is blocking the pump's thread, which is the
       failure this design exists to avoid.
+
+**2026-09-17: the modal appears, which is the half that was in doubt.** Tray
+Quit during the alpha.40 ranked recording refused to exit without asking first.
+Cancelling left the recording running, and it finished and landed in the
+library, so "No cancels and the recording continues" holds as well.
+
+"Yes" was not taken, so the other half of that row, finalizing before exit and
+finding a playable VOD and its row afterwards, is still unchecked. The row stays
+unticked until both halves are, because it is one criterion and not two.
 
 
 
@@ -308,6 +352,14 @@ window.
 They were missing for two commits, between WS3.4 moving the supervisor out of
 the UI and WS3.3 rebuilding the notifier on `notify-rust`. If a build predates
 that, this section is expected to fail entirely.
+
+**2026-09-17: notifications arrived with no window open**, on the alpha.40
+ranked run. That is the claim this section exists for: the process that noticed
+the game had ended is the one that raised the toast, which is only true because
+the supervisor is in the daemon. Which kinds fired was not recorded row by row,
+so the rows below stay unticked and want a deliberate pass; what is settled is
+that the mechanism works from a windowless process, which is what could not be
+checked anywhere but here.
 
 - [ ] Closing the window the first time shows the "still running in the tray"
       notice, and closing it again does **not**.
