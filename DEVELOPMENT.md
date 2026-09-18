@@ -2156,3 +2156,89 @@ at all. That leaves no log by construction, whoever opens it. The difference is
 that the silence is now itself a result: a launch that still writes nothing has
 ruled out everything after the loader, which is the half of the search space
 this could not previously separate.
+
+---
+
+## 19. The Svelte migration: what WS4.1 decided
+
+WS4 replaces the frontend view by view rather than at once, so the decisions
+below are all about the same thing: making two frontends coexist in one window
+without either becoming the other's problem.
+
+### The root mounts beside the views, not around them
+
+The obvious shape for a framework migration is to put the new root at the top
+and let it render the old markup underneath. It is also the shape that makes
+every later step a merge conflict: the vanilla views and the Svelte tree would
+both have an opinion about layout, and `index.html` would have to be rewritten
+on the first commit instead of the last.
+
+So `#svelte-root` is a sibling, the last child of `.container`, empty in the
+markup and empty at runtime. An empty div in a block container takes no space,
+which is what lets the seam land without the existing views moving a pixel.
+When WS4.3 moves the library across, the component renders in the same place,
+at the same width, as the section it replaces.
+
+### `router.ts` owns the join
+
+Not `main.ts`, and not a new module. The router already owns the only question
+both halves have to agree on, which is which view is showing, and it was
+written in the first place because two files were toggling each other's
+`hidden` attributes. A Svelte root that managed its own visibility would
+reintroduce exactly that, with a compiler in front of it.
+
+### Mount once, and do not tie it to view changes
+
+`mount` and `unmount` destroy component state. Driving them from `showView`
+would look tidy and would throw away a migrated view's scroll position, its
+filter selections and its in-flight requests every time the user glanced at
+Settings. Visibility stays what it has always been: the `hidden` attribute on
+the host.
+
+`unmountApp` exists anyway, and nothing in the app calls it. Mounting that
+cannot be undone is mounting that cannot be tested, and "an empty `App.svelte`
+mounts and unmounts without affecting the vanilla views" is the whole of what
+WS4.1 claims. The test suite is the caller.
+
+### The tokens moved, and nothing else did
+
+Every custom property left `styles.css` for `src/lib/styles/tokens.css`
+unchanged: same values, same selectors, same order, verified by diffing the
+declaration sets before and after. Components need a token source that outlives
+the stylesheet WS4.6 deletes, and that was reason enough to move them; it was
+not reason to also revise them. A commit that moved and rewrote them at once
+would have no readable visual diff, and the next person to change a colour
+would be reading two changes at once.
+
+`styles.css` imports the file on its first line rather than `index.html`
+loading it as a second `<link>`, and no component imports it either. Both
+alternatives put the tokens after first paint, which is the theme flash the
+inline boot script in `index.html` exists to prevent.
+
+### Two type-checkers, on purpose
+
+`tsc` does not look inside `.svelte` files. That is why `svelte-check` had to
+land in the same task as the first component rather than in WS5.6 afterwards:
+a gate that narrows silently is worse than one that was never there, because it
+goes on reporting success while covering less each week.
+
+It could not simply be added, though. `svelte-check` peer-requires
+`typescript` at `^5 || ^6`, and this tree had moved to 7.x, the native port.
+Downgrading would have given back the whole-project check's speed, and pinning
+`svelte-check` to an older Svelte was not a real option either. So both are
+installed: `typescript` at 6.x for `svelte-check`'s language service, and the
+7.x native checker under the `@typescript/native` alias for `npm run
+typecheck`.
+
+The cost of that is a genuine trap. Both packages ship a binary called `tsc`,
+and which one `node_modules/.bin/tsc` resolves to is decided by install order,
+so `npx tsc --noEmit` runs whichever won a race. Every script and every CI step
+now names the checker it means by path, and `npx tsc` should not appear in this
+repository again.
+
+`check:svelte` also does not pass `--tsgo`, which would run the Svelte gate on
+the native checker too. It is about a second faster and writes a shadow
+TypeScript project into `.svelte-check/` that is not pruned when a component is
+deleted, so the gate goes on failing over a file that is no longer in the tree,
+citing a path that does not exist. A second on a run measured in minutes does
+not buy that.

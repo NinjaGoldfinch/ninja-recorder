@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import App from "./lib/App.svelte";
 
 /**
  * `router.ts` — WS5 task 5.5, and the module WS4 has to keep honest.
@@ -21,6 +22,7 @@ type Router = typeof import("./router");
 
 let router: Router;
 let views: Record<string, HTMLElement>;
+let host: HTMLElement;
 
 function register(r: Router) {
   views = {
@@ -31,6 +33,12 @@ function register(r: Router) {
   r.registerView("library", views.library);
   r.registerView("review", views.review);
   r.registerView("settings", views.settings);
+
+  // Where the Svelte root goes. In the app this is `#svelte-root`, the last
+  // child of `.container`; here it only has to be a node the vanilla views
+  // are not inside, which is the whole of what "beside them" means.
+  host = document.createElement("div");
+  document.body.append(host);
 }
 
 /** Which views the DOM says are showing, as against what the router says. */
@@ -51,7 +59,12 @@ beforeEach(async () => {
   register(router);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // The root is module state, like `current`: a test that leaves it up would
+  // make the next `mountApp` a no-op and the failure would surface somewhere
+  // else entirely.
+  await router.unmountApp();
+  host.remove();
   window.location.hash = "";
 });
 
@@ -149,5 +162,80 @@ describe("initRouting", () => {
     // rejected `listen` must not take the whole frontend down with it.
     listen.mockRejectedValue(new Error("no tauri"));
     expect(() => router.initRouting()).not.toThrow();
+  });
+});
+
+describe("the Svelte root", () => {
+  /**
+   * WS4.1's exit criterion, and the only claim this task makes: an empty
+   * `App.svelte` goes up and comes down again without the vanilla views
+   * noticing. Everything WS4.2 onwards does is moving markup across this
+   * seam, so a break here is a break in all of it.
+   */
+
+  it("mounts into its host", async () => {
+    expect(router.appMounted()).toBe(false);
+    router.mountApp(App, host);
+    expect(router.appMounted()).toBe(true);
+  });
+
+  it("unmounts again, and says so", async () => {
+    router.mountApp(App, host);
+    await expect(router.unmountApp()).resolves.toBe(true);
+    expect(router.appMounted()).toBe(false);
+  });
+
+  it("reports nothing to unmount when it was never up", async () => {
+    await expect(router.unmountApp()).resolves.toBe(false);
+  });
+
+  it("refuses to mount a second copy over the first", () => {
+    // A second root in the same node duplicates the UI rather than throwing,
+    // which is the kind of bug that gets diagnosed as a CSS problem. Counting
+    // child nodes rather than elements is what makes this test able to fail:
+    // the component renders nothing, so its footprint is the single anchor
+    // node Svelte leaves behind, and a second mount would make that two.
+    router.mountApp(App, host);
+    expect(host.childNodes.length).toBe(1);
+
+    router.mountApp(App, host);
+    expect(router.appMounted()).toBe(true);
+    expect(host.childNodes.length).toBe(1);
+  });
+
+  it("renders nothing while it is empty", () => {
+    // Not a tautology: it is what "without affecting the vanilla views" means
+    // in the DOM. WS4.3 is the commit that gets to change this line.
+    router.mountApp(App, host);
+    expect(host.innerHTML).toBe("");
+  });
+
+  it("can go up, come down and go up again", async () => {
+    router.mountApp(App, host);
+    await router.unmountApp();
+    router.mountApp(App, host);
+    expect(router.appMounted()).toBe(true);
+  });
+
+  it("leaves the vanilla views exactly as it found them", async () => {
+    router.showView("settings");
+    const before = visible();
+
+    router.mountApp(App, host);
+    expect(visible()).toEqual(before);
+    expect(router.currentView()).toBe("settings");
+
+    await router.unmountApp();
+    expect(visible()).toEqual(before);
+    expect(router.currentView()).toBe("settings");
+  });
+
+  it("does not become a view the router can switch to", () => {
+    // The host is not registered, so `showView` must not touch it. Once a
+    // migrated view lives in there, WS4.3 registers the host itself and this
+    // is the line that changes.
+    router.mountApp(App, host);
+    router.showView("review");
+    expect(host.hidden).toBe(false);
   });
 });

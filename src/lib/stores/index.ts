@@ -1,5 +1,5 @@
 /**
- * Application state as Svelte 5 runes — WS4 task 4.1.
+ * Application state as Svelte 5 runes — WS4 task 4.3.
  *
  * One shape, fed two ways: the daemon's snapshot sets it on connect, and the
  * event stream updates it after that. Nothing polls, and nothing derives

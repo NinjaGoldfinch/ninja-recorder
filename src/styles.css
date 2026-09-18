@@ -1,17 +1,11 @@
-/* ---------------------------------------------------------------------
- * Design tokens
- *
- * `data-theme` on <html> is written by theme.ts and is only ever "light" or
- * "dark" — never absent once the boot script in index.html has run. That is
- * why there is no `@media (prefers-color-scheme: dark)` block here: the OS
- * preference is resolved once, in JS, so "System" and an explicit "Light"
- * on a dark OS both land on a single unambiguous attribute instead of
- * fighting a media query for specificity.
- *
- * Only colour lives per-theme. Radii, spacing, type scale and motion are
- * defined once — a token that differs between themes for any reason other
- * than contrast is a bug.
- * ------------------------------------------------------------------- */
+/* The design tokens, and the only `@import` in this file — it has to be the
+ * first rule, so keep it there. They used to be defined at the top of this
+ * stylesheet; WS4.1 moved them to `src/lib/styles/tokens.css` unchanged, so
+ * that the `.svelte` components have a token source that does not disappear
+ * when WS4.6 deletes this file. Loading them from here rather than from a
+ * second `<link>` or a JS import keeps them inside the stylesheet index.html
+ * already resolves before first paint. */
+@import "./lib/styles/tokens.css";
 
 /* Without this, `width: 100%` and `max-width` both mean "before padding",
  * so any padded full-width element overflows its container by exactly its
@@ -20,132 +14,6 @@
 *::before,
 *::after {
   box-sizing: border-box;
-}
-
-:root {
-  --r-xs: 4px;
-  --r-sm: 6px;
-  --r-md: 10px;
-  --r-lg: 14px;
-  --r-pill: 999px;
-
-  --sp-1: 0.25rem;
-  --sp-2: 0.5rem;
-  --sp-3: 0.75rem;
-  --sp-4: 1rem;
-  --sp-5: 1.5rem;
-  --sp-6: 2rem;
-
-  --fs-xs: 0.72rem;
-  --fs-sm: 0.8125rem;
-  --fs-md: 0.875rem;
-  --fs-base: 1rem;
-  --fs-lg: 1.125rem;
-  --fs-xl: 1.5rem;
-
-  --dur-fast: 120ms;
-  --dur: 180ms;
-  --ease: cubic-bezier(0.2, 0.6, 0.3, 1);
-
-  --content-max: 1120px;
-
-  --font-sans: -apple-system, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono", monospace;
-
-  font-family: var(--font-sans);
-  font-size: 16px;
-  line-height: 1.5;
-  font-weight: 400;
-  color: var(--text);
-  background-color: var(--bg-app);
-  accent-color: var(--accent);
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-:root,
-:root[data-theme="light"] {
-  color-scheme: light;
-
-  --bg-app: #f8f6fd;
-  --bg-surface: #ffffff;
-  --bg-surface-2: #f2eefb;
-  --bg-surface-hover: #efe9fb;
-  --bg-inset: #ece6f8;
-
-  --border: #e5def4;
-  --border-strong: #cdc0e9;
-
-  --text: #191233;
-  --text-muted: #5b5177;
-  --text-subtle: #857aa3;
-
-  --accent: #6d3fd4;
-  --accent-hover: #5c31bd;
-  --accent-contrast: #ffffff;
-  --accent-soft: #ebe3fd;
-  --accent-ring: rgba(109, 63, 212, 0.35);
-
-  --win-fg: #1c7c54;
-  --win-bg: #dcf5e9;
-  --loss-fg: #b3253f;
-  --loss-bg: #fde5ea;
-  --rec-fg: #d81b52;
-  --warn-fg: #a8650a;
-
-  --shadow-1: 0 1px 2px rgba(30, 16, 66, 0.06), 0 1px 3px rgba(30, 16, 66, 0.08);
-  --shadow-2: 0 4px 12px rgba(30, 16, 66, 0.1);
-  --shadow-3: 0 10px 28px rgba(30, 16, 66, 0.15);
-
-  /* Marker colours come from review.ts as event semantics, not chrome.
-   * They were picked against a light surface, so they only need lifting
-   * on dark. */
-  --marker-boost: none;
-
-  --glow: radial-gradient(900px 380px at 50% -220px, rgba(109, 63, 212, 0.13), transparent 70%);
-}
-
-:root[data-theme="dark"] {
-  color-scheme: dark;
-
-  --bg-app: #100d17;
-  --bg-surface: #191524;
-  --bg-surface-2: #221c31;
-  --bg-surface-hover: #292139;
-  --bg-inset: #0b0910;
-
-  --border: #2e2640;
-  --border-strong: #43385c;
-
-  --text: #ece8f6;
-  --text-muted: #ada3c4;
-  --text-subtle: #7d7396;
-
-  /* The light theme's 600-weight accent goes muddy on a dark ground; this
-   * is the same hue lifted until it reads as luminous rather than dim. */
-  --accent: #a880ff;
-  --accent-hover: #bb9bff;
-  --accent-contrast: #170f2b;
-  --accent-soft: rgba(168, 128, 255, 0.16);
-  --accent-ring: rgba(168, 128, 255, 0.45);
-
-  --win-fg: #6ee7b7;
-  --win-bg: rgba(52, 211, 153, 0.14);
-  --loss-fg: #fb7185;
-  --loss-bg: rgba(244, 63, 94, 0.14);
-  --rec-fg: #fb7185;
-  --warn-fg: #f5b544;
-
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.45);
-  --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.55);
-
-  --marker-boost: brightness(1.35) saturate(1.15);
-
-  --glow: radial-gradient(900px 380px at 50% -220px, rgba(168, 128, 255, 0.16), transparent 70%);
 }
 
 /* ---------------------------------------------------------------------
