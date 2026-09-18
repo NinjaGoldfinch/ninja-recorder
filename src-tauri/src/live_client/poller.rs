@@ -68,7 +68,21 @@ pub async fn watch<OnSnapshot, OnDown>(
                 // is alive, so this must never end a recording — it is the
                 // one failure guaranteed to repeat, because a payload the
                 // parser cannot read will not start reading next second.
-                warn!("live-poll", "unreadable response, still recording: {e}");
+                //
+                // **A 404 is not "whatever is wrong with it".** It is this
+                // API answering correctly that no game is in progress, which
+                // happens for a few seconds at the end of every game while the
+                // server is still up. Treated as an unreadable response it
+                // produced three or four warnings per game, for an expected
+                // answer, in the log a person reads when something has gone
+                // wrong. The *behaviour* is unchanged and deliberately so:
+                // ending a recording on a 404 would cut it short here and cut
+                // it before it began during a loading screen.
+                if e.means_no_game() {
+                    debug!("live-poll", "the endpoint says no game in progress; still recording");
+                } else {
+                    warn!("live-poll", "unreadable response, still recording: {e}");
+                }
                 tokio::time::sleep(poll_interval).await;
             }
             Err(e) => {

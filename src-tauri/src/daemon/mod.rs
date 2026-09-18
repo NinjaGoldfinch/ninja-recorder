@@ -649,11 +649,22 @@ fn wire_finalize_work(
             let events = events.clone();
             tokio::task::spawn_blocking(move || match trim::trim_recording(&db, &ffmpeg, recording_id) {
                 Ok(report) => {
+                    // `head_removed_s` is a *measured* difference rather than a
+                    // decision, so a recording that began at or after the game
+                    // reports a few hundredths of a second instead of a clean
+                    // zero. Nothing was cut from the front in that case, and
+                    // `-0.0s loading screen` reads as a fault in a log that is
+                    // scanned for faults, so the two cases are said
+                    // differently (trim.rs's header has the reasoning).
+                    let head = if report.head_removed_s > 0.05 {
+                        format!("{:.1}s loading screen", report.head_removed_s)
+                    } else {
+                        "no loading screen".to_string()
+                    };
                     info!(
                         "trim",
-                        "cut {:.1}s off recording {recording_id} ({:.1}s loading screen, {:.1}s post-game)",
+                        "cut {:.1}s off recording {recording_id} ({head}, {:.1}s post-game)",
                         report.removed_s,
-                        report.head_removed_s,
                         report.tail_removed_s
                     );
                     // The card's length and size both changed.
