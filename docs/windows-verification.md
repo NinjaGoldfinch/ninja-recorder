@@ -256,11 +256,11 @@ belongs to that process and disappears when it quits.
       different places in order and which one worked is the useful fact.
 - [x] Right-click shows exactly three items: Open ninja-recorder, Settings,
       Quit, with separators around Settings.
-- [ ] Left-click opens the window; left-click does **not** show the menu.
-      **Failed 2026-09-18: it opens the menu.** `tray-icon` defaults
-      `menu_on_left_click` to true and it was never turned off, so the menu
-      appeared for both buttons while the click handler fired underneath it.
-      Fixed in #147; re-check on a build carrying it.
+- [x] Left-click opens the window; left-click does **not** show the menu.
+      **Failed on alpha.49, fixed in #147, re-checked on alpha.51.**
+      `tray-icon` defaults `menu_on_left_click` to true and it was never turned
+      off, so the menu appeared for both buttons while the click handler fired
+      underneath it.
 - [x] With no UI running, Open starts one and the window appears.
 - [x] With a UI already running, Open focuses the existing window rather than
       starting a second process. Confirm in Task Manager that there is still
@@ -270,12 +270,13 @@ belongs to that process and disappears when it quits.
       creates it again.
 - [x] Settings does the same and lands on the Settings view, in all three of
       those states.
-- [ ] **Quit while idle** exits without asking, the icon disappears, and both
+- [x] **Quit while idle** exits without asking, the icon disappears, and both
       processes are gone from Task Manager.
-      **Failed 2026-09-18: it does not quit.** The daemon stops, the window
-      notices the pipe die, and `connect_or_start` starts a fresh one seconds
-      later. The daemon had always published `DaemonShuttingDown` with a
-      reason; nothing read it. Fixed in #148; re-check on a build carrying it.
+      **Failed on alpha.49, fixed in #148, re-checked on alpha.51.** The daemon
+      stopped, the window noticed the pipe die, and `connect_or_start` started
+      a fresh one seconds later, so the app could not be quit from its own
+      tray. The daemon had always published `DaemonShuttingDown` with a reason
+      saying it left on purpose; nothing read it.
 - [x] **Quit mid-recording asks first.** A modal appears naming the recording;
       "No" cancels and the recording continues, and the daemon keeps running.
       "Yes" finalizes before exiting: the VOD is playable and the row is in the
