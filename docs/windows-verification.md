@@ -24,6 +24,10 @@ The second attempt, alpha.48 to alpha.49 on a build carrying that fix,
 **installed correctly**. The offer appeared, the download verified, the
 installer ran and the new version was in place.
 
+Also confirmed in the same pass: **the install is refused while a game is being
+recorded**, which is `core::install_update`'s gate working on hardware rather
+than in a unit test, and Settings shows the new version afterwards.
+
 **It does not restart afterwards** (#145). The machine is left with no daemon
 and no window and the app has to be started by hand, so the step stays open.
 `launch_installer` passes `/S /UPDATE` and the generated NSIS script also
