@@ -343,13 +343,37 @@ fn write_installer(url: &str, bytes: &[u8]) -> Result<std::path::PathBuf, String
 
 /// Runs the installer and returns, leaving it to replace this binary.
 ///
-/// `/S` is NSIS's silent mode and `/UPDATE` is what the bundle's own script
-/// reads to know it is replacing an install rather than making one. Detached,
-/// for the reason `daemon::spawn` detaches: the process it belongs to is about
-/// to stop existing.
+/// `/S` is NSIS's silent mode, `/UPDATE` is what the bundle's own script reads
+/// to know it is replacing an install rather than making one, and `/R` is what
+/// starts the app again afterwards. Detached, for the reason `daemon::spawn`
+/// detaches: the process it belongs to is about to stop existing.
+///
+/// ## `/R` was missing, and the update looked like it had killed the app
+///
+/// Without it the install completed and nothing came back: no daemon, no
+/// window, and no recorder until someone started it by hand (#145). The three
+/// flags are parsed by the generated `installer.nsi`, so this list is a
+/// contract with the bundle rather than with NSIS in general.
+///
+/// **`/R` with no `/ARGS`, deliberately.** It relaunches the main binary with
+/// no arguments, which is `Launch::Ui`: a window. The daemon is what was
+/// updating and the daemon is what must exist afterwards, so `/ARGS --daemon`
+/// looks like the more correct answer and is the worse one. The person
+/// pressed Install in a window and watched it vanish; bringing back only an
+/// invisible background process reads as a failed update. A window comes back,
+/// `connect_or_start` starts a daemon because none is listening, and both
+/// exist a second later.
+///
+/// **`/S` rather than `/P`, also deliberately.** The bundle's script parses
+/// `/P` for passive mode, which would show a progress bar instead of nothing,
+/// and `tauri.conf.json` still carries an `installMode: "passive"` that has
+/// been dead since the daemon took the install over. Passive is arguably the
+/// nicer experience. It is not worth trading for it here: silent is what has
+/// now been observed installing correctly on real hardware, and the way to
+/// change it is to verify the change, not to assume it.
 fn launch_installer(path: &std::path::Path) -> Result<(), String> {
     let mut command = std::process::Command::new(path);
-    command.args(["/S", "/UPDATE"]);
+    command.args(["/S", "/UPDATE", "/R"]);
 
     #[cfg(target_os = "windows")]
     {
