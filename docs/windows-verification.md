@@ -567,7 +567,7 @@ backend is libobs, and this section is what stands in for that.
       the descriptor could not be built and the pipe fell back to the process
       default, which is the thing this replaced: report that line's reason
       rather than the ACL.
-- [ ] A second Windows account signed in at the same time cannot drive this
+- [x] A second Windows account signed in at the same time cannot drive this
       user's daemon. With fast user switching, sign in as another account and
       run the same connect: it must fail with access denied rather than
       connecting.
