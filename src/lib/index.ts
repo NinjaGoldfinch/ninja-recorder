@@ -12,11 +12,12 @@
  * |---|---|---|
  * | `App.svelte` | WS4.1 | LANDED: the root, mounted into `#svelte-root` |
  * | `components/library/` | WS4.3 | LANDED: eight components replacing `library.ts`, which is deleted |
- * | `Settings.svelte`, `Review.svelte`, `Timeline.svelte` | WS4.4–4.5 | the views still replacing `settings.ts`, `update.ts`, `review.ts` |
+ * | `components/settings/` | WS4.4 | LANDED: nine components replacing `settings.ts` and `update.ts`, both deleted |
+ * | `Review.svelte`, `Timeline.svelte` | WS4.5 | the views still replacing `review.ts` |
  * | `contract/` | WS2.5 | GENERATED: `types.ts`, `client.ts`, `events.ts`, `index.ts`. Committed, CI-checked by `gen-contract --check` |
  * | `transport/` | WS2.6, WS3.6 | `invoke.ts` and `mock.ts` landed in WS2.6; `pipe.ts` is WS3.6 |
- * | `stores/` | WS4.3 | LANDED: `library.svelte.ts` and `icons.svelte.ts` |
- * | `library/`, `timeline/` | WS4.2 | LANDED: the pure logic, with its tests |
+ * | `stores/` | WS4.3–4.4 | LANDED: `library`, `icons`, `settings`, `update`, `about` |
+ * | `library/`, `timeline/`, `settings/` | WS4.2–4.4 | LANDED: the pure logic, with its tests |
  * | `styles/tokens.css` | WS4.1 | LANDED: every custom property, moved out of `styles.css` unchanged |
  *
  * The stores are not yet driven by the daemon's event stream, which is what

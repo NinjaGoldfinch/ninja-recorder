@@ -1,5 +1,5 @@
 import { mount, unmount } from "svelte";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RecordingRow } from "../../../types";
 import Row from "./Row.svelte";
 
@@ -53,7 +53,11 @@ const noop = () => {};
 let host: HTMLElement | null = null;
 let instance: Record<string, unknown> | null = null;
 
-function render(r: RecordingRow, showInspect = false): HTMLElement {
+function render(
+  r: RecordingRow,
+  showInspect = false,
+  over: Record<string, unknown> = {},
+): HTMLElement {
   host = document.createElement("div");
   document.body.append(host);
   instance = mount(Row, {
@@ -65,6 +69,7 @@ function render(r: RecordingRow, showInspect = false): HTMLElement {
       ondelete: noop,
       oninspect: noop,
       showInspect,
+      ...over,
     },
   });
   return host;
@@ -287,6 +292,44 @@ describe("a row with a full scoreboard", () => {
     expect(render(withBoard()).querySelector(".vod-row")?.getAttribute("aria-label")).toContain(
       "Zed",
     );
+  });
+});
+
+describe("the actions do not open the recording", () => {
+  /**
+   * `library.ts` did this by checking `closest(".vod-actions")` in a delegated
+   * handler on the grid. Without it, pinning or deleting also opens the VOD,
+   * which for delete means opening the thing you just destroyed.
+   *
+   * Tested through `Row` rather than `RowActions`: Svelte delegates these
+   * events to the mount root, so `stopPropagation` in the child is only
+   * meaningful against the parent handler it is actually guarding, which is
+   * the article's.
+   */
+  it("pinning does not open it", async () => {
+    const onopen = vi.fn();
+    const el = render(row(), false, { onopen });
+    el.querySelector<HTMLButtonElement>(".pin-btn")?.click();
+    await Promise.resolve();
+    expect(onopen).not.toHaveBeenCalled();
+  });
+
+  it("arming a delete does not open it", async () => {
+    const onopen = vi.fn();
+    const el = render(row(), false, { onopen });
+    el.querySelector<HTMLButtonElement>('[aria-label="Delete recording"]')?.click();
+    await Promise.resolve();
+    expect(onopen).not.toHaveBeenCalled();
+  });
+
+  it("clicking the row itself does open it", async () => {
+    // The other half: without this the first two tests would pass on a row
+    // that is not clickable at all.
+    const onopen = vi.fn();
+    const el = render(row(), false, { onopen });
+    el.querySelector<HTMLElement>(".vod-champ")?.click();
+    await Promise.resolve();
+    expect(onopen).toHaveBeenCalledOnce();
   });
 });
 

@@ -1,5 +1,6 @@
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { defineConfig } from "vitest/config";
+import pkg from "./package.json";
 
 /**
  * Frontend unit tests — WS5 task 5.5.
@@ -25,6 +26,13 @@ export default defineConfig({
   // off outside `vite dev`, so there is nothing to pass here.
   plugins: [svelte()],
 
+  // The same injection `vite.config.ts` makes. `About.svelte` reads it, so a
+  // test that mounts the settings view fails at render without it, and a
+  // hard-coded string here would be a second place for the version to live.
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
+
   resolve: {
     // Without this, Node's own export conditions win and `svelte` resolves to
     // its server build, where `mount` throws. The failure names neither Svelte
@@ -38,6 +46,10 @@ export default defineConfig({
     // pinning before Svelte takes it over. jsdom rather than happy-dom
     // because `hidden` and `dataset` semantics are what is under test.
     environment: "jsdom",
+    // jsdom has no `matchMedia`, and `theme.ts` calls it at module scope, so
+    // any test that reaches the settings view fails on import. See the file
+    // for why the call is not the thing that moves.
+    setupFiles: ["src/test-setup.ts"],
     include: ["src/**/*.test.ts"],
     // The dev portal is a separate entry point with its own lifecycle; WS4
     // leaves it on the vanilla stack (plan §9, Q6), so it is out of scope
