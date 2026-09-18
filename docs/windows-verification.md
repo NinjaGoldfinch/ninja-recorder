@@ -108,21 +108,22 @@ what is confirmed is that markers are captured and that seeking to one works.
 
 ## 3. Vanguard-protected game
 
-- [ ] The Practice Tool run above completed with Vanguard active and no flags
+- [x] The Practice Tool run above completed with Vanguard active and no flags
       or warnings from Vanguard or Riot
 - [x] Repeat the full loop once during a **live queued game**, not just
       Practice Tool. This confirms behaviour under real matchmaking timing
       (champ select, dodges) per the documented state machine edge cases in
       [recording-pipeline.md](recording-pipeline.md#2-the-state-machine)
 
-Record: Ranked Solo. Nothing differed from Practice Tool because there was no
-Practice Tool run.
+Record: Ranked Solo, and a Practice Tool run since. Vanguard was active for
+both, since League does not start without it, and no flag, warning or client
+complaint followed either.
 
-**The first row stays empty on purpose.** It asks about a Practice Tool run and
-there has not been one: the first capture on real hardware went straight to a
-queued game, which is the stronger case and not the one that row describes.
-Vanguard was active throughout, since League does not start without it, and no
-flag, warning or client complaint followed.
+**What differed between the two is not recorded here**, because nobody has
+written it down. The queued game came first and was the stronger case; the
+Practice Tool row was checked off afterwards. If anything behaved differently
+between them it belongs in this paragraph, and an empty statement is better
+than an assumed one.
 
 ## 4. Capture resilience
 
