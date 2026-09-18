@@ -99,110 +99,6 @@
     <div id="daemon-strip" class="daemon-strip" role="status" aria-live="polite" hidden></div>
 
     <main class="container">
-      <section id="library-view">
-        <section class="stats-bar" id="stats-bar">
-          <div class="stat">
-            <span class="stat-value" id="stat-games">&#8212;</span>
-            <span class="stat-label">Games</span>
-            <span class="stat-sub" id="stat-games-sub"></span>
-          </div>
-          <div class="stat">
-            <span class="stat-value" id="stat-winrate">&#8212;</span>
-            <span class="stat-label">Win rate</span>
-            <span class="stat-sub" id="stat-winrate-sub"></span>
-          </div>
-          <div class="stat">
-            <span class="stat-value" id="stat-playtime">&#8212;</span>
-            <span class="stat-label">Recorded</span>
-            <span class="stat-sub" id="stat-playtime-sub"></span>
-          </div>
-          <div class="stat">
-            <span class="stat-value" id="stat-disk">&#8212;</span>
-            <span class="stat-label">On disk</span>
-            <span class="stat-sub" id="stat-disk-sub"></span>
-          </div>
-        </section>
-
-        <div class="toolbar">
-          <div class="search-field">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none"
-                 stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-              <circle cx="11" cy="11" r="6.5" />
-              <path d="m16 16 4.5 4.5" stroke-linecap="round" />
-            </svg>
-            <input
-              type="search"
-              id="filter-champion"
-              placeholder="Search champion&#8230;"
-              aria-label="Search champion"
-            />
-          </div>
-          <!-- The three derived filters ship with only their "All" option;
-               `library.ts` fills the rest from the rows actually in the
-               library. Patch cannot be enumerated ahead of time and the
-               other two would otherwise offer choices that match nothing. -->
-          <select id="filter-queue" aria-label="Filter by queue" disabled>
-            <option value="all">All queues</option>
-          </select>
-          <select id="filter-role" aria-label="Filter by role" disabled>
-            <option value="all">All roles</option>
-          </select>
-          <select id="filter-outcome" aria-label="Filter by result">
-            <option value="all">All results</option>
-            <option value="wins">Wins only</option>
-            <option value="losses">Losses only</option>
-          </select>
-          <select id="filter-patch" aria-label="Filter by patch" disabled>
-            <option value="all">All patches</option>
-          </select>
-          <label class="checkbox-label">
-            <input type="checkbox" id="filter-pinned" />
-            Pinned only
-          </label>
-          <select id="sort-select" aria-label="Sort order">
-            <option value="newest">Newest first</option>
-            <option value="oldest">Oldest first</option>
-            <option value="longest">Longest first</option>
-            <option value="champion">Champion (A&#8211;Z)</option>
-          </select>
-          <span class="toolbar-spacer"></span>
-          <button id="rescan-btn" type="button" class="ghost">Rescan folder</button>
-          <button
-            id="refresh-btn"
-            type="button"
-            class="icon-btn ghost"
-            aria-label="Refresh library"
-            title="Refresh library"
-          >
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none"
-                 stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-              <path d="M20 11a8 8 0 1 0-.7 4.2" />
-              <path d="M20 5v6h-6" />
-            </svg>
-          </button>
-        </div>
-
-        <div id="library-empty" class="empty-state">
-          <p class="empty-title">No recordings yet</p>
-          <p class="hint">
-            Recordings appear here once a game finishes &#8212; or any video
-            file dropped into the recordings folder, via &#8220;Rescan
-            folder&#8221; above.
-          </p>
-        </div>
-        <!-- Distinct from the empty state above: "nothing recorded yet" and
-             "everything is filtered out" are different problems, and the
-             first message was the only one there used to be. -->
-        <div id="library-no-matches" class="empty-state" hidden>
-          <p class="empty-title">No recordings match these filters</p>
-          <p class="hint" id="no-matches-hint"></p>
-          <button id="clear-filters-btn" type="button" class="ghost">
-            Clear filters
-          </button>
-        </div>
-        <div id="library-grid" class="vod-list" role="list" hidden></div>
-      </section>
-
       <section id="review-view" class="review-view" hidden>
         <div class="review-header">
           <button id="back-to-library-btn" type="button" class="back-btn">
@@ -638,13 +534,11 @@
         </section>
       </section>
 
-      <!-- Where the Svelte root mounts (WS4.1). Empty in the markup and empty
-           at runtime until WS4.3: `router.ts` owns what goes in it, and an
-           empty div in a block container takes no space, which is what lets
-           the seam land without the vanilla views moving a pixel. It is the
-           last child of .container deliberately, so a migrated view renders
-           in the same place, at the same width, as the section it replaces.
-           WS4.6 deletes the sections above it and this file with them. -->
+      <!-- Where the Svelte root mounts (WS4.1), and since WS4.3 where the
+           library lives: `App.svelte` renders `#library-view` into here and
+           registers it with the router itself. The sections above are what is
+           left of the vanilla frontend, and WS4.6 deletes them and this file
+           with them. -->
       <div id="svelte-root"></div>
     </main>
 

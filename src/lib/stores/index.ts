@@ -1,6 +1,9 @@
 /**
  * Application state as Svelte 5 runes — WS4 task 4.3.
  *
+ * `library.svelte.ts` and `icons.svelte.ts` have landed. This file stays as
+ * the directory's doc comment and exports nothing.
+ *
  * One shape, fed two ways: the daemon's snapshot sets it on connect, and the
  * event stream updates it after that. Nothing polls, and nothing derives
  * state from a command's return value — a command that changed something

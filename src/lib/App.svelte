@@ -1,35 +1,49 @@
 <!--
-  The Svelte root — WS4 task 4.1.
+  The Svelte root - WS4 task 4.1, filling up from WS4.3.
 
-  Empty on purpose, and the emptiness is the exit criterion: it mounts beside
-  the vanilla views and unmounts again without any of them noticing. Until
-  WS4.3 that is the whole of its job. What it proves is that the seam exists
-  — the compiler runs, `svelte-check` sees the file, and `router.ts` can bring
-  a component up and take it down — so the first real view lands as a view
-  and not as a toolchain change wearing one.
+  It renders the views that have migrated and nothing else. `index.html` still
+  holds the review and settings sections, and `main.ts` still wires them; the
+  two frontends run side by side for the length of WS4, and each task moves one
+  view across and deletes its vanilla counterpart in the same commit.
 
-  Views arrive here one at a time (implementation plan §4.6): `Library` in
-  WS4.3, `Settings` and `Update` in WS4.4, `Review` and `Timeline` in WS4.5.
-  Each one deletes its vanilla counterpart and the markup `index.html` holds
-  for it in the same commit, so the two frontends never both own a view.
+  **Each migrated view registers itself with the router.** `main.ts` registers
+  the sections it still owns by `el("#id")`; a Svelte view has no id to look
+  up, so it hands its own node over on mount. Either way `showView` stays the
+  one thing that decides which section is showing, which is the invariant it
+  was written for.
+
+  Views still to come: `Settings` and `Update` in WS4.4, `Review` and
+  `Timeline` in WS4.5. WS4.6 deletes what is left of the markup.
 
   It imports no stylesheet. `styles/tokens.css` is pulled in by `styles.css`,
-  which `index.html` loads as a `<link>` before first paint — a token block
-  arriving later, over a JS import, is the theme flash the boot script in
-  that file exists to prevent. WS4.6 re-homes the import when it deletes the
-  stylesheet; until then there is exactly one loader of the tokens.
+  which `index.html` loads as a `<link>` before first paint; a token block
+  arriving later over a JS import is the theme flash the boot script in that
+  file exists to prevent. WS4.6 re-homes the import when it deletes the
+  stylesheet.
 
-  **No `{@html}` on any recording-derived string.** `db::reconcile` imports
-  whatever video file the user drops into the folder, so a filename is
-  untrusted input. Default interpolation is what replaces v1's `escapeHtml`
-  and `escapeAttr`; `{@html}` opts straight back out of it.
+  **No `{@html}` on any recording-derived string** anywhere below this point.
+  `db::reconcile` imports whatever video file the user drops into the folder,
+  so a filename is untrusted input. Default interpolation is what replaces v1's
+  `escapeHtml` and `escapeAttr`.
 -->
 
-<!--
-  Empty, and it has to be here. `svelte2tsx` emits a typed component for a
-  file with a script block and an untyped one for a file without, so deleting
-  these two lines turns `import App from "./lib/App.svelte"` in `main.ts`
-  back into an implicit `any` and fails `svelte-check` — from the importer,
-  with no mention of this file. Give it a body rather than removing it.
--->
-<script lang="ts"></script>
+<script lang="ts">
+import { registerView } from "../router";
+import Library from "./components/library/Library.svelte";
+
+let libraryNode: HTMLElement;
+
+// On mount, not in `main.ts`: the node does not exist until this renders.
+// `initRouting` runs before this and reads the URL fragment, so a window
+// opened at `#settings` has already switched by the time the library
+// registers, and `showView` sets `hidden` on every registered node when it
+// does. Registering late therefore cannot leave two views showing, because
+// the registration itself does not change what is current.
+$effect(() => {
+  registerView("library", libraryNode);
+});
+</script>
+
+<section bind:this={libraryNode} id="library-view">
+  <Library />
+</section>

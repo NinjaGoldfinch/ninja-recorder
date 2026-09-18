@@ -1,6 +1,7 @@
 import { assetUrl, call } from "./bridge";
 import { escapeHtml } from "./dom";
 import { formatTime, vodHeading } from "./format";
+import { laneOpponent } from "./lib/library/scoreboard";
 import { CLUSTER_PX, clusterCentre, clusterMarkers, leadMarker } from "./lib/timeline/clusters";
 import { downsample, MAX_RULER_LABELS, RULER_STEPS, rulerStep } from "./lib/timeline/graph";
 import { stemCorrection } from "./lib/timeline/stem";
@@ -13,7 +14,6 @@ import {
   viewingWindow,
   windowFraction as windowFractionIn,
 } from "./lib/timeline/window";
-import { laneOpponent } from "./library";
 import { currentView, showView } from "./router";
 import { toast } from "./toast";
 import type { AudioLayout, MarkerRow, RecordingRow, SampleRow } from "./types";

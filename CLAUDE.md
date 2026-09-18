@@ -51,7 +51,7 @@ disagreeing about the same file.
 | `src-tauri/src/ui/` (the Tauri commands; `client` has landed) | WS3 |
 | `src-tauri/src/recorder/own/` | WS1 task 1.6 |
 | `src-tauri/src/db/pool.rs` | WS6 |
-| `src/lib/` (`stores/` only; `contract/`, `transport/`, `styles/tokens.css` and `App.svelte` have landed) | WS2 / WS4 |
+| `src/lib/` (nothing left empty; `contract/`, `transport/`, `stores/`, `components/library/`, `styles/tokens.css` and `App.svelte` have all landed) | WS2 / WS4 |
 
 `src/lib/contract/` is **generated** once WS2.4 lands — committed and
 CI-checked, never hand-edited.
@@ -250,11 +250,13 @@ workstream should be rewritten to say what it means.
   shape of Option B, so "just hook it" is not a shortcut available anywhere.
 - **No `{@html}` on any recording-derived string.** `db::reconcile` imports
   whatever video file the user drops into the folder, so a filename is
-  untrusted input. v1 guards it with `escapeHtml`/`escapeAttr`
-  ([docs/frontend.md](docs/frontend.md)); Svelte's default text interpolation
-  replaces both, and `{@html}` opts straight back out of the thing that made
-  the migration safe. Until WS4 lands, `escapeAttr` for attribute values and
-  `escapeHtml` for text nodes still apply.
+  untrusted input and `vodTitle` falls back to it. Svelte's default text
+  interpolation is what replaces v1's `escapeHtml`/`escapeAttr`, and `{@html}`
+  opts straight back out of the thing that made the migration safe.
+  `Row.test.ts` has the tests that would catch it. **The vanilla half is not
+  finished**: `review.ts` and `settings.ts` still build markup by hand, so
+  `escapeAttr` for attribute values and `escapeHtml` for text nodes still apply
+  there until WS4.5.
 - **Pure decision + thin I/O wrapper.** `state_machine::machine`,
   `db::reconcile` and `retention::select_for_deletion` are pure and directly
   unit-tested; their wrappers are deliberately too small to hide a bug. Adding
@@ -331,6 +333,13 @@ workstream should be rewritten to say what it means.
   emitted TypeScript matches the declaration, which is a claim about two files,
   while that test proves `dispatch` can parse what the client actually sends,
   which is a claim about runtime.
+- **A migrated view registers itself with the router, and `registerView` sets
+  `hidden` from the current view.** A Svelte view has no id to look up before
+  it renders, so `App.svelte` hands its node over on mount, which is after
+  `initRouting` has read the URL fragment. A node that trusted its own default
+  would leave a window opened at `#settings` showing two views at once. If you
+  add a view, register it the same way and do not re-order `main.ts` to work
+  around it.
 - **Don't remove `theme.ts`'s matchMedia `change` listener.** It is the only
   thing making the "System" theme follow the OS, and no test covers it.
 - **The tokens live in one file, and `styles.css` imports it on its first

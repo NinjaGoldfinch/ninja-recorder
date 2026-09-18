@@ -57,6 +57,26 @@
   },
   "overrides": [
     {
+      // **A tool limitation, not debt.** Biome lints a `.svelte` file's
+      // `<script>` block and does not parse the template, so a prop or a
+      // `$derived` that only the markup reads looks unused to it. Every
+      // component would otherwise carry two or three false warnings, which
+      // is how a warning count stops meaning anything.
+      //
+      // A component imported only to be rendered is the same story, which is
+      // why `noUnusedImports` is off too.
+      //
+      // Only these two rules are off, and only here. Formatting, and every
+      // other lint, still apply. `svelte-check` is what actually type-checks
+      // these files, and it does see the template.
+      "includes": ["**/*.svelte"],
+      "linter": {
+        "rules": {
+          "correctness": { "noUnusedVariables": "off", "noUnusedImports": "off" }
+        }
+      }
+    },
+    {
       // **Dated debt, not a blanket — WS4.2 deletes this override.**
       //
       // These two files hold every remaining lint error in the tree: 8
