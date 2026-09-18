@@ -1306,7 +1306,31 @@ crash, it would quietly check the wrong place forever.
 
 `reqwest` fetches the artifact, `minisign-verify` checks it against the baked
 public key, the bytes are written to a temp directory, and the daemon runs them
-with `/S /UPDATE` and exits.
+with `/S /UPDATE /R` and exits.
+
+**`/R` is what starts the app again**, and its absence made the first working
+install look like a failed one: the update completed and nothing came back, so
+the machine had no recorder until someone launched it by hand. All three flags
+are parsed by the generated `installer.nsi`, which makes this list a contract
+with the bundle rather than with NSIS in general.
+
+**`/R` carries no `/ARGS`, and that is the decision rather than an omission.**
+It relaunches the main binary with no arguments, which is `Launch::Ui`, a
+window. The daemon is what was updating and the daemon is what has to exist
+afterwards, so `/ARGS --daemon` reads as the more correct answer. It is the
+worse one. Someone pressed Install in a window and watched it disappear;
+bringing back an invisible background process and nothing else is
+indistinguishable from an update that broke the app. A window comes back, finds
+nothing listening, and starts a daemon through `connect_or_start`, so both
+exist a second later and the visible one is the one that was asked for.
+
+**`installMode: "passive"` in `tauri.conf.json` is dead config.** It is read by
+`tauri-plugin-updater`, which stopped performing the install in WS3.6. The
+bundle's script does parse `/P` for passive mode, which would show a progress
+bar rather than nothing, and that is arguably the nicer experience. It is not
+worth taking on trust: `/S` is what has been observed installing correctly on
+real hardware, and changing it means verifying the change rather than assuming
+it.
 
 Three things about that order are deliberate.
 
