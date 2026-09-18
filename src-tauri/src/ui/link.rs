@@ -158,6 +158,38 @@ impl DaemonLink {
                             crate::tray::show_window(&app, view.as_deref());
                             continue;
                         }
+                        // **A daemon that left on purpose must not be replaced.**
+                        //
+                        // Losing the connection normally means the recorder
+                        // crashed, and the right answer is the one WS3.8 built:
+                        // say so, start another, reconnect. That answer is
+                        // exactly wrong when the recorder was *asked* to stop.
+                        // Tray Quit stopped the daemon and this process started
+                        // a fresh one seconds later, so the app could not be
+                        // quit from its own tray at all.
+                        //
+                        // The daemon has always said which it was. Nothing read
+                        // it until now.
+                        //
+                        // `Update` exits for a second reason on top of that
+                        // one: the installer is about to replace the binary
+                        // this process is running from, and a UI still holding
+                        // it open, or spawning a daemon out of it mid-install,
+                        // is a good way to make an install fail.
+                        //
+                        // `Error` deliberately falls through to the reconnect.
+                        // Nobody asked for that shutdown, so the strip saying
+                        // "the recorder is not running" is the truth, and
+                        // starting another is worth trying.
+                        if let crate::contract::events::Event::DaemonShuttingDown { reason } = &event
+                        {
+                            use crate::contract::events::ShutdownReason;
+                            if matches!(reason, ShutdownReason::Quit | ShutdownReason::Update) {
+                                info!("ui", "the recorder is stopping ({reason:?}); closing this window too");
+                                app.exit(0);
+                                continue;
+                            }
+                        }
                         // The v1 channels first, because the views that listen
                         // on them have not been rewritten yet.
                         relay_legacy(&app, &event);
