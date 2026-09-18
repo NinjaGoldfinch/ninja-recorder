@@ -1,4 +1,5 @@
 import { call } from "./bridge";
+import { whenDaemonReachable } from "./daemon";
 import { el, escapeAttr, escapeHtml } from "./dom";
 import { BYTES_PER_GB, formatBytes } from "./format";
 import { refreshDiskUsage, refreshLibrary } from "./library";
@@ -164,10 +165,26 @@ export function initSettings() {
 
   defaultAutostartHint = els.autostartHint.textContent ?? "";
 
-  void loadAutostart();
-  void loadRetentionPolicy();
-  void loadRecordingsDir();
-  void loadAudioSettings();
+  // **All four are RPCs, so all four wait for the daemon.** They ran on load
+  // and lost the same race the library used to: the window paints before the
+  // handshake completes, `Client::call` answers `Disconnected` by design, and
+  // each of these reported it as its own failure. The visible one was the
+  // start-on-login row reading "Couldn't read this setting: not connected to
+  // the recorder" on a perfectly healthy window.
+  //
+  // Missed when `main.ts`'s startup batch moved behind this, which is the
+  // argument for the seam being somewhere a reader trips over rather than a
+  // rule to remember: the fix looked complete and was not.
+  //
+  // Re-running on reconnect is right here for a reason beyond symmetry.
+  // `get_autostart` reads the registry rather than a cached pref, so what it
+  // returns can change while the window is open.
+  whenDaemonReachable(() => {
+    void loadAutostart();
+    void loadRetentionPolicy();
+    void loadRecordingsDir();
+    void loadAudioSettings();
+  });
   els.version.textContent = __APP_VERSION__;
 }
 
