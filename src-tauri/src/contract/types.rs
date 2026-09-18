@@ -74,6 +74,7 @@ macro_rules! all_boundary_types {
             crate::core::AutostartStatus,
             crate::core::DiskUsage,
             crate::core::LcuStatus,
+            crate::core::QuitOutcome,
             crate::db::MarkerRow,
             crate::db::RecordingRow,
             crate::db::RetentionPolicy,
@@ -170,7 +171,7 @@ mod tests {
             }};
         }
         let n = all_boundary_types!(check);
-        assert_eq!(n, 39, "the boundary type list changed; update the count deliberately");
+        assert_eq!(n, 40, "the boundary type list changed; update the count deliberately");
     }
 
     /// The decision above, made executable. Rendering with ts-rs's default

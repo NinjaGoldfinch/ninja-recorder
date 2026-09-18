@@ -744,6 +744,13 @@ macro_rules! production_form_table {
         danger: true,
         args: [],
     }
+    quit_recorder {
+        group: "Recorder",
+        danger: true,
+        args: [
+            { name: "force", kind: "boolean", default: "false", help: "quit even while a game is being recorded", optional: false },
+        ],
+    }
     is_recording {
         group: "Recorder",
         danger: false,

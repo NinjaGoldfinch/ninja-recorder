@@ -1911,6 +1911,51 @@ button.small {
   border-bottom-color: color-mix(in srgb, var(--loss-fg) 50%, transparent);
 }
 
+/* The close button's "quit anyway?" question (#136). A <dialog> rather than
+   window.confirm, which WebView2 renders as a bare system box carrying the
+   executable's path, and which blocks the whole webview while it is up. */
+.quit-dialog {
+  max-width: 30rem;
+  padding: 1.25rem 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background-color: var(--bg-surface);
+  color: var(--fg);
+}
+
+.quit-dialog::backdrop {
+  background-color: rgb(0 0 0 / 55%);
+}
+
+.quit-dialog h2 {
+  margin: 0 0 var(--sp-2);
+  font-size: 1.05rem;
+}
+
+.quit-dialog p {
+  margin: 0 0 var(--sp-4);
+  color: var(--fg-muted);
+  line-height: 1.5;
+}
+
+.quit-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
+/* The per-option explanations under the close-button setting. A list, because
+   three consequences run together in one paragraph is how nobody reads them. */
+.setting-choices {
+  margin: var(--sp-2) 0 0;
+  padding-left: 1.1rem;
+  list-style: disc;
+}
+
+.setting-choices li + li {
+  margin-top: var(--sp-1);
+}
+
 .toast {
   position: fixed;
   left: 50%;

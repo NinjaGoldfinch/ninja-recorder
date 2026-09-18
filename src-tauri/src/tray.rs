@@ -5,10 +5,17 @@
 //! process that must outlive the window is the one worth reaching. This file is
 //! what stayed behind: showing the window, and the close button's Quit.
 //!
-//! The name is now a little wrong and is kept anyway, because the two functions
-//! in it are still the tray's requests — they just arrive from another process
-//! as an `Event::ShowUi` off the pipe rather than from a menu callback in this
-//! one.
+//! The name is now a little wrong and is kept anyway, because what is left in
+//! it is still the tray's request — it just arrives from another process as an
+//! `Event::ShowUi` off the pipe rather than from a menu callback in this one.
+//!
+//! **`request_quit` used to live here and is gone.** It finalized through this
+//! process's supervisor, which has not been started since WS3.4 and holds a
+//! `FailedRecorder`, and then exited the window and nothing else: the daemon
+//! carried on recording with its tray icon still there. Quitting is two calls
+//! in order now, `quit_recorder` over the pipe and then `exit_ui`, made by the
+//! frontend because the question "a game is being recorded, quit anyway?"
+//! belongs in the window that asked (#136).
 //!
 //! **No tests live in this file, and none should.** It is reachable only from
 //! `lib.rs`'s `run()` and `ui::link`, which are dead code in a `cargo test`
@@ -21,7 +28,7 @@
 //! incident. Anything here worth testing — `CloseAction` parsing — belongs in
 //! `core`, which names no `tauri` type.
 
-use crate::{error, info};
+use crate::error;
 use tauri::{AppHandle, Manager};
 
 /// Emitted to the frontend to ask it to switch views. Carries the view name.
@@ -66,28 +73,5 @@ pub(crate) fn show_window(app: &AppHandle, view: Option<&str>) {
         if let Err(e) = crate::create_main_window(&app, view.as_deref()) {
             error!("tray", "could not open the window: {e}");
         }
-    });
-}
-
-/// Quits, finalizing an in-flight recording first so the game isn't lost.
-///
-/// The finalize runs on a blocking thread, never here: menu handlers run on
-/// the main thread, and `Supervisor::finalize_for_shutdown` does an ffmpeg
-/// remux and a retention sweep. Doing that inline would freeze the tray, the
-/// menu and every window for seconds.
-pub(crate) fn request_quit(app: &AppHandle) {
-    let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let supervisor = {
-            let state = app.state::<crate::AppState>();
-            std::sync::Arc::clone(&state.supervisor)
-        };
-        if supervisor.finalize_for_shutdown() {
-            info!("tray", "finalized an in-flight recording before quitting");
-        }
-        // `exit` rather than letting the last window close: this is the
-        // programmatic path, which `RunEvent::ExitRequested` sees as
-        // `code: Some(_)` and therefore does not veto.
-        app.exit(0);
     });
 }

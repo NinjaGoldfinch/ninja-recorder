@@ -185,6 +185,17 @@ export const COMMANDS: PortalCommand[] = [
     args: [],
   },
   {
+    name: "quit_recorder",
+    group: "Recorder",
+    dev: false,
+    overRpc: true,
+    danger: true,
+    description: "Stops the recorder itself, so nothing records in the background afterwards. Answers `recordingInFlight` instead of stopping when a game is being recorded and `force` is false; call again with `force` once the person has agreed.",
+    args: [
+      { name: "force", kind: "boolean", default: "false", help: "quit even while a game is being recorded", optional: false },
+    ],
+  },
+  {
     name: "is_recording",
     group: "Recorder",
     dev: false,

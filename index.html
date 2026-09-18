@@ -407,16 +407,31 @@
             <div class="setting-copy">
               <span class="setting-label">Close button</span>
               <p class="setting-hint">
-                ninja-recorder keeps recording in the tray either way &#8212;
-                only quitting stops it. &#8220;Close the window&#8221; frees
-                its memory; &#8220;Hide&#8221; keeps it loaded so reopening is
-                instant.
+                The recorder runs as its own background process, so closing the
+                window and quitting are not the same thing.
               </p>
+              <ul class="setting-hint setting-choices">
+                <li>
+                  <strong>Close the window</strong> frees the memory the window
+                  was using. Recording carries on, and the tray icon reopens it.
+                </li>
+                <li>
+                  <strong>Hide the window</strong> keeps it loaded so reopening
+                  is instant, at the cost of its memory the whole time.
+                  Recording carries on.
+                </li>
+                <li>
+                  <strong>Quit ninja-recorder</strong> stops the recorder too.
+                  <strong>Nothing is recorded in the background afterwards</strong>,
+                  until you open the app again. If a game is being recorded it
+                  asks first, and finishes saving that recording before exiting.
+                </li>
+              </ul>
             </div>
             <select id="close-action-select" aria-label="Close button">
-              <option value="close-window">Close the window</option>
-              <option value="hide">Hide the window</option>
-              <option value="quit">Quit ninja-recorder</option>
+              <option value="close-window">Close the window (keeps recording)</option>
+              <option value="hide">Hide the window (keeps recording)</option>
+              <option value="quit">Quit ninja-recorder (stops recording)</option>
             </select>
           </div>
         </section>
@@ -624,6 +639,20 @@
       </section>
     </main>
 
+    <dialog id="quit-dialog" class="quit-dialog">
+      <form method="dialog">
+        <h2>Quit while recording?</h2>
+        <p>
+          A game is being recorded right now. Quitting finishes and saves that
+          recording first, which takes a few seconds, and then nothing is
+          recorded in the background until you open ninja-recorder again.
+        </p>
+        <div class="quit-dialog-actions">
+          <button value="cancel" class="ghost">Keep recording</button>
+          <button value="quit" class="danger">Quit anyway</button>
+        </div>
+      </form>
+    </dialog>
     <div id="toast" class="toast" role="alert" hidden></div>
   </body>
 </html>

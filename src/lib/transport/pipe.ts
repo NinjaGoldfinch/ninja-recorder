@@ -36,6 +36,10 @@ import type { Transport } from "./index";
  */
 const DIRECT_COMMANDS = new Set([
   "open_recordings_folder",
+  // Ends *this* process. Sending it to the daemon would ask the recorder to
+  // exit, which is `quit_recorder`'s job and the opposite of what the window
+  // wants when it is only closing itself.
+  "exit_ui",
   "dev_open_portal",
   "dev_registered_commands",
 ]);
