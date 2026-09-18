@@ -637,6 +637,15 @@
           </dl>
         </section>
       </section>
+
+      <!-- Where the Svelte root mounts (WS4.1). Empty in the markup and empty
+           at runtime until WS4.3: `router.ts` owns what goes in it, and an
+           empty div in a block container takes no space, which is what lets
+           the seam land without the vanilla views moving a pixel. It is the
+           last child of .container deliberately, so a migrated view renders
+           in the same place, at the same width, as the section it replaces.
+           WS4.6 deletes the sections above it and this file with them. -->
+      <div id="svelte-root"></div>
     </main>
 
     <dialog id="quit-dialog" class="quit-dialog">

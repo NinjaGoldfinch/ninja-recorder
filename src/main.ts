@@ -4,11 +4,12 @@ import { initDaemonStatus, whenDaemonReachable } from "./daemon";
 import { initDesktop } from "./desktop";
 import { initDevPortal } from "./devportal";
 import { el } from "./dom";
+import App from "./lib/App.svelte";
 import { applyDefaultSort, initLibrary, refreshDiskUsage, refreshLibrary } from "./library";
 import { loadPrefs } from "./prefs";
 import { initQuit, quitEverything } from "./quit";
 import { initReview } from "./review";
-import { initRouting, registerView } from "./router";
+import { initRouting, mountApp, registerView } from "./router";
 import { initSettings, syncSettingsFromPrefs } from "./settings";
 import { initStatus } from "./status";
 import { applyThemePref, initTheme } from "./theme";
@@ -49,6 +50,13 @@ window.addEventListener("DOMContentLoaded", () => {
   // After the views are registered, so a `#settings` start or a tray
   // "Settings" click has something to switch to.
   initRouting();
+
+  // The Svelte root, beside the vanilla views rather than around them (WS4.1).
+  // It renders nothing yet; WS4.3 onwards moves views into it one at a time,
+  // each deleting its vanilla counterpart in the same commit. Mounted last so
+  // that a component throwing on the way up cannot take the working frontend
+  // with it — every `init*` above has already run by this line.
+  mountApp(App, el("#svelte-root"));
 
   // The backend pushes this after a finalize, after a retention deletion,
   // and after any dev-portal write. Before it existed, a recording the

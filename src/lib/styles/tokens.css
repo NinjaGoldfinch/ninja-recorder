@@ -1,15 +1,157 @@
-/*
+/* ---------------------------------------------------------------------
  * Design tokens — WS4 task 4.1.
  *
- * Empty on purpose. v1 has one 2,013-line global `src/styles.css`; v2 replaces
- * it with tokens here plus component-scoped styles in each `.svelte` file.
+ * Every custom property the app has, and the only place any of them is
+ * defined. They were **moved here from `src/styles.css`, not rewritten**:
+ * the values, the selectors and the cascade order are byte-for-byte what
+ * they were, because changing the tokens and changing where they live at
+ * the same time would make the visual diff unreadable. The next commit to
+ * touch a value has a one-file diff to show for it.
  *
- * The tokens come out of `styles.css`'s existing custom properties rather than
- * being invented: the theme switch in `theme.ts` already drives them, and
- * `docs/frontend.md` documents the theming flow. Changing the values and
- * changing the mechanism at the same time would make the visual diff
- * unreadable.
+ * `data-theme` on <html> is written by theme.ts and is only ever "light" or
+ * "dark" — never absent once the boot script in index.html has run. That is
+ * why there is no `@media (prefers-color-scheme: dark)` block here: the OS
+ * preference is resolved once, in JS, so "System" and an explicit "Light"
+ * on a dark OS both land on a single unambiguous attribute instead of
+ * fighting a media query for specificity.
  *
- * `styles.css` is deleted by WS4, not before — it is still the whole of the
- * app's appearance.
- */
+ * Only colour lives per-theme. Radii, spacing, type scale and motion are
+ * defined once — a token that differs between themes for any reason other
+ * than contrast is a bug.
+ *
+ * **Who loads this.** `styles.css` does, with an `@import` on its first
+ * line, so the tokens are in the `<link>` index.html resolves before first
+ * paint. Nothing else should: a second loader over a JS import arrives
+ * after that paint, which is the theme flash the inline boot script exists
+ * to prevent. When WS4.6 deletes `styles.css` and the markup with it, this
+ * file outlives both and the import moves to whatever loads first then.
+ *
+ * Component-scoped styles live in each `.svelte` file and are the other
+ * half of what replaces the 2,013-line global stylesheet.
+ * ------------------------------------------------------------------- */
+
+:root {
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-pill: 999px;
+
+  --sp-1: 0.25rem;
+  --sp-2: 0.5rem;
+  --sp-3: 0.75rem;
+  --sp-4: 1rem;
+  --sp-5: 1.5rem;
+  --sp-6: 2rem;
+
+  --fs-xs: 0.72rem;
+  --fs-sm: 0.8125rem;
+  --fs-md: 0.875rem;
+  --fs-base: 1rem;
+  --fs-lg: 1.125rem;
+  --fs-xl: 1.5rem;
+
+  --dur-fast: 120ms;
+  --dur: 180ms;
+  --ease: cubic-bezier(0.2, 0.6, 0.3, 1);
+
+  --content-max: 1120px;
+
+  --font-sans: -apple-system, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono", monospace;
+
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.5;
+  font-weight: 400;
+  color: var(--text);
+  background-color: var(--bg-app);
+  accent-color: var(--accent);
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-app: #f8f6fd;
+  --bg-surface: #ffffff;
+  --bg-surface-2: #f2eefb;
+  --bg-surface-hover: #efe9fb;
+  --bg-inset: #ece6f8;
+
+  --border: #e5def4;
+  --border-strong: #cdc0e9;
+
+  --text: #191233;
+  --text-muted: #5b5177;
+  --text-subtle: #857aa3;
+
+  --accent: #6d3fd4;
+  --accent-hover: #5c31bd;
+  --accent-contrast: #ffffff;
+  --accent-soft: #ebe3fd;
+  --accent-ring: rgba(109, 63, 212, 0.35);
+
+  --win-fg: #1c7c54;
+  --win-bg: #dcf5e9;
+  --loss-fg: #b3253f;
+  --loss-bg: #fde5ea;
+  --rec-fg: #d81b52;
+  --warn-fg: #a8650a;
+
+  --shadow-1: 0 1px 2px rgba(30, 16, 66, 0.06), 0 1px 3px rgba(30, 16, 66, 0.08);
+  --shadow-2: 0 4px 12px rgba(30, 16, 66, 0.1);
+  --shadow-3: 0 10px 28px rgba(30, 16, 66, 0.15);
+
+  /* Marker colours come from review.ts as event semantics, not chrome.
+   * They were picked against a light surface, so they only need lifting
+   * on dark. */
+  --marker-boost: none;
+
+  --glow: radial-gradient(900px 380px at 50% -220px, rgba(109, 63, 212, 0.13), transparent 70%);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-app: #100d17;
+  --bg-surface: #191524;
+  --bg-surface-2: #221c31;
+  --bg-surface-hover: #292139;
+  --bg-inset: #0b0910;
+
+  --border: #2e2640;
+  --border-strong: #43385c;
+
+  --text: #ece8f6;
+  --text-muted: #ada3c4;
+  --text-subtle: #7d7396;
+
+  /* The light theme's 600-weight accent goes muddy on a dark ground; this
+   * is the same hue lifted until it reads as luminous rather than dim. */
+  --accent: #a880ff;
+  --accent-hover: #bb9bff;
+  --accent-contrast: #170f2b;
+  --accent-soft: rgba(168, 128, 255, 0.16);
+  --accent-ring: rgba(168, 128, 255, 0.45);
+
+  --win-fg: #6ee7b7;
+  --win-bg: rgba(52, 211, 153, 0.14);
+  --loss-fg: #fb7185;
+  --loss-bg: rgba(244, 63, 94, 0.14);
+  --rec-fg: #fb7185;
+  --warn-fg: #f5b544;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.45);
+  --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.55);
+
+  --marker-boost: brightness(1.35) saturate(1.15);
+
+  --glow: radial-gradient(900px 380px at 50% -220px, rgba(168, 128, 255, 0.16), transparent 70%);
+}

@@ -1,3 +1,4 @@
+import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { defineConfig } from "vitest/config";
 
 /**
@@ -19,6 +20,18 @@ import { defineConfig } from "vitest/config";
  * module that loses its test is visible in the same directory listing.
  */
 export default defineConfig({
+  // The same plugin the app builds with, so a component under test is compiled
+  // the way it ships, reading the same `svelte.config.js`. HMR turns itself
+  // off outside `vite dev`, so there is nothing to pass here.
+  plugins: [svelte()],
+
+  resolve: {
+    // Without this, Node's own export conditions win and `svelte` resolves to
+    // its server build, where `mount` throws. The failure names neither Svelte
+    // nor this file, so it is worth the two lines to make impossible.
+    conditions: ["browser"],
+  },
+
   test: {
     // `format.ts` is pure and needs nothing; `router.ts` toggles the `hidden`
     // attribute on real elements, which is exactly the behaviour worth

@@ -6,14 +6,16 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "npm run typecheck && npm run check:svelte && vite build",
     "check": "biome ci .",
+    "typecheck": "node node_modules/@typescript/native/bin/tsc --noEmit",
+    "check:svelte": "svelte-check --tsconfig ./tsconfig.json --output human",
     "format": "biome check --write .",
     "test": "vitest run",
     "test:watch": "vitest",
     "preview": "vite preview",
     "tauri": "tauri",
-    "build:devtools": "tsc && NINJA_DEVTOOLS=1 vite build",
+    "build:devtools": "npm run typecheck && npm run check:svelte && NINJA_DEVTOOLS=1 vite build",
     "tauri:dev": "tauri dev --features devtools",
     "release": "node scripts/release.mjs"
   },
@@ -22,9 +24,13 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.13",
+    "@sveltejs/vite-plugin-svelte": "^7.3.0",
     "@tauri-apps/cli": "^2",
+    "@typescript/native": "npm:typescript@~7.0.2",
     "jsdom": "^30.0.1",
-    "typescript": "~7.0.2",
+    "svelte": "^5.57.0",
+    "svelte-check": "^4.7.6",
+    "typescript": "~6.0.3",
     "vite": "^8.3.0",
     "vitest": "^5.0.0"
   }
