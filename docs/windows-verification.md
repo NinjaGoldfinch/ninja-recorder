@@ -163,6 +163,12 @@ the window will show whatever it held when the connection died. That is fixed
 in #135; on a build without it, a stale grid after a reconnect is expected
 rather than a new finding.
 
+**2026-09-18, alpha.49: the recording survives and the markers do not.** The
+strip appeared and stayed, the window started another daemon and cleared it by
+itself, and the partial file is playable. The rows about the row and its markers
+fail, for the reason #150 sets out: markers are only written at finalize, so
+killing the daemon loses every one.
+
 - [ ] Start a recording. Kill **the daemon** from Task Manager mid-game.
 - [ ] The window says the recorder is not running, in a strip under the app bar
       that stays until it is no longer true. It must not be a toast that
@@ -172,8 +178,16 @@ rather than a new finding.
       point it was cut off, which is the guarantee that survives a crash.
 - [ ] The row is reconciled on the next startup scan: it appears in the library
       with a duration read back from the file, rather than being lost.
-- [ ] Nothing is lost that was already written. Markers up to the kill are in
-      the row.
+- [ ] ~~Nothing is lost that was already written. Markers up to the kill are in
+      the row.~~ **This row was wrong and is retained struck through rather than
+      deleted, because it was tested against and it failed.** Nothing *is*
+      written until finalize: `insert_markers` has one caller, in the
+      supervisor's finalize path, and markers live in memory for the whole game
+      until then. A killed daemon loses all of them, and the next recording to
+      finish inherits them at offsets belonging to the killed one, because the
+      Live Client Data API serves the whole game's event list rather than the
+      events since the last poll. Tracked in #150, which is where the fix is
+      being designed; replace this row when it lands.
 
 And the version-skew case, which is the one that does **not** recover:
 
