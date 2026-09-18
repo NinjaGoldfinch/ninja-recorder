@@ -337,6 +337,7 @@ mod tests {
             path: path.display().to_string(),
             started_at: 0,
             size_bytes: 4,
+            finished_at: Some(1),
             ..Default::default()
         })
         .unwrap();
