@@ -84,7 +84,7 @@ supervisor is the only thing that executes them, so "what should happen" and
 | Signal | Source | Cadence |
 |---|---|---|
 | `LockfileChanged` | `lcu::lockfile::watch` | poll every 2 s, backing off to 30 s while absent |
-| `GameflowPhase` | `lcu::gameflow::watch` | LCU WebSocket, falling back to 1 s polling. Both read the *current* phase on connect, not just changes to it |
+| `GameflowPhase` | `lcu::gameflow::watch` | LCU WebSocket, falling back to 1 s polling. Both read the *current* phase on connect, not just changes to it. The socket lasts two to three minutes and is re-established; see below |
 | `LiveClientUp` / `LiveClientDown` | `live_client::poller::watch` | 1 Hz. `Down` needs 5 consecutive *transport* failures, ~5 s; backoff to 10 s only once down |
 | `FinalizeComplete` | the supervisor itself, after `stop()` and teardown | once per game |
 
@@ -92,6 +92,32 @@ Alongside those, one request that drives no transition: entering
 `WaitingForGame` also fires a single `GET /lol-gameflow/v1/session` to learn
 *which* game is starting: `gameId`, the real `queueId`, and whether it is a
 custom. See "Identifying the game" below.
+
+#### The gameflow socket is short-lived, and that is absorbed by design
+
+An alpha.49 log showed the LCU event socket living two to three minutes and
+then being re-established, repeatedly (#146). Nothing breaks, because the
+reconnect reads the current phase over HTTP immediately after subscribing and
+`last` de-duplicates, so a change landing in the two-second gap is picked up by
+that read rather than lost. That ordering is the one "Subscribes to phase-change
+events, **and reads the phase we are already in**" already argues for.
+
+It was invisible for a different reason: a stream that simply ends falls out of
+the read loop and returns `Ok(())`, which the caller treats as nothing worth
+mentioning. Two of the three closes in that log produced no line at all, and the
+only reason anyone noticed was that #142 had made the *reconnect* announce
+itself. Each connection now logs one line when it ends, carrying how long it
+lived, how many frames of each kind it saw, and the close code and reason if the
+peer sent one. The read loop used to discard `Message::Close` along with
+everything that was not text, which is exactly the frame that answers why.
+
+**Pongs are not ours to send.** A plausible reading of the code is that nothing
+writes after the initial subscribe, so an LCU ping would go unanswered and the
+server would drop us on a timer. That is not what happens: tungstenite queues a
+pong for every ping and flushes it from inside `read`, which is what
+`ws.next()` drives, so replying manually is wrong rather than missing. The ping
+and pong counts are in the close line so a real session can show whether the
+client pings at all.
 
 ### The capture backend's warm window
 
