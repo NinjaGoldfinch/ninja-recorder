@@ -61,6 +61,30 @@ describe("the pipe transport", () => {
   });
 
   /**
+   * **Routing this one wrong quits the wrong process.** `exit_ui` ends the
+   * window; `quit_recorder` ends the recorder, and the quit flow calls both,
+   * in that order. Sent down the pipe, `exit_ui` would either be refused as an
+   * unknown command, leaving a window that will not close, or worse, reach
+   * something that acted on it.
+   */
+  it("keeps exit_ui in the process it is supposed to exit", async () => {
+    await pipeTransport.invoke("exit_ui", {});
+
+    expect(invoke).toHaveBeenCalledWith("exit_ui", {});
+    expect(invoke).not.toHaveBeenCalledWith("rpc_call", expect.anything());
+  });
+
+  /** And its other half goes to the daemon, which is the process that records. */
+  it("sends quit_recorder to the recorder", async () => {
+    await pipeTransport.invoke("quit_recorder", { force: false });
+
+    expect(invoke).toHaveBeenCalledWith("rpc_call", {
+      command: "quit_recorder",
+      args: { force: false },
+    });
+  });
+
+  /**
    * The portal decides whether it exists by watching this call reject in a
    * shipped build. Routed through `rpc_call` it would reject in *every* build,
    * with "unknown command", permanently hiding the button.

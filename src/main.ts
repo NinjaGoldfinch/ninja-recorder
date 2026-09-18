@@ -6,6 +6,7 @@ import { initDevPortal } from "./devportal";
 import { el } from "./dom";
 import { applyDefaultSort, initLibrary, refreshDiskUsage, refreshLibrary } from "./library";
 import { loadPrefs } from "./prefs";
+import { initQuit, quitEverything } from "./quit";
 import { initReview } from "./review";
 import { initRouting, registerView } from "./router";
 import { initSettings, syncSettingsFromPrefs } from "./settings";
@@ -29,6 +30,8 @@ window.addEventListener("DOMContentLoaded", () => {
   registerView("settings", el("#settings-view"));
 
   initToast();
+  // Before the close button can be pressed, which is immediately.
+  initQuit();
   // Before the views: if the recorder is not running, that is the first thing
   // worth saying, and the views below will be showing stale or empty data
   // because of it.
@@ -52,6 +55,13 @@ window.addEventListener("DOMContentLoaded", () => {
   // supervisor had just finished stayed invisible until the user happened
   // to press Refresh. `.catch` because `listen` rejects outright outside
   // the Tauri webview, and bridge.ts deliberately supports running there.
+  // The close action is `quit`, and `lib.rs` has vetoed the close so this can
+  // run. Two processes have to stop, in order, and the person may have to be
+  // asked first: `quit.ts` owns all of that.
+  listen("quit-requested", () => {
+    void quitEverything();
+  }).catch((err) => console.warn("quit-requested listener unavailable:", err));
+
   listen("library-changed", () => {
     void refreshLibrary();
     void refreshDiskUsage();
