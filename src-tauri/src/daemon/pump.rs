@@ -158,7 +158,17 @@ mod win32 {
             }
         }));
 
-        let mut builder = TrayIconBuilder::new().with_tooltip("ninja-recorder").with_menu(Box::new(menu));
+        // **`with_menu_on_left_click(false)` is load-bearing.** `tray-icon`
+        // defaults it to *true*, so the menu opened on a left click as well as
+        // a right one, and the handler above fired underneath it. The comment
+        // there describes the intent correctly and the default quietly
+        // contradicted it: left-click is "open the app" on Windows, and a menu
+        // that appears for both gestures makes the icon's primary action
+        // unreachable.
+        let mut builder = TrayIconBuilder::new()
+            .with_tooltip("ninja-recorder")
+            .with_menu(Box::new(menu))
+            .with_menu_on_left_click(false);
         match icon() {
             Some(icon) => builder = builder.with_icon(icon),
             // Without an icon the tray is an invisible click target. v1 skips
