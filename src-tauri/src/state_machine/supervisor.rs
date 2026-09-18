@@ -1114,6 +1114,12 @@ impl Supervisor {
                         .as_ref()
                         .and_then(|s| s.players.iter().find(|p| p.is_us))
                         .map(|p| p.cs),
+                    // **This is what puts the row in the library** (#150). A
+                    // row exists from the moment recording starts so markers
+                    // have somewhere to go; until this is set it is hidden,
+                    // which is what keeps a half-written file and a recording
+                    // a killed daemon abandoned out of the grid.
+                    finished_at: Some(timestamp_millis()),
                     ..Default::default()
                 }) {
                     Ok(id) => {

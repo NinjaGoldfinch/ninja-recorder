@@ -62,11 +62,22 @@ pub fn reconcile(
             // leaves the probed duration in place; that race predates this
             // and costs a slightly short length on one recording.
             let duration_s = ffmpeg.and_then(|ffmpeg| crate::probe::duration_s(ffmpeg, &path));
+            let modified = file_modified_millis(&metadata);
             db.insert_recording(&NewRecording {
                 path: path_str,
-                started_at: file_modified_millis(&metadata),
+                started_at: modified,
                 size_bytes: metadata.len() as i64,
                 duration_s,
+                // **Imported files are finished, and saying so is not
+                // optional** (#150). A row with no `finished_at` is hidden
+                // from the library, so leaving this `None` would import every
+                // untracked recording straight into invisibility.
+                //
+                // The file's own mtime is the only end time available. It is
+                // the same value `started_at` gets, which is honest about how
+                // little is known: a file found on disk has no session behind
+                // it to ask.
+                finished_at: Some(modified),
                 ..Default::default()
             })?;
             report.imported += 1;
@@ -114,6 +125,7 @@ mod tests {
         db.insert_recording(&NewRecording {
             path: dir.join("gone.mp4").to_string_lossy().to_string(),
             started_at: 1,
+            finished_at: Some(1),
             ..Default::default()
         })
         .unwrap();
@@ -195,6 +207,7 @@ mod tests {
             path: file_path.to_string_lossy().to_string(),
             started_at: 1,
             champion: Some("Ahri".into()),
+            finished_at: Some(1),
             ..Default::default()
         })
         .unwrap();
