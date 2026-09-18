@@ -1272,8 +1272,8 @@ crash, it would quietly check the wrong place forever.
 ### Installing one
 
 `reqwest` fetches the artifact, `minisign-verify` checks it against the baked
-public key, `zip` unpacks the installer out of it, and the daemon runs it with
-`/S /UPDATE` and exits.
+public key, the bytes are written to a temp directory, and the daemon runs them
+with `/S /UPDATE` and exits.
 
 Three things about that order are deliberate.
 
@@ -1287,9 +1287,27 @@ public key is a second copy of what `tauri.conf.json` carries, pinned by a test:
 a mismatch fails closed, which is the right way round, and is still worth
 checking rather than hoping.
 
-**The archive is remote input.** Only the final component of an entry's name is
-used, so an entry called `..\..\something.exe` writes into the temp directory
-chosen here rather than wherever it pointed. There is a test for it.
+**The artifact is the installer, and this took a first run to find out.** The
+code unzipped, on the strength of a comment saying Tauri's NSIS updater artifact
+is a zip with the setup executable inside it. That was Tauri v1's shape. Since
+v2 `createUpdaterArtifacts` emits `<app>_<version>_x64-setup.exe` beside a
+`.sig` signing those exact bytes, and the manifest's `url` points at the `.exe`.
+So the daemon downloaded a PE, looked for an end-of-central-directory record
+that a PE does not have, and every install ended at "The update is not a
+readable archive: invalid Zip archive: Could not find EOCD".
+
+It passed every gate. The download and the signature check are covered against
+a local server, the refusal paths are covered, and the one step in between was
+described by a comment rather than exercised by anything, because exercising it
+needs a published release and an installed build to update from. This is what
+§5.0.4 meant by "never run end to end", and it is what running it found on the
+first attempt.
+
+Dropping the unzip dropped a whole class of problem with it. An archive's entry
+names are remote input and had to be defended against naming a path outside the
+temp directory; a file name taken from our own manifest's URL, reduced to its
+final component and required to end in `.exe`, has nowhere else to go. The
+`zip` crate went with the code that used it.
 
 The refusal while recording is `core::install_update`'s gate, unchanged, and it
 is the reason the whole updater is in this process: `installable` takes the
