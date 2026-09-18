@@ -79,6 +79,21 @@ impl PendingMarker {
     }
 }
 
+/// One resolved marker as the `markers` table stores it.
+///
+/// A free function with two callers, which is the reason it exists: markers
+/// are written twice now, once as they arrive during the game and once at
+/// finalize against the final alignment (#150). Two copies of this mapping
+/// would be two places for a column to be forgotten.
+fn marker_row(m: &SessionMarker) -> db::NewMarker {
+    db::NewMarker {
+        game_time_s: m.marker.game_time_s,
+        video_time_s: m.video_time_s,
+        kind: m.marker.kind.as_str().to_string(),
+        payload_json: m.marker.payload.to_string(),
+    }
+}
+
 /// An advantage-curve sample before its video position is known. See
 /// `PendingMarker` for why the mapping is deferred.
 #[derive(Debug, Clone)]
@@ -233,6 +248,14 @@ pub struct RecordingDiagnostics {
 }
 
 struct RecordingSession {
+    /// The `recordings` row opened when capture started, if it could be.
+    ///
+    /// `Some` is the normal case and is what lets markers be written as they
+    /// arrive rather than at finalize (#150). `None` means the start-insert
+    /// failed, which costs this recording the crash-safety and nothing else:
+    /// the finalize falls back to `insert_recording` and behaves exactly as
+    /// it did before this existed.
+    recording_id: Option<i64>,
     tracker: MarkerTracker,
     markers: Vec<PendingMarker>,
     samples: Vec<PendingSample>,
@@ -909,14 +932,48 @@ impl Supervisor {
         };
         let elapsed_s = session.record_started_at.elapsed().as_secs_f64();
         let added = session.ingest(&snapshot, elapsed_s);
+        let recording_id = session.recording_id;
         // The session lock is dropped before publishing: `publish` runs the
         // sink inline, and holding this across it would put a `lib.rs` closure
         // inside the lock that every poll and the whole finalize contend for.
         drop(guard);
+
+        // **Written now, not at finalize** (#150). This is the whole fix: a
+        // daemon killed from here on leaves these markers in the database
+        // attached to a real row, instead of taking every one of them with it.
+        //
+        // Positions are provisional in the same way the published event below
+        // is provisional, and for the same reason: a marker seen during the
+        // loading screen, before game time ever advanced, resolves against a
+        // 1:1 fallback that a later poll improves on. The finalize deletes
+        // these and re-inserts them against the final alignment, so the
+        // durable answer is never worse than it was before. What changes is
+        // that there is an answer at all when the finalize never runs.
+        //
+        // Only when there were markers: a quiet poll must not open a write
+        // transaction, and at 1 Hz for a 30-minute game most polls are quiet.
+        if let Some(id) = recording_id
+            && !added.is_empty()
+        {
+            let rows: Vec<db::NewMarker> = added.iter().map(marker_row).collect();
+            if let Err(e) = self.db.insert_markers(id, &rows) {
+                // Logged, never fatal. The in-memory copy is still there and
+                // the finalize will write it, which is exactly the behaviour
+                // this replaced.
+                warn!(
+                    "state_machine",
+                    "could not write {} live marker(s) for recording {id}: {e}",
+                    rows.len()
+                );
+            }
+        }
+
         for marker in added {
-            // `None`: the library row does not exist until finalize. A client
-            // correlates these against the `RecordingStarted` it has already
-            // seen, which is what `file_stem` is for.
+            // `None` even though a row now exists. The row is deliberately not
+            // a library entry until it is finished, so handing out its id
+            // would invite a client to look up something `list_recordings`
+            // hides. Correlation stays what it was: the `RecordingStarted`
+            // the client has already seen, and its `file_stem`.
             self.publish(crate::contract::events::Event::MarkerAdded {
                 recording_id: None,
                 marker,
@@ -962,9 +1019,40 @@ impl Supervisor {
                 Default::default()
             }),
         };
+        // Read before `start` consumes the config. A prediction of where the
+        // backend will write, which is enough for the row below: the finalize
+        // corrects it by id from what `stop` actually reports.
+        let expected_path = config.expected_output_path();
         match self.recorder.lock().unwrap().start(config) {
             Ok(()) => {
+                // The row goes in now, unfinished, so that markers have
+                // somewhere to go for the rest of the game (#150). Before
+                // this, every marker lived in the `markers` vec below until
+                // finalize, and a daemon killed mid-game took all of them
+                // with it while leaving a perfectly playable file behind.
+                //
+                // Unfinished means `finished_at IS NULL`, which keeps it out
+                // of the library and away from retention until a finalize or
+                // a recovery pass completes it.
+                //
+                // A failure here is logged and carried: recording without
+                // crash-safe markers is worth more than not recording.
+                let recording_id = match self
+                    .db
+                    .begin_recording(&expected_path.display().to_string(), started_at_millis)
+                {
+                    Ok(id) => Some(id),
+                    Err(e) => {
+                        error!(
+                            "state_machine",
+                            "could not open a recording row ({e}); markers for this game will \
+                             only be written at finalize"
+                        );
+                        None
+                    }
+                };
                 *self.session.lock().unwrap() = Some(RecordingSession {
+                    recording_id,
                     tracker: MarkerTracker::new(),
                     markers: Vec::new(),
                     samples: Vec::new(),
@@ -1088,7 +1176,7 @@ impl Supervisor {
                     }
                 };
 
-                let recording_id = match self.db.insert_recording(&db::NewRecording {
+                let row = db::NewRecording {
                     path: path_str.clone(),
                     started_at,
                     duration_s,
@@ -1121,17 +1209,48 @@ impl Supervisor {
                     // a killed daemon abandoned out of the grid.
                     finished_at: Some(timestamp_millis()),
                     ..Default::default()
-                }) {
+                };
+
+                // **By id when there is one** (#150). The row was opened when
+                // recording started and already owns this game's markers, so
+                // it has to be the row that gets finished. `insert_recording`
+                // upserts on `path` instead, and the path a recording started
+                // with is only a prediction of the one it ends with: where the
+                // two differ it would finish a *different* row and strand the
+                // markers on an unfinished one nothing ever shows.
+                //
+                // The fallback is not dead code. A recording already in flight
+                // when this version started has no id, and neither has one
+                // whose start-insert failed; both finalize exactly as they did
+                // before, which is the behaviour this is a strict improvement
+                // on rather than a replacement for.
+                let started_id = session.as_ref().and_then(|s| s.recording_id);
+                let written = match started_id {
+                    Some(id) => self.db.finish_recording(id, &row).map(|()| id),
+                    None => self.db.insert_recording(&row),
+                };
+
+                let recording_id = match written {
                     Ok(id) => {
-                        let new_markers: Vec<db::NewMarker> = markers
-                            .iter()
-                            .map(|m| db::NewMarker {
-                                game_time_s: m.marker.game_time_s,
-                                video_time_s: m.video_time_s,
-                                kind: m.marker.kind.as_str().to_string(),
-                                payload_json: m.marker.payload.to_string(),
-                            })
-                            .collect();
+                        // Delete then insert, rather than append. Markers
+                        // written during the game were resolved against
+                        // whatever alignment was known at the time; the ones
+                        // captured before game time first advanced used a 1:1
+                        // fallback and are corrected here, against the
+                        // alignment the whole game proved. Appending would
+                        // leave both copies in the timeline.
+                        //
+                        // A delete that fails is worth reporting and worth
+                        // continuing past: duplicated markers are a worse
+                        // timeline than none, but both beat losing the row.
+                        if let Err(e) = self.db.delete_markers(id) {
+                            error!(
+                                "state_machine",
+                                "failed to clear the live markers for recording {id}: {e}"
+                            );
+                        }
+                        let new_markers: Vec<db::NewMarker> =
+                            markers.iter().map(marker_row).collect();
                         if let Err(e) = self.db.insert_markers(id, &new_markers) {
                             error!(
                                 "state_machine",
@@ -1712,6 +1831,10 @@ mod tests {
 
     fn empty_session() -> RecordingSession {
         RecordingSession {
+            // These tests drive `ingest` directly, with no database behind
+            // them: `None` is the "the start-insert did not happen" case, and
+            // exercising it here keeps the fallback path honest.
+            recording_id: None,
             tracker: MarkerTracker::new(),
             markers: Vec::new(),
             samples: Vec::new(),
@@ -1976,6 +2099,143 @@ mod tests {
         assert_eq!(rows[0].kda_d, Some(1));
         assert_eq!(rows[0].kda_a, Some(2));
         assert_eq!(rows[0].game_mode.as_deref(), Some("CLASSIC"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- A killed daemon keeps its markers (#150) -------------------------
+
+    /// **The bug, reproduced.** Markers used to live in `session.markers`
+    /// for the whole game and reach SQLite once, at finalize, so a daemon
+    /// killed mid-game took every one of them with it while leaving a
+    /// perfectly playable file behind.
+    ///
+    /// Not calling `stop_recording` is the kill: that is precisely what a
+    /// process dying does, and what the state machine's finalize is the only
+    /// caller of.
+    #[test]
+    fn a_killed_daemon_leaves_its_markers_in_the_database() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+        sup.on_snapshot(snapshot(210.5, &[3]));
+
+        // The daemon dies here. No finalize, ever.
+
+        let open = sup.db.unfinished_recordings().unwrap();
+        assert_eq!(open.len(), 1, "the recording opened a row when it started");
+
+        let markers = sup.db.get_markers(open[0].id).unwrap();
+        assert_eq!(markers.len(), 1, "written as it arrived, not held for a finalize");
+        assert_eq!(markers[0].game_time_s, 210.5);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The other half of the same decision: the row exists, and it is still
+    /// not a library entry. A card with no duration, no champion and a
+    /// growing file behind it is not something to put in front of someone,
+    /// and one left by a crash would sit there forever looking broken.
+    #[test]
+    fn the_row_a_recording_opens_is_not_in_the_library_yet() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+        sup.on_snapshot(snapshot(210.5, &[3]));
+
+        assert!(
+            sup.db.list_recordings().unwrap().is_empty(),
+            "an unfinished recording is not a library entry"
+        );
+        assert_eq!(sup.db.unfinished_recordings().unwrap().len(), 1);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A finalize must complete the row the recording opened, not add a
+    /// second one beside it. Getting this wrong strands the markers written
+    /// during the game on a row nothing ever shows.
+    #[test]
+    fn a_finalize_completes_the_row_the_recording_opened() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+        let opened = sup.db.unfinished_recordings().unwrap()[0].id;
+
+        sup.on_snapshot(snapshot(210.5, &[3]));
+        sup.stop_recording();
+
+        let rows = sup.db.list_recordings().unwrap();
+        assert_eq!(rows.len(), 1, "one row, not one per phase");
+        assert_eq!(rows[0].id, opened, "the same row, finished");
+        assert!(sup.db.unfinished_recordings().unwrap().is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The finalize deletes and re-inserts rather than appending. Appending
+    /// would leave every marker in the timeline twice: once from the poll
+    /// that saw it, once from the finalize that resolved it against the
+    /// alignment the whole game proved.
+    #[test]
+    fn a_finalize_replaces_the_live_markers_rather_than_appending() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+
+        // Two polls carrying the same event, then a third carrying a
+        // second. The tracker dedupes by event id, so this is two markers
+        // written live across three polls.
+        sup.on_snapshot(snapshot(210.5, &[3]));
+        sup.on_snapshot(snapshot(211.5, &[3]));
+        sup.on_snapshot(snapshot(540.0, &[3, 8]));
+
+        let id = sup.db.unfinished_recordings().unwrap()[0].id;
+        let live = sup.db.get_markers(id).unwrap().len();
+        assert_eq!(live, 2, "deduped by event id while the game ran");
+
+        sup.stop_recording();
+
+        assert_eq!(
+            sup.db.get_markers(id).unwrap().len(),
+            live,
+            "the finalize rewrites the markers, it does not add to them"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The correction the delete-and-reinsert exists for. A marker seen
+    /// before game time ever advanced is resolved against a 1:1 fallback
+    /// when it is written live, and against the alignment the game proved
+    /// once there is one. The durable answer is the second.
+    #[test]
+    fn the_finalize_corrects_a_marker_written_before_the_clock_moved() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+
+        // The loading screen: game time pinned at 0 while capture runs on.
+        // The event's own clock reads 210.5, and with no alignment proven
+        // yet it resolves 1:1 against that.
+        sup.on_snapshot(snapshot(0.0, &[3]));
+        let id = sup.db.unfinished_recordings().unwrap()[0].id;
+        let live = sup.db.get_markers(id).unwrap()[0].video_time_s;
+        assert_eq!(live, 210.5, "the 1:1 fallback, which is all there is to go on");
+
+        // Now the clock jumps to 30s while barely any capture time has
+        // passed, which proves an offset of about -30.
+        sup.on_snapshot(snapshot(30.0, &[3]));
+        sup.stop_recording();
+
+        let settled = sup.db.get_markers(id).unwrap();
+        assert_eq!(settled.len(), 1);
+        assert_ne!(
+            settled[0].video_time_s, live,
+            "the live value was provisional and the finalize was supposed to replace it"
+        );
+        // 210.5 game seconds, less the ~30s the alignment proved the video
+        // runs behind by. Within a second because `elapsed_s` is a real clock.
+        assert!(
+            (settled[0].video_time_s - 180.5).abs() < 1.0,
+            "resolved against the proven alignment, not the fallback: {}",
+            settled[0].video_time_s
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

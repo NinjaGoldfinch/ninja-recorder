@@ -257,6 +257,16 @@ workstream should be rewritten to say what it means.
   `db::reconcile` and `retention::select_for_deletion` are pure and directly
   unit-tested; their wrappers are deliberately too small to hide a bug. Adding
   I/O or a clock read to a pure function removes its test coverage.
+- **A `recordings` row is opened when capture starts and finished by id.**
+  `begin_recording` writes it with a NULL `finished_at`, which is what keeps an
+  in-progress or abandoned recording out of the library; `finish_recording`
+  completes it **by id**, because the path a recording starts with is a
+  prediction and the path it ends with is a fact. Markers are written as each
+  poll produces them and rewritten at finalize. If you add a writer, decide
+  which of those it is: `insert_recording` upserts on `path` and is now only
+  for `reconcile` and the no-id fallback. A new query that lists recordings has
+  to decide whether it wants `finished_at IS NOT NULL`, and the answer is
+  almost always yes (DEVELOPMENT.md §4.3).
 - **Append migrations, never edit them.** Shipped builds have already run the
   old ones. WS6 changed connection handling, not the schema.
 - **A `Db` method reads or it writes, and the connection enforces which.**
