@@ -35,6 +35,8 @@ flowchart TB
     BRIDGE --> CONTRACT
     APP["lib/App.svelte<br/><small>the Svelte root: empty until WS4.3</small>"]
     TOKENS["lib/styles/tokens.css<br/><small>every custom property,<br/>imported by styles.css</small>"]
+    TL["lib/timeline/<br/><small>window, clusters, graph, stem<br/>pure, tested</small>"]
+    LIBP["lib/library/<br/><small>filters, sort<br/>pure, tested</small>"]
     DOM["dom.ts<br/><small>el, escapeHtml, escapeAttr</small>"]
     FMT["format.ts<br/><small>pure formatters + label fallbacks</small>"]
     TYPES["types.ts<br/><small>mirrors the Rust serde structs</small>"]
@@ -68,6 +70,8 @@ flowchart TB
     UPDATE --> DOM
     UPDATE --> PREFS
     SETTINGS --> UPDATE
+    LIB --> LIBP
+    REVIEW --> TL
     LIB --> FMT
     REVIEW --> FMT
     LIB --> DOM
@@ -78,6 +82,8 @@ flowchart TB
     style BRIDGE fill:#e3f2fd,stroke:#1565c0
     style APP fill:#fff3e0,stroke:#ef6c00
     style TOKENS fill:#fff3e0,stroke:#ef6c00
+    style TL fill:#e8f5e9,stroke:#2e7d32
+    style LIBP fill:#e8f5e9,stroke:#2e7d32
 ```
 
 `types.ts` sits apart deliberately: putting each shape beside its first
@@ -945,6 +951,40 @@ in normal use.
 
 `main.ts` mounts last, after every `init*` has run, so a component throwing on
 the way up cannot take a working frontend down with it.
+
+### The pure logic comes out first
+
+WS4.2 moved the decisions out of `review.ts` and `library.ts` ahead of the
+views that will replace them, into `lib/timeline/` and `lib/library/`. Nothing
+changed behaviour; what changed is that all of it is now reachable without a
+DOM.
+
+| Module | What it owns |
+|---|---|
+| `timeline/window.ts` | which slice of the file is the game: the lead-in skip, the tail clip and its three refusals, and every fraction drawn along the timeline |
+| `timeline/clusters.ts` | markers too close together to draw separately, and which icon a cluster shows |
+| `timeline/graph.ts` | the advantage curve's max-abs downsampling, and the ruler's tick spacing |
+| `timeline/stem.ts` | whether a drifting audio stem is nudged back or seeked |
+| `library/filters.ts` | which recordings the library shows, and whether anything is narrowing it |
+| `library/sort.ts` | facet ordering, and the row order the sort control picks |
+
+These were not untested by oversight. Every one of them read module-level
+mutable state or a form control, so asking "does a pinned-only filter hide an
+unpinned row" meant building a settings form, and exercising the tail clip
+meant constructing a review view with a loaded video. Taking that state as
+arguments is the whole of the change.
+
+Two things the extraction is careful about. `library.ts` still owns the
+controls: it reads them into a `LibraryFilters` and hands that over, so
+nothing under `lib/` knows an element exists. And `vodTitle` is injected into
+the filter predicate rather than imported, so the champion box can be tested
+against a title that says what the test means instead of against the
+fallback-to-filename rules, which have tests of their own.
+
+**Coverage is scoped to `src/lib/`** and floored at 80% by
+`npm run coverage`. Measuring the whole of `src/` would report a number
+dominated by the DOM wiring being strangled, which is not what the number is
+supposed to mean.
 
 ### What has moved across
 

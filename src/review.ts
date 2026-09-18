@@ -1,6 +1,18 @@
 import { assetUrl, call } from "./bridge";
 import { escapeHtml } from "./dom";
 import { formatTime, vodHeading } from "./format";
+import { CLUSTER_PX, clusterCentre, clusterMarkers, leadMarker } from "./lib/timeline/clusters";
+import { downsample, MAX_RULER_LABELS, RULER_STEPS, rulerStep } from "./lib/timeline/graph";
+import { stemCorrection } from "./lib/timeline/stem";
+import {
+  clamp,
+  displayTime as displayTimeIn,
+  measureGameEnd,
+  measureGameStart,
+  type ViewingWindow,
+  viewingWindow,
+  windowFraction as windowFractionIn,
+} from "./lib/timeline/window";
 import { laneOpponent } from "./library";
 import { currentView, showView } from "./router";
 import { toast } from "./toast";
@@ -23,26 +35,6 @@ const MARKER_STYLE: Record<string, { icon: string; label: string; color: string 
   first_blood: { icon: "🩸", label: "First Blood", color: "#d81b60" },
 };
 
-// When several markers collapse into one timeline glyph, the cluster shows
-// a single icon — this is which one wins. Ordered by how much the event
-// changes what you're looking for in a VOD: your own deaths and kills first,
-// then objectives by value, with assists last because they're the most
-// numerous and the least individually interesting.
-const MARKER_PRIORITY = [
-  "multikill",
-  "death",
-  "kill",
-  "baron",
-  "dragon",
-  "herald",
-  "voidgrubs",
-  "inhibitor",
-  "ace",
-  "first_blood",
-  "turret",
-  "assist",
-];
-
 // Volume and mute are the *user's* intent, held here rather than read back
 // off the video element. Playing an isolated stem means muting the video and
 // letting a separate <audio> carry the sound, and if the controls read
@@ -54,13 +46,6 @@ let userMuted = false;
 // combined mix) plays from the video element itself.
 let stemAudio: HTMLAudioElement | null = null;
 let selectedTrack = 0;
-
-// Drift thresholds for keeping the stem aligned to the video.
-// 0.04s is ~2.4 frames at 60fps — below the point A/V desync is noticeable —
-// and a rate nudge beyond ~2% is audible as a pitch shift, so anything
-// worse than SYNC_HARD is re-seeked instead of nudged.
-const SYNC_NUDGE = 0.04;
-const SYNC_HARD = 0.25;
 
 let backBtn: HTMLButtonElement | null;
 let reviewTitle: HTMLElement | null;
@@ -459,57 +444,9 @@ function jumpToMarker(direction: 1 | -1, predicate: (m: MarkerRow) => boolean) {
 }
 
 // --- The playable window --------------------------------------------------
-
-/**
- * How much of the loading screen to keep in front of the game.
- *
- * Not zero: cutting to the exact frame the clock starts on opens a VOD
- * mid-fade with no sense of where it began. One second, matching
- * `trim::LEAD_IN_S`, so a trimmed recording and an untrimmed one open at
- * the same place — the alignment is measured from a 1 Hz poll and is only
- * accurate to about that anyway.
- */
-const LEAD_IN_S = 1;
-
-/** Below this there is no loading screen worth skipping. */
-const MIN_SKIP_S = 3;
-
-/**
- * How much to keep after the last thing the game reported: nothing.
- *
- * Capture outlives the game window — nothing stops it at the instant the
- * game ends, because neither signal that ends a recording knows at that
- * instant (#119) — and a window that no longer exists captures as *black*
- * under WGC, not as a frozen last frame.
- *
- * **Deliberately not the mirror of `LEAD_IN_S`.** A margin was kept here so
- * the final moment could not be clipped by the 1 Hz sample cadence, and two
- * seconds was not enough to stop the VOD ending on black anyway. The two ends
- * are not worth the same: the head margin buys the opening of a game, while
- * everything after the last report is the post-game end screen. Losing up to
- * a second of that costs nothing a person would go back for, and ending on
- * black is a defect people actually notice.
- *
- * The guards below are untouched — a gap wider than `MAX_TAIL_CLIP_S` is
- * still refused, so a stretch with no samples cannot cut real gameplay.
- */
-const TAIL_OUT_S = 0;
-
-/**
- * Past this, the gap is not a post-game tail and clipping it would be a
- * guess.
- *
- * The tail is normally 5-15 s: five failed polls at 1 Hz, or up to three
- * times that if the dying game process makes them time out rather than
- * refuse. A much larger gap means something else — most likely a stretch
- * where Live Client Data answered with something the parser could not read,
- * which keeps recording and produces *no samples*, so real gameplay sits
- * after the last one. Cutting there would hide the game.
- *
- * The same rule `trim.rs` applies at the other end: act on a measured
- * answer, never on a guessed one.
- */
-const MAX_TAIL_CLIP_S = 60;
+//
+// The maths moved to `lib/timeline/window.ts` in WS4.2. What stays here is
+// the mutable state it is computed from and the elements it is applied to.
 
 /**
  * Where the game clock starts, in video time.
@@ -540,65 +477,42 @@ let gameStartsAt = 0;
  */
 let gameEndsAt: number | null = null;
 
-function measureGameEnd(samples: readonly SampleRow[]): number | null {
-  let latest: number | null = null;
-  for (const s of samples) {
-    if (latest === null || s.video_time_s > latest) latest = s.video_time_s;
-  }
-  return latest;
-}
-
-function measureGameStart(samples: readonly SampleRow[]): number {
-  const earliest = samples.reduce<SampleRow | null>(
-    (best, s) => (best === null || s.game_time_s < best.game_time_s ? s : best),
-    null,
-  );
-  if (!earliest) return 0;
-  const offset = earliest.video_time_s - earliest.game_time_s;
-  // Negative means capture started *after* the game did — a reconnect —
-  // and there is no loading screen in front of it to skip.
-  return offset >= MIN_SKIP_S ? offset : 0;
+/**
+ * The window as it stands right now, from the two measurements above and the
+ * file the player is holding.
+ *
+ * Recomputed per call rather than cached, which is what the three separate
+ * accessors it replaced did between them anyway. `video.duration` is `NaN`
+ * until metadata loads and `viewingWindow` refuses that, returning an empty
+ * window, so every caller below gets 0 rather than `NaN`.
+ */
+function currentWindow(): ViewingWindow {
+  return viewingWindow(gameStartsAt, gameEndsAt, video?.duration ?? 0);
 }
 
 /** The first video position the player will show. */
 function windowStart(): number {
-  return Math.max(0, gameStartsAt - LEAD_IN_S);
+  return currentWindow().start;
 }
 
-/**
- * The last video position the player will show.
- *
- * Three ways this declines to clip, and all of them fall back to the end of
- * the file rather than to a guess: no samples to measure from, a tail
- * already shorter than the margin, or a gap too large to be a post-game
- * tail at all (`MAX_TAIL_CLIP_S`).
- */
+/** The last video position the player will show. */
 function windowEnd(): number {
-  if (!video || !isFinite(video.duration)) return 0;
-  const fileEnd = video.duration;
-  if (gameEndsAt === null) return fileEnd;
-  const clipped = gameEndsAt + TAIL_OUT_S;
-  if (clipped >= fileEnd) return fileEnd;
-  if (fileEnd - clipped > MAX_TAIL_CLIP_S) return fileEnd;
-  return Math.max(windowStart(), clipped);
+  return currentWindow().end;
 }
 
 /** How much video the player treats as the recording. */
 function windowSpan(): number {
-  if (!video || !isFinite(video.duration)) return 0;
-  return Math.max(0, windowEnd() - windowStart());
+  return currentWindow().span;
 }
 
-/** Video time → the position shown to the user, where 0 is the window's start. */
+/** Video time to the position shown to the user, where 0 is the window's start. */
 function displayTime(videoTime: number): number {
-  return Math.max(0, videoTime - windowStart());
+  return displayTimeIn(videoTime, currentWindow());
 }
 
 /** Fraction across the window, for anything drawn along the timeline. */
 function windowFraction(videoTime: number): number {
-  const span = windowSpan();
-  if (span <= 0) return 0;
-  return clamp((videoTime - windowStart()) / span, 0, 1);
+  return windowFractionIn(videoTime, currentWindow());
 }
 
 /**
@@ -769,28 +683,6 @@ function renderGraph() {
   );
 }
 
-/**
- * Buckets `points` down to at most `target` entries, keeping the largest
- * magnitude in each bucket. Max-*abs* rather than max: on a signed series the
- * interesting value in a bucket is the biggest swing either way, and plain
- * max would quietly drop every trough.
- */
-function downsample<T extends { v: number }>(points: T[], target: number): T[] {
-  if (points.length <= target) return points;
-  const size = points.length / target;
-  const out: T[] = [];
-  for (let i = 0; i < target; i++) {
-    const slice = points.slice(Math.floor(i * size), Math.floor((i + 1) * size));
-    if (slice.length === 0) continue;
-    out.push(slice.reduce((a, b) => (Math.abs(b.v) > Math.abs(a.v) ? b : a)));
-  }
-  return out;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
 function formatSigned(value: number): string {
   return `${value > 0 ? "+" : ""}${Math.round(value)}`;
 }
@@ -802,12 +694,6 @@ function formatSignedGold(value: number): string {
 }
 
 // Roughly a glyph's width plus a gap: markers landing closer together than
-// this on screen get collapsed into one badge-counted cluster. Measured in
-// pixels rather than the percentage the old two-lane strip used, because a
-// percentage threshold means something completely different on a 600px-wide
-// window than on a 1600px one.
-const CLUSTER_PX = 28;
-
 function renderGlyphs() {
   if (!timelineGlyphs || !timelineBody || !video) return;
   if (!isFinite(video.duration) || !video.duration) return;
@@ -816,24 +702,21 @@ function renderGlyphs() {
   // Zero while the review view is still hidden — the ResizeObserver fires
   // again with a real width once it's shown.
   if (width === 0) return;
-  currentClusters = [];
-  let clusterStartX = -Infinity;
-  for (const marker of currentMarkers) {
-    const px = windowFraction(marker.video_time_s) * width;
-    if (currentClusters.length > 0 && px - clusterStartX <= CLUSTER_PX) {
-      currentClusters[currentClusters.length - 1].push(marker);
-    } else {
-      currentClusters.push([marker]);
-      clusterStartX = px;
-    }
-  }
+  // The window is read once and reused for every marker: `windowFraction`
+  // recomputes it per call, and a teamfight's worth of markers would each
+  // pay for it.
+  const window = currentWindow();
+  currentClusters = clusterMarkers(
+    currentMarkers,
+    (marker) => windowFractionIn(marker.video_time_s, window) * width,
+    CLUSTER_PX,
+  );
 
   timelineGlyphs.innerHTML = currentClusters
     .map((cluster, index) => {
       const lead = leadMarker(cluster);
       const style = markerStyle(lead);
-      const mean = cluster.reduce((sum, m) => sum + m.video_time_s, 0) / cluster.length;
-      const pct = windowFraction(mean) * 100;
+      const pct = windowFractionIn(clusterCentre(cluster), window) * 100;
       const badge = cluster.length > 1 ? `<span class="glyph-badge">${cluster.length}</span>` : "";
       const label = cluster
         .map((m) => `${markerLabel(m)} at ${formatTime(m.video_time_s)}`)
@@ -852,21 +735,6 @@ function markerStyle(marker: MarkerRow) {
   return MARKER_STYLE[marker.kind] ?? { icon: "●", label: marker.kind, color: "#999" };
 }
 
-/** The marker whose icon represents a whole cluster. */
-function leadMarker(cluster: MarkerRow[]): MarkerRow {
-  return [...cluster].sort((a, b) => rank(a.kind) - rank(b.kind))[0];
-}
-
-function rank(kind: string): number {
-  const i = MARKER_PRIORITY.indexOf(kind);
-  return i === -1 ? MARKER_PRIORITY.length : i;
-}
-
-// Candidate spacings for labelled ticks, coarsest-wins. Every entry divides
-// cleanly by 4 so the minor ticks between them land on whole seconds.
-const RULER_STEPS = [15, 30, 60, 120, 300, 600, 900];
-const MAX_RULER_LABELS = 16;
-
 function renderRuler() {
   if (!timelineRuler || !video || !isFinite(video.duration) || !video.duration) return;
   // The window, not the file: the ruler reads 0:00 where the player starts,
@@ -875,9 +743,7 @@ function renderRuler() {
   const span = windowSpan();
   if (span <= 0) return;
 
-  const major =
-    RULER_STEPS.find((step) => span / step <= MAX_RULER_LABELS) ??
-    RULER_STEPS[RULER_STEPS.length - 1];
+  const major = rulerStep(span, RULER_STEPS, MAX_RULER_LABELS);
 
   // Minor ticks are a repeating gradient with a percentage period, so they
   // reflow with the container for free — no resize handling needed.
@@ -1295,17 +1161,9 @@ async function resumeStem() {
 function correctStemDrift() {
   if (!stemAudio || !video || video.paused || stemAudio.seeking) return;
 
-  const drift = stemAudio.currentTime - video.currentTime;
-  if (Math.abs(drift) > SYNC_HARD) {
-    stemAudio.currentTime = video.currentTime;
-    stemAudio.playbackRate = video.playbackRate;
-  } else if (Math.abs(drift) > SYNC_NUDGE) {
-    // Ease back into alignment instead of seeking, which would be audible
-    // as a click at this magnitude.
-    stemAudio.playbackRate = video.playbackRate * (drift > 0 ? 0.98 : 1.02);
-  } else {
-    stemAudio.playbackRate = video.playbackRate;
-  }
+  const correction = stemCorrection(stemAudio.currentTime - video.currentTime, video.playbackRate);
+  if (correction.seek) stemAudio.currentTime = video.currentTime;
+  stemAudio.playbackRate = correction.playbackRate;
 }
 
 function toggleFullscreen() {

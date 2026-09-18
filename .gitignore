@@ -12,6 +12,7 @@ node_modules/
 dist/
 dist-ssr/
 .vite/
+coverage/
 *.local
 # `svelte-check --tsgo` writes a shadow TypeScript project here. The gate does
 # not use that flag (see docs/ci-and-releases.md for why), so this directory
