@@ -1100,20 +1100,45 @@ Win32 GUI import stack out of the test binary. The one testable thing,
 ### Start on login
 
 Recording unattended is worth very little if the user has to remember to launch
-the recorder first. `tauri-plugin-autostart` registers the app under
-`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (a LaunchAgent on
-macOS, a `.desktop` entry on Linux, which is what makes the whole thing
-exercisable in the dev loop), and it is registered with `--hidden`, so a
-login start costs a tray icon and no webview at all.
+the recorder first. `daemon::autostart` registers the app under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` with `--daemon`, so a
+login start is the recorder and nothing else: no window, no WebView2, nothing
+that costs anything until it is asked for.
 
-**`--hidden`, not `--daemon`.** The daemon is still reserved and exits 2, so
-registering it would produce a login start that launches nothing and records
-nothing, with no console to say why. This is the reason the flags were fixed
-before the tray existed: the string goes into the registry once, at enable
-time, and the build that reads it back may be years newer. `launch.rs` owns
-both flags as constants and has a test pinning their exact spelling. Renaming
-the constant is free, changing its value strands every machine that already has
-the old one.
+**`--daemon`, since WS3.5.** It was `--hidden` while the daemon was reserved
+and exited 2, because registering a flag that launched nothing would have
+produced a login start that recorded nothing with no console to say why. The
+string goes into the registry once, at enable time, and the build that reads it
+back may be years newer, so `launch.rs` owns both flags as constants with a
+test pinning their spelling, and `Launch::UiHidden` is permanent rather than
+transitional: every machine that enabled this before the change still has
+`--hidden` in its `Run` key.
+
+**The daemon writes it, and that took two goes.** §3.1's table always put this
+with the daemon, for the obvious reason that the daemon is what login starts.
+The implementation did not follow. `Ctx`'s autostart seam was set in `lib.rs`,
+in the window, and WS3.4 moved the commands that read it into the daemon, so
+for several workstreams the settings row said "start-on-login is not available
+in this build" on builds where it was. Nothing failed; an unset seam refuses
+with a message. See §17's note on seams for the pattern, of which this was the
+third instance.
+
+`tauri-plugin-autostart` could not be the fix because its API hangs off an
+`AppHandle` and the daemon builds no Tauri app. `auto-launch`, the crate that
+plugin wraps, was already in the tree through it, so the daemon uses that
+directly and the plugin is gone. That keeps the behaviour rather than
+reimplementing it, and one part of that behaviour is worth naming: `is_enabled`
+consults Task Manager's `StartupApproved\Run` override, so an entry that exists
+but has been switched off from the Startup tab reads as disabled, which is
+exactly what "the registry is the source of truth" has to mean.
+
+**The entry's *name* is as much a contract as its value.** The plugin filed it
+under `productName`, and `is_enabled` looks a value up by name without checking
+the path, so the daemon uses the same string or every entry written before this
+becomes invisible and the checkbox silently unticks itself. It is scoped by
+build for the reason the pipe is: the devtools bundle overrides `productName`,
+installs beside the release build, and would otherwise share one login entry
+with it.
 
 **Off until asked for, and never written by the installer.** Nothing registers
 at install or first run; the entry appears only when the settings toggle is

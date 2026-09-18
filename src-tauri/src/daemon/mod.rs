@@ -40,6 +40,7 @@
 pub mod pipe_acl;
 pub mod notify;
 pub mod pump;
+pub mod autostart;
 pub mod rpc;
 pub mod snapshot;
 pub mod update;
@@ -530,6 +531,18 @@ async fn start(paths: Paths) -> Result<Option<Started>, DaemonError> {
         // on waiting for Ctrl-C. That is a dev-box shape rather than a shipped
         // one: `pump::run` already refused on this platform and said so.
         ctx.set_quit_requester(Box::new(pump::stop));
+        // Start-on-login. `None` here is what the settings row renders as
+        // "not available in this build", which is what it said on every build
+        // between WS3.4 and #151: the commands moved to this process and the
+        // seam stayed in the window.
+        match autostart::RegistryAutostart::resolve() {
+            Ok(autostart) => ctx.set_autostart(Box::new(autostart)),
+            // Left unset rather than failing the daemon. Not being able to
+            // name our own executable is not a reason to refuse to record;
+            // the row goes back to saying the control is unavailable, which is
+            // then true.
+            Err(e) => warn!("autostart", "start-on-login is unavailable: {e}"),
+        }
         ctx
     });
 
