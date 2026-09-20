@@ -602,6 +602,69 @@ The one place the environment pushed back: jsdom has no `matchMedia`, and
 view failed at import. `src/test-setup.ts` shims the environment. Moving the
 call would have been the easier fix and the wrong one.
 
+### 4.6 Decision: the player migrated last, and stayed imperative
+
+WS4 moved four views. The player went last because it is the one where the
+framework's central offer does not apply: a `<video>`'s `currentTime` is not
+state anything should be diffing. It changes sixty times a second while
+playing, the element is its own source of truth, and a seek is a command
+rather than an assignment. Making it reactive would mean re-deriving a
+position that the element already knows, and then fighting it.
+
+So `Review.svelte` holds a real element reference and talks to it directly.
+The rAF playhead loop, pointer-capture scrubbing, the stem `<audio>`,
+fullscreen and the visibility pause are all imperative and unchanged in shape
+from `review.ts`.
+
+**What the migration bought is a defined boundary rather than a rewrite.**
+One number leaves the island per frame, the playhead position, which is the
+smallest seam that still lets the timeline be declarative. Everything else
+crosses inward: the window, the markers, the samples, and callbacks to seek.
+
+The timeline is where that paid. Its five states were five early returns
+inside one function, each writing different text into different elements and
+each having to undo what the last call did. `graphView` returns which of the
+five a recording is in, and the component renders one of five things. The
+distinction that matters most is now impossible to lose: a recording where we
+were never matched in `allPlayers` has samples but no side, so every diff's
+sign is unknowable, and drawing the curve anyway would risk telling someone
+they were ahead in a game they lost.
+
+**The store holds the recording, never the player.** `currentTime`, `paused`,
+`volume`, the selected track and the fullscreen state stay on the component.
+Putting any of them in a store would claim they are shared, and nothing else
+has any business reading them.
+
+Two guards changed on the way. `seekTo` and `togglePlay` tested
+`Number.isFinite(video.duration)`; they test `review.window.span > 0` instead,
+which is the same fact read from the side the rest of the component already
+reads, and makes an unknown duration a no-op rather than a seek to zero.
+
+### 4.7 A frontend that boots is not something any gate was checking
+
+WS4.4 shipped a broken `main`. It deleted `#settings-view` from `index.html`
+and left `registerView("settings", el("#settings-view"))` behind. `el` throws
+on a miss by design, and that line ran before `mountApp`, so the composition
+root threw and the entire frontend failed to boot: a window with static markup
+and no behaviour at all.
+
+Every gate passed. `biome`, `tsc`, `svelte-check`, 313 unit tests, both builds,
+the Rust suite and both Windows smoke tests. None of them was wrong; none of
+them was looking. No test imported `main.ts`, and the smoke tests assert that
+the *process* reaches `setup` and connects, which is a claim about Rust and
+says nothing about whether the webview rendered.
+
+`src/main.boot.test.ts` is the test that was missing. It loads the shipped
+`index.html` and the real `main.ts` together, dispatches `DOMContentLoaded`,
+and asserts nothing threw and the Svelte root mounted. Every module it reaches
+is mocked to nothing, because what is under test is the wiring rather than the
+modules.
+
+It is worth having beyond this one bug. **The markup is being deleted a view at
+a time**, and `el()` throwing is the designed behaviour for a missing element,
+so this exact failure is available on every remaining WS4 task. WS4.6 deletes
+the rest of `index.html`.
+
 ## 5. Review player
 
 - WebView2 `<video>` element: H.264/AAC MP4 decodes natively, so seeking and playback rate are free.

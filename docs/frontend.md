@@ -1,9 +1,12 @@
 # Frontend
 
-Two frontends, for the length of WS4. The library and settings are Svelte 5,
-under `src/lib/`. The review player is still vanilla TypeScript wired onto
-markup in `index.html`. [The Svelte seam](#the-svelte-seam) below is what joins
-them, and which views have moved across.
+Svelte 5, under `src/lib/`. Every view is a component since WS4.5, and what
+is left of `index.html` is the app bar, the quit dialog and the anti-flash boot
+script, none of which is a view. WS4.6 takes those.
+
+The player is the exception to everything below and stays an **imperative
+island** on purpose: a `<video>`'s `currentTime` is not state anything should
+be diffing.
 
 The organising principle is the same on both sides: **state ownership, not
 widgets**. Each module owns exactly one piece of mutable state and is the only
@@ -24,7 +27,8 @@ flowchart TB
     LIBV["lib/components/library/<br/><small>Library, Row, Toolbar, StatsBar,<br/>Loadout, Matchup, Slot, RowActions</small>"]
     LIBS["lib/stores/library.svelte.ts<br/><small>owns: the row set + every control</small>"]
     ICONS["lib/stores/icons.svelte.ts<br/><small>owns: when art has arrived</small>"]
-    REVIEW["review.ts<br/><small>owns: the player + timeline</small>"]
+    REVV["lib/components/review/<br/><small>Review (imperative island), Timeline,<br/>PlayerControls, MarkerList, MarkerTimes</small>"]
+    REVS["lib/stores/review.svelte.ts<br/><small>owns: which recording, its markers,<br/>samples and window</small>"]
     SETV["lib/components/settings/<br/><small>Settings, Appearance, BackgroundTray,<br/>Notifications, AudioSettings, Storage,<br/>About, Update, UpdateNotes</small>"]
     SETS["lib/stores/settings.svelte.ts<br/><small>owns: autostart, audio, retention,<br/>the folder, mirrored prefs</small>"]
     UPD["lib/stores/update.svelte.ts<br/><small>owns: the update status</small>"]
@@ -51,7 +55,6 @@ flowchart TB
     MAIN --> THEME
     MAIN --> PREFS
     MAIN --> STATUS
-    MAIN --> REVIEW
     MAIN --> BAR
     MAIN --> TOAST
     MAIN --> DESK
@@ -62,9 +65,9 @@ flowchart TB
     SETV --> LIBS
     SETV --> THEME
     SETS --> PREFS
-    LIBV --> REVIEW
+    LIBV --> REVS
     LIBS --> BRIDGE
-    REVIEW --> BRIDGE
+    REVS --> BRIDGE
     SETS --> BRIDGE
     STATUS --> BRIDGE
     PREFS --> BRIDGE
@@ -80,16 +83,19 @@ flowchart TB
     LIBV --> LIBS
     LIBV --> ICONS
     APP --> LIBV
-    REVIEW --> TL
     LIBV --> FMT
-    REVIEW --> FMT
-    REVIEW --> DOM
+    REVV --> FMT
+    REVV --> REVS
+    REVV --> TL
+    APP --> REVV
     BRIDGE --> TYPES
     FMT -.->|"type-only"| TYPES
     style MAIN fill:#ede7f6,stroke:#5e35b1
     style BRIDGE fill:#e3f2fd,stroke:#1565c0
     style APP fill:#fff3e0,stroke:#ef6c00
     style TOKENS fill:#fff3e0,stroke:#ef6c00
+    style REVV fill:#fff3e0,stroke:#ef6c00
+    style REVS fill:#fff3e0,stroke:#ef6c00
     style SETV fill:#fff3e0,stroke:#ef6c00
     style SETS fill:#fff3e0,stroke:#ef6c00
     style UPD fill:#fff3e0,stroke:#ef6c00
@@ -1029,6 +1035,51 @@ One thing deliberately did not change: a row is a focusable, clickable
 item, and making every row contain a real button is a UX change rather than a
 migration. It is flagged in the component and worth its own issue.
 
+### The player is an island, and the island has a coastline
+
+WS4.5 deleted `review.ts`. What replaced it is not the same shape as the other
+views, and that is the point of migrating it last.
+
+**A `<video>`'s position is not state.** `currentTime` changes sixty times a
+second while playing, the element is its own source of truth, and every seek is
+a command rather than an assignment. So `Review.svelte` holds a real element
+reference and talks to it directly, exactly as `review.ts` did: the rAF
+playhead loop, the pointer-capture scrubbing, the stem `<audio>`, fullscreen
+and the visibility pause are all imperative and stay that way.
+
+What changed is that the island now has a defined coastline.
+
+| Crosses the boundary | Direction |
+|---|---|
+| `playhead` (one number, from the rAF loop) | out, to `Timeline` |
+| `review.window` | in, from the store |
+| `markers`, `samples`, `metric` | in, from the store |
+| `seekTo`, `onscrub` | in, as callbacks |
+
+One number leaving per frame is the smallest seam that still lets the timeline
+be declarative, and the timeline is the part that benefits most: its five graph
+states used to be five early returns writing different text into three
+different elements, and are now one `graphView` call returning which of five to
+render.
+
+**The store holds the recording, never the player.** `currentTime`, `paused`,
+`volume`, the selected track and the fullscreen state all live on the component
+beside the elements that own them. Putting any of them in the store would be
+claiming they are shared, and nothing else has any business reading them.
+
+Two small corrections fell out of testing. `seekTo` and `togglePlay` both
+guarded on `Number.isFinite(video.duration)`; they guard on
+`review.window.span > 0` now, which is the same fact read from the side that
+everything else in the component already reads, and is the reason an empty
+window makes them no-ops rather than seeking to zero.
+
+The `[` / `]` / `d` / `D` hotkeys are **the only marker navigation available in
+fullscreen**, because the rich timeline is outside `.player-wrap` and is
+therefore not rendered there. `lib/review/hotkeys.ts` is the decision and
+`Review.svelte` acts on it, which is what finally made the guards testable: a
+focused `<button>` must not swallow the arrows, because clicking a timeline
+glyph leaves one focused.
+
 ### Settings, and the three things that outlived it
 
 WS4.4 deleted `settings.ts` and `update.ts`. What made it more than a second
@@ -1112,7 +1163,7 @@ supposed to mean.
 | `App.svelte` | WS4.1 | landed |
 | `Library.svelte` and children | WS4.3 | **landed**; `library.ts` deleted |
 | `Settings.svelte`, `Update.svelte` | WS4.4 | **landed**; `settings.ts` and `update.ts` deleted |
-| `Review.svelte`, `Timeline.svelte` | WS4.5 | vanilla (`review.ts`) |
+| `Review.svelte`, `Timeline.svelte` | WS4.5 | **landed**; `review.ts` deleted |
 
 Each of those deletes its vanilla counterpart and the markup `index.html` holds
 for it in the same commit, so no view is ever owned by both. The player is
