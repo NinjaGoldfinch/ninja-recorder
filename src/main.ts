@@ -1,20 +1,20 @@
 import { listen } from "@tauri-apps/api/event";
 
+import { initAppBar } from "./appbar.svelte";
 import { initDaemonStatus, whenDaemonReachable } from "./daemon";
 import { initDesktop } from "./desktop";
 import { initDevPortal } from "./devportal";
 import { el } from "./dom";
 import App from "./lib/App.svelte";
 import { applyDefaultSort, refreshDiskUsage, refreshLibrary } from "./lib/stores/library.svelte";
+import { syncFromPrefs } from "./lib/stores/settings.svelte";
 import { loadPrefs } from "./prefs";
 import { initQuit, quitEverything } from "./quit";
 import { initReview } from "./review";
 import { initRouting, mountApp, registerView } from "./router";
-import { initSettings, syncSettingsFromPrefs } from "./settings";
 import { initStatus } from "./status";
 import { applyThemePref, initTheme } from "./theme";
 import { initToast } from "./toast";
-import { initUpdate } from "./update";
 
 window.addEventListener("DOMContentLoaded", () => {
   // The theme is already on <html> from the inline boot script; this adopts
@@ -39,13 +39,13 @@ window.addEventListener("DOMContentLoaded", () => {
   // because of it.
   initDaemonStatus();
   initReview();
-  initSettings();
   initStatus();
   initDevPortal();
   // After `initToast`: a *refused* install — a game started between the
   // render and the click — is the one thing this reports loudly, and it
-  // reports it through the toast.
-  initUpdate();
+  // reports it through the toast. Only the app bar's two controls are wired
+  // here now; the panel itself is `Settings.svelte` (WS4.4).
+  initAppBar();
 
   // After the views are registered, so a `#settings` start or a tray
   // "Settings" click has something to switch to.
@@ -94,7 +94,7 @@ window.addEventListener("DOMContentLoaded", () => {
     // paint. Both consumers re-apply rather than waiting on them.
     void loadPrefs().then((prefs) => {
       applyThemePref(prefs.theme);
-      syncSettingsFromPrefs();
+      syncFromPrefs();
       applyDefaultSort(prefs.defaultSort);
     });
   });

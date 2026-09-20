@@ -559,6 +559,49 @@ settings section and the library at once, because the library's node missed the
 `showView` that hid everything else. `registerView` now sets `hidden` from the
 current view rather than trusting the node's default.
 
+### 4.5 Decision: a view's markup can have more owners than its module
+
+WS4.3 moved one module and one block of markup, and the two lined up.
+`#settings-view` did not. Four things wrote into it, and only two of them were
+`settings.ts` and `update.ts`.
+
+`status.ts` was the interesting one. It owns the app bar's pills and a poll
+timer, and it also owned three rows of the About block, by reaching into
+`#about-lcu`, `#about-game-state` and `#about-last-finalized`. That is not a
+module doing two jobs by accident: those lines are pushed by a poll on its own
+schedule rather than read when the view opens, so somebody outside the view has
+to produce them. What was wrong was where they landed. The wording is now in
+`lib/settings/about.ts`, where it has tests, and the values go to a store the
+component reads. **The poll did not move**, and should not: it is not a
+settings concern.
+
+The fourth owner is `index.html`'s app bar, which holds the settings button and
+the update dot. It is not a view and WS4.4 does not delete it, so
+`appbar.svelte.ts` exists to own those two elements until WS4.6 does. The
+alternative was keeping all of `update.ts` alive to toggle one element's
+`hidden`. It reads a rune from a plain module through `$effect.root`, and never
+tears that root down, which is correct for elements that live as long as the
+window.
+
+**Preferences are mirrored rather than moved.** `prefs.ts` keeps the localStorage
+cache that the inline boot script in `index.html` reads before first paint,
+which is the only thing preventing a theme flash, and SQLite stays the source of
+truth. A store that owned preferences would have to reproduce both. So it holds
+a reactive copy for controls to bind to, every write still goes through
+`savePref`, and `syncFromPrefs` fills the copy in when SQLite answers.
+
+**`theme.ts` is untouched, deliberately.** It owns `html[data-theme]` and the
+matchMedia `change` listener that makes "System" follow the OS as it changes.
+`Appearance.svelte` asks it to change and never writes the attribute itself,
+because a second writer would race the listener. That listener has no test, and
+removing it is a silent regression; WS4.4's job was not to give it one, but it
+was to avoid being the change that broke it.
+
+The one place the environment pushed back: jsdom has no `matchMedia`, and
+`theme.ts` calls it at module scope, so every test that reached the settings
+view failed at import. `src/test-setup.ts` shims the environment. Moving the
+call would have been the easier fix and the wrong one.
+
 ## 5. Review player
 
 - WebView2 `<video>` element: H.264/AAC MP4 decodes natively, so seeking and playback rate are free.

@@ -51,7 +51,7 @@ disagreeing about the same file.
 | `src-tauri/src/ui/` (the Tauri commands; `client` has landed) | WS3 |
 | `src-tauri/src/recorder/own/` | WS1 task 1.6 |
 | `src-tauri/src/db/pool.rs` | WS6 |
-| `src/lib/` (nothing left empty; `contract/`, `transport/`, `stores/`, `components/library/`, `styles/tokens.css` and `App.svelte` have all landed) | WS2 / WS4 |
+| `src/lib/` (nothing left empty; `contract/`, `transport/`, `stores/`, `components/`, `library/`, `settings/`, `timeline/`, `styles/tokens.css` and `App.svelte` have all landed) | WS2 / WS4 |
 
 `src/lib/contract/` is **generated** once WS2.4 lands — committed and
 CI-checked, never hand-edited.
@@ -253,10 +253,13 @@ workstream should be rewritten to say what it means.
   untrusted input and `vodTitle` falls back to it. Svelte's default text
   interpolation is what replaces v1's `escapeHtml`/`escapeAttr`, and `{@html}`
   opts straight back out of the thing that made the migration safe.
-  `Row.test.ts` has the tests that would catch it. **The vanilla half is not
-  finished**: `review.ts` and `settings.ts` still build markup by hand, so
-  `escapeAttr` for attribute values and `escapeHtml` for text nodes still apply
-  there until WS4.5.
+  `Row.test.ts` has the tests that would catch it. The same rule covers the
+  **release notes**, for a different reason: `latest.json` is fetched over
+  HTTPS but is *not* covered by the update signature, so `UpdateNotes.svelte`
+  renders a parsed structure and `UpdateNotes.test.ts` fails if that changes.
+  **The vanilla half is not finished**: `review.ts` still builds markup by
+  hand, so `escapeAttr` for attribute values and `escapeHtml` for text nodes
+  still apply there until WS4.5.
 - **Pure decision + thin I/O wrapper.** `state_machine::machine`,
   `db::reconcile` and `retention::select_for_deletion` are pure and directly
   unit-tested; their wrappers are deliberately too small to hide a bug. Adding
@@ -342,6 +345,10 @@ workstream should be rewritten to say what it means.
   around it.
 - **Don't remove `theme.ts`'s matchMedia `change` listener.** It is the only
   thing making the "System" theme follow the OS, and no test covers it.
+  `Appearance.svelte` asks `theme.ts` to change and never writes
+  `html[data-theme]` itself, because a second writer would race that listener.
+  jsdom has no `matchMedia`, so `src/test-setup.ts` shims it: **the shim is
+  what moves, never the call.**
 - **The tokens live in one file, and `styles.css` imports it on its first
   line.** WS4.1 moved every custom property to `src/lib/styles/tokens.css`
   unchanged, so the `.svelte` components have a token source that survives

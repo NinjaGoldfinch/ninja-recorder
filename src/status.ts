@@ -1,9 +1,10 @@
 import { call } from "./bridge";
 import { el } from "./dom";
-import { formatTime } from "./format";
+import { finalizedLine, gamePill, lcuLine, lcuPill } from "./lib/settings/about";
+import { setAboutGameState, setAboutLastFinalized, setAboutLcu } from "./lib/stores/about.svelte";
 import { refreshDiskUsage, refreshLibrary } from "./lib/stores/library.svelte";
+import { refreshUpdateStatus } from "./lib/stores/update.svelte";
 import type { GameState, LcuStatus, SupervisorStatus } from "./types";
-import { refreshUpdateStatus } from "./update";
 
 // The two Tauri events the backend pushes (`library-changed`,
 // `update-status-changed`) are both once-in-a-while facts; nothing pushes the
@@ -37,9 +38,6 @@ interface Els {
   lcuText: HTMLElement;
   gamePill: HTMLElement;
   gameText: HTMLElement;
-  aboutLcu: HTMLElement;
-  aboutState: HTMLElement;
-  aboutFinalized: HTMLElement;
 }
 
 let els: Els;
@@ -71,9 +69,6 @@ export function initStatus() {
     lcuText: el("#status-lcu-text"),
     gamePill: el("#status-game"),
     gameText: el("#status-game-text"),
-    aboutLcu: el("#about-lcu"),
-    aboutState: el("#about-game-state"),
-    aboutFinalized: el("#about-last-finalized"),
   };
   lastSafetyRefresh = performance.now();
   tick();
@@ -154,56 +149,26 @@ function setPill(pill: HTMLElement, text: HTMLElement, state: string, copy: stri
   text.textContent = copy;
 }
 
+// The wording moved to `lib/settings/about.ts` in WS4.4 so that it could be
+// tested, and the About lines now go to a store rather than to elements this
+// module used to reach into. The pills are still written here: they live in
+// the app bar, which is vanilla markup until WS4.6.
 function renderLcu(status: LcuStatus) {
-  if (status.error) {
-    setPill(els.lcuPill, els.lcuText, "error", "Client error");
-    els.aboutLcu.textContent = `Error: ${status.error}`;
-    return;
-  }
-  if (!status.connected) {
-    setPill(els.lcuPill, els.lcuText, "offline", "Client not running");
-    els.aboutLcu.textContent = "Not running (no lockfile found).";
-    return;
-  }
-  // The LCU hands back an empty string, not null, when it has no Riot ID
-  // for us yet — so fall back on falsiness rather than nullishness.
-  const who = status.summoner || "signed in";
-  setPill(els.lcuPill, els.lcuText, "online", who);
-  els.aboutLcu.textContent = `Connected as ${who} — phase ${status.phase ?? "?"}.`;
+  const pill = lcuPill(status);
+  setPill(els.lcuPill, els.lcuText, pill.state, pill.copy);
+  setAboutLcu(lcuLine(status));
 }
 
-const GAME_COPY: Record<GameState, { state: string; copy: string }> = {
-  Idle: { state: "idle", copy: "Idle" },
-  ClientRunning: { state: "idle", copy: "Waiting for a game" },
-  WaitingForGame: { state: "armed", copy: "Game starting…" },
-  Recording: { state: "recording", copy: "Recording" },
-  Finalizing: { state: "finalizing", copy: "Saving…" },
-};
-
 function renderGame(status: SupervisorStatus) {
-  const { state, copy } = GAME_COPY[status.state];
-  const elapsed =
-    status.state === "Recording" && recordingElapsed !== null
-      ? ` — ${formatTime(recordingElapsed)}`
-      : "";
-  setPill(els.gamePill, els.gameText, state, `${copy}${elapsed}`);
-
-  els.aboutState.textContent = status.state;
-  const finalized = status.last_finalized;
-  if (!finalized) {
-    els.aboutFinalized.textContent = "None yet.";
-    return;
-  }
-  // A null recording_id means the file exists but its row never got
-  // written — worth saying out loud rather than rendering as a blank.
-  const idNote =
-    finalized.recording_id === null ? "DB WRITE FAILED" : `db id ${finalized.recording_id}`;
-  els.aboutFinalized.textContent = `${finalized.path} (${finalized.markers.length} markers, ${idNote})`;
+  const pill = gamePill(status.state, recordingElapsed);
+  setPill(els.gamePill, els.gameText, pill.state, pill.copy);
+  setAboutGameState(status.state);
+  setAboutLastFinalized(finalizedLine(status));
 }
 
 function renderError(err: unknown) {
   setPill(els.gamePill, els.gameText, "error", "Status unavailable");
-  els.aboutState.textContent = `Failed to read: ${err}`;
+  setAboutGameState(`Failed to read: ${err}`);
 }
 
 // Without this, every hot reload leaves its poll loop running and the

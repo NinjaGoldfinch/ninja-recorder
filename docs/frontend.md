@@ -1,9 +1,9 @@
 # Frontend
 
-Two frontends, for the length of WS4. The library is Svelte 5, under
-`src/lib/`. Review and settings are still vanilla TypeScript wired onto markup
-in `index.html`. [The Svelte seam](#the-svelte-seam) below is what joins them,
-and which views have moved across.
+Two frontends, for the length of WS4. The library and settings are Svelte 5,
+under `src/lib/`. The review player is still vanilla TypeScript wired onto
+markup in `index.html`. [The Svelte seam](#the-svelte-seam) below is what joins
+them, and which views have moved across.
 
 The organising principle is the same on both sides: **state ownership, not
 widgets**. Each module owns exactly one piece of mutable state and is the only
@@ -25,9 +25,12 @@ flowchart TB
     LIBS["lib/stores/library.svelte.ts<br/><small>owns: the row set + every control</small>"]
     ICONS["lib/stores/icons.svelte.ts<br/><small>owns: when art has arrived</small>"]
     REVIEW["review.ts<br/><small>owns: the player + timeline</small>"]
-    SETTINGS["settings.ts<br/><small>owns: the settings form</small>"]
+    SETV["lib/components/settings/<br/><small>Settings, Appearance, BackgroundTray,<br/>Notifications, AudioSettings, Storage,<br/>About, Update, UpdateNotes</small>"]
+    SETS["lib/stores/settings.svelte.ts<br/><small>owns: autostart, audio, retention,<br/>the folder, mirrored prefs</small>"]
+    UPD["lib/stores/update.svelte.ts<br/><small>owns: the update status</small>"]
+    ABOUT["lib/stores/about.svelte.ts<br/><small>owns: the three live About lines</small>"]
     TOAST["toast.ts<br/><small>owns: the transient message</small>"]
-    UPDATE["update.ts<br/><small>owns: the update row + badge</small>"]
+    BAR["appbar.svelte.ts<br/><small>owns: the settings button + update dot</small>"]
     DESK["desktop.ts<br/><small>owns: the browser behaviours we suppress</small>"]
     BRIDGE["bridge.ts<br/><small>composition root: picks a transport,<br/>exposes the generated client</small>"]
     TRANSPORT["lib/transport/<br/><small>pipe.ts (live) · mock.ts<br/>invoke.ts unused since WS3.4</small>"]
@@ -49,27 +52,29 @@ flowchart TB
     MAIN --> PREFS
     MAIN --> STATUS
     MAIN --> REVIEW
-    MAIN --> SETTINGS
+    MAIN --> BAR
     MAIN --> TOAST
-    MAIN --> UPDATE
     MAIN --> DESK
     DESK --> BRIDGE
     STATUS --> LIBS
-    STATUS --> UPDATE
-    SETTINGS --> LIBS
-    SETTINGS --> THEME
-    SETTINGS --> PREFS
+    STATUS --> UPD
+    STATUS --> ABOUT
+    SETV --> LIBS
+    SETV --> THEME
+    SETS --> PREFS
     LIBV --> REVIEW
     LIBS --> BRIDGE
     REVIEW --> BRIDGE
-    SETTINGS --> BRIDGE
+    SETS --> BRIDGE
     STATUS --> BRIDGE
     PREFS --> BRIDGE
-    UPDATE --> BRIDGE
-    UPDATE --> TOAST
-    UPDATE --> DOM
-    UPDATE --> PREFS
-    SETTINGS --> UPDATE
+    UPD --> BRIDGE
+    UPD --> TOAST
+    BAR --> UPD
+    SETV --> SETS
+    SETV --> UPD
+    SETV --> ABOUT
+    APP --> SETV
     LIBV --> LIBP
     LIBS --> LIBP
     LIBV --> LIBS
@@ -85,6 +90,10 @@ flowchart TB
     style BRIDGE fill:#e3f2fd,stroke:#1565c0
     style APP fill:#fff3e0,stroke:#ef6c00
     style TOKENS fill:#fff3e0,stroke:#ef6c00
+    style SETV fill:#fff3e0,stroke:#ef6c00
+    style SETS fill:#fff3e0,stroke:#ef6c00
+    style UPD fill:#fff3e0,stroke:#ef6c00
+    style ABOUT fill:#fff3e0,stroke:#ef6c00
     style LIBV fill:#fff3e0,stroke:#ef6c00
     style LIBS fill:#fff3e0,stroke:#ef6c00
     style ICONS fill:#fff3e0,stroke:#ef6c00
@@ -1020,6 +1029,48 @@ One thing deliberately did not change: a row is a focusable, clickable
 item, and making every row contain a real button is a UX change rather than a
 migration. It is flagged in the component and worth its own issue.
 
+### Settings, and the three things that outlived it
+
+WS4.4 deleted `settings.ts` and `update.ts`. What made it more than a second
+helping of WS4.3 is that the settings markup had **four** owners, not one.
+
+| Wrote into `#settings-view` | Now |
+|---|---|
+| `settings.ts` | `lib/components/settings/`, eight components |
+| `update.ts` | `Update.svelte` and `UpdateNotes.svelte`, over `lib/stores/update.svelte.ts` |
+| `status.ts` | still polls; publishes three lines to `lib/stores/about.svelte.ts` |
+| `index.html`'s app bar | `appbar.svelte.ts`, which is not a view |
+
+**`status.ts` only lost its element references.** It owns the poll timer and
+the app bar's two pills, and always has; what it had also acquired was three
+rows of a view it has nothing to do with, written by reaching into
+`#about-lcu` and friends. The wording moved to `lib/settings/about.ts` where it
+can be tested, and the values now go to a store. The poll is untouched.
+
+**`appbar.svelte.ts` exists because the header is not a view.** The settings
+button and the update dot live in `index.html`, which WS4.6 deletes and WS4.4
+does not. The alternative was keeping `update.ts` alive to toggle one
+element's `hidden`. It uses `$effect.root`, which is what lets a plain module
+read a rune; the root is never torn down, which is right for elements that
+live as long as the window.
+
+**Preferences are mirrored, not moved.** `prefs.ts` still owns them, still
+writes through `savePref`, and still keeps the localStorage cache the boot
+script reads before first paint. The store holds a reactive copy so controls
+can bind to it, and `syncFromPrefs` fills it in when SQLite answers, which is
+the same moment `settings.ts` used to re-apply every control by hand.
+
+**`theme.ts` is untouched on purpose.** It owns `html[data-theme]` and the
+matchMedia `change` listener that makes "System" follow the OS live.
+`Appearance.svelte` asks it to change and does not write the attribute itself:
+a second writer would be racing the listener. CLAUDE.md names removing that
+listener as a silent regression with no test to catch it, which is still true.
+
+The one thing jsdom forced: `matchMedia` has no implementation there, and
+`theme.ts` calls it at module scope, so any test reaching the settings view
+failed at import. The fix is `src/test-setup.ts`, a shim for the environment,
+rather than moving a call that is load-bearing.
+
 ### The pure logic comes out first
 
 WS4.2 moved the decisions out of `review.ts` and `library.ts` ahead of the
@@ -1060,7 +1111,7 @@ supposed to mean.
 |---|---|---|
 | `App.svelte` | WS4.1 | landed |
 | `Library.svelte` and children | WS4.3 | **landed**; `library.ts` deleted |
-| `Settings.svelte`, `Update.svelte` | WS4.4 | vanilla (`settings.ts`, `update.ts`) |
+| `Settings.svelte`, `Update.svelte` | WS4.4 | **landed**; `settings.ts` and `update.ts` deleted |
 | `Review.svelte`, `Timeline.svelte` | WS4.5 | vanilla (`review.ts`) |
 
 Each of those deletes its vanilla counterpart and the markup `index.html` holds
