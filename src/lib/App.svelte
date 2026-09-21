@@ -1,10 +1,8 @@
 <!--
   The Svelte root - WS4 task 4.1, filling up from WS4.3.
 
-  It renders the views that have migrated and nothing else. `index.html` still
-  holds the review section, and `main.ts` still wires it; the
-  two frontends run side by side for the length of WS4, and each task moves one
-  view across and deletes its vanilla counterpart in the same commit.
+  It renders every view. `index.html` is down to the app bar, the quit dialog
+  and the anti-flash boot script, none of which is a view; WS4.6 takes those.
 
   **Each migrated view registers itself with the router.** `main.ts` registers
   the sections it still owns by `el("#id")`; a Svelte view has no id to look
@@ -12,8 +10,8 @@
   one thing that decides which section is showing, which is the invariant it
   was written for.
 
-  Views still to come: `Review` and `Timeline` in WS4.5. WS4.6 deletes what
-  is left of the markup.
+  Every view lives here now. WS4.6 deletes what is left of `index.html`: the
+  app bar, the quit dialog and the boot script.
 
   It imports no stylesheet. `styles/tokens.css` is pulled in by `styles.css`,
   which `index.html` loads as a `<link>` before first paint; a token block
@@ -30,9 +28,11 @@
 <script lang="ts">
 import { registerView } from "../router";
 import Library from "./components/library/Library.svelte";
+import Review from "./components/review/Review.svelte";
 import Settings from "./components/settings/Settings.svelte";
 
 let libraryNode: HTMLElement;
+let reviewNode: HTMLElement;
 let settingsNode: HTMLElement;
 
 // On mount, not in `main.ts`: these nodes do not exist until this renders,
@@ -43,12 +43,17 @@ let settingsNode: HTMLElement;
 // for the `showView` that hid everything else.
 $effect(() => {
   registerView("library", libraryNode);
+  registerView("review", reviewNode);
   registerView("settings", settingsNode);
 });
 </script>
 
 <section bind:this={libraryNode} id="library-view">
   <Library />
+</section>
+
+<section bind:this={reviewNode} id="review-view" class="review-view" hidden>
+  <Review />
 </section>
 
 <section bind:this={settingsNode} id="settings-view" class="view" hidden>

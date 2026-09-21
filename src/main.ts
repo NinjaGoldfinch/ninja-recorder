@@ -10,8 +10,7 @@ import { applyDefaultSort, refreshDiskUsage, refreshLibrary } from "./lib/stores
 import { syncFromPrefs } from "./lib/stores/settings.svelte";
 import { loadPrefs } from "./prefs";
 import { initQuit, quitEverything } from "./quit";
-import { initReview } from "./review";
-import { initRouting, mountApp, registerView } from "./router";
+import { initRouting, mountApp } from "./router";
 import { initStatus } from "./status";
 import { applyThemePref, initTheme } from "./theme";
 import { initToast } from "./toast";
@@ -26,10 +25,15 @@ window.addEventListener("DOMContentLoaded", () => {
   // existing.
   initDesktop();
 
-  // The library registers itself from `App.svelte`, because its node does
-  // not exist until that component mounts (WS4.3).
-  registerView("review", el("#review-view"));
-  registerView("settings", el("#settings-view"));
+  // **No `registerView` here at all any more.** Every view registers itself
+  // from `App.svelte`, because none of their nodes exist until that component
+  // mounts (WS4.3 through WS4.5).
+  //
+  // A line was left behind when WS4.4 deleted `#settings-view`, and `el`
+  // throws on a miss by design, so `main.ts` threw here before `mountApp` and
+  // the whole frontend failed to boot. Nothing caught it: no test imports this
+  // file, and the Windows smoke test asserts the *process* reaches `setup`.
+  // `main.boot.test.ts` is the test that would have.
 
   initToast();
   // Before the close button can be pressed, which is immediately.
@@ -38,7 +42,6 @@ window.addEventListener("DOMContentLoaded", () => {
   // worth saying, and the views below will be showing stale or empty data
   // because of it.
   initDaemonStatus();
-  initReview();
   initStatus();
   initDevPortal();
   // After `initToast`: a *refused* install — a game started between the
