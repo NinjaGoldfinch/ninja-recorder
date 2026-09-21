@@ -406,12 +406,34 @@ mod tests {
 
     // --- the read-only pool -------------------------------------------------
 
-    /// A number no other test in this process will use. The tests run
-    /// concurrently and each wants its own database file; sharing one would
-    /// make a failure depend on which ran first.
-    fn next_dir() -> usize {
+    /// A directory no other test, and no earlier run, will use.
+    ///
+    /// The process id and a counter are not enough between them, which cost a
+    /// CI run to establish. The counter restarts at 0 in every test binary and
+    /// CI runs `cargo test` twice in one job, once with `--features devtools`;
+    /// Windows reuses process ids freely inside a job; and the cleanup at the
+    /// end of each test below used to run while the pools were still open, so
+    /// on Windows the delete failed silently against a live file handle. The
+    /// second run then opened the first run's migrated database, and
+    /// `opening_before_the_schema_exists_recovers_when_it_appears` found a
+    /// schema where it asserts there is none.
+    ///
+    /// The clock separates runs. Removing any survivor first makes a collision
+    /// harmless rather than merely unlikely, which matters because the failure
+    /// it caused was intermittent and looked like flakiness.
+    fn scratch_dir(prefix: &str) -> std::path::PathBuf {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
-        NEXT.fetch_add(1, Ordering::Relaxed)
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let dir = std::env::temp_dir().join(format!(
+            "ninja-recorder-{prefix}-{}-{nanos:x}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     /// A pool on a throwaway file, opened the way the UI opens the library.
@@ -420,9 +442,7 @@ mod tests {
     /// daemon's writer made the schema, and the UI's connections can only read
     /// it.
     fn two_process_pools() -> (Pool, Pool, std::path::PathBuf) {
-        let dir = std::env::temp_dir()
-            .join(format!("ninja-recorder-ro-{}-{}", std::process::id(), next_dir()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = scratch_dir("ro");
         let path = dir.join("library.sqlite");
 
         let daemon = Pool::open(&path, schema).unwrap();
@@ -454,6 +474,9 @@ mod tests {
             .expect_err("a reader must refuse a write");
         assert!(error.to_string().contains("readonly"), "got: {error}");
 
+        // Before the delete: Windows refuses to remove a file something still
+        // holds open, and `remove_dir_all`'s failure here is ignored.
+        drop((_daemon, ui));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -470,6 +493,7 @@ mod tests {
             ui.read().query_row("SELECT v FROM t LIMIT 1", [], |r| r.get(0)).unwrap();
         assert_eq!(value, 42, "the UI reads the daemon's writes from the same file");
 
+        drop((daemon, ui));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -478,9 +502,7 @@ mod tests {
     /// that was already open, without it being reopened.
     #[test]
     fn opening_before_the_schema_exists_recovers_when_it_appears() {
-        let dir = std::env::temp_dir()
-            .join(format!("ninja-recorder-ro-early-{}-{}", std::process::id(), next_dir()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = scratch_dir("ro-early");
         let path = dir.join("library.sqlite");
 
         // The UI first, on a path with nothing behind it.
@@ -498,6 +520,7 @@ mod tests {
             ui.read().query_row("SELECT v FROM t LIMIT 1", [], |r| r.get(0)).unwrap();
         assert_eq!(value, 7, "the same connection sees the table once it exists");
 
+        drop((daemon, ui));
         let _ = std::fs::remove_dir_all(dir);
     }
 }
