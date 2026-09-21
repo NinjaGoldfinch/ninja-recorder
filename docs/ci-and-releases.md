@@ -58,14 +58,14 @@ other end: it needs everything already compiled.
 rather than a gate. WS4.7 brought the count to zero so that the convention
 means something: **any warning in a diff is one the diff introduced.**
 
-Four suppressions carry the exceptions, each with its reason where it applies:
+Three suppressions carry the exceptions, each with its reason where it applies.
+**None of them is in a test.**
 
 | Where | Rule | Why |
 |---|---|---|
 | `**/*.svelte` | `noUnusedVariables`, `noUnusedImports` | Biome lints a component's `<script>` and does not parse its template, so a prop the markup reads looks unused. A tool limitation, not debt; `svelte-check` does see the template |
 | `app.css`, `dev.css` | `noDescendingSpecificity` | a reading-order convention, not correctness: the higher-specificity selector wins whichever comes first. Five of the six in `dev.css` are false positives, matching `.kv-table th` against `table.grid th` when no element is both |
 | `app.css`, `dev.css` | `noImportantStyles` | `[hidden]` is a bare attribute selector, so any class rule setting `display` beats it. Without the `!important` an error overlay sits over every video |
-| `primitives.test.ts` | `noExplicitAny` | one shared mount helper across six components |
 
 The override that disabled the linter outright for `index.html` and `dev.html`
 is gone. It was there because the markup carried lint errors that could only be
