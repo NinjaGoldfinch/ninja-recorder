@@ -185,13 +185,31 @@ should test. The second recording in particular
 matters: the inherited-markers half of the bug only shows on the recording
 *after* the one that was killed.
 
-- [ ] Start a recording. Kill **the daemon** from Task Manager mid-game.
-- [ ] The window says the recorder is not running, in a strip under the app bar
+- [x] Start a recording. Kill **the daemon** from Task Manager mid-game.
+- [x] The window says the recorder is not running, in a strip under the app bar
       that stays until it is no longer true. It must not be a toast that
       vanishes while the problem persists.
-- [ ] The UI starts another daemon and the strip clears by itself.
-- [ ] The **recording file is playable**. A fragmented MP4 is valid up to the
+- [x] The UI starts another daemon and the strip clears by itself.
+- [x] The **recording file is playable**. A fragmented MP4 is valid up to the
       point it was cut off, which is the guarantee that survives a crash.
+
+**2026-09-21, WS3 session: 18 of 28 rows on the #130 sheet pass.** The tray is
+fully exercised and the daemon's headless half holds: a game recorded with no
+UI process, "Recording saved" arrived with the window closed, and the row was
+in the library at the next launch. The dev portal drove the daemon over the
+pipe, and a second Windows account was refused at the ACL. The update ran end
+to end apart from the relaunch. Ticks below are from that session unless an
+earlier dated note claims them.
+
+**What that session did not reach, and why each one matters:**
+
+| Open | Section | Why it is not a formality |
+|---|---|---|
+| `daemon.log` holds the finalize, with no `WARN [notify]` | 5.0.5 | The notification was *seen*, so the absence of a warning is the only evidence the daemon took the path it was supposed to rather than a fallback |
+| The UI killed mid-game, all three rows | 5.0.6 | **WS3.4's exit criterion.** The other direction from the daemon kill, and the only untested one of the two |
+| The row and its markers survive a killed daemon | 4.1 | #150 landed specifically to make this true and has never been run |
+| Start on login, all four rows | 5.0.2 | The argument list is an on-disk contract written once and replayed for years |
+| The app comes back on the new version | 5.0.4 | The install was handed over; nothing confirmed what came back |
 - [ ] The recording does **not** appear in the library while the daemon is
       down. Its row exists but is unfinished, and an unfinished row is not a
       library entry.
@@ -471,7 +489,7 @@ its absence on a fresh profile is a setting rather than a fault.
 - [ ] Closing the window the first time shows the "still running in the tray"
       notice, and closing it again does **not**.
 - [ ] Settings → Notifications → Reset makes that notice appear once more.
-- [ ] Finishing a game shows "Recording saved" with the file name and marker
+- [x] Finishing a game shows "Recording saved" with the file name and marker
       count, **with the window closed**. This is the one that says the split
       worked: the process that noticed the game ended is the one that told you.
 - [ ] Starting a game shows "Recording started" when that kind is enabled, again
@@ -522,13 +540,13 @@ at all. That is the design, not a fault.
       toast, no Windows notification, no dialog. That is the design, not a
       missing piece.
 - [ ] "Check now" produces the same answer without waiting.
-- [ ] **The gate.** Start a game. While the header reads Recording, the Install
+- [x] **The gate.** Start a game. While the header reads Recording, the Install
       button is disabled and the row says why. Confirm the same during
       `Game starting…` and `Saving…`. All three refuse.
-- [ ] The button re-enables on its own once the game ends, **without**
+- [x] The button re-enables on its own once the game ends, **without**
       reopening Settings or restarting the app. This is the `status.ts` edge
       refresh; if it needs a reload, that hook is broken.
-- [ ] Install. The app exits, the NSIS installer runs *passively* (a progress
+- [x] Install. The app exits, the NSIS installer runs *passively* (a progress
       bar, no wizard to click through), and the app comes back. Settings →
       About now shows the new version and offers nothing.
 - [ ] The install did **not** create a second entry in Apps & Features, a
@@ -544,7 +562,7 @@ at all. That is the design, not a fault.
       is exactly what renaming the product was meant to prevent.
 - [ ] Pull the network cable and press "Check now": the row reports the failure
       in words and the app carries on recording normally.
-- [ ] Tamper check, which needs a scratch release: replace the installer
+- [x] Tamper check, which needs a scratch release: replace the installer
       attached to a release without updating `latest.json`, and confirm the
       download is **rejected** rather than run. This is the only test that
       exercises the signature at all.
@@ -640,9 +658,9 @@ needs a window.
       afterwards.
 - [ ] Quit the daemon while the UI is open. The UI reports a lost connection
       rather than hanging, and reconnects when a daemon is started again.
-- [ ] Start a recording, then close the UI window entirely. The recording
+- [x] Start a recording, then close the UI window entirely. The recording
       continues and the row appears in the library when the UI is reopened.
-- [ ] **The exit criterion for 3.7.** With a devtools build, open the dev
+- [x] **The exit criterion for 3.7.** With a devtools build, open the dev
       portal and work through every panel. Each one drives the *daemon's*
       database, supervisor and recorder: Overview's counts, Database's tables,
       Simulate's state injection and Log's files should all describe the daemon
