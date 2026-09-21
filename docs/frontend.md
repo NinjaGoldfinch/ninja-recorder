@@ -24,33 +24,32 @@ flowchart TB
     ROUTER["router.ts<br/><small>owns: which view is showing</small>"]
     THEME["theme.ts<br/><small>owns: html[data-theme]</small>"]
     PREFS["prefs.ts<br/><small>owns: the preference cache</small>"]
+    DESK["desktop.ts<br/><small>owns: the browser behaviours we suppress</small>"]
+    APP["lib/App.svelte<br/><small>the root: app bar, strip, three views,<br/>quit dialog, toast</small>"]
+    SHELL["lib/components/shell/<br/><small>AppBar, DaemonStrip, QuitDialog, Toast</small>"]
     STATUS["lib/stores/status.svelte.ts<br/><small>owns: the poll timer</small>"]
     DAEMONS["lib/stores/daemon.svelte.ts<br/><small>owns: whether the recorder is there</small>"]
     QUITS["lib/stores/quit.svelte.ts<br/><small>owns: the two-process quit flow</small>"]
+    TOASTS["lib/stores/toast.svelte.ts<br/><small>owns: the transient message</small>"]
+    ABOUT["lib/stores/about.svelte.ts<br/><small>owns: the three live About lines</small>"]
     LIBV["lib/components/library/<br/><small>Library, Row, Toolbar, StatsBar,<br/>Loadout, Matchup, Slot, RowActions</small>"]
     LIBS["lib/stores/library.svelte.ts<br/><small>owns: the row set + every control</small>"]
     ICONS["lib/stores/icons.svelte.ts<br/><small>owns: when art has arrived</small>"]
     REVV["lib/components/review/<br/><small>Review (imperative island), Timeline,<br/>PlayerControls, MarkerList, MarkerTimes</small>"]
     REVS["lib/stores/review.svelte.ts<br/><small>owns: which recording, its markers,<br/>samples and window</small>"]
-    SETV["lib/components/settings/<br/><small>Settings, Appearance, BackgroundTray,<br/>Notifications, AudioSettings, Storage,<br/>About, Update, UpdateNotes</small>"]
+    SETV["lib/components/settings/<br/><small>Settings, Appearance, BackgroundTray,<br/>Notifications, AudioSettings, Storage,<br/>About, Update, UpdateNotes, SettingRow</small>"]
     SETS["lib/stores/settings.svelte.ts<br/><small>owns: autostart, audio, retention,<br/>the folder, mirrored prefs</small>"]
     UPD["lib/stores/update.svelte.ts<br/><small>owns: the update status</small>"]
-    ABOUT["lib/stores/about.svelte.ts<br/><small>owns: the three live About lines</small>"]
-    TOASTS["lib/stores/toast.svelte.ts<br/><small>owns: the transient message</small>"]
-    SHELL["lib/components/shell/<br/><small>AppBar, DaemonStrip, QuitDialog, Toast</small>"]
-    DESK["desktop.ts<br/><small>owns: the browser behaviours we suppress</small>"]
+    TL["lib/timeline/<br/><small>window, clusters, graph, stem,<br/>markers, navigate · pure, tested</small>"]
+    LIBP["lib/library/<br/><small>filters, sort, stats, scoreboard<br/>pure, tested</small>"]
+    SETP["lib/settings/<br/><small>notes, backfill, retention, audio,<br/>update, about · pure, tested</small>"]
+    REVP["lib/review/<br/><small>hotkeys, playback<br/>pure, tested</small>"]
     BRIDGE["bridge.ts<br/><small>composition root: picks a transport,<br/>exposes the generated client</small>"]
-    TRANSPORT["lib/transport/<br/><small>pipe.ts (live) · mock.ts<br/>invoke.ts unused since WS3.4</small>"]
+    TRANSPORT["lib/transport/<br/><small>pipe.ts (live) · mock.ts<br/>invoke.ts kept for the dev portal</small>"]
     CONTRACT["lib/contract/<br/><small>GENERATED from Rust</small>"]
-    BRIDGE --> TRANSPORT
-    BRIDGE --> CONTRACT
-    APP["lib/App.svelte<br/><small>the Svelte root: empty until WS4.3</small>"]
-    TOKENS["lib/styles/tokens.css<br/><small>every custom property,<br/>imported by styles.css</small>"]
-    TL["lib/timeline/<br/><small>window, clusters, graph, stem<br/>pure, tested</small>"]
-    LIBP["lib/library/<br/><small>filters, sort<br/>pure, tested</small>"]
-    DOM["dom.ts<br/><small>el, escapeHtml, escapeAttr</small>"]
     FMT["format.ts<br/><small>pure formatters + label fallbacks</small>"]
     TYPES["types.ts<br/><small>mirrors the Rust serde structs</small>"]
+    STYLES["lib/styles/<br/><small>tokens.css · app.css · dev.css</small>"]
 
     MAIN --> ROUTER
     MAIN --> APP
@@ -62,69 +61,88 @@ flowchart TB
     MAIN --> QUITS
     MAIN --> DESK
     DESK --> BRIDGE
+    BRIDGE --> TRANSPORT
+    BRIDGE --> CONTRACT
+    BRIDGE --> TYPES
     STATUS --> LIBS
     STATUS --> UPD
     STATUS --> ABOUT
-    SETV --> LIBS
-    SETV --> THEME
-    SETS --> PREFS
-    LIBV --> REVS
-    LIBS --> BRIDGE
-    REVS --> BRIDGE
-    SETS --> BRIDGE
     STATUS --> BRIDGE
-    PREFS --> BRIDGE
-    UPD --> BRIDGE
-    UPD --> TOASTS
-    SHELL --> UPD
-    SHELL --> ABOUT
     APP --> SHELL
+    APP --> LIBV
+    APP --> REVV
+    APP --> SETV
     SHELL --> DAEMONS
     SHELL --> QUITS
     SHELL --> TOASTS
+    SHELL --> UPD
+    SHELL --> ABOUT
+    LIBV --> LIBS
+    LIBV --> LIBP
+    LIBV --> ICONS
+    LIBV --> REVS
+    LIBV --> FMT
+    LIBS --> LIBP
+    LIBS --> BRIDGE
+    REVV --> REVS
+    REVV --> REVP
+    REVV --> TL
+    REVV --> FMT
+    REVS --> BRIDGE
     SETV --> SETS
+    SETV --> SETP
     SETV --> UPD
     SETV --> ABOUT
-    APP --> SETV
-    LIBV --> LIBP
-    LIBS --> LIBP
-    LIBV --> LIBS
-    LIBV --> ICONS
-    APP --> LIBV
-    LIBV --> FMT
-    REVV --> FMT
-    REVV --> REVS
-    REVV --> TL
-    APP --> REVV
-    BRIDGE --> TYPES
+    SETV --> LIBS
+    SETV --> THEME
+    SETS --> PREFS
+    SETS --> BRIDGE
+    PREFS --> BRIDGE
+    UPD --> BRIDGE
+    UPD --> TOASTS
     FMT -.->|"type-only"| TYPES
     style MAIN fill:#ede7f6,stroke:#5e35b1
     style BRIDGE fill:#e3f2fd,stroke:#1565c0
     style APP fill:#fff3e0,stroke:#ef6c00
-    style TOKENS fill:#fff3e0,stroke:#ef6c00
     style SHELL fill:#fff3e0,stroke:#ef6c00
     style DAEMONS fill:#fff3e0,stroke:#ef6c00
     style QUITS fill:#fff3e0,stroke:#ef6c00
     style TOASTS fill:#fff3e0,stroke:#ef6c00
+    style ABOUT fill:#fff3e0,stroke:#ef6c00
     style REVV fill:#fff3e0,stroke:#ef6c00
     style REVS fill:#fff3e0,stroke:#ef6c00
     style SETV fill:#fff3e0,stroke:#ef6c00
     style SETS fill:#fff3e0,stroke:#ef6c00
     style UPD fill:#fff3e0,stroke:#ef6c00
-    style ABOUT fill:#fff3e0,stroke:#ef6c00
     style LIBV fill:#fff3e0,stroke:#ef6c00
     style LIBS fill:#fff3e0,stroke:#ef6c00
     style ICONS fill:#fff3e0,stroke:#ef6c00
+    style STYLES fill:#fff3e0,stroke:#ef6c00
     style TL fill:#e8f5e9,stroke:#2e7d32
     style LIBP fill:#e8f5e9,stroke:#2e7d32
+    style SETP fill:#e8f5e9,stroke:#2e7d32
+    style REVP fill:#e8f5e9,stroke:#2e7d32
 ```
 
-`types.ts` sits apart deliberately: putting each shape beside its first
-consumer would make `bridge` → `review` → `bridge` a cycle.
+Orange is a component or the store that feeds it, green is pure and directly
+tested, and the two roots are the only modules that compose rather than own.
 
-`devportal.ts` is left off the graph: it is one button and a probe, and it is
-compiled out of what it talks to. Its edge to `bridge.ts` is the same
-`hasDevCommands` one `desktop.ts` draws.
+**Four modules sit outside the tree and are meant to.** `main.ts` composes,
+`theme.ts` owns `html[data-theme]`, `desktop.ts` suppresses browser behaviours
+at the document level, and `router.ts` decides which view is showing. None is
+a view and none looks up an element. Beside them sit the shared libraries the
+components import: `bridge`, `format`, `prefs`, `icons`, `router` and `types`.
+They are modules rather than markup and were never what "vanilla" meant here.
+
+`types.ts` sits apart deliberately: putting each shape beside its first
+consumer would make `bridge` -> `review` -> `bridge` a cycle.
+
+**The dev portal is a second tree, not a branch of this one.** `dev.html`
+mounts `lib/components/dev/DevApp.svelte`, which renders eleven panels against
+`lib/dev/` and `src/dev/`; nothing in the app proper may import any of it,
+because all of it is compiled out of a shipped build. It has its own document,
+its own stylesheet and its own entry point, and
+[docs/dev-portal.md](dev-portal.md) is its map.
 
 ### How a command reaches the backend
 
@@ -956,17 +974,18 @@ tray has just created, and a `navigate` event for a window that already exists.
 A `#review` fragment is ignored, because the review view with no recording
 loaded is not a state worth restoring into.
 
-## The Svelte seam
+## The root, and how it mounts
 
-WS4 is a strangler, not a rewrite, so the window runs two frontends at once for
-the length of it: the vanilla sections `index.html` still holds, and one Svelte
-5 root mounted beside them in `#svelte-root`, the last child of `.container`.
+WS4 was a strangler rather than a rewrite, so for its length the window ran two
+frontends at once: the sections `index.html` still held, and one Svelte root
+mounted beside them. There is one frontend now, and the arrangement that made
+the crossing safe is the arrangement that remains.
 
-`router.ts` owns the join, because it already owns the only question the two
-halves have to agree on, which is **which view is showing**. A second module
+`router.ts` owns the join, because it already owned the only question the two
+halves had to agree on, which is **which view is showing**. A second module
 toggling `hidden` is the exact failure `showView` was written to end, and a
-Svelte root that hid its own siblings would be that failure with a compiler in
-front of it.
+Svelte root that hid its own siblings would have been that failure with a
+compiler in front of it.
 
 | Export | What it does |
 |---|---|
@@ -974,9 +993,9 @@ front of it.
 | `unmountApp()` | takes it down, resolving `true` if there was anything to take down |
 | `appMounted()` | whether it is currently up |
 
-**A migrated view registers itself.** `main.ts` registers the sections it
-still owns by `el("#id")`; a Svelte view has no id to look up before it
-renders, so `App.svelte` hands its node to `registerView` on mount. That
+**A view registers itself.** There is no markup to look up any more, and a
+Svelte view has no id to look up before it renders, so `App.svelte` hands its
+node to `registerView` on mount. That
 happens *after* `initRouting` has read the URL fragment, which is why
 `registerView` sets `hidden` from the current view rather than trusting the
 node's default: a window opened at `#settings` would otherwise show the
@@ -984,8 +1003,8 @@ settings section and the library at once.
 
 **The root goes up once and stays up.** It is deliberately not driven from
 `showView`: `mount` and `unmount` destroy component state, so tying them to
-view changes would throw away a migrated view's scroll position and in-flight
-requests every time the user glanced at Settings. Visibility stays what it has
+view changes would throw away a view's scroll position and in-flight requests
+every time the user glanced at Settings. Visibility stays what it has
 always been, the `hidden` attribute on the host. `unmountApp` exists so that
 mounting is reversible, which is what makes the root testable; nothing calls it
 in normal use.
@@ -1037,9 +1056,10 @@ rendered and hidden.
 `escapeHtml` / `escapeAttr` on this path. Every one of the row's values used to
 be concatenated into a template string with an escape applied by hand at each
 site, and `vodTitle` falls back to a filename, which is untrusted input.
-Default interpolation replaces both. **`{@html}` anywhere under
-`lib/components/` would opt straight back out of it**, which is what
-`Row.test.ts`'s last two tests exist to catch.
+Default interpolation replaces both. **`{@html}` anywhere would opt straight
+back out of it**, which is what `Row.test.ts`'s last two tests and
+`markup-guard.test.ts` exist to catch. See
+[Escaping](#escaping-and-why-there-is-nothing-left-to-call).
 
 One thing deliberately did not change: a row is a focusable, clickable
 `role="listitem"`, which is what v1's markup did and what the a11y warnings in
@@ -1047,7 +1067,7 @@ One thing deliberately did not change: a row is a focusable, clickable
 item, and making every row contain a real button is a UX change rather than a
 migration. It is flagged in the component and worth its own issue.
 
-### What is left of the vanilla frontend
+### What stayed vanilla, and why
 
 WS4.6 deleted the last modules that owned an element. `index.html`'s body is
 one `<div id="app-root">`; `App.svelte` renders the app bar, the daemon strip,
@@ -1060,7 +1080,7 @@ the three views, the quit dialog and the toast.
 | `quit.ts` | `stores/quit.svelte.ts` + `shell/QuitDialog.svelte` |
 | `status.ts` | `stores/status.svelte.ts` (the poll kept; the pills go to a store) |
 | `appbar.svelte.ts`, `devportal.ts` | `shell/AppBar.svelte` |
-| `dom.ts` | deleted; the escape helpers moved to `src/dev/ui.ts`, and went with it in #72 |
+| `dom.ts` | deleted; its escape helpers moved to `src/dev/ui.ts` and went with that in #72 |
 
 Three modules stay vanilla and are meant to: `main.ts` composes, `theme.ts`
 owns `html[data-theme]`, and `desktop.ts` suppresses browser behaviours at the
@@ -1181,9 +1201,9 @@ rather than moving a call that is load-bearing.
 ### The pure logic comes out first
 
 WS4.2 moved the decisions out of `review.ts` and `library.ts` ahead of the
-views that will replace them, into `lib/timeline/` and `lib/library/`. Nothing
-changed behaviour; what changed is that all of it is now reachable without a
-DOM.
+views that replaced them, and every view after it did the same on the way
+across. Nothing changed behaviour; what changed is that all of it is reachable
+without a DOM.
 
 | Module | What it owns |
 |---|---|
@@ -1191,8 +1211,13 @@ DOM.
 | `timeline/clusters.ts` | markers too close together to draw separately, and which icon a cluster shows |
 | `timeline/graph.ts` | the advantage curve's max-abs downsampling, and the ruler's tick spacing |
 | `timeline/stem.ts` | whether a drifting audio stem is nudged back or seeked |
+| `timeline/markers.ts`, `timeline/navigate.ts` | what a marker is labelled, and which one a jump lands on |
 | `library/filters.ts` | which recordings the library shows, and whether anything is narrowing it |
 | `library/sort.ts` | facet ordering, and the row order the sort control picks |
+| `library/stats.ts`, `library/scoreboard.ts` | the header totals, and the lane opponent a row can name |
+| `review/hotkeys.ts`, `review/playback.ts` | which key means what, and the seek and rate arithmetic |
+| `settings/` | the release-note parse, the backfill and retention wording, the audio device list, and every About line |
+| `dev/` | the portal's routing, formatting, argument coercion, log filtering, cell parsing and seed presets |
 
 These were not untested by oversight. Every one of them read module-level
 mutable state or a form control, so asking "does a pinned-only filter hide an
@@ -1208,9 +1233,10 @@ against a title that says what the test means instead of against the
 fallback-to-filename rules, which have tests of their own.
 
 **Coverage is scoped to `src/lib/`** and floored at 80% by
-`npm run coverage`. Measuring the whole of `src/` would report a number
-dominated by the DOM wiring being strangled, which is not what the number is
-supposed to mean.
+`npm run coverage`. It was scoped that way while the number would otherwise
+have been dominated by the DOM wiring being strangled; it stays that way
+because `src/` outside `lib/` is now four composition modules and a mount,
+and `main.boot.test.ts` covers the only claim they make.
 
 ### What has moved across
 
@@ -1223,10 +1249,14 @@ supposed to mean.
 | the shell, and `index.html`'s body | WS4.6 | **landed**; `dom.ts`, `toast.ts`, `daemon.ts`, `devportal.ts` and `appbar.svelte.ts` deleted |
 | `DevApp.svelte` and eleven panels | #72 | **landed**; `src/dev/main.ts` rewritten to a mount, `src/dev/ui.ts` and `src/dev/panels/` deleted |
 
-Each of those deletes its vanilla counterpart and the markup `index.html` holds
-for it in the same commit, so no view is ever owned by both. The player is
-migrated last and stays an imperative island: it owns real DOM nodes, because
+Each of those deleted its vanilla counterpart and the markup `index.html` held
+for it in the same commit, so no view was ever owned by both. The player went
+last and stays an imperative island: it owns real DOM nodes, because
 `<video>` `currentTime` is not state anything should be diffing.
+
+WS4.7 closed the workstream with the three things that only make sense once
+everything has landed: the structural `{@html}` guard, a Biome-clean tree, and
+this document rewritten around the component tree rather than the crossing.
 
 The dev portal (`dev.html`, `src/dev/`) was out of scope under plan §9, Q6,
 which offered retiring it. It was reworked instead (#72): it is eleven Svelte
@@ -1342,9 +1372,40 @@ truth and wins any disagreement.
   playhead loop stops with it, and `resumeStem` hard-resyncs the stem on the
   way back, so it cannot return drifted.
 
-## Escaping
+## Escaping, and why there is nothing left to call
 
 `reconcile` imports any video file the user drops into the recordings folder,
-so a displayed recording name is **not necessarily ours**. `escapeHtml` is for
-text nodes and does not handle quotes; `escapeAttr` is the one for attribute
-values. Using the wrong one is an injection bug with a plausible trigger.
+so a displayed recording name is **not necessarily ours**, and `vodTitle`
+falls back to a filename.
+
+v1 answered that with two functions. `escapeHtml` was for text nodes and did
+not handle quotes; `escapeAttr` was the one for attribute values; and every
+interpolation site had to pick the right one. Using the wrong one was an
+injection bug with a plausible trigger, and getting it right forty times in a
+row was the only thing standing between a filename and the DOM.
+
+**Both are gone, and so is the choice.** Svelte's default interpolation escapes
+what it renders, `dom.ts` went with the vanilla shell in WS4.6, and `src/dev/ui.ts`
+went with the portal rewrite in #72. There is no escape helper left to reach
+for, which is the point: the way to render an untrusted string is to
+interpolate it.
+
+Three tests hold the line, and they answer different questions:
+
+| Test | Claim |
+|---|---|
+| `Row.test.ts` | the most exposed component renders a hostile title as text |
+| `UpdateNotes.test.ts` | release notes, fetched over HTTPS but **not covered by the update signature**, render as a parsed structure rather than markup |
+| `markup-guard.test.ts` | no component anywhere contains `{@html`, and nothing in `src/` assigns `innerHTML`, `outerHTML`, `insertAdjacentHTML` or calls `document.write` |
+
+The first two are about the components most likely to be handed something
+nasty. The third is the structural one, and it is the half a per-component test
+can never cover: it says no *future* component can reopen the hole. It checks
+that it is reading a real tree before it checks anything else, because a guard
+whose glob matches nothing passes forever, and it carries its own proof that
+the matcher bites.
+
+If a case for `{@html}` ever genuinely arrives, it needs an entry in that
+test's `ALLOWED` list with a reason, a sanitiser, and a test of its own.
+The list is empty today. Adding to it should be a deliberate, reviewed act,
+which is exactly what failing the guard makes it.

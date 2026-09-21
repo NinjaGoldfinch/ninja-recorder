@@ -19,9 +19,16 @@ import Pill from "./Pill.svelte";
 let host: HTMLElement | null = null;
 let instance: Record<string, unknown> | null = null;
 
-// biome-ignore lint/suspicious/noExplicitAny: each component has its own props
-// shape and the helper is shared; naming them all would be noise.
-function render(component: Component<any>, props: Record<string, unknown> = {}) {
+/**
+ * A shared mount helper. The props bag is loose on purpose: each of these
+ * components has its own shape, and naming six of them to type one test
+ * helper is more ceremony than the helper is worth.
+ */
+function render(
+  // biome-ignore lint/suspicious/noExplicitAny: see above.
+  component: Component<any>,
+  props: Record<string, unknown>,
+) {
   host = document.createElement("div");
   document.body.append(host);
   instance = mount(component, { target: host, props });
@@ -160,14 +167,14 @@ describe("DevToasts", () => {
   it("renders nothing when the stack is empty", async () => {
     const { clearDevToasts } = await import("../../stores/devToast.svelte");
     clearDevToasts();
-    expect(render(DevToasts).querySelector(".toast-stack")).toBeNull();
+    expect(render(DevToasts, {}).querySelector(".toast-stack")).toBeNull();
   });
 
   it("stacks rather than replacing, so a batch stays readable", async () => {
     const { devToast, clearDevToasts } = await import("../../stores/devToast.svelte");
     clearDevToasts();
 
-    const el = render(DevToasts);
+    const el = render(DevToasts, {});
     devToast("Seeded 5");
     devToast("Seeded 10", "ok");
     await Promise.resolve();

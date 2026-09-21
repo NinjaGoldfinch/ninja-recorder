@@ -52,6 +52,32 @@ other end: it needs everything already compiled.
 | 10 | `scripts/smoke-daemon.ps1` | the daemon actually runs | WS3.3 |
 | 11 | `scripts/smoke-ui.ps1` | the UI starts and finds it | WS3.3 |
 
+### The tree is at zero Biome warnings, and that is the point
+
+`biome ci` fails on errors, not warnings, so a clean tree is a convention
+rather than a gate. WS4.7 brought the count to zero so that the convention
+means something: **any warning in a diff is one the diff introduced.**
+
+Four suppressions carry the exceptions, each with its reason where it applies:
+
+| Where | Rule | Why |
+|---|---|---|
+| `**/*.svelte` | `noUnusedVariables`, `noUnusedImports` | Biome lints a component's `<script>` and does not parse its template, so a prop the markup reads looks unused. A tool limitation, not debt; `svelte-check` does see the template |
+| `app.css`, `dev.css` | `noDescendingSpecificity` | a reading-order convention, not correctness: the higher-specificity selector wins whichever comes first. Five of the six in `dev.css` are false positives, matching `.kv-table th` against `table.grid th` when no element is both |
+| `app.css`, `dev.css` | `noImportantStyles` | `[hidden]` is a bare attribute selector, so any class rule setting `display` beats it. Without the `!important` an error overlay sits over every video |
+| `primitives.test.ts` | `noExplicitAny` | one shared mount helper across six components |
+
+The override that disabled the linter outright for `index.html` and `dev.html`
+is gone. It was there because the markup carried lint errors that could only be
+fixed by rewriting it, which WS4 then did: both files are one `<div>` now, and
+both lint clean.
+
+**A suppression goes on the line above the thing reported, not the declaration
+around it.** A `biome-ignore` above `function render(...)` does not suppress a
+diagnostic inside its parameter list: Biome attributes the comment to the
+function and reports the suppression itself as unused, so the file ends up with
+two warnings instead of none.
+
 Steps 3 and 4 are `npm run` scripts rather than `npx` invocations, and that is
 load-bearing. Two packages in this tree ship a binary called `tsc`:
 `typescript` at 6.x, which is what `svelte-check` peer-requires, and

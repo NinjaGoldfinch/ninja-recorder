@@ -1,3 +1,13 @@
+/** biome-ignore-all lint/style/noDescendingSpecificity: this sheet is
+ * organised view-section-first, so a scoped override (`.player-controls
+ * .time-display`) is written where the view is and the shared base rule
+ * (`.time-display`) sits further down with the other shared rules. The rule
+ * is about reading order, not correctness: the higher-specificity selector
+ * wins whichever comes first, so every pair it reports already behaves the
+ * way it reads. Reordering 1400 lines to satisfy it is the one change whose
+ * failure mode is invisible in CI, since nothing here renders a pixel. Each
+ * of these resolves on its own as rules move into components (DEVELOPMENT.md
+ * §4.8), and this comment goes with the last of them. */
 /* The application's styles.
  *
  * **Still one global stylesheet, and still loaded by a `<link>`.** WS4.6 moved
@@ -82,6 +92,9 @@ body {
  * tooltip permanently visible. Enforcing it once here is more robust than
  * remembering a `[hidden]` companion rule for each new component. */
 [hidden] {
+  /* biome-ignore lint/complexity/noImportantStyles: the comment above is
+   * the reason. Without it a class rule setting `display` beats `[hidden]`,
+   * which is how an error overlay ends up sitting over every video. */
   display: none !important;
 }
 

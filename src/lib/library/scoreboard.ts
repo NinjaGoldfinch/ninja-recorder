@@ -28,7 +28,7 @@ export function selfPlayer(row: RecordingRow): ScoreboardPlayer | null {
 export function laneOpponent(row: RecordingRow): ScoreboardPlayer | null {
   const players = parseScoreboard(row.scoreboard_json)?.players ?? [];
   const us = players.find((p) => p.is_us) ?? null;
-  if (!us || !us.position) return null;
+  if (!us?.position) return null;
   return players.find((p) => p.team !== us.team && p.position === us.position) ?? null;
 }
 
