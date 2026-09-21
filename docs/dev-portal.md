@@ -51,23 +51,58 @@ one forgotten click from shipping all of that, so the asset is now simply
 never there. CI uploads it as a workflow artifact instead, which
 expires on its own and cannot be published by accident.
 
-## How a panel is mounted
+## How a panel is rendered
 
-A panel is a plain object with `mount(root, ctx)` and an optional `unmount`.
-`mount` is called again on every navigation and on every `ctx.refresh()`: the
-`r` key, a `library-changed` event, and several panels' own buttons, so it has
-to be safe to run repeatedly.
+A panel is a Svelte component under `src/lib/components/dev/panels/`.
+`DevApp.svelte` reads the hash, picks the component out of a registry, and
+renders it inside a `{#key}` whose value is the panel id and a generation
+counter. Navigating changes the id; pressing `r` or receiving a
+`library-changed` bumps the counter. Either way the old component is destroyed
+and a new one is created, which is what a panel's load effect keys off.
 
-**Each mount gets a fresh `#dev-main`.** Panels bind delegated handlers to the
-element they are handed and have no way to unbind them; `unmount` is not given
-a reference to it. Mounting onto the same element every time therefore stacked
-one handler per mount, and two live handlers turn a single click into two
-toggles: a no-op that renders once on the way through, which is what made the
-Log panel's tag chips light up and revert within a frame. Handlers left behind
-by *other* panels are the worse half: `[data-reload]` and `[data-copy]` are not
-unique across the panel set. `mountPanel` replaces the element with a shallow
-clone of itself, which carries the id, class and tabindex and no listeners, so
-no panel has to know any of this.
+Panels get their arguments two ways, and the distinction is load-bearing:
+
+- **`route.payload`** is the one path segment after the panel id. `#/library/12`
+  is what lets the main window's rows open the portal *on* a recording. It is
+  small by construction and it is in the URL, so the link can be shared and
+  reopened. Only the Library panel takes one.
+- **`ctx.takeHandoff()`** is a value one panel passes to another in memory,
+  consumed on read. The only caller is Fixtures sending a fixture body to
+  Simulate, and the captured `eog-stats-block` is 99 KB of nested JSON, which
+  is not something to put in a URL.
+
+### What the rewrite removed
+
+Panels used to be plain objects with `mount(root, ctx)` and an optional
+`unmount`, and `mount` ran again on every navigation and every `refresh()`.
+They bound delegated handlers to the element they were handed and had no way to
+unbind them, since `unmount` was not given a reference to it. Mounting onto the
+same element therefore stacked one handler per mount, and two live handlers
+turn a single click into two toggles: a no-op that renders once on the way
+through, which is what made the Log panel's tag chips light up and revert
+inside a frame. Handlers left behind by *other* panels were the worse half:
+`[data-reload]` and `[data-copy]` were not unique across the panel set. The
+workaround was to replace `#dev-main` with a shallow clone of itself on every
+navigation, so each panel got a listener-free element.
+
+Svelte removes a component's handlers with the component, so there is nothing
+to clone and nothing to explain.
+
+The `onHealth` hook went the same way. A panel could opt into the 1 Hz
+`dev_health` tick so it could patch one element in place, because a full redraw
+would have wiped whatever was typed into a textarea. Form values are component
+state now, so Simulate's state strip simply reads the shared poll.
+
+### The parts that are not components
+
+Pure decisions live in `src/lib/dev/` and are unit-tested: the panel registry
+and hash route (`panels.ts`), value formatting (`format.ts`), command argument
+coercion (`args.ts`), the seed presets (`seed.ts`), log filtering (`log.ts`),
+the SQL console's snippets and cell parsing (`sql.ts`), the diagnostics
+concerns (`diagnostics.ts`) and the scripted simulate input (`simulate.ts`).
+`src/dev/` keeps what talks to the backend: `ipc.ts`, `types.ts` and the
+generated `commands.generated.ts`, plus a `main.ts` that finds the root and
+mounts.
 
 ## Panels and what each one exists to solve
 

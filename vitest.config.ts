@@ -51,10 +51,12 @@ export default defineConfig({
     // for why the call is not the thing that moves.
     setupFiles: ["src/test-setup.ts"],
     include: ["src/**/*.test.ts"],
-    // The dev portal is a separate entry point with its own lifecycle; WS4
-    // leaves it on the vanilla stack (plan §9, Q6), so it is out of scope
-    // here rather than untested by accident.
-    exclude: ["src/dev/**", "node_modules/**", "dist/**"],
+    // **`src/dev/**` is no longer excluded.** It was, because plan §9 (Q6) had
+    // the portal staying on the vanilla stack, so its code was out of scope
+    // rather than untested by accident. #72 reversed that: the portal is being
+    // reworked alongside the app, and its logic is as testable as anything
+    // else once it stops being markup builders.
+    exclude: ["node_modules/**", "dist/**"],
 
     // `npm run coverage`. Scoped to `src/lib/`, and that is the whole point:
     // measuring the vanilla modules would report a number dominated by
