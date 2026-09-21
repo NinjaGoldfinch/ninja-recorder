@@ -1,9 +1,18 @@
 //! **P0c stage 1 (WS1.3, #7): can process loopback isolate game audio?**
 //!
-//! This is the hard fork in WS1. If WASAPI process loopback cannot capture one
-//! application's audio without capturing everything else, per-application audio
-//! is not achievable without libobs, and the licence goal at v2.1 has to be
-//! weighed against losing it (#67, Q1a) before anything downstream continues.
+//! **Not a licence trade, though #7 and #67 were both written as though it
+//! were.** The premise was that failing here means keeping libobs to keep
+//! per-application audio. It does not: the fork captures per-app audio with
+//! `wasapi_process_output_capture`, which is OBS's process-loopback source,
+//! which is the same `ActivateAudioInterfaceAsync` +
+//! `AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK` this file calls. There is no
+//! fallback inside it either. So if this fails, it fails for both backends and
+//! keeping libobs saves nothing. #67 has the evidence.
+//!
+//! What that leaves is a question about Windows rather than about our code:
+//! does process loopback work against a Vanguard-protected process? This spike
+//! answers it in isolation, away from a capture pipeline that could be blamed
+//! for the result.
 //!
 //! The spike answers exactly that and nothing else: point it at a process,
 //! record for a while, write a WAV. Play the WAV. If the game is in it and
