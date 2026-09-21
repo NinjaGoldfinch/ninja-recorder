@@ -414,26 +414,70 @@ Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' |
   Select-Object -ExpandProperty 'ninja-recorder'
 ```
 
+**2026-09-22: `l1` and `l2` pass, with Defender live.** After a real logon:
+one `ninja-recorder.exe`, its command line carrying `--daemon`, no second
+process without it, and no WebView2 process parented to ours. The Run value is
+the installed exe path followed by `--daemon`, written by the app rather than
+by hand.
+
+Taken with the Defender exclusion **off**, which is what makes any of it worth
+anything: see #181. Nothing fired from the logon, from the Run key starting the
+daemon, from relaunching the binary, or from the app writing and removing the
+key through Settings. Unticking removes the value entirely and ticking writes
+it back with `--daemon`.
+
+**The Defender quarantine that started that investigation was caused by the
+test method, not by the app.** Writing the Run key from PowerShell and then
+spawning the target through `Win32_Process::Create` is two malware techniques
+in sequence; the app doing the same write itself is not. Two entries in the
+same registry key make the point better than any argument: `Discord` and
+`Spotify` both run from AppData, from HKCU Run, with arguments, and neither is
+flagged. What they have that this build does not is a signature.
+
 - [ ] A fresh install registers **nothing**: the key is absent and the
       Settings checkbox is off before it is ever touched.
-- [ ] Ticking it creates the value, and it holds the installed exe's full path
+- [x] Ticking it creates the value, and it holds the installed exe's full path
       **followed by `--daemon`** (WS3.5). A path with no flag means a login
       start that opens a window; `--hidden` means a build from before WS3.5,
       which still works but starts a UI rather than a daemon.
-- [ ] Unticking it removes the value entirely.
+- [x] Unticking it removes the value entirely.
 - [ ] The setting survives a restart of the app: reopen Settings and confirm
       the checkbox still reflects the key.
-- [ ] **Sign out and back in.** Task Manager shows **one** `ninja-recorder.exe`
-      and it is the daemon: no window, no taskbar button, and no
-      `msedgewebview2.exe`. The tray icon is there, and the recorder is live.
-      Start a game without opening the window and confirm it records. This is
-      WS3.5's exit criterion: login starts a daemon only.
-- [ ] Open the app from that tray icon. Now there are two processes and still
+- [x] **Sign out and back in.** Task Manager shows **one**
+      `ninja-recorder.exe` and it is the daemon: no window and no taskbar
+      button. The tray icon is there, and the recorder is live. Start a game
+      without opening the window and confirm it records. This is WS3.5's exit
+      criterion: login starts a daemon only.
+
+      **Do not check this by looking for `msedgewebview2.exe`.** WebView2 is
+      shared infrastructure: Widgets, Outlook, Teams and plenty else host it,
+      and a normal desktop runs a dozen of them at rest. Their presence says
+      nothing about this app. The claim is that *our* process did not start a
+      window, so ask about our process:
+
+      ```powershell
+      $proc = @(Get-CimInstance Win32_Process -Filter "Name='ninja-recorder.exe'")
+      @($proc | Where-Object { $_.CommandLine -notmatch '--daemon' }).Count   # must be 0
+      ```
+
+      Or, if the webview itself is what you want to see, filter to the ones
+      whose parent is ours rather than counting them all.
+- [x] Open the app from that tray icon. Now there are two processes and still
       **one** tray icon, because the UI no longer builds its own (WS3.5).
-- [ ] An entry written by an older build (`--hidden`) still works: set the value
+- [x] An entry written by an older build (`--hidden`) still works: set the value
       by hand, sign out and back in, and confirm the app records. It starts a UI
       with no window, which starts a daemon itself, so Task Manager shows two
       processes rather than one. Expected, and the reason `--hidden` is kept.
+
+      Checked by launching the exe with the flag directly rather than through
+      the registry and a logon, which tests the same claim: the flag is what
+      decides the shape, and `l1` already covers the value being written.
+
+      **`--hidden` builds no window at all, rather than a hidden one.** No
+      WebView2 process is parented to ours under that flag, where opening the
+      window normally produces one. A hidden window would still cost a webview,
+      so this is the better of the two possible meanings and worth not
+      regressing.
 - [ ] Delete the entry from **Task Manager → Startup** with the app running,
       then reopen Settings: the checkbox must now read *off*. This is the case
       the "no `settings_kv` mirror" decision exists for
@@ -551,10 +595,10 @@ at all. That is the design, not a fault.
       About now shows the new version and offers nothing.
 - [ ] The install did **not** create a second entry in Apps & Features, a
       second Start-menu shortcut, or a second install directory.
-- [ ] Start-on-login, the close-button setting, the audio preset and the
+- [x] Start-on-login, the close-button setting, the audio preset and the
       retention policy all survive the update; they live in `settings_kv` and
       the `Run` key, neither of which the installer touches.
-- [ ] The VOD library survives it: recordings are still listed, and their files
+- [x] The VOD library survives it: recordings are still listed, and their files
       still play.
 - [ ] **Install the devtools bundle and confirm it offers nothing at all.**
       Settings → About must read "not available in this build". A dev bundle
@@ -577,8 +621,10 @@ reported a second launch as already running, and shut down cleanly on Ctrl-C.
 None of that has been run on Windows, where the address is a named pipe and the
 backend is libobs, and this section is what stands in for that.
 
-- [x] `ninja-recorder.exe --daemon` starts and keeps running. Task Manager
-      shows one process and **no** `msedgewebview2.exe` alongside it.
+- [x] `ninja-recorder.exe --daemon` starts and keeps running, with no window
+      and no second `ninja-recorder.exe`. (This row originally said "no
+      `msedgewebview2.exe`", which is not a sound test: see §5.0.2. It passed
+      on a machine where nothing else happened to be hosting WebView2.)
 - [x] `app_data_dir()/logs/daemon.log` is created and names the pipe it bound.
       The UI's own log is `ui.log` beside it, and neither rotates the other.
 - [x] The pipe exists while the daemon runs. From PowerShell:
@@ -640,6 +686,20 @@ and the row to add beside it is that an entry written by an older build still
 says `--hidden` and must keep working.
 
 ### 5.0.6 The UI as a client of the daemon
+**2026-09-22: WS3 is 26 of 28.** The sheet on #130 is the row-level record.
+Everything passes except the two below, and one of them is what #150 landed
+for.
+
+| Open | Why it is still worth doing |
+|---|---|
+| `daemon.log` holds the finalize, with no `WARN [notify]` | The notification was seen, so the absence of a warning is the only evidence the daemon took the path it was meant to rather than a fallback |
+| The row and its markers survive a killed daemon (§4.1) | #150 landed to make this true and it has never been run. It is also the state PR #180 fixes the review player for |
+
+**WS3.4's exit criterion passes**: the UI killed mid-game, relaunched, showing
+the recording still in flight with the elapsed time continuing, and a complete
+VOD afterwards. That is also WS1.2's (#6) exit criterion, which needs no
+separate run.
+
 
 Since WS3.4 the window runs no recorder of its own: every command it issues is
 forwarded to the daemon over the pipe, and the daemon pushes a snapshot and a
@@ -651,7 +711,7 @@ needs a window.
       shows two `ninja-recorder.exe` processes.
 - [ ] `app_data_dir()/logs/` now holds both `ui.log` and `daemon.log`, and
       neither rotates the other.
-- [ ] **The exit criterion for 3.4.** Start a game and let recording begin.
+- [x] **The exit criterion for 3.4.** Start a game and let recording begin.
       Kill the UI process from Task Manager, then launch it again. Within one
       reconnect it shows the recording still in flight, with the elapsed time
       continuing rather than restarting. The VOD is complete and playable
