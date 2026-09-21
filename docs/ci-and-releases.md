@@ -52,6 +52,36 @@ other end: it needs everything already compiled.
 | 10 | `scripts/smoke-daemon.ps1` | the daemon actually runs | WS3.3 |
 | 11 | `scripts/smoke-ui.ps1` | the UI starts and finds it | WS3.3 |
 
+### Trimming libobs is opt-in, and the cache key knows about it
+
+`scripts/trim-libobs.ps1` removes everything from the staged capture backend
+that `scripts/libobs-keep.txt` does not name. It is WS1.1's P0a arm (#5): the
+trimmed backend is the fallback if the P0c spikes fail and a selectable second
+backend for one release if they pass, and either way its size is what is being
+measured.
+
+It runs only when the repository variable `LIBOBS_TRIM` is `1`, and the run
+does an inventory pass before the applying pass.
+
+**Two things about it are load-bearing.**
+
+The keep-list has never been compared against a real staged directory, because
+none exists off Windows. `-Inventory` is what turns it from a guess into a
+keep-list: it prints what is there and, more usefully, which keep-list patterns
+matched nothing. A pattern matching nothing is either a file that moved or a
+file that was never there, and both are worth knowing before deleting the rest.
+
+**The trim flag is part of the cache key.** `actions/cache` saves at post-job,
+so a run with `LIBOBS_TRIM` on would otherwise write a trimmed directory under
+the untrimmed key, and every later build would restore it and ship a trimmed
+backend that nobody asked for. That failure would look exactly like the
+capture backend spontaneously breaking, weeks later, on a commit that touched
+none of it.
+
+A wrongly removed plugin still builds, still packages, still installs, and then
+does not capture. The exit criterion is a clean plugin-load log and a recording
+that plays, not a green run.
+
 ### The tree is at zero Biome warnings, and that is the point
 
 `biome ci` fails on errors, not warnings, so a clean tree is a convention

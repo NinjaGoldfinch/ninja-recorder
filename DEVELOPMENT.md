@@ -2197,10 +2197,108 @@ day this package grows a second binary that genuinely has to ship.
 
 ---
 
-## 17. Contract and transport
+## 16. The capture gate, and what it is allowed to decide
 
-§16 is WS1.5's to write and does not exist yet; the numbers are reserved by the
-plan, so this is §17 with a gap above it rather than a renumbering.
+**WS1.5's section, and most of it is deliberately empty.** The gate is three
+spikes whose whole purpose is to produce measurements, and an empty cell here
+is a true statement where a plausible number is not.
+
+What is written below is the half that does not need hardware: what each arm
+is for, what its result is allowed to decide, and one premise that turned out
+to be wrong.
+
+### The three arms
+
+| Arm | Asks | Where |
+|---|---|---|
+| **P0a** | Can libobs be trimmed to a shippable keep-list? | WS1.1, #5 |
+| **P0b** | Can `LibObsRecorder` be driven by a `--daemon` process? | WS1.2, #6 |
+| **P0c** | Can we capture and encode without libobs at all? | WS1.3 and WS1.4, #7 and #8 |
+
+P0a and P0b are about the **fallback**: they keep libobs viable as a selectable
+second backend for one release (WS1.7). P0c is about **Option B**, the target,
+and it is the one WS8 is waiting on, because deleting libobs is what allows the
+licence to change at v2.1.
+
+P0c has two stages and they fail independently. Stage 1 is per-application
+audio; stage 2 is Windows.Graphics.Capture into a fragmented MP4.
+
+### The premise Q1a was written on is false
+
+Q1a (#67) asked, in advance, whether the licence goal at v2.1 outweighs losing
+isolated game audio if stage 1 fails. It assumed the alternative was to keep
+libobs and keep the audio.
+
+**Keeping libobs does not keep the audio.** The fork captures per-application
+audio with `wasapi_process_output_capture`, which is OBS's process-loopback
+source, which is `ActivateAudioInterfaceAsync` with
+`AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`: the same Windows API
+`spikes/p0c-audio` calls. The fork carries no fallback either, and says so in
+its own comment: a machine without process loopback "should lose per-app
+audio, not all recording".
+
+| If process loopback | libobs isolates | Option B isolates | Licence |
+|---|---|---|---|
+| works | yes | yes | proceeds, nothing traded |
+| fails | no | no | proceeds, nothing saved by staying |
+
+So the licence goal is never opposed by the audio feature, and stage 1's result
+cannot decide it either way. That is the same answer whichever way the spike
+lands, which is the property the plan wanted from answering Q1a in advance.
+
+**There is no third implementation.** Short of process loopback the only option
+is a virtual audio device driver, which needs a signed driver, an installer
+that installs one, and the user routing game audio by hand. It is a different
+product. Everything else is either injection, which §1.1 forbids and Vanguard
+bans, or the session APIs, which control a session's volume and return no PCM.
+
+### Stage 1 can be answered by the shipping build
+
+Because both backends call the same API, `windows-verification.md` §6's first
+row answers stage 1 without building a spike at all: record a Practice Tool
+game on the **Game** preset and check the track for real samples. Doing that
+first makes `p0c-audio` confirm a known answer rather than discover one, which
+is the cheaper order and needs no new build.
+
+### What the spikes are allowed to decide
+
+Naming this in advance is the point of the section, for the same reason Q1a was
+answered in advance.
+
+| Outcome | What follows |
+|---|---|
+| Stage 1 passes | Per-application audio survives into Option B. Nothing else changes. |
+| Stage 1 fails | Isolated audio is lost **on both backends**. Presets naming "game audio" have to be renamed, because a preset name that is not true is a bug (§2.5). The licence plan is unaffected. |
+| Stage 2 passes | Option B is viable and WS1.6 builds it. |
+| Stage 2 fails | Option B is not viable, WS1.7's trimmed libobs becomes the shipping backend rather than the fallback, and WS8 stops. This is the only result that ends the relicensing plan. |
+
+### The measurements
+
+Empty until the box produces them. Filling a cell here is WS1.5's actual
+deliverable; everything above is the frame it goes in.
+
+| Measurement | Arm | Result |
+|---|---|---|
+| Trimmed libobs: recording plays, plugin-load log clean | P0a | |
+| Trimmed libobs: bundle size | P0a | |
+| `LibObsRecorder` under `--daemon`: recording finalizes | P0b | |
+| Daemon-only RAM while recording | P0b | |
+| Process loopback isolates game audio from Discord | P0c-1 | |
+| Root PID the capture was attached to | P0c-1 | |
+| WGC frames reach a fragmented MP4 | P0c-2 | |
+| Worst drift over ten minutes, in frames | P0c-2 | |
+| A file killed at minute five is playable | P0c-2 | |
+| Encoder selected, and what was offered | P0c-2 | |
+
+**The vendor half of #8's exit criterion cannot be met.** It asks for encoder
+detection on two GPU vendors; #68 settled that only NVIDIA and software-only
+are available here, so the AMF and oneVPL orderings stay unverified. That is a
+recorded gap rather than a pending measurement, and the row above says what was
+offered rather than pretending to cover it.
+
+---
+
+## 17. Contract and transport
 
 WS2 made the command and event surface a single declaration in Rust, generated
 into TypeScript and checked in CI. This section is the half that carries it:

@@ -89,7 +89,8 @@ Two of them have been appended to since the import, and neither renumbers
 anything: `windows-verification.md` gains **§5.2** (the v2 measurement method's
 three empty rows; §5.0 was already "Launch modes", which is why it is not
 §5.0.5), and `ci-and-releases.md` gains the new gate list. `DEVELOPMENT.md` is
-untouched; v2's §16, §17 and §18 are WS1.5, WS2 and WS8's to write.
+untouched; v2's §17 has landed with WS2 and §16 with WS1.5, which
+leaves §18 as WS8's to write.
 
 ### Rewritten for v2, not carried
 

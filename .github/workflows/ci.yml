@@ -444,7 +444,12 @@ jobs:
         uses: actions/cache@v6
         with:
           path: src-tauri/target/libobs
-          key: libobs-${{ runner.os }}-${{ steps.libobs-rev.outputs.rev }}-ffmpeg-epoch2
+          # The trim flag is part of the key, and has to be. `actions/cache`
+          # saves at post-job, so a run with LIBOBS_TRIM on would otherwise
+          # write a *trimmed* directory under the untrimmed key, and every
+          # later build would restore it and ship a trimmed backend without
+          # anyone asking for one. Two keys keeps the two artefacts apart.
+          key: libobs-${{ runner.os }}-${{ steps.libobs-rev.outputs.rev }}-ffmpeg-epoch2-trim${{ vars.LIBOBS_TRIM || '0' }}
 
       # Builds the out-of-process libobs worker from our capture-backend
       # fork (github.com/NinjaGoldfinch/libobs-recorder — see
@@ -473,6 +478,22 @@ jobs:
           New-Item -ItemType Directory -Force -Path src-tauri/target/libobs | Out-Null
           Copy-Item "$($dllDir.FullName)/*" src-tauri/target/libobs -Recurse -Force
           Copy-Item ../libobs-recorder-build/target/release/extprocess_recorder.exe src-tauri/target/libobs/extprocess_recorder.exe -Force
+
+      # WS1.1, the P0a arm (#5). Off by default and opt-in per run, because the
+      # keep-list has not been compared against a real staged directory yet and
+      # a wrongly removed plugin still builds, still packages, and then does not
+      # capture. Set the repository or workflow variable LIBOBS_TRIM to 1 to
+      # turn it on for a dispatch, take the size from the log, and play a game
+      # before believing it.
+      - name: Trim libobs to the keep-list (opt-in)
+        if: matrix.platform == 'windows-latest' && vars.LIBOBS_TRIM == '1'
+        shell: pwsh
+        run: ./scripts/trim-libobs.ps1 -Inventory
+
+      - name: Apply the libobs keep-list (opt-in)
+        if: matrix.platform == 'windows-latest' && vars.LIBOBS_TRIM == '1'
+        shell: pwsh
+        run: ./scripts/trim-libobs.ps1 -Apply
 
       # The **lgpl** build, not gpl. Every ffmpeg invocation this app makes is
       # `-c copy` — the faststart remux (`recorder/libobs/mod.rs`) and stem
