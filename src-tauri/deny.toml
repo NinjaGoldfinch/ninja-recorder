@@ -167,16 +167,17 @@ ignore = [
 # the check.
 multiple-versions = "allow"
 
-# `warn`, not `deny`, for exactly one reason: a git dependency with no
-# `version` is a wildcard, and `libobs-recorder` is pinned to a branch because
-# the fork has no tags to pin to (docs/provenance.md, WS1.7).
+# `deny` since WS1.7. It sat at `warn` because a git dependency with no
+# `version` is a wildcard, and `libobs-recorder` had to be pinned to a branch:
+# the fork carried only inherited upstream libobs tags, none of which covered
+# the branch we build from.
 #
-# So this warns on the one thing already known and recorded, rather than
-# failing CI over it. **WS1.7 flips this to `deny`** once the fork is tagged —
-# that flip is part of what "no branch-pinned fork in Cargo.toml" in the §8
-# definition of done means, and leaving the key at `warn` afterwards would let
-# the next wildcard in unnoticed.
-wildcards = "warn"
+# It carries `tag = "v2.0.0"` and `version = "2.0.0"` now, so the one known
+# wildcard is gone and the key can do what it is for. Leaving it at `warn`
+# afterwards would have let the next one in unnoticed, which is the whole
+# reason the flip was written into WS1.7's definition of done rather than
+# left as tidying.
+wildcards = "deny"
 
 # The fork's five manifests say `license = "GPL-2.0"`, which is a deprecated
 # SPDX identifier (the current spellings are `GPL-2.0-only` and

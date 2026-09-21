@@ -163,11 +163,20 @@ tauri-plugin-updater = "2"
 # §1.1/§2.2 for why upstream can't be used as-is. GPL-2.0, same as libobs
 # itself; this project is GPL-2.0 accordingly (README).
 [target.'cfg(target_os = "windows")'.dependencies]
-# Pinned to the `multi-track-audio` branch rather than the fork's default:
-# the multi-track patch (DEVELOPMENT.md §2.5) changes encoder and source
-# lifetimes inside libobs and has not been run on real Windows hardware yet,
-# so `master` stays the known-working backend until it has.
-libobs-recorder = { git = "https://github.com/NinjaGoldfinch/libobs-recorder.git", branch = "multi-track-audio" }
+# Pinned to a **tag**, not a branch. `v2.0.0` on the fork is the tip of
+# `multi-track-audio` at the moment WS1.7 pinned it: the patch that gives each
+# audio source its own encoder and track (DEVELOPMENT.md §2.5), on top of the
+# `window_capture` swap that removes injection.
+#
+# A branch pin resolves to whatever the branch points at *today*, so two
+# checkouts a week apart can build different backends with no diff between
+# them saying so. `Cargo.lock` hides that most of the time and stops hiding it
+# the moment someone runs `cargo update`.
+#
+# `version` is here for a second reason: a git dependency without one is a
+# wildcard as far as cargo-deny is concerned, which is why `deny.toml`'s
+# `[bans] wildcards` sat at `warn`. With both, it is `deny`.
+libobs-recorder = { git = "https://github.com/NinjaGoldfinch/libobs-recorder.git", tag = "v2.0.0", version = "2.0.0" }
 
 # The daemon's tray and its menu, on the daemon's own Win32 message loop
 # (`daemon/pump.rs`). These are the crates Tauri itself wraps, by the same
