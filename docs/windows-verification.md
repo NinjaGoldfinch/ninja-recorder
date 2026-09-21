@@ -595,10 +595,10 @@ at all. That is the design, not a fault.
       About now shows the new version and offers nothing.
 - [ ] The install did **not** create a second entry in Apps & Features, a
       second Start-menu shortcut, or a second install directory.
-- [ ] Start-on-login, the close-button setting, the audio preset and the
+- [x] Start-on-login, the close-button setting, the audio preset and the
       retention policy all survive the update; they live in `settings_kv` and
       the `Run` key, neither of which the installer touches.
-- [ ] The VOD library survives it: recordings are still listed, and their files
+- [x] The VOD library survives it: recordings are still listed, and their files
       still play.
 - [ ] **Install the devtools bundle and confirm it offers nothing at all.**
       Settings → About must read "not available in this build". A dev bundle
@@ -686,6 +686,20 @@ and the row to add beside it is that an entry written by an older build still
 says `--hidden` and must keep working.
 
 ### 5.0.6 The UI as a client of the daemon
+**2026-09-22: WS3 is 26 of 28.** The sheet on #130 is the row-level record.
+Everything passes except the two below, and one of them is what #150 landed
+for.
+
+| Open | Why it is still worth doing |
+|---|---|
+| `daemon.log` holds the finalize, with no `WARN [notify]` | The notification was seen, so the absence of a warning is the only evidence the daemon took the path it was meant to rather than a fallback |
+| The row and its markers survive a killed daemon (§4.1) | #150 landed to make this true and it has never been run. It is also the state PR #180 fixes the review player for |
+
+**WS3.4's exit criterion passes**: the UI killed mid-game, relaunched, showing
+the recording still in flight with the elapsed time continuing, and a complete
+VOD afterwards. That is also WS1.2's (#6) exit criterion, which needs no
+separate run.
+
 
 Since WS3.4 the window runs no recorder of its own: every command it issues is
 forwarded to the daemon over the pipe, and the daemon pushes a snapshot and a
@@ -697,7 +711,7 @@ needs a window.
       shows two `ninja-recorder.exe` processes.
 - [ ] `app_data_dir()/logs/` now holds both `ui.log` and `daemon.log`, and
       neither rotates the other.
-- [ ] **The exit criterion for 3.4.** Start a game and let recording begin.
+- [x] **The exit criterion for 3.4.** Start a game and let recording begin.
       Kill the UI process from Task Manager, then launch it again. Within one
       reconnect it shows the recording still in flight, with the elapsed time
       continuing rather than restarting. The VOD is complete and playable
