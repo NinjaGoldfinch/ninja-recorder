@@ -2522,3 +2522,57 @@ TypeScript project into `.svelte-check/` that is not pruned when a component is
 deleted, so the gate goes on failing over a file that is no longer in the tree,
 citing a path that does not exist. A second on a run measured in minutes does
 not buy that.
+
+### 19.1 The dev portal was reworked, not retired
+
+Plan §9, Q6 asked whether the portal should survive WS4 at all, and the answer
+was to bring it across rather than let it rot behind the app it exists to
+debug. It was the last hand-built markup in the repository: eleven panels, a
+hash router, and a module of markup builders with a hand-applied escape at
+every interpolation site.
+
+**It is the one part of the migration that removed a workaround rather than a
+file.** A panel was an object with `mount(root, ctx)`, called again on every
+navigation and on every `refresh()`. Panels bound delegated handlers to the
+element they were handed, and `unmount` was not given a reference to it, so
+there was no way to unbind them: mounting onto the same element stacked one
+handler per mount. Two live handlers turn a single click into two toggles, a
+no-op that renders once on the way through, and the Log panel's tag chips lit
+up and reverted inside one frame because of it. Handlers left behind by *other*
+panels were worse, since hooks like `[data-reload]` were not unique across the
+set. The fix was to swap `#dev-main` for a shallow clone of itself before every
+mount. Svelte destroys a component's handlers with the component, so the clone
+and the paragraph explaining it are both gone.
+
+The `onHealth` hook went for a related reason. A panel could opt into the 1 Hz
+health tick to patch one element in place, because a full redraw would have
+wiped whatever was typed into a textarea. Form values are component state now,
+so the state strip reads the shared poll and the textarea beside it is
+untouched.
+
+**What did not come across is `refresh()`.** Most of what it did was re-run a
+`draw()` a panel could not trigger itself, which is what state does for free.
+What is left is a generation counter: `r` and a `library-changed` event force
+the current panel to be destroyed and recreated, which re-runs its load from
+scratch. That is the half of `refresh()` that was never about rendering.
+
+The panels' pure decisions moved out into `src/lib/dev/` on the way, and are
+covered by tests for the first time: the argument coercion whose rule is that
+an omitted optional must be absent rather than null, the level filter that must
+never let the last level be turned off, the cell parser that falls back to text
+when an object literal will not parse, and the seed presets, whose whole value
+is that each one exercises something that otherwise needs a real game on
+Windows.
+
+#### The stylesheet moved; it did not scatter
+
+`src/dev/styles.css` is `src/lib/styles/dev.css`, still one global sheet
+loaded by a plain `<link>` in `dev.html`. This is the same call §4.8 made for
+the app's own stylesheet, for the same reason: Svelte scopes a component's
+`<style>` block to that component's own template, so a rule that matches an
+element a child renders stops applying, silently, and nothing in this repo
+renders a pixel in CI. The portal has no visual tests and no Windows
+verification of its own. Moving rules into components is safe work, a few at a
+time, checked against a running window; doing it blind in the same commit that
+rewrote every panel would have been a large invisible-failure surface for no
+gain.

@@ -28,6 +28,17 @@ export const PANELS: readonly PanelMeta[] = [
   { id: "log", title: "Log", icon: "☰", group: "Tools" },
 ];
 
+/**
+ * What every panel component is handed.
+ *
+ * One shape for all eleven, because `DevApp` picks the component out of a map
+ * and cannot vary the props per entry. Only Library reads it; the rest declare
+ * nothing and are assignable all the same.
+ */
+export interface PanelProps {
+  payload?: string | null;
+}
+
 export interface Route {
   panel: PanelMeta;
   /**
