@@ -84,3 +84,32 @@ if (typeof window !== "undefined" && typeof HTMLMediaElement !== "undefined") {
   };
   media.load = () => {};
 }
+
+/**
+ * jsdom parses `<dialog>` but implements neither `showModal` nor `close`.
+ *
+ * `QuitDialog.svelte` is built on both, and on the `close` event carrying a
+ * `returnValue`, which is what lets Escape and the two buttons resolve the
+ * same promise with different answers. The shim keeps that contract: `close`
+ * records the value, drops `open`, and fires the event.
+ *
+ * Nothing here makes it modal. The focus trap is the browser's job and no test
+ * asserts on it.
+ */
+if (typeof window !== "undefined" && typeof HTMLDialogElement !== "undefined") {
+  // **Overridden unconditionally, not behind a `typeof` check.** jsdom
+  // *defines* `showModal` and then throws "not implemented" from it, so a
+  // guard that asks whether the method exists installs nothing and the dialog
+  // silently never opens.
+  const dialog = HTMLDialogElement.prototype as unknown as Record<string, unknown>;
+  dialog.showModal = function showModal(this: HTMLDialogElement) {
+    this.setAttribute("open", "");
+  };
+  dialog.show = dialog.showModal;
+  dialog.close = function close(this: HTMLDialogElement, returnValue?: string) {
+    if (returnValue !== undefined) this.returnValue = returnValue;
+    if (!this.hasAttribute("open")) return;
+    this.removeAttribute("open");
+    this.dispatchEvent(new Event("close"));
+  };
+}

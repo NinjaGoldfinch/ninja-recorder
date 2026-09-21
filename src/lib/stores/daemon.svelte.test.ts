@@ -15,7 +15,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DaemonHealth } from "./lib/transport/pipe";
+import type { DaemonHealth } from "../transport/pipe";
 
 /** What the one-off `daemonHealth()` call answers with. */
 let firstAnswer: Promise<DaemonHealth>;
@@ -36,16 +36,15 @@ async function settle() {
 async function load(inTauri = true) {
   vi.resetModules();
   push = undefined;
-  document.body.innerHTML = `<div id="daemon-strip" hidden></div>`;
-  vi.doMock("./lib/transport/invoke", () => ({ IN_TAURI: inTauri }));
-  vi.doMock("./lib/transport/pipe", () => ({
+  vi.doMock("../transport/invoke", () => ({ IN_TAURI: inTauri }));
+  vi.doMock("../transport/pipe", () => ({
     daemonHealth: () => firstAnswer,
     subscribe: (handlers: { onHealth?: (health: DaemonHealth) => void }) => {
       push = handlers.onHealth;
       return () => {};
     },
   }));
-  const daemon = await import("./daemon");
+  const daemon = await import("./daemon.svelte");
   daemon.initDaemonStatus();
   return daemon;
 }
@@ -137,33 +136,49 @@ describe("whenDaemonReachable", () => {
   });
 });
 
-describe("the strip", () => {
+describe("what the strip says", () => {
+  // WS4.6 moved the element to `DaemonStrip.svelte`; these assert the wording
+  // rather than the DOM, which is where the wording lives now.
   beforeEach(() => {
     firstAnswer = unanswered();
   });
 
+  it("says nothing until something has answered", async () => {
+    // "Not known yet" is not "not connected", and the strip must not claim
+    // the recorder is missing while the handshake is still in flight.
+    const { daemon } = await load();
+    expect(daemon.strip).toBeNull();
+  });
+
   it("says the recorder is missing, and stops saying it when it is back", async () => {
-    await load();
-    const strip = document.querySelector<HTMLElement>("#daemon-strip");
+    const { daemon } = await load();
 
     push?.({ state: "reconnecting" });
-    expect(strip?.hidden).toBe(false);
-    expect(strip?.textContent).toContain("The recorder is not running");
+    expect(daemon.strip?.kind).toBe("warn");
+    expect(daemon.strip?.text).toContain("The recorder is not running");
 
     push?.({ state: "connected" });
-    expect(strip?.hidden).toBe(true);
+    expect(daemon.strip).toBeNull();
   });
 
   /** Terminal, so it says restart rather than implying waiting will help. */
   it("tells a skewed build to restart, and names both protocols", async () => {
-    await load();
-    const strip = document.querySelector<HTMLElement>("#daemon-strip");
+    const { daemon } = await load();
 
     push?.({ state: "skewed", ours: 3, theirs: 4 });
 
-    expect(strip?.hidden).toBe(false);
-    expect(strip?.textContent).toContain("3");
-    expect(strip?.textContent).toContain("4");
-    expect(strip?.textContent).toContain("Restart");
+    expect(daemon.strip?.kind).toBe("error");
+    expect(daemon.strip?.text).toContain("3");
+    expect(daemon.strip?.text).toContain("4");
+    expect(daemon.strip?.text).toContain("Restart");
+  });
+
+  it("offers no button for a skew, deliberately", async () => {
+    // The two builds cannot agree, and the one thing the UI must not do is
+    // tell the daemon to quit: it may be recording. The strip is text and a
+    // kind, and has nowhere to put an action.
+    const { daemon } = await load();
+    push?.({ state: "skewed", ours: 3, theirs: 4 });
+    expect(Object.keys(daemon.strip ?? {})).toEqual(["kind", "text"]);
   });
 });

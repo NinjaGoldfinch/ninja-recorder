@@ -6,8 +6,8 @@
 -->
 
 <script lang="ts">
-import { whenDaemonReachable } from "../../../daemon";
 import { showView } from "../../../router";
+import { whenDaemonReachable } from "../../stores/daemon.svelte";
 import {
   loadAudioSettings,
   loadAutostart,

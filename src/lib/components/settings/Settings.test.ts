@@ -18,7 +18,7 @@ vi.mock("../../../bridge", () => ({
 }));
 // `whenDaemonReachable` runs its callback once the handshake lands. The view
 // uses it to gate four RPCs; here it fires immediately so those paths run.
-vi.mock("../../../daemon", () => ({
+vi.mock("../../stores/daemon.svelte", () => ({
   whenDaemonReachable: (fn: () => void) => fn(),
   initDaemonStatus: vi.fn(),
 }));

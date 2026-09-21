@@ -24,44 +24,27 @@
  * and the dialog below is the one that asks.
  */
 
-import { call } from "./bridge";
-import { el } from "./dom";
-import { toast } from "./toast";
+import { call } from "../../bridge";
+import { toast } from "./toast.svelte";
 
 /** What `quit_recorder` answered. Mirrors `core::QuitOutcome`. */
 type QuitOutcome = { outcome: "shuttingDown" } | { outcome: "recordingInFlight" };
 
-let dialog: HTMLDialogElement | null = null;
+/**
+ * Who asks the question.
+ *
+ * `QuitDialog.svelte` owns the `<dialog>` since WS4.6 and registers itself
+ * here on mount. A `null` asker means no way to ask, and quitting anyway would
+ * end a recording nobody agreed to lose, so it answers "no".
+ */
+let asker: (() => Promise<boolean>) | null = null;
 
-export function initQuit() {
-  dialog = el<HTMLDialogElement>("#quit-dialog");
+export function setQuitAsker(ask: (() => Promise<boolean>) | null) {
+  asker = ask;
 }
 
-/**
- * Asks, and answers whether to go ahead.
- *
- * `<dialog>` rather than `window.confirm`, which WebView2 renders as a bare
- * system box with the executable's path in the title, and which blocks the
- * whole webview while it is up.
- */
 function askAboutTheRecording(): Promise<boolean> {
-  return new Promise((resolve) => {
-    if (!dialog) {
-      // No dialog means no way to ask, and quitting anyway would end a
-      // recording nobody agreed to lose.
-      resolve(false);
-      return;
-    }
-    const done = (quit: boolean) => {
-      dialog?.removeEventListener("close", onClose);
-      resolve(quit);
-    };
-    // Covers Escape and any other dismissal, both of which mean "no".
-    const onClose = () => done(dialog?.returnValue === "quit");
-    dialog.addEventListener("close", onClose, { once: true });
-    dialog.returnValue = "";
-    dialog.showModal();
-  });
+  return asker?.() ?? Promise.resolve(false);
 }
 
 /**

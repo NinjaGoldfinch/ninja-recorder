@@ -1,8 +1,9 @@
 # Frontend
 
-Svelte 5, under `src/lib/`. Every view is a component since WS4.5, and what
-is left of `index.html` is the app bar, the quit dialog and the anti-flash boot
-script, none of which is a view. WS4.6 takes those.
+Svelte 5, under `src/lib/`. Since WS4.6 the app renders **every** element it
+has: `index.html`'s body is one `<div id="app-root">`, and what remains in its
+head cannot move into a component, being the anti-flash boot script and the
+stylesheet that script depends on.
 
 The player is the exception to everything below and stays an **imperative
 island** on purpose: a `<video>`'s `currentTime` is not state anything should
@@ -23,7 +24,9 @@ flowchart TB
     ROUTER["router.ts<br/><small>owns: which view is showing</small>"]
     THEME["theme.ts<br/><small>owns: html[data-theme]</small>"]
     PREFS["prefs.ts<br/><small>owns: the preference cache</small>"]
-    STATUS["status.ts<br/><small>owns: the poll timer</small>"]
+    STATUS["lib/stores/status.svelte.ts<br/><small>owns: the poll timer</small>"]
+    DAEMONS["lib/stores/daemon.svelte.ts<br/><small>owns: whether the recorder is there</small>"]
+    QUITS["lib/stores/quit.svelte.ts<br/><small>owns: the two-process quit flow</small>"]
     LIBV["lib/components/library/<br/><small>Library, Row, Toolbar, StatsBar,<br/>Loadout, Matchup, Slot, RowActions</small>"]
     LIBS["lib/stores/library.svelte.ts<br/><small>owns: the row set + every control</small>"]
     ICONS["lib/stores/icons.svelte.ts<br/><small>owns: when art has arrived</small>"]
@@ -33,8 +36,8 @@ flowchart TB
     SETS["lib/stores/settings.svelte.ts<br/><small>owns: autostart, audio, retention,<br/>the folder, mirrored prefs</small>"]
     UPD["lib/stores/update.svelte.ts<br/><small>owns: the update status</small>"]
     ABOUT["lib/stores/about.svelte.ts<br/><small>owns: the three live About lines</small>"]
-    TOAST["toast.ts<br/><small>owns: the transient message</small>"]
-    BAR["appbar.svelte.ts<br/><small>owns: the settings button + update dot</small>"]
+    TOASTS["lib/stores/toast.svelte.ts<br/><small>owns: the transient message</small>"]
+    SHELL["lib/components/shell/<br/><small>AppBar, DaemonStrip, QuitDialog, Toast</small>"]
     DESK["desktop.ts<br/><small>owns: the browser behaviours we suppress</small>"]
     BRIDGE["bridge.ts<br/><small>composition root: picks a transport,<br/>exposes the generated client</small>"]
     TRANSPORT["lib/transport/<br/><small>pipe.ts (live) · mock.ts<br/>invoke.ts unused since WS3.4</small>"]
@@ -55,8 +58,8 @@ flowchart TB
     MAIN --> THEME
     MAIN --> PREFS
     MAIN --> STATUS
-    MAIN --> BAR
-    MAIN --> TOAST
+    MAIN --> DAEMONS
+    MAIN --> QUITS
     MAIN --> DESK
     DESK --> BRIDGE
     STATUS --> LIBS
@@ -72,8 +75,13 @@ flowchart TB
     STATUS --> BRIDGE
     PREFS --> BRIDGE
     UPD --> BRIDGE
-    UPD --> TOAST
-    BAR --> UPD
+    UPD --> TOASTS
+    SHELL --> UPD
+    SHELL --> ABOUT
+    APP --> SHELL
+    SHELL --> DAEMONS
+    SHELL --> QUITS
+    SHELL --> TOASTS
     SETV --> SETS
     SETV --> UPD
     SETV --> ABOUT
@@ -94,6 +102,10 @@ flowchart TB
     style BRIDGE fill:#e3f2fd,stroke:#1565c0
     style APP fill:#fff3e0,stroke:#ef6c00
     style TOKENS fill:#fff3e0,stroke:#ef6c00
+    style SHELL fill:#fff3e0,stroke:#ef6c00
+    style DAEMONS fill:#fff3e0,stroke:#ef6c00
+    style QUITS fill:#fff3e0,stroke:#ef6c00
+    style TOASTS fill:#fff3e0,stroke:#ef6c00
     style REVV fill:#fff3e0,stroke:#ef6c00
     style REVS fill:#fff3e0,stroke:#ef6c00
     style SETV fill:#fff3e0,stroke:#ef6c00
@@ -1034,6 +1046,50 @@ One thing deliberately did not change: a row is a focusable, clickable
 `Row.svelte` are suppressed for. ARIA has no good role for an activatable list
 item, and making every row contain a real button is a UX change rather than a
 migration. It is flagged in the component and worth its own issue.
+
+### What is left of the vanilla frontend
+
+WS4.6 deleted the last modules that owned an element. `index.html`'s body is
+one `<div id="app-root">`; `App.svelte` renders the app bar, the daemon strip,
+the three views, the quit dialog and the toast.
+
+| Was | Is |
+|---|---|
+| `toast.ts` | `stores/toast.svelte.ts` + `shell/Toast.svelte` |
+| `daemon.ts` | `stores/daemon.svelte.ts` + `shell/DaemonStrip.svelte` |
+| `quit.ts` | `stores/quit.svelte.ts` + `shell/QuitDialog.svelte` |
+| `status.ts` | `stores/status.svelte.ts` (the poll kept; the pills go to a store) |
+| `appbar.svelte.ts`, `devportal.ts` | `shell/AppBar.svelte` |
+| `dom.ts` | deleted; the escape helpers moved to `src/dev/ui.ts` |
+
+Three modules stay vanilla and are meant to: `main.ts` composes, `theme.ts`
+owns `html[data-theme]`, and `desktop.ts` suppresses browser behaviours at the
+document level. None of them is a view and none of them looks up an element.
+Beside them sit the shared libraries the components import: `bridge`, `format`,
+`icons`, `prefs`, `router` and `types`. They are modules rather than markup and
+were never what "vanilla" meant here.
+
+**The one deliberate exception in `<head>`.** The anti-flash boot script has to
+run before first paint, and so does the stylesheet whose tokens it depends on,
+so both stay a plain `<script>` and a plain `<link>`. A stylesheet that arrived
+over a JS import would be the flash the script exists to prevent.
+
+#### The stylesheet moved; it did not scatter
+
+`src/styles.css` is `src/lib/styles/app.css` and is still one global sheet.
+**The remaining half of WS4.6 is not done and should not be assumed done.**
+
+Svelte scopes a component's `<style>` to that component's own template, so a
+rule written in one component and matching an element another renders silently
+stops applying. `.vod-items .vod-slot` is the shape of the problem: the
+positioning belongs to `Loadout`, the box belongs to `Slot`, and distributing
+them needs `:global()` in exactly the places where it is easy to be wrong. With
+1,900 lines of that, no visual test anywhere in this repo, and no way to look
+at the result, it is a change whose failure mode is invisible to whoever makes
+it.
+
+Doing it component by component, each verified against a running window, is the
+way it should happen.
 
 ### The player is an island, and the island has a coastline
 

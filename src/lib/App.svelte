@@ -30,10 +30,16 @@ import { registerView } from "../router";
 import Library from "./components/library/Library.svelte";
 import Review from "./components/review/Review.svelte";
 import Settings from "./components/settings/Settings.svelte";
+import AppBar from "./components/shell/AppBar.svelte";
+import DaemonStrip from "./components/shell/DaemonStrip.svelte";
+import QuitDialog from "./components/shell/QuitDialog.svelte";
+import Toast from "./components/shell/Toast.svelte";
+import { setQuitAsker } from "./stores/quit.svelte";
 
 let libraryNode: HTMLElement;
 let reviewNode: HTMLElement;
 let settingsNode: HTMLElement;
+let quitDialog: ReturnType<typeof QuitDialog> | undefined;
 
 // On mount, not in `main.ts`: these nodes do not exist until this renders,
 // which is *after* `initRouting` has read the URL fragment. That ordering is
@@ -46,16 +52,33 @@ $effect(() => {
   registerView("review", reviewNode);
   registerView("settings", settingsNode);
 });
+
+// `quit.ts` owns the flow and this owns the dialog, so the flow is given a
+// way to ask rather than a way to find an element.
+$effect(() => {
+  const dialog = quitDialog;
+  setQuitAsker(dialog ? () => dialog.ask() : null);
+  return () => setQuitAsker(null);
+});
 </script>
 
-<section bind:this={libraryNode} id="library-view">
-  <Library />
-</section>
+<AppBar />
 
-<section bind:this={reviewNode} id="review-view" class="review-view" hidden>
-  <Review />
-</section>
+<DaemonStrip />
 
-<section bind:this={settingsNode} id="settings-view" class="view" hidden>
-  <Settings />
-</section>
+<main class="container">
+  <section bind:this={libraryNode} id="library-view">
+    <Library />
+  </section>
+
+  <section bind:this={reviewNode} id="review-view" class="review-view" hidden>
+    <Review />
+  </section>
+
+  <section bind:this={settingsNode} id="settings-view" class="view" hidden>
+    <Settings />
+  </section>
+</main>
+
+<QuitDialog bind:this={quitDialog} />
+<Toast />

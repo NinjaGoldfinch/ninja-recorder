@@ -665,6 +665,61 @@ a time**, and `el()` throwing is the designed behaviour for a missing element,
 so this exact failure is available on every remaining WS4 task. WS4.6 deletes
 the rest of `index.html`.
 
+### 4.8 Decision: the stylesheet moved, and did not scatter
+
+WS4.6's brief was to delete `dom.ts`, the markup and `styles.css`. Two of the
+three happened. The third is half done on purpose, and the half that is missing
+is the interesting one.
+
+Svelte scopes a component's `<style>` block to that component's own template.
+A rule written in one component that matches an element a *child* renders
+silently stops applying, and the failure is not an error, a warning or a
+crash: it is a box in the wrong place. `.vod-items .vod-slot` is the shape of
+it, where the positioning belongs to `Loadout` and the box belongs to `Slot`.
+Distributing 1,900 lines of that correctly means placing `:global()` in exactly
+the places it is easiest to get wrong.
+
+This repo has no visual test of any kind, and nothing in CI renders a pixel.
+So a CSS redistribution done in one pass is a change whose failure mode is
+invisible to whoever makes it and whose verification is somebody opening the
+app and looking. That is the wrong shape for one commit.
+
+What did happen: the sheet moved to `src/lib/styles/app.css`, the `<link>`
+moved with it, and every element it dresses is now rendered by a component. The
+rules can be moved into those components one at a time, each verified against a
+running window, which is the only way the result is actually known.
+
+**It stays a `<link>` either way.** The anti-flash boot script has to run
+before first paint and the tokens it depends on have to be there when it does,
+so a stylesheet arriving over a JS import would be the flash that script exists
+to prevent.
+
+### 4.9 Two bugs the shell migration turned up, both in `<dialog>`
+
+Neither was in the code being migrated, which is the point of writing them
+down: they were in what the migration made testable.
+
+**The dialog answered "no" to "Quit anyway".** `QuitDialog` read
+`returnValue` inside its `close` handler, which is the obvious way to tell the
+two buttons apart. Closing a `<dialog>` by submitting a `method="dialog"` form
+is a *default action*, and it races the click handler that records which button
+was pressed: the close event can arrive before the choice is known. The buttons
+are `type="button"` now and close the dialog themselves, which puts the two in
+an order that does not depend on the environment. Escape still means no,
+because it never touches either button.
+
+**A test passed for the wrong reason.** `mount` is synchronous but `bind:this`
+is assigned by an effect, so a method called in the same tick finds its element
+undefined. `ask()` answers `false` in that case by design, which is exactly
+what the "dismissed" test expected, so it passed without the dialog ever having
+opened. The fix is a `renderSettled` helper that awaits a tick; the lesson is
+that a test asserting a falsy default is the one most likely to be lying.
+
+jsdom contributed a third of its own: it *defines* `showModal` and then throws
+"not implemented" from it, so a shim guarded on `typeof showModal !== "function"`
+installs nothing and the dialog silently never opens. `test-setup.ts` overrides
+it unconditionally and says why.
+
 ## 5. Review player
 
 - WebView2 `<video>` element: H.264/AAC MP4 decodes natively, so seeking and playback rate are free.
