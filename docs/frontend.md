@@ -214,7 +214,7 @@ or a `devtools` build, detected through `bridge.ts`'s `hasDevCommands` probe.
 The flag is read when the event fires, not captured at init, so the few
 milliseconds before that probe resolves simply behave like a shipped build.
 
-The dev portal (`dev.html`, `src/dev/`) does none of this. It is a debugging
+The dev portal (`dev.html`) does none of this. It is a debugging
 surface: log output and query results are there to be selected and copied, and
 "Inspect element" is a feature of the window.
 
@@ -1060,7 +1060,7 @@ the three views, the quit dialog and the toast.
 | `quit.ts` | `stores/quit.svelte.ts` + `shell/QuitDialog.svelte` |
 | `status.ts` | `stores/status.svelte.ts` (the poll kept; the pills go to a store) |
 | `appbar.svelte.ts`, `devportal.ts` | `shell/AppBar.svelte` |
-| `dom.ts` | deleted; the escape helpers moved to `src/dev/ui.ts` |
+| `dom.ts` | deleted; the escape helpers moved to `src/dev/ui.ts`, and went with it in #72 |
 
 Three modules stay vanilla and are meant to: `main.ts` composes, `theme.ts`
 owns `html[data-theme]`, and `desktop.ts` suppresses browser behaviours at the
@@ -1220,14 +1220,18 @@ supposed to mean.
 | `Library.svelte` and children | WS4.3 | **landed**; `library.ts` deleted |
 | `Settings.svelte`, `Update.svelte` | WS4.4 | **landed**; `settings.ts` and `update.ts` deleted |
 | `Review.svelte`, `Timeline.svelte` | WS4.5 | **landed**; `review.ts` deleted |
+| the shell, and `index.html`'s body | WS4.6 | **landed**; `dom.ts`, `toast.ts`, `daemon.ts`, `devportal.ts` and `appbar.svelte.ts` deleted |
+| `DevApp.svelte` and eleven panels | #72 | **landed**; `src/dev/main.ts` rewritten to a mount, `src/dev/ui.ts` and `src/dev/panels/` deleted |
 
 Each of those deletes its vanilla counterpart and the markup `index.html` holds
 for it in the same commit, so no view is ever owned by both. The player is
 migrated last and stays an imperative island: it owns real DOM nodes, because
 `<video>` `currentTime` is not state anything should be diffing.
 
-The dev portal (`dev.html`, `src/dev/`) is out of scope and stays vanilla, per
-plan §9, Q6.
+The dev portal (`dev.html`, `src/dev/`) was out of scope under plan §9, Q6,
+which offered retiring it. It was reworked instead (#72): it is eleven Svelte
+panels now, and the last hand-built markup in the repo went with it. See
+[docs/dev-portal.md](dev-portal.md).
 
 ### Two type gates, not one
 

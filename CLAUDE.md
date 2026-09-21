@@ -257,10 +257,11 @@ workstream should be rewritten to say what it means.
   **release notes**, for a different reason: `latest.json` is fetched over
   HTTPS but is *not* covered by the update signature, so `UpdateNotes.svelte`
   renders a parsed structure and `UpdateNotes.test.ts` fails if that changes.
-  **The app builds no markup by hand at all** since WS4.6, which deleted
-  `dom.ts`. `escapeHtml` and `escapeAttr` live in `src/dev/ui.ts` now and have
-  only the dev portal as a caller, where the rule still applies in full until
-  that is reworked too (#72).
+  **Nothing in this repo builds markup by hand any more.** WS4.6 deleted
+  `dom.ts` and left `escapeHtml`/`escapeAttr` in `src/dev/ui.ts` with the
+  portal as their only caller; #72 reworked the portal in Svelte and deleted
+  that module too. There is no escape helper left to reach for, which is the
+  point: the way to render an untrusted string is to interpolate it.
 - **Pure decision + thin I/O wrapper.** `state_machine::machine`,
   `db::reconcile` and `retention::select_for_deletion` are pure and directly
   unit-tested; their wrappers are deliberately too small to hide a bug. Adding
@@ -382,6 +383,13 @@ workstream should be rewritten to say what it means.
   `<link>`, or a JS `import` in a component — puts them after first paint,
   which is the theme flash the inline boot script in `index.html` exists to
   prevent. Keep the `@import` first: CSS requires it, and so does the cascade.
+- **Do not name a local `state` inside a `.svelte` component.** `svelte2tsx`
+  emits the runes as declarations in the component's own scope, so a
+  `let state = $state(...)` makes every later `$state<T>()` in that file report
+  "Block-scoped variable '$state' used before its declaration" and "Untyped
+  function calls may not accept type arguments". The errors name `$state`, not
+  the variable, and `tsc` does not see them at all - only `check:svelte` does.
+  `Simulate.svelte` calls its copy `machineState` for this reason.
 - **A `.svelte` file needs a `<script>` block even when it is empty.**
   `svelte2tsx` emits a typed component for a file that has one and an untyped
   one for a file that does not, so removing an empty block turns the importing
