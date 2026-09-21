@@ -423,11 +423,25 @@ Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' |
 - [ ] Unticking it removes the value entirely.
 - [ ] The setting survives a restart of the app: reopen Settings and confirm
       the checkbox still reflects the key.
-- [ ] **Sign out and back in.** Task Manager shows **one** `ninja-recorder.exe`
-      and it is the daemon: no window, no taskbar button, and no
-      `msedgewebview2.exe`. The tray icon is there, and the recorder is live.
-      Start a game without opening the window and confirm it records. This is
-      WS3.5's exit criterion: login starts a daemon only.
+- [ ] **Sign out and back in.** Task Manager shows **one**
+      `ninja-recorder.exe` and it is the daemon: no window and no taskbar
+      button. The tray icon is there, and the recorder is live. Start a game
+      without opening the window and confirm it records. This is WS3.5's exit
+      criterion: login starts a daemon only.
+
+      **Do not check this by looking for `msedgewebview2.exe`.** WebView2 is
+      shared infrastructure: Widgets, Outlook, Teams and plenty else host it,
+      and a normal desktop runs a dozen of them at rest. Their presence says
+      nothing about this app. The claim is that *our* process did not start a
+      window, so ask about our process:
+
+      ```powershell
+      $proc = @(Get-CimInstance Win32_Process -Filter "Name='ninja-recorder.exe'")
+      @($proc | Where-Object { $_.CommandLine -notmatch '--daemon' }).Count   # must be 0
+      ```
+
+      Or, if the webview itself is what you want to see, filter to the ones
+      whose parent is ours rather than counting them all.
 - [ ] Open the app from that tray icon. Now there are two processes and still
       **one** tray icon, because the UI no longer builds its own (WS3.5).
 - [ ] An entry written by an older build (`--hidden`) still works: set the value
@@ -577,8 +591,10 @@ reported a second launch as already running, and shut down cleanly on Ctrl-C.
 None of that has been run on Windows, where the address is a named pipe and the
 backend is libobs, and this section is what stands in for that.
 
-- [x] `ninja-recorder.exe --daemon` starts and keeps running. Task Manager
-      shows one process and **no** `msedgewebview2.exe` alongside it.
+- [x] `ninja-recorder.exe --daemon` starts and keeps running, with no window
+      and no second `ninja-recorder.exe`. (This row originally said "no
+      `msedgewebview2.exe`", which is not a sound test: see §5.0.2. It passed
+      on a machine where nothing else happened to be hosting WebView2.)
 - [x] `app_data_dir()/logs/daemon.log` is created and names the pipe it bound.
       The UI's own log is `ui.log` beside it, and neither rotates the other.
 - [x] The pipe exists while the daemon runs. From PowerShell:
