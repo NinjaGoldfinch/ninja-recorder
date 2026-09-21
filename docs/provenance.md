@@ -116,23 +116,33 @@ inherited. None of them is ambiguous, since each follows the daemon/UI split in
 
 ## Known debt carried in from v1
 
-### WS1.7: `libobs-recorder` is branch-pinned, not tag-pinned
+### ~~WS1.7: `libobs-recorder` is branch-pinned, not tag-pinned~~ (paid, WS1.7)
 
-`src-tauri/Cargo.toml` pins the capture backend to a **branch**:
+`src-tauri/Cargo.toml` pinned the capture backend to a **branch**, because at
+import the fork carried no tag covering the branch it is built from. It now
+pins a tag:
 
 ```toml
-libobs-recorder = { git = "https://github.com/NinjaGoldfinch/libobs-recorder.git", branch = "multi-track-audio" }
+libobs-recorder = { git = "https://github.com/NinjaGoldfinch/libobs-recorder.git", tag = "v2.0.0", version = "2.0.0" }
 ```
 
-The fork has **no tags** at the time of import, so a tag pin is not possible
-today; only the branch pin is. That is recorded here as WS1.7 debt, per the
-plan's task 1.7 ("fork pin replaced by a tag") and the §8 definition of done
-("pinned to a tag, no branch-pinned fork in `Cargo.toml`").
+`v2.0.0` on the fork is the tip of `multi-track-audio` at the moment it was
+pinned, `7c651640`, which is the revision `Cargo.lock` already held. The tag
+was created against that commit rather than against the branch head, so
+nothing about the build changed: the lockfile's revision is byte-identical
+either side of the change and only the source URL differs.
 
-`Cargo.lock` pins the exact revision, so a build is reproducible; what is not
-pinned is what `cargo update` would move to. The interim mitigation is that CI
-resolves and caches the revision explicitly (`Resolve libobs backend revision`
-in `ci.yml`).
+**One thing the original entry got wrong**, recorded because #76 will carry it
+to the planning repository: the fork did have tags. Five of them
+(`libobs_27.2.4` through `libobs_29.1.3`), inherited upstream libobs version
+tags pointing at unrelated commits. The true statement was that it had no tag
+covering *our* branch, which is a smaller problem than "no tags" and one that
+a single `git tag` closed.
+
+`version` is present alongside `tag` for a second reason. A git dependency
+without one is a wildcard to cargo-deny, which is why `deny.toml`'s
+`[bans] wildcards` sat at `warn`. With both it is `deny`, which is the other
+half of what the §8 definition of done asks for.
 
 ### WS1.7: the GPL exceptions in `deny.toml`, and why there are five of them
 
