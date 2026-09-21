@@ -160,8 +160,9 @@ section. **No blanket `allow`, and no body-wide `unsafe {}` either** — the
 second one trips `unused_unsafe` as soon as anything inside it is already
 wrapped.
 
-`gen` is a reserved keyword, which is why `contract/r#gen.rs` is spelled that
-way.
+`gen` is a reserved keyword in edition 2024, which is why the module is
+declared `pub mod r#gen;`. **The file itself is `contract/gen.rs`**: a file
+name is not an identifier, and neither is the `gen-contract` bin name.
 
 ### cargo-deny is the licence exit, not hygiene
 
