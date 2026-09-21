@@ -3,6 +3,13 @@
 **/*.rs.bk
 Cargo.lock.orig
 
+# Spike crates. Each is its own cargo package, so its build output is not
+# under the two anchored paths above. `/target/` and `/src-tauri/target/` are
+# anchored deliberately - an unanchored `target/` would also ignore a source
+# directory somebody legitimately named that - so each new package needs its
+# own line, and `spikes/` is the one place new packages appear.
+spikes/*/target/
+
 # Tauri
 /src-tauri/target/
 /src-tauri/gen/
