@@ -420,10 +420,19 @@ process without it, and no WebView2 process parented to ours. The Run value is
 the installed exe path followed by `--daemon`, written by the app rather than
 by hand.
 
-Taken with the Defender exclusion **off**, which matters: see #181. Nothing
-fired from the logon, from the Run key starting the daemon, or from relaunching
-the binary. The one act still untested with protection live is the app
-*writing* the key, which is what the persistence heuristic watches.
+Taken with the Defender exclusion **off**, which is what makes any of it worth
+anything: see #181. Nothing fired from the logon, from the Run key starting the
+daemon, from relaunching the binary, or from the app writing and removing the
+key through Settings. Unticking removes the value entirely and ticking writes
+it back with `--daemon`.
+
+**The Defender quarantine that started that investigation was caused by the
+test method, not by the app.** Writing the Run key from PowerShell and then
+spawning the target through `Win32_Process::Create` is two malware techniques
+in sequence; the app doing the same write itself is not. Two entries in the
+same registry key make the point better than any argument: `Discord` and
+`Spotify` both run from AppData, from HKCU Run, with arguments, and neither is
+flagged. What they have that this build does not is a signature.
 
 - [ ] A fresh install registers **nothing**: the key is absent and the
       Settings checkbox is off before it is ever touched.
@@ -431,7 +440,7 @@ the binary. The one act still untested with protection live is the app
       **followed by `--daemon`** (WS3.5). A path with no flag means a login
       start that opens a window; `--hidden` means a build from before WS3.5,
       which still works but starts a UI rather than a daemon.
-- [ ] Unticking it removes the value entirely.
+- [x] Unticking it removes the value entirely.
 - [ ] The setting survives a restart of the app: reopen Settings and confirm
       the checkbox still reflects the key.
 - [x] **Sign out and back in.** Task Manager shows **one**
