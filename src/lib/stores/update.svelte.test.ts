@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const call = vi.hoisted(() => vi.fn());
 vi.mock("../../bridge", () => ({ call, hasDevCommands: vi.fn(), assetUrl: (p: string) => p }));
 const toast = vi.hoisted(() => vi.fn());
-vi.mock("../../toast", () => ({ toast }));
+vi.mock("./toast.svelte", () => ({ toast }));
 
 let store: typeof import("./update.svelte");
 

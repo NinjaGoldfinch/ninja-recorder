@@ -14,7 +14,6 @@
 
 import { call } from "../../bridge";
 import { DEFAULT_PREFS, getPrefs, type NotifyPrefKey, type Prefs, savePref } from "../../prefs";
-import { toast } from "../../toast";
 import type {
   AudioInputDevice,
   AudioPreset,
@@ -35,6 +34,7 @@ import {
   savedMessage,
 } from "../settings/retention";
 import { refreshDiskUsage, refreshLibrary } from "./library.svelte";
+import { toast } from "./toast.svelte";
 
 // --- Preferences, mirrored -------------------------------------------------
 

@@ -1,71 +1,69 @@
 import { listen } from "@tauri-apps/api/event";
 
-import { initAppBar } from "./appbar.svelte";
-import { initDaemonStatus, whenDaemonReachable } from "./daemon";
 import { initDesktop } from "./desktop";
-import { initDevPortal } from "./devportal";
-import { el } from "./dom";
 import App from "./lib/App.svelte";
+import { initDaemonStatus, whenDaemonReachable } from "./lib/stores/daemon.svelte";
 import { applyDefaultSort, refreshDiskUsage, refreshLibrary } from "./lib/stores/library.svelte";
+import { quitEverything } from "./lib/stores/quit.svelte";
 import { syncFromPrefs } from "./lib/stores/settings.svelte";
+import { initStatus } from "./lib/stores/status.svelte";
+import { checkOnOpen, onStatusEvent, refreshUpdateStatus } from "./lib/stores/update.svelte";
 import { loadPrefs } from "./prefs";
-import { initQuit, quitEverything } from "./quit";
-import { initRouting, mountApp } from "./router";
-import { initStatus } from "./status";
+import { initRouting, mountApp, onViewChange } from "./router";
 import { applyThemePref, initTheme } from "./theme";
-import { initToast } from "./toast";
 
+/**
+ * The composition root - and since WS4.6, very nearly all that is left of the
+ * vanilla frontend.
+ *
+ * It owns nothing. `index.html` is one `<div>` and a boot script; every
+ * element the app has is rendered by `App.svelte`, which is why there is not a
+ * single `el()` call below. That is deliberate and worth keeping: WS4.4 left
+ * one behind after deleting the markup it looked up, `el` throws on a miss by
+ * design, and the whole frontend failed to boot with every gate green.
+ * `main.boot.test.ts` is what watches for that now.
+ */
 window.addEventListener("DOMContentLoaded", () => {
   // The theme is already on <html> from the inline boot script; this adopts
   // that value into module state and starts following the OS.
   initTheme();
 
   // Before anything else binds a listener: these are `document`-level
-  // suppressions of browser behaviour, and none of them depend on the views
-  // existing.
+  // suppressions of browser behaviour, and none of them depend on anything
+  // existing yet.
   initDesktop();
 
-  // **No `registerView` here at all any more.** Every view registers itself
-  // from `App.svelte`, because none of their nodes exist until that component
-  // mounts (WS4.3 through WS4.5).
-  //
-  // A line was left behind when WS4.4 deleted `#settings-view`, and `el`
-  // throws on a miss by design, so `main.ts` threw here before `mountApp` and
-  // the whole frontend failed to boot. Nothing caught it: no test imports this
-  // file, and the Windows smoke test asserts the *process* reaches `setup`.
-  // `main.boot.test.ts` is the test that would have.
-
-  initToast();
-  // Before the close button can be pressed, which is immediately.
-  initQuit();
   // Before the views: if the recorder is not running, that is the first thing
-  // worth saying, and the views below will be showing stale or empty data
-  // because of it.
+  // worth saying, and the views will be showing stale or empty data because
+  // of it. Both are polls and subscriptions rather than elements now, so
+  // neither cares whether the root has mounted.
   initDaemonStatus();
   initStatus();
-  initDevPortal();
-  // After `initToast`: a *refused* install — a game started between the
-  // render and the click — is the one thing this reports loudly, and it
-  // reports it through the toast. Only the app bar's two controls are wired
-  // here now; the panel itself is `Settings.svelte` (WS4.4).
-  initAppBar();
+  void refreshUpdateStatus();
 
-  // After the views are registered, so a `#settings` start or a tray
-  // "Settings" click has something to switch to.
+  // Reads the URL fragment. `App.svelte` registers each view when it mounts,
+  // which is after this, so `registerView` adopts whatever is current rather
+  // than assuming a fresh node's default. See `router.ts`.
   initRouting();
 
-  // The Svelte root, beside the vanilla views rather than around them (WS4.1).
-  // It renders nothing yet; WS4.3 onwards moves views into it one at a time,
-  // each deleting its vanilla counterpart in the same commit. Mounted last so
-  // that a component throwing on the way up cannot take the working frontend
-  // with it — every `init*` above has already run by this line.
-  mountApp(App, el("#svelte-root"));
+  mountApp(App, document.querySelector("#app-root") as HTMLElement);
 
-  // The backend pushes this after a finalize, after a retention deletion,
-  // and after any dev-portal write. Before it existed, a recording the
-  // supervisor had just finished stayed invisible until the user happened
-  // to press Refresh. `.catch` because `listen` rejects outright outside
-  // the Tauri webview, and bridge.ts deliberately supports running there.
+  // **The panel is only read when someone opens it, so that is when it is
+  // worth being right.** The background loop runs every six hours and nothing
+  // else re-checked, which meant a correct "Up to date." from hours ago read
+  // as a broken updater. Rate-limited inside `checkOnOpen`, because Settings
+  // is one click from the library and gets revisited.
+  onViewChange((view) => {
+    if (view === "settings") void checkOnOpen();
+  });
+
+  // Pushed by the background check in `lib.rs`, which runs on a six-hourly
+  // loop, far too slow to poll for. `.catch` because `listen` rejects outside
+  // the Tauri webview, which `bridge.ts` deliberately supports.
+  listen("update-status-changed", () => {
+    void onStatusEvent();
+  }).catch((err) => console.warn("update-status-changed listener unavailable:", err));
+
   // The close action is `quit`, and `lib.rs` has vetoed the close so this can
   // run. Two processes have to stop, in order, and the person may have to be
   // asked first: `quit.ts` owns all of that.
@@ -73,13 +71,17 @@ window.addEventListener("DOMContentLoaded", () => {
     void quitEverything();
   }).catch((err) => console.warn("quit-requested listener unavailable:", err));
 
+  // The backend pushes this after a finalize, after a retention deletion, and
+  // after any dev-portal write. Before it existed, a recording the supervisor
+  // had just finished stayed invisible until the user happened to press
+  // Refresh.
   listen("library-changed", () => {
     void refreshLibrary();
     void refreshDiskUsage();
   }).catch((err) => console.warn("library-changed listener unavailable:", err));
 
   // **Not on load: on connect.** Every one of these is an RPC to the daemon,
-  // and on a cold start the window paints before the handshake finishes — on a
+  // and on a cold start the window paints before the handshake finishes; on a
   // first launch after an install it is starting the daemon itself, which
   // takes seconds. Fetching here got `not connected to the recorder` back and
   // reported it as an error, so a healthy install greeted its owner with a red
@@ -94,7 +96,7 @@ window.addEventListener("DOMContentLoaded", () => {
     void refreshDiskUsage();
 
     // Preferences come from SQLite, so they land a beat after the first
-    // paint. Both consumers re-apply rather than waiting on them.
+    // paint. Every consumer re-applies rather than waiting on them.
     void loadPrefs().then((prefs) => {
       applyThemePref(prefs.theme);
       syncFromPrefs();

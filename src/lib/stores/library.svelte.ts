@@ -16,11 +16,11 @@
 
 import { call } from "../../bridge";
 import { patchLabel, queueOrModeLabel, vodTitle } from "../../format";
-import { toast } from "../../toast";
 import type { DiskUsage, ReconcileReport, RecordingRow } from "../../types";
 import { ANY, anyFilterActive, filterRows, type LibraryFilters } from "../library/filters";
 import { byLane, byName, byPatchDesc, sortRows } from "../library/sort";
 import { facetOptions, keepSelection, libraryStats } from "../library/stats";
+import { toast } from "./toast.svelte";
 
 /** The full set fetched from the DB. Filtering and sorting happen over this
  *  in memory rather than by re-querying: the dataset is small and local. */

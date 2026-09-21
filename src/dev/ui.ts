@@ -8,9 +8,28 @@
  * table renderer, a JSON view, a confirm dialog, and toasts. There is no
  * component framework here on purpose.
  */
-import { escapeAttr, escapeHtml } from "../dom";
 
-export { escapeAttr, escapeHtml };
+/**
+ * Escaping, which used to live in `src/dom.ts`.
+ *
+ * WS4.6 deleted that module: the app builds no markup by hand any more, and
+ * these two had the portal as their only remaining caller. They moved here
+ * rather than being kept alive elsewhere, and they go when the portal is
+ * reworked (#72).
+ */
+
+/** Escapes text destined for a text node. Handles `<`, `>` and `&`, but NOT
+ *  quotes, so it is not safe for attribute values. Use `escapeAttr` there. */
+export function escapeHtml(value: string): string {
+  const div = document.createElement("div");
+  div.textContent = value;
+  return div.innerHTML;
+}
+
+/** Escapes text destined for a quoted attribute value. */
+export function escapeAttr(value: string): string {
+  return escapeHtml(value).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
 
 export function h(html: string): string {
   return html;

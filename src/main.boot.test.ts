@@ -31,13 +31,16 @@ vi.mock("./bridge", () => ({
   hasDevCommands: vi.fn().mockResolvedValue(false),
   assetUrl: (p: string) => p,
 }));
-vi.mock("./daemon", () => ({
+vi.mock("./lib/stores/daemon.svelte", () => ({
   initDaemonStatus: vi.fn(),
   // Never fires: the point is to get through the synchronous boot, not to
   // exercise what happens after a handshake.
   whenDaemonReachable: vi.fn(),
+  // `DaemonStrip.svelte` reads this. Null is "nothing to say", which is the
+  // state a window that has not handshaken yet is in.
+  daemon: { strip: null, health: undefined },
 }));
-vi.mock("./status", () => ({ initStatus: vi.fn(), stopStatusPolling: vi.fn() }));
+vi.mock("./lib/stores/status.svelte", () => ({ initStatus: vi.fn(), stopStatusPolling: vi.fn() }));
 vi.mock("./prefs", async (original) => ({
   ...(await original<typeof import("./prefs")>()),
   loadPrefs: vi.fn().mockResolvedValue({}),
@@ -79,7 +82,7 @@ describe("booting the frontend", () => {
     await import("./main");
     window.dispatchEvent(new Event("DOMContentLoaded"));
 
-    const root = document.querySelector("#svelte-root");
+    const root = document.querySelector("#app-root");
     expect(root).not.toBeNull();
     // Every view is rendered by `App.svelte` now, so finding one proves the
     // mount happened rather than that the markup contains it.
