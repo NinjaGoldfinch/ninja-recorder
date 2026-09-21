@@ -1,5 +1,6 @@
-import { mount, unmount } from "svelte";
+import { flushSync, mount, unmount } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resizeTo } from "../../../test-setup";
 import type { MarkerRow, SampleRow } from "../../../types";
 import type { MetricKey } from "../../timeline/graph";
 import { viewingWindow } from "../../timeline/window";
@@ -183,5 +184,110 @@ describe("markers", () => {
     // zero width rather than piling every marker at the left edge.
     const el = render({ markers: [marker({ video_time_s: 10 })] });
     expect(el.querySelectorAll(".marker-glyph")).toHaveLength(0);
+  });
+});
+
+describe("the cluster tooltip", () => {
+  /**
+   * jsdom lays nothing out, so every measurement the placement reads is zero
+   * unless it is stubbed. These stub only what the code actually reads, which
+   * is the width of the body, the tooltip's own width, and whether its content
+   * overflows.
+   */
+  /** The width the clustering measures in, said out loud. Without it there
+   *  are no glyphs at all, which is jsdom telling the truth about layout. */
+  function widen(el: HTMLElement, width = 400) {
+    const bodyEl = el.querySelector<HTMLElement>(".timeline-body");
+    if (bodyEl) resizeTo(bodyEl, width);
+    flushSync();
+  }
+
+  function hover(el: HTMLElement) {
+    const glyph = el.querySelector<HTMLElement>(".marker-glyph");
+    if (!glyph) throw new Error("no marker glyph");
+    glyph.dispatchEvent(new MouseEvent("mouseenter", { bubbles: false }));
+    return glyph;
+  }
+
+  /**
+   * Hovers, measures, hovers again.
+   *
+   * The tooltip does not exist until something is hovered, so its dimensions
+   * cannot be stubbed before the first hover, and placement reads them. The
+   * second hover is what places it with the measurements in hand.
+   */
+  async function openTooltip(el: HTMLElement, { width = 100, overflows = false } = {}) {
+    hover(el);
+    await Promise.resolve();
+    const tooltip = el.querySelector<HTMLElement>(".timeline-tooltip");
+    if (tooltip) {
+      Object.defineProperty(tooltip, "offsetWidth", { value: width, configurable: true });
+      Object.defineProperty(tooltip, "scrollHeight", {
+        value: overflows ? 500 : 50,
+        configurable: true,
+      });
+      Object.defineProperty(tooltip, "clientHeight", { value: 50, configurable: true });
+    }
+    hover(el);
+    await Promise.resolve();
+    return el.querySelector<HTMLElement>(".timeline-tooltip");
+  }
+
+  it("shows the markers in the cluster it was opened on", async () => {
+    const el = render({ markers: [marker({ id: 1, video_time_s: 60, kind: "kill" })] });
+    widen(el);
+    const tooltip = await openTooltip(el);
+    expect(tooltip?.textContent).toContain("1:00");
+  });
+
+  it("stays inside the timeline at either end", async () => {
+    const el = render({ markers: [marker({ id: 1, video_time_s: 0 })] });
+    widen(el, 400);
+    const tooltip = await openTooltip(el, { width: 100 });
+    const left = Number.parseFloat(tooltip?.style.left ?? "0");
+    // Half its own width in from the edge, never off it.
+    expect(left).toBeGreaterThanOrEqual(50);
+    expect(left).toBeLessThanOrEqual(350);
+  });
+
+  it("takes the pointer only when it actually overflows", async () => {
+    // It overlaps the top of the track, so making it hoverable unconditionally
+    // would put a dead strip over the glyphs underneath.
+    const el = render({ markers: [marker({ id: 1, video_time_s: 60 })] });
+    widen(el);
+    expect((await openTooltip(el, { overflows: false }))?.dataset.scrollable).toBe("false");
+
+    const scrollable = render({ markers: [marker({ id: 2, video_time_s: 60 })] });
+    widen(scrollable);
+    expect((await openTooltip(scrollable, { overflows: true }))?.dataset.scrollable).toBe("true");
+  });
+
+  it("survives a hover before the tooltip has been laid out", async () => {
+    const el = render({ markers: [marker({ id: 1, video_time_s: 60 })] });
+    // A width, so the glyph exists, but nothing stubbed on the tooltip: every
+    // measurement it makes is zero, which is what a hover on the first frame
+    // really sees.
+    widen(el);
+    hover(el);
+    await Promise.resolve();
+    expect(el.querySelector(".vod-timeline")).not.toBeNull();
+  });
+
+  it("seeks to the first marker in the cluster when the glyph is pressed", () => {
+    const seeks: number[] = [];
+    const el = render({
+      markers: [marker({ id: 1, video_time_s: 90 })],
+      onseek: (t: number) => seeks.push(t),
+    });
+    widen(el);
+    el.querySelector<HTMLButtonElement>(".marker-glyph")?.click();
+    expect(seeks).toEqual([90]);
+  });
+
+  it("names every marker in the cluster for a screen reader", () => {
+    const el = render({ markers: [marker({ id: 1, video_time_s: 90, kind: "kill" })] });
+    widen(el);
+    const label = el.querySelector(".marker-glyph")?.getAttribute("aria-label");
+    expect(label).toContain("1:30");
   });
 });

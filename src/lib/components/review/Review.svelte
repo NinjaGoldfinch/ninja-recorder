@@ -251,7 +251,7 @@ async function selectTrack(index: number) {
 // --- Controls -----------------------------------------------------------
 
 function togglePlay() {
-  if (!video || !video.src) return;
+  if (!video?.src) return;
   if (!video.paused) {
     video.pause();
     return;

@@ -75,24 +75,6 @@
           "correctness": { "noUnusedVariables": "off", "noUnusedImports": "off" }
         }
       }
-    },
-    {
-      // **Dated debt, not a blanket — WS4.2 deletes this override.**
-      //
-      // These two files hold every remaining lint error in the tree: 8
-      // `useSemanticElements`, 4 `noSvgWithoutTitle`, 1 `useHeadingContent`,
-      // 1 `useMediaCaption` and 2 `noInnerDeclarations` (the inline
-      // anti-theme-flash script's `var`s).
-      //
-      // All of them are real. None of them can be fixed without editing the
-      // markup, which the v2 skeleton is not allowed to do and which
-      // Appendix D of the plan deletes outright when the Svelte views land.
-      // Fixing them now would mean rewriting markup twice and shipping an
-      // untested change to the release build in between.
-      //
-      // Formatting stays on for both files; only the linter is off.
-      "includes": ["index.html", "dev.html"],
-      "linter": { "enabled": false }
     }
   ]
 }

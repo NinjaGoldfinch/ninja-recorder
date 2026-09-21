@@ -1,3 +1,11 @@
+/** biome-ignore-all lint/style/noDescendingSpecificity: five of the six it
+ * reports here are false positives. `.kv-table th` and `table.grid th` are
+ * two different tables and no element matches both, but the rule compares the
+ * rightmost compound and does not check whether the ancestor parts can
+ * co-apply. The sixth, `.card-grid` after `.card + .card-grid`, sets no
+ * property the earlier rule touches. As in `app.css`, this is about reading
+ * order rather than correctness, and it goes when the rules move into
+ * components (DEVELOPMENT.md §19.1). */
 /* Dev portal.
  *
  * The app's own stylesheet hard-codes hex and restates every rule inside
@@ -71,6 +79,9 @@
 /* Same reason the app's stylesheet needs this: `[hidden]` is a bare
  * attribute selector, so any class rule setting `display` beats it. */
 [hidden] {
+  /* biome-ignore lint/complexity/noImportantStyles: the comment above is
+   * the reason. Without it a class rule setting `display` beats `[hidden]`,
+   * which is how an error overlay ends up sitting over every video. */
   display: none !important;
 }
 
