@@ -414,16 +414,27 @@ Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' |
   Select-Object -ExpandProperty 'ninja-recorder'
 ```
 
+**2026-09-22: `l1` and `l2` pass, with Defender live.** After a real logon:
+one `ninja-recorder.exe`, its command line carrying `--daemon`, no second
+process without it, and no WebView2 process parented to ours. The Run value is
+the installed exe path followed by `--daemon`, written by the app rather than
+by hand.
+
+Taken with the Defender exclusion **off**, which matters: see #181. Nothing
+fired from the logon, from the Run key starting the daemon, or from relaunching
+the binary. The one act still untested with protection live is the app
+*writing* the key, which is what the persistence heuristic watches.
+
 - [ ] A fresh install registers **nothing**: the key is absent and the
       Settings checkbox is off before it is ever touched.
-- [ ] Ticking it creates the value, and it holds the installed exe's full path
+- [x] Ticking it creates the value, and it holds the installed exe's full path
       **followed by `--daemon`** (WS3.5). A path with no flag means a login
       start that opens a window; `--hidden` means a build from before WS3.5,
       which still works but starts a UI rather than a daemon.
 - [ ] Unticking it removes the value entirely.
 - [ ] The setting survives a restart of the app: reopen Settings and confirm
       the checkbox still reflects the key.
-- [ ] **Sign out and back in.** Task Manager shows **one**
+- [x] **Sign out and back in.** Task Manager shows **one**
       `ninja-recorder.exe` and it is the daemon: no window and no taskbar
       button. The tray icon is there, and the recorder is live. Start a game
       without opening the window and confirm it records. This is WS3.5's exit
