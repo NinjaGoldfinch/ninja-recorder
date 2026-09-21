@@ -772,6 +772,13 @@ modes here are silent, and the app's own UI will not show you most of them.
       Vanguard-protected `League of Legends.exe`?** This is the big one: every
       preset naming "game audio" depends on it and there is no automatic
       fallback. If it fails, Desktop is the documented workaround.
+
+      **This row also answers WS1's P0c stage 1 (#7), on the shipping build.**
+      The libobs fork and `spikes/p0c-audio` call the same Windows API, so a
+      Game-preset recording with real samples in it says process loopback works
+      against League on this machine, and a silent one says it does not. Either
+      way the spike is then confirming a known answer rather than discovering
+      one, which is the cheaper order to do them in. See #67.
 - [ ] Record with each preset. Confirm the track *count* and order match the
       table in §2.5, and that a Game-only recording contains no microphone
       audio.
