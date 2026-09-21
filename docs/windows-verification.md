@@ -838,10 +838,12 @@ modes here are silent, and the app's own UI will not show you most of them.
 
 ## 7. The frontend, after the Svelte migration (#167)
 
-WS4 replaced every view in the window, one workstream at a time, and none of it
-has been run on Windows. This section is ordered so each step leaves the
-machine in a useful state for the next, and it leads with the two failures that
-would make everything after them meaningless.
+WS4 replaced every view in the window, one workstream at a time. **All of it
+has now been run on Windows and all of it passes**; what follows is the
+checklist that was used and the record of what it found. The order is still
+the order to repeat it in: each step leaves the machine in a useful state for
+the next, and it leads with the two failures that would make everything after
+them meaningless.
 
 **Nothing below is covered by CI, and that is structural rather than an
 oversight.** The test suite runs in jsdom, which lays nothing out: every
@@ -854,106 +856,137 @@ Read §2's ticks with care. They were recorded on alpha.40, before WS4.3, so
 against `library.ts` and `review.ts`, both since deleted. They still stand as
 claims about the backend underneath; they say nothing about the current views.
 
+**2026-09-21: all 45 rows pass.** WS4 is verified. The row-level record is the
+sheet on #167; this section is its durable copy, and the two disagree only in
+grain: the sheet splits tooltip placement and the reset dialog into rows of
+their own, so it counts 45 where this counts 45 after the two additions below.
+
+**The first pass found two defects, and the list had a row for neither.**
+
+| Found | Was | Fixed |
+|---|---|---|
+| The player rendered enormous and cropped | `app.css` sizes the video through `#review-video`, and WS4.5 rebuilt the element with a `bind:this` reference, which needs no id. The rule stopped matching and the `<video>` fell back to its intrinsic 1920-wide box inside a wrapper with `overflow: hidden` | #169 |
+| Clicking the video did nothing | `review.ts` bound a click handler; the rebuilt element carried seven handlers and no `click` | #169 |
+
+Both are worth more than their own fixes. The sizing bug **survived a look at
+the feature most likely to break**, because fullscreen was checked first and
+fullscreen looks right either way: there the wrapper fills the screen whatever
+the video does. And neither was on the list, which means the list is a floor
+rather than a ceiling, and a session that only ticks rows finds less than one
+that also looks.
+
+`src/style-hooks.test.ts` now asserts that every id a stylesheet selects exists
+in the markup, which is the structural half of the first one. It is the most a
+test can say here: nothing in this repo renders a pixel, so a stylesheet
+detaching from its markup is invisible until someone opens the window.
+
 ### 7.1 It boots, and it is dressed
 
-- [ ] The window opens and shows the library. A blank window means the root
+- [x] The window opens and shows the library. A blank window means the root
       threw on the way up: open DevTools and read the console first, because
       everything below will fail in a way that hides it
-- [ ] **No flash of the wrong theme on launch.** The inline boot script in
+- [x] **No flash of the wrong theme on launch.** The inline boot script in
       `index.html` runs before first paint and `app.css` imports `tokens.css`
       on its first line; either coming late is visible exactly once per start,
       so watch the first frame rather than the settled window
-- [ ] The app bar, the library grid and the rows are **styled**. `app.css` was
+- [x] The app bar, the library grid and the rows are **styled**. `app.css` was
       moved from `src/styles.css` in #164 and not rewritten, so the failure
       to look for is wholesale unstyled markup rather than a wrong margin
-- [ ] Switch to Settings and back. One view at a time, never two at once
-- [ ] Open the app at `#settings` directly (edit the URL in a dev build, or
+- [x] Switch to Settings and back. One view at a time, never two at once
+- [x] Open the app at `#settings` directly (edit the URL in a dev build, or
       relaunch after leaving it there). **The settings view alone** should
       show: a view that trusted its own default would render two at once
 
 ### 7.2 The library (WS4.3)
 
-- [ ] Rows show champion art, the matchup, KDA, CS and the result
-- [ ] Champion search narrows the list as it is typed
-- [ ] Each of the three facet filters (queue, role, patch) narrows it, and the
+- [x] Rows show champion art, the matchup, KDA, CS and the result
+- [x] Champion search narrows the list as it is typed
+- [x] Each of the three facet filters (queue, role, patch) narrows it, and the
       options offered are the values actually present
-- [ ] Delete a recording that a facet filter is selecting on. The filter
+- [x] Delete a recording that a facet filter is selecting on. The filter
       should fall back to "All", not hide everything with no way back
-- [ ] Every sort order reorders the grid, and survives switching views
-- [ ] "Clear filters" clears the filters and **leaves the sort where it was**
-- [ ] The empty state appears with a way out when filters match nothing, and
+- [x] Every sort order reorders the grid, and survives switching views
+- [x] "Clear filters" clears the filters and **leaves the sort where it was**
+- [x] The empty state appears with a way out when filters match nothing, and
       without one when the library is genuinely empty
-- [ ] Pin a row, delete a row: both report, and the grid and the disk figure
+- [x] Pin a row, delete a row: both report, and the grid and the disk figure
       both update
 
 ### 7.3 The review player (WS4.5)
 
 Needs one real recording. §2 produces one.
 
-- [ ] It plays, and the timeline draws the advantage curve
-- [ ] Markers appear as glyphs on the track. **Markers close together cluster
+- [x] It plays, and the timeline draws the advantage curve
+- [x] Markers appear as glyphs on the track. **Markers close together cluster
       into one glyph with a count**, which no test can check: clustering is
       measured in pixels and jsdom has none
-- [ ] Hovering a cluster shows its tooltip, and a tooltip near either end
+- [x] Hovering a cluster shows its tooltip, and a tooltip near either end
       stays inside the timeline rather than hanging off it
-- [ ] A tooltip with more markers than fit scrolls, and survives the pointer
+- [x] A tooltip with more markers than fit scrolls, and survives the pointer
       moving into it
-- [ ] Clicking a glyph seeks to that marker; the marker list seeks too
-- [ ] Dragging the in-player bar scrubs, and keeps scrubbing when the pointer
+- [x] Clicking a glyph seeks to that marker; the marker list seeks too
+- [x] Dragging the in-player bar scrubs, and keeps scrubbing when the pointer
       leaves the bar
-- [ ] **Playback stops at the end of the viewing window rather than running
+- [x] **The player is the size of its wrapper**, not its intrinsic size, and
+      stays right when the window is resized. Neither this nor the row below
+      was on this list when the first session ran; both were found anyway, and
+      both were real (#169). The list is the poorer of the two records, so they
+      are here now.
+- [x] Clicking the video toggles play and pause, and a click that only
+      dismissed the settings menu does not also toggle it.
+- [x] **Playback stops at the end of the viewing window rather than running
       into the black tail** (#119), and the clock does not read past the end
-- [ ] The hotkeys work, **including in fullscreen**, which is the only marker
+- [x] The hotkeys work, **including in fullscreen**, which is the only marker
       navigation available there: the rich timeline is outside `.player-wrap`
-- [ ] For a multi-track recording, switching audio tracks extracts a stem and
+- [x] For a multi-track recording, switching audio tracks extracts a stem and
       the video mutes. Switch twice quickly: the second choice must win
-- [ ] Switch to a track whose extraction fails. It should fall back to the mix
+- [x] Switch to a track whose extraction fails. It should fall back to the mix
       and say so, not go silent with the picker claiming otherwise
 
 ### 7.4 Settings and the updater (WS4.4)
 
-- [ ] Every control reflects what is actually set, and a restart shows the
+- [x] Every control reflects what is actually set, and a restart shows the
       same values
-- [ ] Theme: Light, Dark and System each apply, and System follows the OS
+- [x] Theme: Light, Dark and System each apply, and System follows the OS
       when it is changed underneath the app
-- [ ] Start on login ticks and unticks, and the checkbox shows what the
+- [x] Start on login ticks and unticks, and the checkbox shows what the
       registry ended up saying rather than what was asked for
-- [ ] Audio preset changes, and a failed change rolls the control back
-- [ ] Retention: the preview says what saving would delete **before** saving,
+- [x] Audio preset changes, and a failed change rolls the control back
+- [x] Retention: the preview says what saving would delete **before** saving,
       and saving deletes exactly that
-- [ ] "Fill in match data" reports, and the library reflects what it filled
-- [ ] The update panel shows a real status, and the release notes render as
+- [x] "Fill in match data" reports, and the library reflects what it filled
+- [x] The update panel shows a real status, and the release notes render as
       text (`latest.json` is not covered by the update signature)
 
 ### 7.5 The shell (WS4.6)
 
-- [ ] Toasts appear, stack, and go away on their own
-- [ ] Kill the daemon: the strip appears and **stays** until the connection is
+- [x] Toasts appear, stack, and go away on their own
+- [x] Kill the daemon: the strip appears and **stays** until the connection is
       back, then clears itself
-- [ ] Close the window while recording: the quit dialog appears, and
+- [x] Close the window while recording: the quit dialog appears, and
       **"Quit anyway" quits** (see DEVELOPMENT.md §4.9, where answering the
       wrong way was a real bug)
-- [ ] "Cancel" on that dialog cancels
-- [ ] Escape dismisses it, and dismissing is not a yes
+- [x] "Cancel" on that dialog cancels
+- [x] Escape dismisses it, and dismissing is not a yes
 
 ### 7.6 The dev portal (#72)
 
 Needs a devtools build (`npm run tauri:dev`, or the CI artifact).
 
-- [ ] The portal opens, the header pills poll, and the Live toggle stops them
-- [ ] **Every one of the eleven panels renders**, which is the whole of what
+- [x] The portal opens, the header pills poll, and the Live toggle stops them
+- [x] **Every one of the eleven panels renders**, which is the whole of what
       the rewrite risks. Walk the sidebar top to bottom
-- [ ] The portal is **styled**: `dev.css` moved in #72 the same way `app.css`
+- [x] The portal is **styled**: `dev.css` moved in #72 the same way `app.css`
       did, so the failure to look for is an unstyled page rather than a
       misplaced rule
-- [ ] `r` refreshes the current panel, and does nothing while typing in a field
-- [ ] A confirm dialog appears for a destructive action, Cancel cancels, and
+- [x] `r` refreshes the current panel, and does nothing while typing in a field
+- [x] A confirm dialog appears for a destructive action, Cancel cancels, and
       the Reset database dialog stays disabled until `reset` is typed
-- [ ] Fixtures → "Send to the snapshot injector" lands the payload in
+- [x] Fixtures → "Send to the snapshot injector" lands the payload in
       Simulate. It is 99 KB and does not travel in the URL
-- [ ] The 🔎 on a library row opens the portal **on that recording**
+- [x] The 🔎 on a library row opens the portal **on that recording**
       (`#/library/<id>`)
-- [ ] Seed a library, then confirm the main window updates without a manual
+- [x] Seed a library, then confirm the main window updates without a manual
       refresh (`library-changed`)
 
 ### 7.7 What to record
