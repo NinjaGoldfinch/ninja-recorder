@@ -569,8 +569,14 @@ $effect(() => {
   />
 </div>
 
+<!--
+  Only the markers the file reaches are drawn. A crashed recording carries
+  markers for moments past its own end, and `windowFraction` clamps, so drawing
+  them would pile a stack of unrelated events onto the final frame. They are
+  listed instead: see `splitByFootage`.
+-->
 <Timeline
-  markers={review.markers}
+  markers={review.footage.inside}
   samples={review.samples}
   metric={review.metric}
   window={review.window}
@@ -581,7 +587,7 @@ $effect(() => {
   onscrubstart={startScrub}
 />
 
-<MarkerList markers={review.markers} onseek={seekTo} />
+<MarkerList markers={review.markers} beyond={review.footage.beyond} onseek={seekTo} />
 
 <p class="hint">
   Space play/pause &middot; &larr; &rarr; seek 5s &middot; [ ] markers &middot; d / D deaths

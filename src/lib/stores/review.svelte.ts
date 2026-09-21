@@ -12,6 +12,7 @@
 import { call } from "../../bridge";
 import type { MarkerRow, RecordingRow, SampleRow } from "../../types";
 import type { MetricKey } from "../timeline/graph";
+import { splitByFootage } from "../timeline/markers";
 import { measureGameEnd, measureGameStart, viewingWindow } from "../timeline/window";
 
 let recording = $state<RecordingRow | null>(null);
@@ -52,6 +53,17 @@ export const review = {
   /** Where the game sits inside the file. See `lib/timeline/window.ts`. */
   get window() {
     return viewingWindow(measureGameStart(samples), measureGameEnd(samples), duration);
+  },
+  /**
+   * The markers the file reaches, and the ones it does not.
+   *
+   * Only a recording whose finalize never ran has a second half: see
+   * `splitByFootage`. Derived here rather than in the view because both the
+   * timeline and the list need the same answer, and it is a fact about the
+   * recording rather than about either widget.
+   */
+  get footage() {
+    return splitByFootage(markers, duration);
   },
   get isOpen() {
     return recording !== null;
