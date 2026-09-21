@@ -14,7 +14,7 @@
 
 <script lang="ts">
 import { call, hasDevCommands } from "../../../bridge";
-import { openReview } from "../../../review";
+import { showView } from "../../../router";
 import type { RecordingRow } from "../../../types";
 import { fillInArt } from "../../stores/icons.svelte";
 import {
@@ -26,6 +26,7 @@ import {
   rescanRecordings,
   togglePin,
 } from "../../stores/library.svelte";
+import { openRecording } from "../../stores/review.svelte";
 import Row from "./Row.svelte";
 import StatsBar from "./StatsBar.svelte";
 import Toolbar from "./Toolbar.svelte";
@@ -96,7 +97,10 @@ $effect(() => {
       <Row
         {row}
         {showInspect}
-        onopen={openReview}
+        onopen={(r: RecordingRow) => {
+          void openRecording(r);
+          showView("review");
+        }}
         onpin={(r: RecordingRow) => void togglePin(r)}
         ondelete={(r: RecordingRow) => void deleteRecording(r)}
         oninspect={(r: RecordingRow) =>

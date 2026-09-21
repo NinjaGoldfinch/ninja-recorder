@@ -1,10 +1,10 @@
 /**
  * The Svelte 5 application — WS4, with its contract client from WS2.
  *
- * `src/main.ts` is still most of the frontend; WS4 is a strangler migration,
- * so this directory fills up view by view while `main.ts` shrinks, and the
- * two run side by side for the length of it. `router.ts` owns the join
- * (`mountApp` / `unmountApp`); see docs/frontend.md, "The Svelte seam".
+ * Every view lives here since WS4.5. `main.ts` is down to a composition
+ * root that mounts `App.svelte` and wires the handful of things that are not
+ * views; `router.ts` owns the join (`mountApp` / `unmountApp`). See
+ * docs/frontend.md, "The Svelte seam".
  *
  * What lands here (implementation plan §3.4, §4.6):
  *
@@ -13,11 +13,11 @@
  * | `App.svelte` | WS4.1 | LANDED: the root, mounted into `#svelte-root` |
  * | `components/library/` | WS4.3 | LANDED: eight components replacing `library.ts`, which is deleted |
  * | `components/settings/` | WS4.4 | LANDED: nine components replacing `settings.ts` and `update.ts`, both deleted |
- * | `Review.svelte`, `Timeline.svelte` | WS4.5 | the views still replacing `review.ts` |
+ * | `components/review/` | WS4.5 | LANDED: five components replacing `review.ts`, which is deleted. `Review` is an imperative island |
  * | `contract/` | WS2.5 | GENERATED: `types.ts`, `client.ts`, `events.ts`, `index.ts`. Committed, CI-checked by `gen-contract --check` |
  * | `transport/` | WS2.6, WS3.6 | `invoke.ts` and `mock.ts` landed in WS2.6; `pipe.ts` is WS3.6 |
- * | `stores/` | WS4.3–4.4 | LANDED: `library`, `icons`, `settings`, `update`, `about` |
- * | `library/`, `timeline/`, `settings/` | WS4.2–4.4 | LANDED: the pure logic, with its tests |
+ * | `stores/` | WS4.3–4.5 | LANDED: `library`, `icons`, `settings`, `update`, `about`, `review` |
+ * | `library/`, `timeline/`, `settings/`, `review/` | WS4.2–4.5 | LANDED: the pure logic, with its tests |
  * | `styles/tokens.css` | WS4.1 | LANDED: every custom property, moved out of `styles.css` unchanged |
  *
  * The stores are not yet driven by the daemon's event stream, which is what

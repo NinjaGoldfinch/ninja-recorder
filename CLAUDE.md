@@ -51,7 +51,7 @@ disagreeing about the same file.
 | `src-tauri/src/ui/` (the Tauri commands; `client` has landed) | WS3 |
 | `src-tauri/src/recorder/own/` | WS1 task 1.6 |
 | `src-tauri/src/db/pool.rs` | WS6 |
-| `src/lib/` (nothing left empty; `contract/`, `transport/`, `stores/`, `components/`, `library/`, `settings/`, `timeline/`, `styles/tokens.css` and `App.svelte` have all landed) | WS2 / WS4 |
+| `src/lib/` (nothing left empty; every view, store and pure module has landed) | WS2 / WS4 |
 
 `src/lib/contract/` is **generated** once WS2.4 lands — committed and
 CI-checked, never hand-edited.
@@ -257,9 +257,11 @@ workstream should be rewritten to say what it means.
   **release notes**, for a different reason: `latest.json` is fetched over
   HTTPS but is *not* covered by the update signature, so `UpdateNotes.svelte`
   renders a parsed structure and `UpdateNotes.test.ts` fails if that changes.
-  **The vanilla half is not finished**: `review.ts` still builds markup by
-  hand, so `escapeAttr` for attribute values and `escapeHtml` for text nodes
-  still apply there until WS4.5.
+  **The app's vanilla half is finished**: since WS4.5 nothing under `src/`
+  outside the dev portal builds markup by hand. `dom.ts`'s `escapeHtml` and
+  `escapeAttr` still have callers, all of them in `src/dev/`, which WS4 leaves
+  on the vanilla stack (plan §9, Q6) and where the rule therefore still
+  applies in full.
 - **Pure decision + thin I/O wrapper.** `state_machine::machine`,
   `db::reconcile` and `retention::select_for_deletion` are pure and directly
   unit-tested; their wrappers are deliberately too small to hide a bug. Adding
@@ -336,6 +338,19 @@ workstream should be rewritten to say what it means.
   emitted TypeScript matches the declaration, which is a claim about two files,
   while that test proves `dispatch` can parse what the client actually sends,
   which is a claim about runtime.
+- **`main.ts` looks up no view elements at all, and a boot test proves it.**
+  WS4.4 left one `el("#settings-view")` behind after deleting that markup;
+  `el` throws on a miss, the line ran before `mountApp`, and the whole
+  frontend failed to boot with every gate green. `src/main.boot.test.ts` now
+  loads the real `index.html` and the real `main.ts` and asserts the root
+  mounts. **Run it in your head before deleting markup**: the remaining
+  `el()` calls are the app bar's, and WS4.6 deletes those too.
+- **The player is an imperative island and stays one.** `Review.svelte` holds
+  a real `<video>` reference because `currentTime` is not state anything
+  should be diffing. One number crosses outward per frame, the playhead, and
+  everything else crosses inward. Do not move `currentTime`, `paused`,
+  `volume`, the selected track or the fullscreen state into a store: nothing
+  outside the component reads them, and a store would claim otherwise.
 - **A migrated view registers itself with the router, and `registerView` sets
   `hidden` from the current view.** A Svelte view has no id to look up before
   it renders, so `App.svelte` hands its node over on mount, which is after
