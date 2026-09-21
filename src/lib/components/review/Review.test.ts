@@ -484,3 +484,61 @@ describe("the end of the window", () => {
     expect(v.currentTime).toBe(5);
   });
 });
+
+describe("clicking the video", () => {
+  /**
+   * Restored after WS4.5 dropped it: `review.ts` bound a click handler to the
+   * element and the migration rebuilt the `<video>` without one, so the only
+   * way to pause was the button or the spacebar. Found on Windows, because
+   * nothing in CI clicks anything.
+   */
+  it("toggles playback", async () => {
+    const el = render();
+    await open([], 600);
+    await Promise.resolve();
+
+    const v = video(el);
+    expect(v.paused).toBe(true);
+    v.click();
+    await Promise.resolve();
+    expect(v.paused).toBe(false);
+
+    v.click();
+    await Promise.resolve();
+    expect(v.paused).toBe(true);
+  });
+
+  it("does not toggle on the click that dismisses the settings menu", async () => {
+    // The click that closes the menu lands on a frame the user was not aiming
+    // at. `review.ts` guarded this with the same flag.
+    const el = render();
+    await open([], 600);
+    await Promise.resolve();
+
+    const gear = el.querySelector<HTMLButtonElement>(".player-menu > button");
+    if (!gear) throw new Error("no settings button");
+    gear.click();
+    await Promise.resolve();
+
+    // On the element, not on `document`: a real pointerdown always targets an
+    // element and bubbles, and the handler reads `closest` off the target.
+    const v = video(el);
+    v.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    v.click();
+    await Promise.resolve();
+
+    expect(v.paused, "the dismissing click also toggled playback").toBe(true);
+  });
+
+  it("still toggles on the next click, once the menu is closed", async () => {
+    const el = render();
+    await open([], 600);
+    await Promise.resolve();
+
+    const v = video(el);
+    v.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    v.click();
+    await Promise.resolve();
+    expect(v.paused).toBe(false);
+  });
+});

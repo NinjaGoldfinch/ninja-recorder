@@ -9,6 +9,10 @@
       // istanbul's own HTML/JS assets at that.
       "!coverage",
       "!src-tauri/target",
+      // A spike crate's build output. `spikes/` holds standalone crates that
+      // answer one question and are then deleted; nothing in them is formatted
+      // or linted by this tool, and `target/` is generated besides.
+      "!spikes/**/target",
       "!package-lock.json",
       // Captured LCU and Live Client Data samples. The point of a fixture is
       // that it is exactly what the API returned, so reformatting it would
