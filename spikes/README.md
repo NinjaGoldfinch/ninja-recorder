@@ -20,6 +20,7 @@ the directory rather than an accident of layout:
 | Crate | Question | Issue |
 |---|---|---|
 | `p0c-audio` | Can WASAPI process loopback isolate one application's audio? | #7 |
+| `p0c-video` | Does WGC reach a fragmented MP4, and does a killed file play? | #8 |
 
 ## What a spike is not
 
