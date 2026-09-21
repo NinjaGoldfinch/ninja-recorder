@@ -223,9 +223,10 @@ This applies to `docs/*.md` too — see `windows-verification.md`, where WS0's
 new material is §5.2 rather than a second §5.0, because §5.0 was taken.
 
 v2 adds §16 (capture gate and Option B, measured), §17 (contract and transport),
-§18 (licensing exit plan) and §19 (the Svelte migration). §16 and §18 are
-reserved for WS1 and WS8 and do not exist yet, which is why §19 follows §17.
-Nothing above them moves.
+§18 (licensing exit plan) and §19 (the Svelte migration). §18 is reserved for
+WS8 and does not exist yet, which is why §19 follows §17. §16's measurement
+table is deliberately empty until the box fills it: an empty cell is a true
+statement and a plausible number is not. Nothing above them moves.
 
 ### Diagrams
 

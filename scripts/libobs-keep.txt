@@ -1,0 +1,83 @@
+# Which staged libobs files survive a trim (WS1.1, P0a, #5).
+#
+# One glob per line, relative to the staged directory, matched case
+# insensitively with backslashes normalised to forward slashes. Anything not
+# matched is a removal candidate.
+#
+# THIS LIST IS PROVISIONAL AND MUST NOT BE APPLIED UNVERIFIED.
+#
+# It was written from what the recorder demonstrably uses, not from an
+# inventory of a real staged directory, because no such directory exists off
+# Windows. Run `trim-libobs.ps1 -Inventory` on the box first: it prints what is
+# actually there with sizes, which is what turns this from a guess into a
+# keep-list. A plugin removed wrongly does not fail the build; it fails a
+# recording, quietly, which is why the script is a dry run unless told
+# otherwise and why the exit criterion is a clean plugin-load log plus a
+# recording that plays.
+#
+# Every line says why. An entry with no reason is an entry nobody can audit
+# later, and this file exists to be audited: it is the difference between a
+# 248 MB install and a smaller one, and also the difference between capture
+# working and not.
+
+# --- The worker and the library it drives ----------------------------------
+
+# The out-of-process recorder itself. Without this there is no backend at all.
+extprocess_recorder.exe
+
+# libobs proper, and the threading shim it links against.
+obs.dll
+w32-pthreads.dll
+
+# --- Plugins the presets actually name --------------------------------------
+
+# Windows.Graphics.Capture. This is the video source, and the whole reason the
+# fork exists: upstream's game_capture injects and DEVELOPMENT.md 1.1 forbids
+# it.
+obs-plugins/64bit/win-capture.dll
+data/obs-plugins/win-capture/**
+
+# Every audio source in section 2.5: wasapi_process_output_capture for game and
+# named applications, wasapi_output_capture for desktop, wasapi_input_capture
+# for the microphone. All three live in this one plugin.
+obs-plugins/64bit/win-wasapi.dll
+data/obs-plugins/win-wasapi/**
+
+# The muxer and the hardware encoders. obs-ffmpeg carries the fragmented MP4
+# output and the NVENC/AMF/QSV paths, so this is the file the encoder detection
+# in section 16 is about.
+obs-plugins/64bit/obs-ffmpeg.dll
+data/obs-plugins/obs-ffmpeg/**
+
+# The software encoder, which is the fallback on a machine with no usable
+# hardware encoder. 68 says that machine is one of the two configurations
+# available for testing, so this is not speculative.
+obs-plugins/64bit/obs-x264.dll
+
+# --- Runtime data libobs loads by path --------------------------------------
+
+# Locale and effect files. libobs reads these at startup and a missing one is
+# a startup failure rather than a degraded feature.
+data/libobs/**
+
+# --- The DLLs the above link against ----------------------------------------
+#
+# Kept as a group on purpose. Working out which ffmpeg DLL each plugin actually
+# needs is exactly the kind of trimming that looks fine and fails on somebody
+# else's machine, and the inventory run is what should decide whether it is
+# worth the bytes.
+avcodec-*.dll
+avdevice-*.dll
+avfilter-*.dll
+avformat-*.dll
+avutil-*.dll
+swresample-*.dll
+swscale-*.dll
+zlib.dll
+libx264-*.dll
+
+# ffmpeg.exe, staged into this same folder so LibObsRecorder::stop can remux to
+# a seekable faststart MP4 after capture. Optional at runtime, and the app
+# degrades to unseekable-but-playable without it, so removing it is a product
+# decision rather than a trim.
+ffmpeg.exe
