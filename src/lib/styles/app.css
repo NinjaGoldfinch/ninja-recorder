@@ -866,6 +866,24 @@ button:disabled {
   border-bottom: none;
 }
 
+/* A marker naming a moment the file does not reach. Only a recording whose
+ * finalize never ran has any: see `splitByFootage`. Dimmed and not a pointer,
+ * because there is nothing to seek to, and the row is still there because the
+ * event still happened. */
+.marker-list li.beyond-footage {
+  opacity: 0.55;
+  cursor: default;
+  border-left-style: dashed;
+}
+
+.marker-list li.beyond-footage:hover {
+  background-color: transparent;
+}
+
+.marker-list-note {
+  padding: var(--sp-2) var(--sp-3);
+}
+
 .marker-list li:hover {
   background-color: var(--bg-surface-hover);
 }

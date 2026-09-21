@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MarkerRow } from "../../types";
-import { isElder, markerLabel, markerStyle, multikillLabel } from "./markers";
+import { isElder, markerLabel, markerStyle, multikillLabel, splitByFootage } from "./markers";
 
 const marker = (kind: string, payload: unknown = {}): MarkerRow =>
   ({
@@ -130,5 +130,62 @@ describe("markerStyle", () => {
     const style = markerStyle(marker("from_the_future"));
     expect(style.icon).toBe("●");
     expect(style.label).toBe("from_the_future");
+  });
+});
+
+describe("splitByFootage", () => {
+  const at = (video_time_s: number, id = video_time_s): MarkerRow =>
+    ({
+      id,
+      recording_id: 1,
+      game_time_s: video_time_s,
+      video_time_s,
+      kind: "kill",
+      payload_json: "{}",
+    }) as MarkerRow;
+
+  it("keeps markers the file reaches", () => {
+    const { inside, beyond } = splitByFootage([at(10), at(60)], 120);
+    expect(inside.map((m) => m.video_time_s)).toEqual([10, 60]);
+    expect(beyond).toEqual([]);
+  });
+
+  it("separates the ones past the end rather than dropping them", () => {
+    // They are real events, and for a recording whose finalize never ran they
+    // are the only record that they happened (#150).
+    const { inside, beyond } = splitByFootage([at(10), at(200)], 120);
+    expect(inside.map((m) => m.video_time_s)).toEqual([10]);
+    expect(beyond.map((m) => m.video_time_s)).toEqual([200]);
+  });
+
+  it("keeps a marker exactly at the end", () => {
+    // The last frame is in the file. Only past it is not.
+    expect(splitByFootage([at(120)], 120).inside).toHaveLength(1);
+  });
+
+  it("draws everything while the duration is still unknown", () => {
+    // Before `loadedmetadata` lands the duration is 0, and treating that as
+    // "no footage" would empty the whole timeline for a frame.
+    for (const unknown of [0, Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+      const { inside, beyond } = splitByFootage([at(10), at(200)], unknown);
+      expect(inside, String(unknown)).toHaveLength(2);
+      expect(beyond, String(unknown)).toHaveLength(0);
+    }
+  });
+
+  it("holds the order it was given, in both halves", () => {
+    const { inside, beyond } = splitByFootage([at(5), at(300), at(9), at(400)], 60);
+    expect(inside.map((m) => m.video_time_s)).toEqual([5, 9]);
+    expect(beyond.map((m) => m.video_time_s)).toEqual([300, 400]);
+  });
+
+  it("copies rather than aliasing, so a caller cannot sort the store's array", () => {
+    const markers = [at(10)];
+    const { inside } = splitByFootage(markers, 120);
+    expect(inside).not.toBe(markers);
+  });
+
+  it("says nothing is beyond an empty list", () => {
+    expect(splitByFootage([], 120)).toEqual({ inside: [], beyond: [] });
   });
 });

@@ -24,10 +24,10 @@ const marker = (over: Partial<MarkerRow> = {}): MarkerRow =>
 let host: HTMLElement | null = null;
 let instance: Record<string, unknown> | null = null;
 
-function render(markers: MarkerRow[], onseek = () => {}) {
+function render(markers: MarkerRow[], onseek = (_t: number) => {}, beyond: MarkerRow[] = []) {
   host = document.createElement("div");
   document.body.append(host);
-  instance = mount(MarkerList, { target: host, props: { markers, onseek } });
+  instance = mount(MarkerList, { target: host, props: { markers, beyond, onseek } });
   return host;
 }
 
@@ -78,5 +78,53 @@ describe("MarkerList", () => {
     expect(el.querySelector(".marker-label")?.textContent).toBe(
       "Killed <img src=x onerror=alert(1)>",
     );
+  });
+});
+
+describe("markers the recording does not reach", () => {
+  /**
+   * A crashed recording ends before the game does, and its markers do not know
+   * that: `video_time_s` is provisional until a finalize re-resolves it, and a
+   * killed daemon never reaches one. The events are real, so they are listed;
+   * the file has no frame for them, so they are not clickable.
+   */
+  const inside = marker({ id: 1, video_time_s: 10 });
+  const outside = marker({ id: 2, video_time_s: 900 });
+
+  it("lists them, marked, alongside the rest", () => {
+    const el = render([inside, outside], () => {}, [outside]);
+    const rows = el.querySelectorAll("li");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].classList.contains("beyond-footage")).toBe(false);
+    expect(rows[1].classList.contains("beyond-footage")).toBe(true);
+  });
+
+  it("does not seek to one, because there is nothing there", () => {
+    const seeks: number[] = [];
+    const el = render([outside], (t) => seeks.push(t), [outside]);
+    el.querySelector("li")?.click();
+    expect(seeks).toEqual([]);
+  });
+
+  it("still seeks to the ones it does reach", () => {
+    const seeks: number[] = [];
+    const el = render([inside, outside], (t) => seeks.push(t), [outside]);
+    el.querySelectorAll("li")[0].click();
+    expect(seeks).toEqual([10]);
+  });
+
+  it("says why, and says the times are approximate", () => {
+    const el = render([outside], () => {}, [outside]);
+    // Whitespace-normalised: the template wraps, so asserting on the raw
+    // textContent would be testing where the line breaks fall.
+    const note = (el.querySelector(".marker-list-note")?.textContent ?? "").replace(/\s+/g, " ");
+    expect(note).toContain("after this recording ends");
+    expect(note).toContain("approximate");
+  });
+
+  it("says nothing at all when the file reaches everything", () => {
+    const el = render([inside]);
+    expect(el.querySelector(".marker-list-note")).toBeNull();
+    expect(el.querySelector(".beyond-footage")).toBeNull();
   });
 });
