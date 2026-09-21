@@ -811,6 +811,133 @@ modes here are silent, and the app's own UI will not show you most of them.
       says they should not be.
 - [ ] Does the app recover state after machine sleep/wake mid-session?
 
+## 7. The frontend, after the Svelte migration (#167)
+
+WS4 replaced every view in the window, one workstream at a time, and none of it
+has been run on Windows. This section is ordered so each step leaves the
+machine in a useful state for the next, and it leads with the two failures that
+would make everything after them meaningless.
+
+**Nothing below is covered by CI, and that is structural rather than an
+oversight.** The test suite runs in jsdom, which lays nothing out: every
+element is zero pixels wide. Marker clustering is measured in pixels and
+correctly returns nothing there; tooltip placement, the graph's geometry, and
+every CSS rule in both stylesheets are unexercised by construction.
+
+Read §2's ticks with care. They were recorded on alpha.40, before WS4.3, so
+"visible in the review UI" and "playback works in the review UI" were observed
+against `library.ts` and `review.ts`, both since deleted. They still stand as
+claims about the backend underneath; they say nothing about the current views.
+
+### 7.1 It boots, and it is dressed
+
+- [ ] The window opens and shows the library. A blank window means the root
+      threw on the way up: open DevTools and read the console first, because
+      everything below will fail in a way that hides it
+- [ ] **No flash of the wrong theme on launch.** The inline boot script in
+      `index.html` runs before first paint and `app.css` imports `tokens.css`
+      on its first line; either coming late is visible exactly once per start,
+      so watch the first frame rather than the settled window
+- [ ] The app bar, the library grid and the rows are **styled**. `app.css` was
+      moved from `src/styles.css` in #164 and not rewritten, so the failure
+      to look for is wholesale unstyled markup rather than a wrong margin
+- [ ] Switch to Settings and back. One view at a time, never two at once
+- [ ] Open the app at `#settings` directly (edit the URL in a dev build, or
+      relaunch after leaving it there). **The settings view alone** should
+      show: a view that trusted its own default would render two at once
+
+### 7.2 The library (WS4.3)
+
+- [ ] Rows show champion art, the matchup, KDA, CS and the result
+- [ ] Champion search narrows the list as it is typed
+- [ ] Each of the three facet filters (queue, role, patch) narrows it, and the
+      options offered are the values actually present
+- [ ] Delete a recording that a facet filter is selecting on. The filter
+      should fall back to "All", not hide everything with no way back
+- [ ] Every sort order reorders the grid, and survives switching views
+- [ ] "Clear filters" clears the filters and **leaves the sort where it was**
+- [ ] The empty state appears with a way out when filters match nothing, and
+      without one when the library is genuinely empty
+- [ ] Pin a row, delete a row: both report, and the grid and the disk figure
+      both update
+
+### 7.3 The review player (WS4.5)
+
+Needs one real recording. §2 produces one.
+
+- [ ] It plays, and the timeline draws the advantage curve
+- [ ] Markers appear as glyphs on the track. **Markers close together cluster
+      into one glyph with a count**, which no test can check: clustering is
+      measured in pixels and jsdom has none
+- [ ] Hovering a cluster shows its tooltip, and a tooltip near either end
+      stays inside the timeline rather than hanging off it
+- [ ] A tooltip with more markers than fit scrolls, and survives the pointer
+      moving into it
+- [ ] Clicking a glyph seeks to that marker; the marker list seeks too
+- [ ] Dragging the in-player bar scrubs, and keeps scrubbing when the pointer
+      leaves the bar
+- [ ] **Playback stops at the end of the viewing window rather than running
+      into the black tail** (#119), and the clock does not read past the end
+- [ ] The hotkeys work, **including in fullscreen**, which is the only marker
+      navigation available there: the rich timeline is outside `.player-wrap`
+- [ ] For a multi-track recording, switching audio tracks extracts a stem and
+      the video mutes. Switch twice quickly: the second choice must win
+- [ ] Switch to a track whose extraction fails. It should fall back to the mix
+      and say so, not go silent with the picker claiming otherwise
+
+### 7.4 Settings and the updater (WS4.4)
+
+- [ ] Every control reflects what is actually set, and a restart shows the
+      same values
+- [ ] Theme: Light, Dark and System each apply, and System follows the OS
+      when it is changed underneath the app
+- [ ] Start on login ticks and unticks, and the checkbox shows what the
+      registry ended up saying rather than what was asked for
+- [ ] Audio preset changes, and a failed change rolls the control back
+- [ ] Retention: the preview says what saving would delete **before** saving,
+      and saving deletes exactly that
+- [ ] "Fill in match data" reports, and the library reflects what it filled
+- [ ] The update panel shows a real status, and the release notes render as
+      text (`latest.json` is not covered by the update signature)
+
+### 7.5 The shell (WS4.6)
+
+- [ ] Toasts appear, stack, and go away on their own
+- [ ] Kill the daemon: the strip appears and **stays** until the connection is
+      back, then clears itself
+- [ ] Close the window while recording: the quit dialog appears, and
+      **"Quit anyway" quits** (see DEVELOPMENT.md §4.9, where answering the
+      wrong way was a real bug)
+- [ ] "Cancel" on that dialog cancels
+- [ ] Escape dismisses it, and dismissing is not a yes
+
+### 7.6 The dev portal (#72)
+
+Needs a devtools build (`npm run tauri:dev`, or the CI artifact).
+
+- [ ] The portal opens, the header pills poll, and the Live toggle stops them
+- [ ] **Every one of the eleven panels renders**, which is the whole of what
+      the rewrite risks. Walk the sidebar top to bottom
+- [ ] The portal is **styled**: `dev.css` moved in #72 the same way `app.css`
+      did, so the failure to look for is an unstyled page rather than a
+      misplaced rule
+- [ ] `r` refreshes the current panel, and does nothing while typing in a field
+- [ ] A confirm dialog appears for a destructive action, Cancel cancels, and
+      the Reset database dialog stays disabled until `reset` is typed
+- [ ] Fixtures → "Send to the snapshot injector" lands the payload in
+      Simulate. It is 99 KB and does not travel in the URL
+- [ ] The 🔎 on a library row opens the portal **on that recording**
+      (`#/library/<id>`)
+- [ ] Seed a library, then confirm the main window updates without a manual
+      refresh (`library-changed`)
+
+### 7.7 What to record
+
+For each failure: the panel or view, what was on screen, and whether the
+console said anything. A component that throws takes its subtree with it and
+leaves a gap rather than an error, so **an empty area is a finding**, not a
+layout preference.
+
 ## Outcome
 
 - [ ] All boxes above checked

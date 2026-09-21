@@ -33,8 +33,9 @@ export const IN_TAURI = "__TAURI_INTERNALS__" in window;
  *     the recorder: `open_recordings_folder`, `dev_open_portal`;
  *   - it is a `dev_*` command, which stays individually registered behind the
  *     `devtools` Cargo feature. `dev_registered_commands` in particular *must*
- *     stay direct: `devportal.ts` detects whether the portal exists by seeing
- *     that call reject in a shipped build, and routing it through `rpc` would
+ *     stay direct: `hasDevCommands` detects whether the portal exists by
+ *     seeing that call reject in a shipped build, and routing it through `rpc`
+ *     would
  *     make it reject with "unknown command" in *every* build, permanently
  *     hiding the button.
  *

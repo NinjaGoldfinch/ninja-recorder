@@ -347,3 +347,140 @@ describe("closing", () => {
     expect(video(el).getAttribute("src")).toBeNull();
   });
 });
+
+/**
+ * The element's own `duration`, which is not the store's.
+ *
+ * `setDuration` tells the store how long the recording is; the guards in the
+ * component read `video.duration`, and jsdom's inert element leaves that NaN.
+ */
+function stampDuration(v: HTMLVideoElement, seconds: number) {
+  Object.defineProperty(v, "duration", { value: seconds, configurable: true });
+}
+
+describe("scrubbing", () => {
+  /** jsdom lays nothing out, so the track has to be told how wide it is. */
+  function sized(track: HTMLElement, width = 200, left = 0) {
+    track.getBoundingClientRect = () =>
+      ({
+        left,
+        width,
+        right: left + width,
+        top: 0,
+        bottom: 10,
+        height: 10,
+        x: left,
+        y: 0,
+      }) as DOMRect;
+  }
+
+  /** jsdom has no `PointerEvent`, so a MouseEvent carries the two fields the
+   *  handler reads. Dispatching a real event rather than calling the handler
+   *  keeps Svelte's delegation in the path being tested. */
+  function down(track: HTMLElement, clientX: number) {
+    const event = new MouseEvent("pointerdown", { clientX, bubbles: true });
+    Object.defineProperty(event, "pointerId", { value: 1 });
+    track.dispatchEvent(event);
+  }
+
+  it("seeks to the fraction of the window the pointer fell at", async () => {
+    const el = render();
+    await open([], 600);
+    await Promise.resolve();
+    const track = el.querySelector<HTMLElement>(".player-scrub");
+    if (!track) throw new Error("no progress track");
+    sized(track);
+    stampDuration(video(el), 600);
+
+    down(track, 100);
+    const { start, span } = store.review.window;
+    expect(video(el).currentTime).toBeCloseTo(start + span * 0.5, 3);
+  });
+
+  it("clamps a pointer that left the track rather than seeking outside it", async () => {
+    const el = render();
+    await open([], 600);
+    await Promise.resolve();
+    const track = el.querySelector<HTMLElement>(".player-scrub");
+    if (!track) throw new Error("no progress track");
+    sized(track);
+    stampDuration(video(el), 600);
+
+    down(track, -500);
+    expect(video(el).currentTime).toBeCloseTo(store.review.window.start, 3);
+
+    down(track, 5000);
+    const { start, span } = store.review.window;
+    expect(video(el).currentTime).toBeCloseTo(start + span, 3);
+  });
+
+  it("does nothing on a track with no width, rather than dividing by zero", async () => {
+    const el = render();
+    await open([], 600);
+    await Promise.resolve();
+    const track = el.querySelector<HTMLElement>(".player-scrub");
+    if (!track) throw new Error("no progress track");
+    sized(track, 0);
+    stampDuration(video(el), 600);
+    video(el).currentTime = 42;
+
+    down(track, 10);
+    expect(video(el).currentTime).toBe(42);
+  });
+
+  it("survives a pointer capture that throws, because the seek matters more", async () => {
+    const el = render();
+    await open([], 600);
+    await Promise.resolve();
+    const track = el.querySelector<HTMLElement>(".player-scrub");
+    if (!track) throw new Error("no progress track");
+    sized(track);
+    stampDuration(video(el), 600);
+    track.setPointerCapture = () => {
+      throw new Error("no capture in jsdom");
+    };
+
+    down(track, 100);
+    expect(video(el).currentTime).toBeGreaterThan(0);
+  });
+});
+
+describe("the end of the window", () => {
+  /**
+   * #119: playback stops at the end of the viewing window rather than running
+   * into the black tail. Checked from `timeupdate` as well as the rAF loop,
+   * because the loop only runs while frames are produced and `timeupdate`
+   * keeps firing at ~4 Hz regardless.
+   */
+  it("pauses and clamps when playback reaches it", async () => {
+    const el = render();
+    await open([], 600);
+    await Promise.resolve();
+
+    const v = video(el);
+    Object.defineProperty(v, "paused", { value: false, configurable: true });
+    // Longer than the window, or there is no tail to protect and the guard
+    // correctly does nothing.
+    stampDuration(v, 1000);
+    const end = store.review.window.end;
+    v.currentTime = end + 2;
+    v.dispatchEvent(new Event("timeupdate"));
+
+    // Clamped rather than left a few milliseconds past: "27:20 / 27:18" is
+    // the kind of thing that looks like a bug.
+    expect(v.currentTime).toBe(end);
+  });
+
+  it("leaves playback alone before it gets there", async () => {
+    const el = render();
+    await open([], 600);
+    await Promise.resolve();
+
+    const v = video(el);
+    Object.defineProperty(v, "paused", { value: false, configurable: true });
+    stampDuration(v, 1000);
+    v.currentTime = 5;
+    v.dispatchEvent(new Event("timeupdate"));
+    expect(v.currentTime).toBe(5);
+  });
+});
