@@ -51,7 +51,7 @@ disagreeing about the same file.
 | `src-tauri/src/ui/` (the Tauri commands; `client` has landed) | WS3 |
 | `src-tauri/src/recorder/own/` | WS1 task 1.6 |
 | `src-tauri/src/db/pool.rs` | WS6 |
-| `src/lib/` (nothing left empty; every view, store and pure module has landed) | WS2 / WS4 |
+| `src/lib/` (nothing left empty; every view, shell component, store and pure module has landed) | WS2 / WS4 |
 
 `src/lib/contract/` is **generated** once WS2.4 lands — committed and
 CI-checked, never hand-edited.
@@ -257,11 +257,10 @@ workstream should be rewritten to say what it means.
   **release notes**, for a different reason: `latest.json` is fetched over
   HTTPS but is *not* covered by the update signature, so `UpdateNotes.svelte`
   renders a parsed structure and `UpdateNotes.test.ts` fails if that changes.
-  **The app's vanilla half is finished**: since WS4.5 nothing under `src/`
-  outside the dev portal builds markup by hand. `dom.ts`'s `escapeHtml` and
-  `escapeAttr` still have callers, all of them in `src/dev/`, which WS4 leaves
-  on the vanilla stack (plan §9, Q6) and where the rule therefore still
-  applies in full.
+  **The app builds no markup by hand at all** since WS4.6, which deleted
+  `dom.ts`. `escapeHtml` and `escapeAttr` live in `src/dev/ui.ts` now and have
+  only the dev portal as a caller, where the rule still applies in full until
+  that is reworked too (#72).
 - **Pure decision + thin I/O wrapper.** `state_machine::machine`,
   `db::reconcile` and `retention::select_for_deletion` are pure and directly
   unit-tested; their wrappers are deliberately too small to hide a bug. Adding
@@ -338,13 +337,13 @@ workstream should be rewritten to say what it means.
   emitted TypeScript matches the declaration, which is a claim about two files,
   while that test proves `dispatch` can parse what the client actually sends,
   which is a claim about runtime.
-- **`main.ts` looks up no view elements at all, and a boot test proves it.**
-  WS4.4 left one `el("#settings-view")` behind after deleting that markup;
-  `el` throws on a miss, the line ran before `mountApp`, and the whole
-  frontend failed to boot with every gate green. `src/main.boot.test.ts` now
+- **`main.ts` looks up no elements at all, and a boot test proves it.** WS4.4
+  left one `el("#settings-view")` behind after deleting that markup; `el`
+  threw, the line ran before `mountApp`, and the whole frontend failed to boot
+  with every gate green. WS4.6 deleted `dom.ts` and with it the last lookup, so
+  the failure is now unavailable by construction. `src/main.boot.test.ts`
   loads the real `index.html` and the real `main.ts` and asserts the root
-  mounts. **Run it in your head before deleting markup**: the remaining
-  `el()` calls are the app bar's, and WS4.6 deletes those too.
+  mounts; keep it passing.
 - **The player is an imperative island and stays one.** `Review.svelte` holds
   a real `<video>` reference because `currentTime` is not state anything
   should be diffing. One number crosses outward per frame, the playhead, and
@@ -358,6 +357,18 @@ workstream should be rewritten to say what it means.
   would leave a window opened at `#settings` showing two views at once. If you
   add a view, register it the same way and do not re-order `main.ts` to work
   around it.
+- **`src/lib/styles/app.css` is still one global stylesheet, and that is not
+  an oversight.** WS4.6 moved it and deleted every hand-written element it
+  dressed, but did not distribute its rules into component `<style>` blocks.
+  Svelte scopes those to a component's own template, so a rule matching an
+  element a *child* renders stops applying silently, and nothing in this repo
+  renders a pixel in CI. Move rules into components a few at a time, each
+  checked against a running window (DEVELOPMENT.md §4.8).
+- **`<dialog>` buttons are `type="button"` and close the dialog themselves.**
+  Relying on `method="dialog"` makes the close a default action that races the
+  click handler recording which button it was, and "Quit anyway" then answers
+  no. See DEVELOPMENT.md §4.9, which also covers why jsdom needs `showModal`
+  overridden unconditionally rather than behind a `typeof` check.
 - **Don't remove `theme.ts`'s matchMedia `change` listener.** It is the only
   thing making the "System" theme follow the OS, and no test covers it.
   `Appearance.svelte` asks `theme.ts` to change and never writes

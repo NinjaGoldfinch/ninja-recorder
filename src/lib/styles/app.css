@@ -1,11 +1,21 @@
-/* The design tokens, and the only `@import` in this file — it has to be the
- * first rule, so keep it there. They used to be defined at the top of this
- * stylesheet; WS4.1 moved them to `src/lib/styles/tokens.css` unchanged, so
- * that the `.svelte` components have a token source that does not disappear
- * when WS4.6 deletes this file. Loading them from here rather than from a
- * second `<link>` or a JS import keeps them inside the stylesheet index.html
- * already resolves before first paint. */
-@import "./lib/styles/tokens.css";
+/* The application's styles.
+ *
+ * **Still one global stylesheet, and still loaded by a `<link>`.** WS4.6 moved
+ * this file here from `src/styles.css` and deleted every hand-written element
+ * it used to dress, but it did not scatter the rules into component `<style>`
+ * blocks. That is the remaining half of the job and it is not done:
+ * Svelte scopes a component's styles to that component's own template, so a
+ * rule like `.vod-items .vod-slot` — written in one component, matching an
+ * element another renders — silently stops applying. Distributing 1,900 lines
+ * of that by hand, with no visual test anywhere in this repo and no way to
+ * look at the result, is a change whose failure mode is invisible.
+ *
+ * It stays a `<link>` rather than a JS import for the reason `tokens.css`
+ * gives: a stylesheet that arrives after first paint is the theme flash the
+ * inline boot script in `index.html` exists to prevent.
+ *
+ * The `@import` has to be the first rule, so keep it there. */
+@import "./tokens.css";
 
 /* Without this, `width: 100%` and `max-width` both mean "before padding",
  * so any padded full-width element overflows its container by exactly its

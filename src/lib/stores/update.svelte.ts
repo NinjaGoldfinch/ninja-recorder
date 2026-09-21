@@ -17,9 +17,9 @@
  */
 
 import { call } from "../../bridge";
-import { toast } from "../../toast";
 import type { UpdateStatus } from "../../types";
 import { type UpdateRow, updateRow } from "../settings/update";
+import { toast } from "./toast.svelte";
 
 let status = $state<UpdateStatus | null>(null);
 let installing = $state(false);

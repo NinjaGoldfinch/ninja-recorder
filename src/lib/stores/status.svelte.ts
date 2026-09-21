@@ -1,10 +1,15 @@
-import { call } from "./bridge";
-import { el } from "./dom";
-import { finalizedLine, gamePill, lcuLine, lcuPill } from "./lib/settings/about";
-import { setAboutGameState, setAboutLastFinalized, setAboutLcu } from "./lib/stores/about.svelte";
-import { refreshDiskUsage, refreshLibrary } from "./lib/stores/library.svelte";
-import { refreshUpdateStatus } from "./lib/stores/update.svelte";
-import type { GameState, LcuStatus, SupervisorStatus } from "./types";
+import { call } from "../../bridge";
+import type { GameState, LcuStatus, SupervisorStatus } from "../../types";
+import { finalizedLine, gamePill, lcuLine, lcuPill } from "../settings/about";
+import {
+  setAboutGameState,
+  setAboutLastFinalized,
+  setAboutLcu,
+  setGamePill,
+  setLcuPill,
+} from "./about.svelte";
+import { refreshDiskUsage, refreshLibrary } from "./library.svelte";
+import { refreshUpdateStatus } from "./update.svelte";
 
 // The two Tauri events the backend pushes (`library-changed`,
 // `update-status-changed`) are both once-in-a-while facts; nothing pushes the
@@ -33,14 +38,6 @@ const LCU_EVERY = 4;
 // — a retention sweep, or files moved in the folder behind our back.
 const SAFETY_REFRESH_MS = 60_000;
 
-interface Els {
-  lcuPill: HTMLElement;
-  lcuText: HTMLElement;
-  gamePill: HTMLElement;
-  gameText: HTMLElement;
-}
-
-let els: Els;
 let timer: number | undefined;
 let stopped = false;
 
@@ -64,12 +61,6 @@ function onVisibilityChange() {
 
 export function initStatus() {
   document.addEventListener("visibilitychange", onVisibilityChange);
-  els = {
-    lcuPill: el("#status-lcu"),
-    lcuText: el("#status-lcu-text"),
-    gamePill: el("#status-game"),
-    gameText: el("#status-game-text"),
-  };
   lastSafetyRefresh = performance.now();
   tick();
 }
@@ -144,30 +135,23 @@ async function pollOnce(): Promise<GameState> {
   return status.state;
 }
 
-function setPill(pill: HTMLElement, text: HTMLElement, state: string, copy: string) {
-  pill.dataset.state = state;
-  text.textContent = copy;
-}
-
-// The wording moved to `lib/settings/about.ts` in WS4.4 so that it could be
-// tested, and the About lines now go to a store rather than to elements this
-// module used to reach into. The pills are still written here: they live in
-// the app bar, which is vanilla markup until WS4.6.
+// The wording lives in `lib/settings/about.ts` since WS4.4 so that it could be
+// tested, and WS4.6 took the elements away too: both the About lines and the
+// app bar's pills now go to a store. This module keeps the poll, which is the
+// thing it was always for.
 function renderLcu(status: LcuStatus) {
-  const pill = lcuPill(status);
-  setPill(els.lcuPill, els.lcuText, pill.state, pill.copy);
+  setLcuPill(lcuPill(status));
   setAboutLcu(lcuLine(status));
 }
 
 function renderGame(status: SupervisorStatus) {
-  const pill = gamePill(status.state, recordingElapsed);
-  setPill(els.gamePill, els.gameText, pill.state, pill.copy);
+  setGamePill(gamePill(status.state, recordingElapsed));
   setAboutGameState(status.state);
   setAboutLastFinalized(finalizedLine(status));
 }
 
 function renderError(err: unknown) {
-  setPill(els.gamePill, els.gameText, "error", "Status unavailable");
+  setGamePill({ state: "error", copy: "Status unavailable" });
   setAboutGameState(`Failed to read: ${err}`);
 }
 

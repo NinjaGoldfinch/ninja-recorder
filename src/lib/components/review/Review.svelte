@@ -17,12 +17,12 @@
 import { assetUrl, call } from "../../../bridge";
 import { vodHeading } from "../../../format";
 import { showView } from "../../../router";
-import { toast } from "../../../toast";
 import type { AudioLayout } from "../../../types";
 import { laneOpponent } from "../../library/scoreboard";
 import { type HotkeyContext, hotkeyAction, SEEK_STEP_S } from "../../review/hotkeys";
 import { parseAudioLayout, videoErrorReport } from "../../review/playback";
 import { closeRecording, review, setDuration } from "../../stores/review.svelte";
+import { toast } from "../../stores/toast.svelte";
 import type { MetricKey } from "../../timeline/graph";
 import { nextMarker } from "../../timeline/navigate";
 import { stemCorrection } from "../../timeline/stem";
