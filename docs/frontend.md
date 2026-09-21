@@ -1198,6 +1198,26 @@ The one thing jsdom forced: `matchMedia` has no implementation there, and
 failed at import. The fix is `src/test-setup.ts`, a shim for the environment,
 rather than moving a call that is load-bearing.
 
+#### What `test-setup.ts` shims, and the one that is opt-in
+
+`matchMedia`, `ResizeObserver`, `<dialog>`'s `showModal` and `close`, and an
+inert `HTMLMediaElement`. Two of those are worth knowing about:
+
+**`showModal` is overridden unconditionally.** jsdom *defines* it and then
+throws from it, so a `typeof` guard installs nothing and the dialog silently
+never opens.
+
+**`ResizeObserver` never fires on its own, and `resizeTo` is how a test makes
+it.** Every element in jsdom is zero pixels wide, so an observer that invented
+a callback would be inventing a layout, and every assertion downstream would
+be measured against a number nobody chose. `resizeTo(element, width)` sets the
+property and notifies whoever is observing it, which is what `bind:clientWidth`
+needs, and it goes **in the test**, next to the assertion that depends on it.
+That is the difference between stating an assumption and hiding one. It is
+also what makes the marker glyphs reachable at all: `clusterMarkers` measures
+in pixels and correctly returns nothing at zero width, so before it there was
+no way to test the cluster tooltip through the component.
+
 ### The pure logic comes out first
 
 WS4.2 moved the decisions out of `review.ts` and `library.ts` ahead of the
