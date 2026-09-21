@@ -1,0 +1,39 @@
+# WS1.4 (#8) — the P0c stage-2 spike: Windows.Graphics.Capture into a
+# fragmented MP4, and what a kill leaves behind.
+#
+# Standalone and in no workspace, for the reasons in ../README.md: a throwaway
+# binary must not be able to reach a Tauri bundle, and a crate depending only
+# on `windows` type-checks from a Linux box.
+[workspace]
+
+[package]
+name = "p0c-video"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "p0c-video"
+path = "src/main.rs"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_UI_WindowsAndMessaging",
+    # The WinRT half: the capture item, the frame pool and the session.
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    "Foundation",
+] }
+windows-core = "0.62.2"
