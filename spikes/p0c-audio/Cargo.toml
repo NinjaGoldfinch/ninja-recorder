@@ -1,0 +1,49 @@
+# WS1.3 (#7) — the P0c stage-1 spike: can process loopback isolate game audio?
+#
+# **Deliberately not a member of any workspace, and not a bin target of
+# `src-tauri`.** Tauri's bundler installs every bin target its package
+# produces — a release once shipped `gen-contract.exe` into the install
+# directory and pointed a Start Menu shortcut at it (CLAUDE.md, "The emitter is
+# not built by default"). A spike that answers one question and is then thrown
+# away must not be able to reach a bundle at all, and the cheapest way to
+# guarantee that is for it to be a different crate.
+#
+# It also keeps the dependency set honest: this builds against `windows` and
+# nothing else, so a `cargo check --target x86_64-pc-windows-msvc` runs on a
+# Linux dev box. The main crate cannot, because a C dependency's build script
+# wants MSVC's `lib.exe`.
+[workspace]
+
+[package]
+name = "p0c-audio"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "p0c-audio"
+path = "src/main.rs"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# The Core Audio surface, plus the PROPVARIANT the activation parameters
+# travel in. `windows::core::implement` needs no feature: it is re-exported
+# from `windows-core`, which is not optional.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    # `CreateEventW` takes a SECURITY_ATTRIBUTES pointer, so windows-rs gates it
+    # on this feature. Without it the function is "configured out" and the error
+    # points at the import rather than at the missing feature.
+    "Win32_Security",
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_System_Threading",
+] }
+
+# `#[implement]` expands to `windows_core::` paths, so the macro needs the crate
+# it names to be in this crate's root. `windows::core` is a re-export of the
+# same crate and does not satisfy that.
+# Must be the same version `windows` itself depends on, or the graph carries
+# two copies and the `Interface` trait the macro needs is the other one's.
+windows-core = "0.62.2"
