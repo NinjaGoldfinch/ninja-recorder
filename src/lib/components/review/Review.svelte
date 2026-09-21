@@ -40,6 +40,12 @@ let paused = $state(true);
 let rate = $state(1);
 let fullscreen = $state(false);
 let menuOpen = $state(false);
+/** Whether the settings menu was open when the current click started.
+ *
+ * Not `$state`: nothing renders from it. It exists so that dismissing the menu
+ * by clicking the video does not also pause the video, which is what the same
+ * flag did in `review.ts` before the migration. */
+let menuWasOpenOnPointerDown = false;
 let videoError = $state<{ message: string; detail: string } | null>(null);
 
 // **Volume and mute are the user's intent**, held here rather than read back
@@ -470,6 +476,9 @@ $effect(() => {
   }
 
   function onPointerDown(e: PointerEvent) {
+    // Recorded before the dismissal below, because the click that closes the
+    // menu lands on the video and must not also toggle playback.
+    menuWasOpenOnPointerDown = menuOpen;
     if (!menuOpen) return;
     if (!(e.target as HTMLElement).closest(".player-menu")) menuOpen = false;
   }
@@ -497,7 +506,15 @@ $effect(() => {
 <div class="player-wrap" bind:this={playerWrap}>
   <!-- svelte-ignore a11y_media_has_caption -->
   <video
+    id="review-video"
     bind:this={video}
+    onclick={() => {
+      // Click-to-toggle, as `review.ts` had it. The guard is the whole
+      // subtlety: a click that dismissed the settings menu started on a frame
+      // the user was not aiming at.
+      if (menuWasOpenOnPointerDown) return;
+      togglePlay();
+    }}
     onloadedmetadata={onLoadedMetadata}
     onerror={onVideoError}
     onplay={() => {
