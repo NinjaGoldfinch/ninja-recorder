@@ -134,3 +134,49 @@ export function markerLabel(m: MarkerRow): string {
       return m.kind;
   }
 }
+
+/**
+ * Markers the recording actually contains, and markers it does not.
+ *
+ * **A crashed recording ends before the game does, and its markers do not
+ * know that.** `video_time_s` is written live and resolved against whatever
+ * alignment was known at that moment, falling back to 1:1 when none has been
+ * proven yet. The finalize re-resolves every marker against the final
+ * alignment, which is why `finish_recording` deletes and re-inserts them. A
+ * killed daemon never reaches the finalize, so the provisional times are the
+ * ones that survive, and some of them name moments past the end of the file.
+ *
+ * They are kept rather than dropped: the events happened, and for a game whose
+ * finalize never ran they are the only record that they did (#150). What they
+ * cannot do is claim a position on a timeline that does not reach them.
+ *
+ * **The split is also the evidence.** A marker beyond the footage proves the
+ * alignment was never resolved, because a resolved one cannot point past the
+ * end of its own recording. So nothing needs to read a "was recovered" flag,
+ * and there is no schema change here: the condition that hides the marker is
+ * the same condition that justifies saying the times are approximate.
+ */
+export interface MarkerFootage {
+  /** In the file, and safe to draw and seek to. */
+  inside: MarkerRow[];
+  /** Real events the file does not reach. Listed, never drawn. */
+  beyond: MarkerRow[];
+}
+
+export function splitByFootage(markers: readonly MarkerRow[], durationS: number): MarkerFootage {
+  // An unknown duration is not zero footage: before `loadedmetadata` lands,
+  // every marker would be "beyond" and the whole timeline would empty itself
+  // for a frame. Treat it as "cannot tell yet" and draw everything, which is
+  // what happened before this function existed.
+  if (!Number.isFinite(durationS) || durationS <= 0) {
+    return { inside: [...markers], beyond: [] };
+  }
+
+  const inside: MarkerRow[] = [];
+  const beyond: MarkerRow[] = [];
+  for (const marker of markers) {
+    if (marker.video_time_s > durationS) beyond.push(marker);
+    else inside.push(marker);
+  }
+  return { inside, beyond };
+}
