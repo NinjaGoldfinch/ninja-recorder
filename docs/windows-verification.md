@@ -462,12 +462,22 @@ flagged. What they have that this build does not is a signature.
 
       Or, if the webview itself is what you want to see, filter to the ones
       whose parent is ours rather than counting them all.
-- [ ] Open the app from that tray icon. Now there are two processes and still
+- [x] Open the app from that tray icon. Now there are two processes and still
       **one** tray icon, because the UI no longer builds its own (WS3.5).
-- [ ] An entry written by an older build (`--hidden`) still works: set the value
+- [x] An entry written by an older build (`--hidden`) still works: set the value
       by hand, sign out and back in, and confirm the app records. It starts a UI
       with no window, which starts a daemon itself, so Task Manager shows two
       processes rather than one. Expected, and the reason `--hidden` is kept.
+
+      Checked by launching the exe with the flag directly rather than through
+      the registry and a logon, which tests the same claim: the flag is what
+      decides the shape, and `l1` already covers the value being written.
+
+      **`--hidden` builds no window at all, rather than a hidden one.** No
+      WebView2 process is parented to ours under that flag, where opening the
+      window normally produces one. A hidden window would still cost a webview,
+      so this is the better of the two possible meanings and worth not
+      regressing.
 - [ ] Delete the entry from **Task Manager → Startup** with the app running,
       then reopen Settings: the checkbox must now read *off*. This is the case
       the "no `settings_kv` mirror" decision exists for
