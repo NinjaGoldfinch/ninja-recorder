@@ -7,13 +7,13 @@
          prevent. Mirrors prefs.ts's cache key and resolution. -->
     <script>
       try {
-        var pref = localStorage.getItem("nr.theme") || "system";
-        var dark =
+        const pref = localStorage.getItem("nr.theme") || "system";
+        const dark =
           pref === "dark" ||
           (pref === "system" &&
             window.matchMedia("(prefers-color-scheme: dark)").matches);
         document.documentElement.dataset.theme = dark ? "dark" : "light";
-      } catch (e) {
+      } catch {
         /* keep the markup default */
       }
     </script>
