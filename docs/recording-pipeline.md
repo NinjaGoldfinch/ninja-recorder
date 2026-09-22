@@ -41,6 +41,7 @@ sequenceDiagram
         G-->>S: allgamedata snapshot
         S->>S: MarkerTracker → new markers (kill, death, dragon …)
         S->>S: team_diff → one advantage sample
+        S->>S: LiveSummary::absorb → champion, KDA, mode, outcome
         S->>D: write them as they arrive (so a crash keeps them)
     end
 
@@ -428,6 +429,12 @@ flowchart TB
     N --> S
     S --> F["finalize: video_time = game_time + alignment<br/><small>alignment ?? first proven ?? 0</small>"]
 ```
+
+The **match summary** rides the same path for the same reason, and needs no
+mapping: champion, KDA, game mode and outcome are written to the open row as
+the polls establish them, and only when a poll establishes something new. See
+[data-model.md](data-model.md) for why that write is an assignment rather than
+a merge.
 
 **Markers and samples are stored with `game_time_s` and mapped twice.** Each
 is written once as its poll produces it, against the alignment known then, and

@@ -402,9 +402,10 @@ stateDiagram-v2
     Recovered --> [*]: reconcile
     note right of Open
         Hidden from the library.
-        Markers and samples are
-        written here, as each poll
-        produces them.
+        Markers, samples and the
+        match summary are written
+        here, as the polls
+        produce them.
     end note
 ```
 
@@ -421,11 +422,20 @@ one is pushed from the poll that produced it, but they still reached SQLite
 only at finalize: a recovered recording came back with its markers and a blank
 graph. They are now written by the poll that produced them too.
 
-**Three writers, three different rules.**
+The **match summary** was the third and the worst. Champion, KDA, game mode and
+outcome are established by the polls and were held in memory until the
+finalize, so a recovered recording came back as a card with no title on it. It
+is now written as the polls establish it, through `update_live_summary`, which
+is a plain assignment rather than a merge: this is the live client writing the
+columns it owns while it still owns them, and it never hands back a field it
+once knew.
+
+**Five writers, each with its own rule about `finished_at`.** The heading used to say three, and the table has had more than that since `recover_unfinished` landed.
 
 | Writer | Method | `finished_at` |
 |---|---|---|
 | Supervisor, at start | `begin_recording` | NULL, and upserts on `path` so a leftover row is reclaimed |
+| Supervisor, per poll | `update_live_summary` | untouched: the row stays hidden while it fills in |
 | Supervisor, at finalize | `finish_recording` | set, and matched **by id** |
 | `reconcile`, importing | `insert_recording` | set from the file's mtime |
 | `recover_unfinished` | `recover_recording` | set from the file's mtime |
