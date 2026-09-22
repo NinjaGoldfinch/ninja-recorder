@@ -34,19 +34,21 @@ sequenceDiagram
     G-->>S: first successful /allgamedata
     S->>S: WaitingForGame → Recording
     S->>R: start(RecordConfig)
+    S->>D: begin_recording (row opened, finished_at NULL)
     S->>S: record started_at + first gameTime → TimeAlignment
 
     loop every second until the game ends
         G-->>S: allgamedata snapshot
         S->>S: MarkerTracker → new markers (kill, death, dragon …)
         S->>S: team_diff → one advantage sample
+        S->>D: write them as they arrive (so a crash keeps them)
     end
 
     C-->>S: phase = EndOfGame (or 2999 stops responding)
     S->>S: Recording → Finalizing
     S->>R: stop()
     R-->>S: finalized MP4 path
-    S->>D: insert recording + markers + samples (one row set)
+    S->>D: finish_recording; rewrite markers + samples<br/>against the final alignment
     S->>D: retention::enforce_now
     S-->>UI: emit "library-changed"
     UI->>D: list_recordings
@@ -427,7 +429,9 @@ flowchart TB
     S --> F["finalize: video_time = game_time + alignment<br/><small>alignment ?? first proven ?? 0</small>"]
 ```
 
-**Markers are stored with `game_time_s` and mapped twice.** A marker seen
+**Markers and samples are stored with `game_time_s` and mapped twice.** Each
+is written once as its poll produces it, against the alignment known then, and
+once at finalize against the one the whole game proved. A marker seen
 before the clock ever moved has no alignment yet; it is still collected (and
 still fed to `MarkerTracker`, so its event ID is deduped) and resolved against
 the first alignment the recording ever proved. If the clock never moved at all,
@@ -474,7 +478,8 @@ flowchart TB
     D -->|"err"| E["log; recording_id = None<br/><small>UI shows DB WRITE FAILED</small>"]
     D -->|"ok"| F0["delete_markers<br/><small>the ones written during the game</small>"]
     F0 --> F["insert_markers<br/><small>re-resolved against the final alignment</small>"]
-    F --> G["insert_samples"]
+    F --> F1["delete_samples<br/><small>likewise, the live curve</small>"]
+    F1 --> G["insert_samples<br/><small>re-resolved the same way</small>"]
     E --> H
     G --> H["last_finalized = {path, markers}"]
     H --> I["retention::enforce_now"]

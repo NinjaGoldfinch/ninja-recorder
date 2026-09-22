@@ -844,6 +844,18 @@ impl Db {
         Ok(())
     }
 
+    /// Drops every advantage-curve sample for one recording.
+    ///
+    /// The counterpart to `delete_markers`, and for the identical reason: the
+    /// samples written during the game were resolved against whatever
+    /// alignment was known at the time, and the finalize re-inserts them
+    /// against the one the whole game proved.
+    pub fn delete_samples(&self, recording_id: i64) -> Result<(), DbError> {
+        let conn = self.pool.write();
+        conn.execute("DELETE FROM samples WHERE recording_id = ?1", [recording_id])?;
+        Ok(())
+    }
+
     /// Patches the post-game columns of one existing row, and nothing
     /// else.
     ///
@@ -1755,6 +1767,22 @@ mod tests {
 
         db.delete_markers(id).unwrap();
         assert!(db.get_markers(id).unwrap().is_empty());
+        assert_eq!(db.unfinished_recordings().unwrap().len(), 1, "the row is still there");
+    }
+
+    /// The samples' half of the same rule. The finalize clears the curve it
+    /// wrote during the game before re-inserting it against the alignment the
+    /// whole game proved, and clearing it must not take the row with it.
+    #[test]
+    fn deleting_samples_leaves_the_recording_alone() {
+        let db = Db::open_temporary().unwrap();
+        let id = db.begin_recording("C:/vods/recording-5a.mp4", 1_000).unwrap();
+        db.insert_samples(id, &[sample(10.0, 100.0, 1), sample(20.0, 200.0, 2)])
+            .unwrap();
+        assert_eq!(db.get_samples(id).unwrap().len(), 2);
+
+        db.delete_samples(id).unwrap();
+        assert!(db.get_samples(id).unwrap().is_empty());
         assert_eq!(db.unfinished_recordings().unwrap().len(), 1, "the row is still there");
     }
 

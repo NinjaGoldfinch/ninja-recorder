@@ -498,10 +498,18 @@ clock is first seen to advance. `AlignmentTracker::fallback` returns the
 that point resolves identically at both writes and only the early ones actually
 move. The finalize deletes and re-inserts rather than working out which.
 
-**Samples are not covered by any of this** and have the identical flaw, tracked
-separately. They are less wrong in the same crash: a sample is pushed from the
-poll that produced it, so a session starting mid-game begins its curve mid-game
-rather than inheriting another recording's.
+**Samples are covered by the same rule, in the same way.** They were not at
+first: a sample was pushed from the poll that produced it but reached SQLite
+only at finalize, so a daemon killed mid-game left a recovered recording with
+its markers intact and an empty advantage curve behind them. That loss was
+less wrong than the markers' had been, because a session starting mid-game
+begins its curve mid-game rather than inheriting another recording's, but it
+was the same loss. A sample is now written by the poll that produced it, and
+the finalize deletes and re-inserts the whole curve exactly as it does the
+markers. A poll that does not move the game clock still writes nothing:
+`ingest` skips it so that a loading screen or a pause cannot draw a vertical
+run of points through the graph, and the live write skips precisely the polls
+`ingest` did.
 
 ### 4.4 Decision: the library is the first view to cross, and it crosses whole
 

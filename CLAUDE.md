@@ -272,9 +272,9 @@ workstream should be rewritten to say what it means.
   `begin_recording` writes it with a NULL `finished_at`, which is what keeps an
   in-progress or abandoned recording out of the library; `finish_recording`
   completes it **by id**, because the path a recording starts with is a
-  prediction and the path it ends with is a fact. Markers are written as each
-  poll produces them and rewritten at finalize. If you add a writer, decide
-  which of those it is: `insert_recording` upserts on `path` and is now only
+  prediction and the path it ends with is a fact. Markers and advantage-curve
+  samples are written as each poll produces them and rewritten at finalize.
+  If you add a writer, decide which of those it is: `insert_recording` upserts on `path` and is now only
   for `reconcile` and the no-id fallback. A new query that lists recordings has
   to decide whether it wants `finished_at IS NOT NULL`, and the answer is
   almost always yes (DEVELOPMENT.md §4.3).
