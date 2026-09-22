@@ -562,7 +562,15 @@ async fn start(paths: Paths) -> Result<Option<Started>, DaemonError> {
         // between WS3.4 and #151: the commands moved to this process and the
         // seam stayed in the window.
         match autostart::RegistryAutostart::resolve() {
-            Ok(autostart) => ctx.set_autostart(Box::new(autostart)),
+            Ok(autostart) => {
+                // Before the seam is handed over, because this is about the
+                // entry on disk rather than about the command that reads it:
+                // an entry written before WS3.5 still names `--hidden`, which
+                // no longer means anything, and this is what stops that
+                // costing a window at every login rather than at one (#71).
+                autostart.refresh_if_enabled();
+                ctx.set_autostart(Box::new(autostart));
+            }
             // Left unset rather than failing the daemon. Not being able to
             // name our own executable is not a reason to refuse to record;
             // the row goes back to saying the control is unavailable, which is

@@ -35,10 +35,9 @@ fn main() {
                 std::process::exit(2);
             }
         }
-        // `UiHidden` creates no window but is otherwise a normal UI start;
-        // `run` reads the mode again to decide that. See the plan's §3.5 for
-        // why the flag survives one more release rather than being retired
-        // the moment `--daemon` works.
-        Launch::Ui | Launch::UiHidden => ninja_recorder_lib::run(),
+        // Everything that is not `--daemon`, which since #71 includes the
+        // `--hidden` an old `Run` key still hands back: it is an unknown
+        // argument now and unknown arguments are ignored.
+        Launch::Ui => ninja_recorder_lib::run(),
     }
 }

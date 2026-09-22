@@ -295,8 +295,11 @@ process is what needs confirming.
 
 - [ ] A normal start still opens the window at 1160x800 with an 880x600
       minimum, titled `ninja-recorder`.
-- [ ] `ninja-recorder.exe --hidden` starts with **no** window and no taskbar
-      button, and is reachable from the tray icon.
+- [ ] `ninja-recorder.exe --hidden` opens a window like any other start.
+      **The flag was removed at 2.0.0** (#71), so it is an unknown argument
+      now and unknown arguments are ignored. This row inverted: it used to
+      assert no window, and the passing result it had is kept below as a
+      record of the behaviour that was replaced.
 - [ ] `ninja-recorder.exe --daemon` starts headless and stays running, with no
       window and no taskbar button. It used to print a refusal and exit 2;
       since WS3.2 it is the daemon, and §5.0.5 is where it is checked.
@@ -394,8 +397,11 @@ only ever stopped the daemon, and the window restarted it (#148).
 
 
 Verified off Windows only as far as a script can go: the tray builds without
-error, a default start creates a webview and `--hidden` creates none (0 WebKit
-handles vs 4). **Everything below needs a real click and none of it is covered
+error, a default start creates a webview and a start with no window creates
+none (0 WebKit handles vs 4). That measurement was taken against `--hidden`,
+which no longer exists (#71); `--daemon` is the mode that builds no window
+now, and it builds no `tauri::App` either, so it is a stronger version of the
+same claim rather than the same one. **Everything below needs a real click and none of it is covered
 by a test.**
 
 - [ ] The tray icon appears, with a tooltip, and its menu has exactly three
@@ -459,8 +465,8 @@ flagged. What they have that this build does not is a signature.
       Settings checkbox is off before it is ever touched.
 - [x] Ticking it creates the value, and it holds the installed exe's full path
       **followed by `--daemon`** (WS3.5). A path with no flag means a login
-      start that opens a window; `--hidden` means a build from before WS3.5,
-      which still works but starts a UI rather than a daemon.
+      start that opens a window, and so, since 2.0.0, does one ending in
+      `--hidden`: that flag was removed (#71) and is ignored.
 - [x] Unticking it removes the value entirely.
 - [ ] The setting survives a restart of the app: reopen Settings and confirm
       the checkbox still reflects the key.
@@ -485,20 +491,25 @@ flagged. What they have that this build does not is a signature.
       whose parent is ours rather than counting them all.
 - [x] Open the app from that tray icon. Now there are two processes and still
       **one** tray icon, because the UI no longer builds its own (WS3.5).
-- [x] An entry written by an older build (`--hidden`) still works: set the value
-      by hand, sign out and back in, and confirm the app records. It starts a UI
-      with no window, which starts a daemon itself, so Task Manager shows two
-      processes rather than one. Expected, and the reason `--hidden` is kept.
+- [ ] **An entry written by an older build (`--hidden`) heals itself.** Set
+      the value by hand to the exe's path plus `--hidden`, sign out and back
+      in. Expect a window to open, because the flag no longer means anything
+      (#71). Then check the `Run` value again **without touching Settings**:
+      it must now end in `--daemon`, because the window started a daemon and
+      `RegistryAutostart::refresh_if_enabled` rewrote it. Sign out and back in
+      once more and confirm a daemon start with no window.
 
-      Checked by launching the exe with the flag directly rather than through
-      the registry and a logon, which tests the same claim: the flag is what
-      decides the shape, and `l1` already covers the value being written.
+      The window appearing once is the cost of the removal and is expected.
+      The row is about it happening exactly once.
 
-      **`--hidden` builds no window at all, rather than a hidden one.** No
-      WebView2 process is parented to ours under that flag, where opening the
-      window normally produces one. A hidden window would still cost a webview,
-      so this is the better of the two possible meanings and worth not
-      regressing.
+      > **Superseded, and kept as the record.** This row previously passed
+      > asserting the opposite: that `--hidden` still worked and started a UI
+      > with no window, so Task Manager showed two processes rather than one.
+      > It was checked on 2026-09-18 by launching the exe with the flag
+      > directly, and it confirmed that `--hidden` built no window at all
+      > rather than a hidden one, with no WebView2 process parented to ours.
+      > That was true of the behaviour it tested. #71 removed the flag rather
+      > than choosing between its two possible meanings.
 - [ ] Delete the entry from **Task Manager → Startup** with the app running,
       then reopen Settings: the checkbox must now read *off*. This is the case
       the "no `settings_kv` mirror" decision exists for
@@ -698,13 +709,14 @@ run there since WS3.7 and can be invoked over the pipe, but the portal window
 itself still talks to the UI process until WS3.4's proxy lands. Running the UI and the daemon together means two supervisors watching for
 the same game, which is expected rather than a defect to report.
 
-**The Run key still points at `--hidden`**, so §5.0.2 is unchanged and a login
-start is still the UI. That is deliberate rather than pending: the two
+**The Run key still pointed at `--hidden`** at the time of this note, so
+§5.0.2 was unchanged and a login start was still the UI. That is deliberate rather than pending: the two
 prerequisites are in
 [DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave).
 When it does move, §5.0.2's "sign out and back in" row is the one that changes,
 and the row to add beside it is that an entry written by an older build still
-says `--hidden` and must keep working.
+says `--hidden`. That row was written before #71 removed the flag; what
+replaced it is the self-healing row in §5.0.2.
 
 ### 5.0.6 The UI as a client of the daemon
 **2026-09-22: WS3 is 26 of 28.** The sheet on #130 is the row-level record.
