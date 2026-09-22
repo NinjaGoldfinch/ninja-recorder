@@ -99,7 +99,7 @@ leaves §18 as WS8's to write.
 
 ## Modules Appendix D does not map
 
-Five v1 modules have no row in the plan's Appendix D file map. They are copied
+Seven v1 modules have no row in the plan's Appendix D file map. They are copied
 as-is and listed here so the omission is recorded rather than silently
 inherited. None of them is ambiguous, since each follows the daemon/UI split in
 §3.1, but WS3 is where the placement gets made real:
