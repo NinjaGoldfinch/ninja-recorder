@@ -18,7 +18,8 @@ scanned: number,
  */
 games_considered: number, 
 /**
- * Rows the clock matched to exactly one game.
+ * Rows resolved to exactly one game: by the `game_id` the row already
+ * carried where it had one, and by the clock otherwise.
  */
 matched: number, 
 /**

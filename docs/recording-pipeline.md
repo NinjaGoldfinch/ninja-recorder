@@ -42,6 +42,7 @@ sequenceDiagram
         S->>S: MarkerTracker → new markers (kill, death, dragon …)
         S->>S: team_diff → one advantage sample
         S->>S: LiveSummary::absorb → champion, KDA, mode, outcome
+        S->>S: GameIdentity::absorb → game id, queue
         S->>D: write them as they arrive (so a crash keeps them)
     end
 
@@ -434,7 +435,9 @@ The **match summary** rides the same path for the same reason, and needs no
 mapping: champion, KDA, game mode and outcome are written to the open row as
 the polls establish them, and only when a poll establishes something new. See
 [data-model.md](data-model.md) for why that write is an assignment rather than
-a merge.
+a merge. The **game identity** rides with it, absorbed from the
+gameflow session rather than from the poll, which is why a killed daemon
+leaves a row that knows which game it was.
 
 **Markers and samples are stored with `game_time_s` and mapped twice.** Each
 is written once as its poll produces it, against the alignment known then, and

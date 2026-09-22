@@ -175,17 +175,19 @@ fail, for the reason #150 sets out: markers are only written at finalize, so
 killing the daemon loses every one.
 
 **#150 has since landed and these rows are open again, not passed.** A row is
-now written when recording starts, and markers, advantage-curve samples and the
-match summary are each written as the polls produce them, so a killed daemon
-leaves all of it behind; daemon startup finishes the abandoned row from the
-file.
+now written when recording starts, and markers, advantage-curve samples, the
+match summary and the game identity are each written as the polls produce them,
+so a killed daemon leaves all of it behind; daemon startup finishes the
+abandoned row from the file.
 
-Two of those three were not part of #150 and were fixed after it, for the same
+Three of those four were not part of #150 and were fixed after it, for the same
 reason in each case. The samples were never attributed to the wrong recording,
 but they reached the database only at finalize, so a recovered recording used
 to come back with its markers and a blank graph. The summary was worse: the
 polls establish champion, KDA and game mode from the first one that matches
-us, and all of it was thrown away, so the card came back with no title. That is covered by unit tests, including one that
+us, and all of it was thrown away, so the card came back with no title. The
+game identity went the same way, which cost a recovered recording the exact
+patch path and left it matchable only on the clock. That is covered by unit tests, including one that
 kills a recording by simply never finalizing it, but **no part of it has been
 run on hardware**. The four rows below about the library, the row and its
 markers are the observable form of the fix, and are what the next session
@@ -215,18 +217,22 @@ earlier dated note claims them.
 |---|---|---|
 | `daemon.log` holds the finalize, with no `WARN [notify]` | 5.0.5 | The notification was *seen*, so the absence of a warning is the only evidence the daemon took the path it was supposed to rather than a fallback |
 | The UI killed mid-game, all three rows | 5.0.6 | **WS3.4's exit criterion.** The other direction from the daemon kill, and the only untested one of the two |
-| The row, its markers, its curve and its card survive a killed daemon | 4.1 | #150 landed specifically to make this true and has never been run |
+| The row, its markers, its curve, its card and its game id survive a killed daemon | 4.1 | #150 landed specifically to make this true and has never been run |
 | Start on login, all four rows | 5.0.2 | The argument list is an on-disk contract written once and replayed for years |
 | The app comes back on the new version | 5.0.4 | The install was handed over; nothing confirmed what came back |
 - [ ] The recording does **not** appear in the library while the daemon is
       down. Its row exists but is unfinished, and an unfinished row is not a
       library entry.
 - [ ] The row appears on the next daemon start, with a duration read back from
-      the file, and **the card is filled in**: champion, KDA and game mode as
-      they stood at the last poll before the kill. The outcome is blank unless
-      the game had actually ended, which is the one honest answer to a game
-      that was still running. `role` and `patch` are blank too: those come
-      from the LCU after a finalize that never happened.
+      the file, and **the card is filled in**: champion, KDA, queue and game
+      mode as they stood at the last poll before the kill. The outcome is
+      blank unless the game had actually ended, which is the one honest answer
+      to a game that was still running. `role` and `patch` are blank too:
+      those come from the LCU after a finalize that never happened.
+- [ ] **Run the backfill afterwards and the row completes.** It carries the
+      game id the client gave it during the game, so the pass asks the LCU
+      about that game directly rather than working out which one it was from
+      the clock. `role`, `patch` and the outcome fill in.
 - [ ] **Markers up to the kill are in the row.** This is the row that failed on
       alpha.49 and the reason #150 exists. Open the recording and check the
       timeline has marker glyphs on it, at positions that match what happened

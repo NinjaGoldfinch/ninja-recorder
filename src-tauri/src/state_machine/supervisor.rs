@@ -296,6 +296,9 @@ struct RecordingSession {
     first_game_time_s: Option<f64>,
     last_game_time_s: Option<f64>,
     ever_matched: bool,
+    /// The gameflow session's answer, absorbed rather than re-read, so a
+    /// client that goes away mid-game cannot take the identity back with it.
+    game: lcu::GameIdentity,
     /// The last `LiveMatch` written to the open row, so a poll that
     /// establishes nothing new costs no write. Most polls do not: a KDA moves
     /// on a kill, not on a tick.
@@ -432,6 +435,8 @@ impl RecordingSession {
                 .as_ref()
                 .and_then(|s| s.players.iter().find(|p| p.is_us))
                 .map(|p| p.cs),
+            game_id: self.game.game_id,
+            queue: self.game.queue_id,
         }
     }
 
@@ -987,6 +992,11 @@ impl Supervisor {
         let samples_before = session.samples.len();
         let added = session.ingest(&snapshot, elapsed_s);
         let new_sample = session.sample_added_since(samples_before);
+        // The identity is fetched once per game by a task that races the
+        // first polls, so it is picked up here rather than at `start`, and
+        // absorbed rather than assigned: a client that drops out later must
+        // not be able to hand back an id this recording already read.
+        session.game.absorb(*self.pending_game.lock().unwrap());
         // Only when this poll actually established something. A KDA moves on
         // a kill rather than on a tick, so most polls leave this `None` and
         // cost no write at all; the loading screen and the end-of-game screen
@@ -1181,6 +1191,7 @@ impl Supervisor {
                     first_game_time_s: None,
                     last_game_time_s: None,
                     ever_matched: false,
+                    game: lcu::GameIdentity::default(),
                     last_live_written: None,
                     record_started_at: Instant::now(),
                     file_stem: config_file_stem.clone(),
@@ -1256,7 +1267,15 @@ impl Supervisor {
                 // Read from the supervisor, not the session: the identity
                 // is resolved when gameflow reaches InProgress, which is
                 // before this recording's session existed.
-                let game = *self.pending_game.lock().unwrap();
+                // The session's copy first, because it absorbed every read
+                // taken while the game ran; the supervisor's is what a
+                // recording with no successful poll has instead. Neither can
+                // erase the other, which is the point of `absorb`.
+                let game = {
+                    let mut identity = session.as_ref().map(|s| s.game).unwrap_or_default();
+                    identity.absorb(*self.pending_game.lock().unwrap());
+                    identity
+                };
                 let path_str = path.display().to_string();
                 let size_bytes = std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0);
 
@@ -1958,6 +1977,7 @@ mod tests {
             first_game_time_s: None,
             last_game_time_s: None,
             ever_matched: false,
+            game: lcu::GameIdentity::default(),
             last_live_written: None,
             record_started_at: Instant::now(),
             file_stem: "recording-0".to_string(),
@@ -2556,6 +2576,91 @@ mod tests {
             "the session clock is the finalize's to write, and it did"
         );
         assert!(sup.db.unfinished_recordings().unwrap().is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The fourth thing a crash used to take, after the markers (#150), the
+    /// curve (#185) and the card (#190). The identity is read once per game
+    /// from the gameflow session and was held on the supervisor until the
+    /// finalize, so a killed daemon left a row that could only ever be
+    /// matched back to its game on the clock, and only while the client still
+    /// remembered the game at all.
+    #[test]
+    fn a_killed_daemon_leaves_the_game_identity_on_the_row() {
+        let (sup, dir) = test_supervisor();
+        *sup.pending_game.lock().unwrap() = lcu::GameIdentity {
+            game_id: Some(5147823901),
+            queue_id: Some(420),
+            is_custom: false,
+        };
+
+        sup.start_recording();
+        sup.on_snapshot(fixture_snapshot("mid-game"));
+
+        // The daemon dies here. No finalize, ever.
+
+        let open = sup.db.unfinished_recordings().unwrap();
+        assert_eq!(open[0].game_id, Some(5147823901));
+        assert_eq!(open[0].queue, Some(420));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The identity is absorbed, not re-read. The gameflow watch is torn down
+    /// with the transition out of `InProgress`, so a read taken after that
+    /// comes back empty, and an empty read is the client not answering rather
+    /// than the game having had no id.
+    #[test]
+    fn a_client_that_goes_away_cannot_take_the_identity_back() {
+        let (sup, dir) = test_supervisor();
+        *sup.pending_game.lock().unwrap() = lcu::GameIdentity {
+            game_id: Some(5147823901),
+            queue_id: Some(420),
+            is_custom: false,
+        };
+
+        sup.start_recording();
+        sup.on_snapshot(fixture_snapshot("mid-game"));
+
+        // The client drops out: the next read has nothing in it.
+        *sup.pending_game.lock().unwrap() = lcu::GameIdentity::default();
+        sup.on_snapshot(fixture_snapshot("won"));
+
+        let id = sup.db.unfinished_recordings().unwrap()[0].id;
+        assert_eq!(
+            sup.db.get_recording(id).unwrap().unwrap().game_id,
+            Some(5147823901),
+            "the row keeps what it read while the game was running"
+        );
+
+        sup.stop_recording();
+        let rows = sup.db.list_recordings().unwrap();
+        assert_eq!(rows[0].game_id, Some(5147823901), "and so does the finalize");
+        assert_eq!(rows[0].queue, Some(420));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A recording with no successful poll never absorbs anything, so the
+    /// finalize has to fall back to the supervisor's own copy. This is the
+    /// path `the_identified_game_lands_on_the_finalized_row` already covers
+    /// from the other direction; here it is with the session in play.
+    #[test]
+    fn a_game_with_no_polls_still_gets_its_identity_at_finalize() {
+        let (sup, dir) = test_supervisor();
+        *sup.pending_game.lock().unwrap() = lcu::GameIdentity {
+            game_id: Some(7),
+            queue_id: Some(0),
+            is_custom: true,
+        };
+
+        sup.start_recording();
+        sup.stop_recording();
+
+        let rows = sup.db.list_recordings().unwrap();
+        assert_eq!(rows[0].game_id, Some(7));
+        assert_eq!(rows[0].queue, Some(0), "a custom game's queue id is zero, not absent");
 
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -325,6 +325,14 @@ Two guards, and both matter more than the feature:
   matches the gap test on every column, and it is the one game match history
   cannot know about, because it has not ended. Without the filter every run
   scans it and reports the game being played as unmatched.
+- **A row that knows its own game is not matched on the clock at all.**
+  `backfill::resolve_game` uses the `game_id` the row carries where there is
+  one, and consults the clock only when there is not. That id was read from
+  the gameflow session while the game was running; a clock match is an
+  inference drawn afterwards from two timestamps, and letting it override the
+  id would be the inference winning. Recovered recordings are what have one:
+  the identity survives a killed daemon, while `role`, `patch` and `win` do
+  not, so the row needs a pass and already knows what to ask about.
 
 **It also rewrites the gold series**, which is the one thing it recovers that
 is not a column on `recordings`. The curve is written by the deferred patch,
@@ -440,7 +448,7 @@ once knew.
 | Writer | Method | `finished_at` |
 |---|---|---|
 | Supervisor, at start | `begin_recording` | NULL, and upserts on `path` so a leftover row is reclaimed |
-| Supervisor, per poll | `update_live_summary` | untouched: the row stays hidden while it fills in |
+| Supervisor, per poll | `update_live_summary` | untouched: the row stays hidden while it fills in, summary columns and game identity alike |
 | Supervisor, at finalize | `finish_recording` | set, and matched **by id** |
 | `reconcile`, importing | `insert_recording` | set from the file's mtime |
 | `recover_unfinished` | `recover_recording` | set from the file's mtime |
