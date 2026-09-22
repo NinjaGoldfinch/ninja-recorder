@@ -2,10 +2,16 @@
 
 Where this repository's code came from, and what is still owed because of it.
 
-`ninja-recorder-v2` is not a rewrite. It starts as a verbatim copy of
-`ninja-recorder` v1 and changes the frontend, the IPC contract, the process
-model, the quality gates and the capture backend in place, one workstream at a
-time. This file records what was copied, from where, and under what licence, so
+v2 is not a rewrite. This repository starts as a verbatim copy of v1 and
+changes the frontend, the IPC contract, the process model, the quality gates
+and the capture backend in place, one workstream at a time.
+
+**The two repositories have swapped names.** v1 was
+[`ninja-recorder`](https://github.com/NinjaGoldfinch/ninja-recorder-deprecated)
+and is now `ninja-recorder-deprecated`, archived and kept for history; this
+repository was `ninja-recorder-v2` and now holds the plain name. Where the
+text below says "v1" it means the deprecated repository, whatever either of
+them was called at the time. This file records what was copied, from where, and under what licence, so
 that the WS8 licence exit (see the plan's §8) is an audit of a known list rather
 than an archaeology exercise.
 

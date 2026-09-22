@@ -415,5 +415,5 @@ the tray coming up, the UI connecting, and recovering from a killed daemon. But
 nothing involving a game, a GPU, a visible menu or a toast has been seen
 working.
 
-[Issue #130](https://github.com/NinjaGoldfinch/ninja-recorder-v2/issues/130)
+[Issue #130](https://github.com/NinjaGoldfinch/ninja-recorder/issues/130)
 is the plan for finding out, in the order worth doing it.
