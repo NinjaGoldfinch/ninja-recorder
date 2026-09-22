@@ -474,6 +474,32 @@ pub struct MatchMetadata {
     pub champion: Option<String>,
 }
 
+/// What Live Client Data has established about a game *so far*, written to
+/// the open row while it is still being recorded.
+///
+/// Smaller than `MatchMetadata` and pointed the other way in time: that one
+/// patches a finished row from the LCU afterwards, this one keeps an
+/// unfinished row current from the polls as they land, so a daemon killed
+/// mid-game leaves a card that says what it was playing instead of a blank
+/// one.
+///
+/// It carries only the columns the live client itself answers for. The blobs
+/// the finalize assembles are not here, meaning the scoreboard, the audio
+/// layout and the diagnostics, because each of those is a product of the
+/// finalize rather than of a poll.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LiveMatch {
+    pub champion: Option<String>,
+    pub role: Option<String>,
+    /// `None` until the game actually ends, never "lost".
+    pub win: Option<bool>,
+    pub kda_k: Option<i64>,
+    pub kda_d: Option<i64>,
+    pub kda_a: Option<i64>,
+    pub game_mode: Option<String>,
+    pub cs: Option<i64>,
+}
+
 /// Disk retention policy (DEVELOPMENT.md §6): `None` means that
 /// dimension is unbounded. Mirrors the single-row `settings` table.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, ts_rs::TS)]
@@ -825,6 +851,43 @@ impl Db {
             "UPDATE recordings SET duration_s = ?2, size_bytes = ?3, finished_at = ?4
              WHERE id = ?1",
             params![id, duration_s, size_bytes, finished_at],
+        )?;
+        Ok(())
+    }
+
+    /// Keeps an unfinished row current with what the polls have established.
+    ///
+    /// **No `COALESCE`, unlike `update_match_metadata`.** That one merges a
+    /// second source into a row the live client already filled and has to
+    /// protect what is there. This one *is* the live client, writing the row
+    /// it owns while it owns it, and `LiveSummary::absorb` guarantees a field
+    /// it once knew is never handed back as `None` - so a plain assignment
+    /// cannot erase anything. Writing it any other way would mean a value the
+    /// game corrected mid-match, a `role` that resolved late or a `win` at the
+    /// end, could not reach the row.
+    ///
+    /// The finalize overwrites all of these anyway, so this is not a second
+    /// opinion about a finished recording. It is what a recording that never
+    /// finishes gets to keep.
+    pub fn update_live_summary(&self, recording_id: i64, m: &LiveMatch) -> Result<(), DbError> {
+        let conn = self.pool.write();
+        conn.execute(
+            "UPDATE recordings SET
+                champion = ?2, role = ?3, win = ?4,
+                kda_k = ?5, kda_d = ?6, kda_a = ?7,
+                game_mode = ?8, cs = ?9
+             WHERE id = ?1",
+            params![
+                recording_id,
+                m.champion,
+                m.role,
+                m.win,
+                m.kda_k,
+                m.kda_d,
+                m.kda_a,
+                m.game_mode,
+                m.cs,
+            ],
         )?;
         Ok(())
     }
@@ -1784,6 +1847,71 @@ mod tests {
         db.delete_samples(id).unwrap();
         assert!(db.get_samples(id).unwrap().is_empty());
         assert_eq!(db.unfinished_recordings().unwrap().len(), 1, "the row is still there");
+    }
+
+    /// The live summary writes the row it owns, without merging. Unlike
+    /// `update_match_metadata`, which protects what is already there, this is
+    /// the source of those columns writing while it is still the source: a
+    /// `role` that resolved late or a `win` at the end has to be able to reach
+    /// a column that already held something.
+    #[test]
+    fn the_live_summary_overwrites_rather_than_merging() {
+        let db = Db::open_temporary().unwrap();
+        let id = db.begin_recording("C:/vods/recording-5b.mp4", 1_000).unwrap();
+
+        db.update_live_summary(
+            id,
+            &LiveMatch {
+                champion: Some("Ahri".into()),
+                game_mode: Some("CLASSIC".into()),
+                kda_k: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let mid = &db.unfinished_recordings().unwrap()[0];
+        assert_eq!(mid.champion.as_deref(), Some("Ahri"));
+        assert_eq!(mid.kda_k, Some(1));
+        assert_eq!(mid.win, None);
+
+        // The game ends: a third kill and an outcome, both landing on columns
+        // that are no longer empty.
+        db.update_live_summary(
+            id,
+            &LiveMatch {
+                champion: Some("Ahri".into()),
+                game_mode: Some("CLASSIC".into()),
+                kda_k: Some(3),
+                win: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let end = &db.unfinished_recordings().unwrap()[0];
+        assert_eq!(end.kda_k, Some(3), "a merge would have kept the 1");
+        assert_eq!(end.win, Some(true));
+    }
+
+    /// And it does not finish the row. A card with a champion on it is still
+    /// not a library entry until a finalize or a recovery sets `finished_at`,
+    /// which is what keeps a growing file out of the grid.
+    #[test]
+    fn the_live_summary_does_not_put_the_row_in_the_library() {
+        let db = Db::open_temporary().unwrap();
+        let id = db.begin_recording("C:/vods/recording-5c.mp4", 1_000).unwrap();
+        db.update_live_summary(
+            id,
+            &LiveMatch {
+                champion: Some("Ahri".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(db.list_recordings().unwrap().is_empty());
+        assert_eq!(db.unfinished_recordings().unwrap().len(), 1);
     }
 
     /// Recovery writes only what a file can answer for. Everything the

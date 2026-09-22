@@ -423,7 +423,10 @@ pub struct Kda {
 
 /// What one Live Client Data snapshot says about the recording player's
 /// own game — everything the library card shows that doesn't need the
-/// LCU. Written to the `recordings` row at finalize.
+/// LCU. Written to the `recordings` row as the polls establish it, and
+/// again at finalize (DEVELOPMENT.md §4.3): the second write is what a
+/// finished recording gets, the first is what a killed daemon leaves
+/// behind.
 ///
 /// Every field is optional because every field maps to a nullable column,
 /// and because each has its own way of being unknowable: `champion` and

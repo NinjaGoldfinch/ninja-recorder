@@ -296,6 +296,10 @@ struct RecordingSession {
     first_game_time_s: Option<f64>,
     last_game_time_s: Option<f64>,
     ever_matched: bool,
+    /// The last `LiveMatch` written to the open row, so a poll that
+    /// establishes nothing new costs no write. Most polls do not: a KDA moves
+    /// on a kill, not on a tick.
+    last_live_written: Option<db::LiveMatch>,
     record_started_at: Instant,
     /// The stem `Recorder::start` was given. Kept rather than re-derived from
     /// `started_at_millis`: the format lives at the one call site that builds
@@ -406,6 +410,29 @@ impl RecordingSession {
     fn resolved_samples(&self) -> Vec<SessionSample> {
         let fallback = self.align.fallback();
         self.samples.iter().map(|s| s.resolve(fallback)).collect()
+    }
+
+    /// What the polls have established so far, shaped for the row.
+    ///
+    /// `cs` comes from the scoreboard rather than from `LiveSummary`, which
+    /// is the one field here that does: it is the only part of the scoreboard
+    /// with a column of its own, because it is shown on the card and sorted
+    /// by.
+    fn live_row(&self) -> db::LiveMatch {
+        db::LiveMatch {
+            champion: self.live.champion.clone(),
+            role: self.live.role.clone(),
+            win: self.live.win,
+            kda_k: self.live.kda.map(|k| k.kills),
+            kda_d: self.live.kda.map(|k| k.deaths),
+            kda_a: self.live.kda.map(|k| k.assists),
+            game_mode: self.live.game_mode.clone(),
+            cs: self
+                .scoreboard
+                .as_ref()
+                .and_then(|s| s.players.iter().find(|p| p.is_us))
+                .map(|p| p.cs),
+        }
     }
 
     /// The sample this poll produced, if it produced one.
@@ -960,6 +987,14 @@ impl Supervisor {
         let samples_before = session.samples.len();
         let added = session.ingest(&snapshot, elapsed_s);
         let new_sample = session.sample_added_since(samples_before);
+        // Only when this poll actually established something. A KDA moves on
+        // a kill rather than on a tick, so most polls leave this `None` and
+        // cost no write at all; the loading screen and the end-of-game screen
+        // leave it `None` for every poll they produce.
+        let live_row = {
+            let row = session.live_row();
+            (session.last_live_written.as_ref() != Some(&row)).then_some(row)
+        };
         let recording_id = session.recording_id;
         // The session lock is dropped before publishing: `publish` runs the
         // sink inline, and holding this across it would put a `lib.rs` closure
@@ -1017,6 +1052,38 @@ impl Supervisor {
                 "state_machine",
                 "could not write a live sample for recording {id}: {e}"
             );
+        }
+
+        // The third thing a killed daemon used to lose, after the markers
+        // (#150) and the curve (#185); this half is #190. Champion, KDA, mode
+        // and outcome were held in `session.live` for the whole game and
+        // written once, at finalize, so a recovered recording came back as a
+        // card with no title. The polls knew: nothing had asked them.
+        //
+        // Not a `COALESCE` merge like the LCU's later patch. This is the live
+        // client writing the row it owns while it owns it, and `absorb` never
+        // hands back a field it once knew, so a plain overwrite cannot lose
+        // anything. The finalize rewrites all of it regardless.
+        if let Some(id) = recording_id
+            && let Some(row) = live_row
+        {
+            match self.db.update_live_summary(id, &row) {
+                // Remembered only once it is actually in the database. A write
+                // that failed has to be retried, and the next poll will retry
+                // it without being told to, because the comparison above is
+                // still looking at the last value that landed.
+                Ok(()) => {
+                    if let Some(session) = self.session.lock().unwrap().as_mut()
+                        && session.recording_id == Some(id)
+                    {
+                        session.last_live_written = Some(row);
+                    }
+                }
+                Err(e) => warn!(
+                    "state_machine",
+                    "could not write the live summary for recording {id}: {e}"
+                ),
+            }
         }
 
         for marker in added {
@@ -1114,6 +1181,7 @@ impl Supervisor {
                     first_game_time_s: None,
                     last_game_time_s: None,
                     ever_matched: false,
+                    last_live_written: None,
                     record_started_at: Instant::now(),
                     file_stem: config_file_stem.clone(),
                     started_at_millis,
@@ -1890,6 +1958,7 @@ mod tests {
             first_game_time_s: None,
             last_game_time_s: None,
             ever_matched: false,
+            last_live_written: None,
             record_started_at: Instant::now(),
             file_stem: "recording-0".to_string(),
             started_at_millis: 0,
@@ -2395,6 +2464,98 @@ mod tests {
         // A second before capture began, and `video_time_s` clamps at the
         // start of the file.
         assert_eq!(settled[0].video_time_s, 0.0);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- A killed daemon keeps its card too -------------------------------
+
+    /// The third thing a crash used to take, after the markers (#150) and the
+    /// curve (#185). Champion, KDA, mode and outcome lived in `session.live`
+    /// for the whole game and reached SQLite once, at finalize, so a daemon
+    /// killed mid-game left a recovered recording with a card that had no
+    /// title on it. The polls had known since the first one.
+    #[test]
+    fn a_killed_daemon_leaves_its_card_filled_in() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+        sup.on_snapshot(fixture_snapshot("mid-game"));
+
+        // The daemon dies here. No finalize, ever.
+
+        let open = sup.db.unfinished_recordings().unwrap();
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].champion.as_deref(), Some("Ahri"));
+        assert_eq!(open[0].game_mode.as_deref(), Some("CLASSIC"));
+        assert_eq!(open[0].kda_k, Some(3));
+        assert_eq!(open[0].kda_d, Some(1));
+        assert_eq!(open[0].kda_a, Some(2));
+        assert_eq!(open[0].win, None, "the game had not ended, so it is not a loss");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The outcome is the field the live write exists for as much as the
+    /// champion is. `GameEnd` arrives on one poll and the game process can
+    /// exit before the next, so a recording killed seconds later still knows
+    /// it won.
+    #[test]
+    fn an_outcome_seen_before_the_kill_is_on_the_row() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+        sup.on_snapshot(fixture_snapshot("mid-game"));
+        sup.on_snapshot(fixture_snapshot("won"));
+
+        let open = sup.db.unfinished_recordings().unwrap();
+        assert_eq!(open[0].win, Some(true));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A poll that establishes nothing new is not a write. Most polls in a
+    /// game are that poll: a KDA moves on a kill, not on a tick, and the
+    /// loading screen and the end-of-game screen produce nothing but repeats.
+    ///
+    /// Tested through the comparison rather than through a write counter,
+    /// because the comparison is the decision. A row that changed shape but
+    /// not content would still compare equal and still be skipped, which is
+    /// the property worth pinning.
+    #[test]
+    fn a_poll_that_establishes_nothing_new_is_not_a_write() {
+        let mut session = empty_session();
+
+        session.ingest(&fixture_snapshot("mid-game"), 1.0);
+        let first = session.live_row();
+        assert_eq!(first.champion.as_deref(), Some("Ahri"));
+
+        session.ingest(&fixture_snapshot("mid-game"), 2.0);
+        assert_eq!(session.live_row(), first, "the same payload, so nothing to write");
+
+        session.ingest(&fixture_snapshot("won"), 3.0);
+        assert_ne!(session.live_row(), first, "the outcome arrived");
+        assert_eq!(session.live_row().win, Some(true));
+    }
+
+    /// The finalize still owns the row. The live write is not a second
+    /// opinion about a finished recording: everything it set is rewritten,
+    /// and anything only the finalize knows lands beside it.
+    #[test]
+    fn the_finalize_still_writes_the_whole_row() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+        sup.on_snapshot(fixture_snapshot("mid-game"));
+        sup.on_snapshot(fixture_snapshot("won"));
+        sup.stop_recording();
+
+        let rows = sup.db.list_recordings().unwrap();
+        assert_eq!(rows.len(), 1, "one row, still finished by id");
+        assert_eq!(rows[0].champion.as_deref(), Some("Ahri"));
+        assert_eq!(rows[0].win, Some(true));
+        assert!(
+            rows[0].duration_s.is_some(),
+            "the session clock is the finalize's to write, and it did"
+        );
+        assert!(sup.db.unfinished_recordings().unwrap().is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
     }
