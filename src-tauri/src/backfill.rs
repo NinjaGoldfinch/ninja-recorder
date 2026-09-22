@@ -63,6 +63,13 @@ pub struct Candidate {
     /// Epoch milliseconds.
     pub started_at: i64,
     pub duration_s: Option<f64>,
+    /// The id the row already carries, if it has one.
+    ///
+    /// A recording that was killed mid-game keeps the identity the gameflow
+    /// session gave it (#193), and that beats anything a clock match could
+    /// work out afterwards: it is what the client said at the time, and it
+    /// puts the row on the exact-id path rather than the heuristic one.
+    pub game_id: Option<i64>,
     /// Matched to a game, but carrying no gold curve.
     ///
     /// Its own flag rather than something inferred from the columns above: a
@@ -136,6 +143,30 @@ pub fn match_recording(recording: &Candidate, games: &[PlayedGame]) -> Match {
     }
 }
 
+/// Which game a candidate belongs to.
+///
+/// **The row's own `game_id` wins where it has one, and the clock is not
+/// consulted at all.** That id was read from the gameflow session while the
+/// game was running, so it is what the client said at the time; a clock match
+/// is an inference drawn afterwards from two timestamps. Letting the second
+/// override the first would be the inference winning, which is the failure
+/// #56 exists to refuse, one column further out.
+///
+/// A row carrying an id and still needing a pass is the recovered-recording
+/// case: since #193 the identity survives a killed daemon, so the row knows
+/// its game while `role`, `patch` and `win` are all still missing, because
+/// those only ever come from a finalize that never ran.
+///
+/// Split out of `run_for` so it can be tested without a client: the pass
+/// around it needs a lockfile, an HTTP client and a history fetch, and this
+/// is the whole of the decision.
+pub fn resolve_game(candidate: &Candidate, games: &[PlayedGame]) -> Match {
+    match candidate.game_id {
+        Some(known) => Match::One(known),
+        None => match_recording(candidate, games),
+    }
+}
+
 /// What one pass did. Every count is reported rather than only the
 /// successes: "nothing happened" and "nothing could be matched" are
 /// different answers, and the second one is the user's cue that their
@@ -146,7 +177,8 @@ pub struct BackfillReport {
     pub scanned: usize,
     /// Games the client offered.
     pub games_considered: usize,
-    /// Rows the clock matched to exactly one game.
+    /// Rows resolved to exactly one game: by the `game_id` the row already
+    /// carried where it had one, and by the clock otherwise.
     pub matched: usize,
     /// Rows actually written. Lower than `matched` when a row was deleted
     /// mid-pass, or when the matched game said nothing worth writing.
@@ -223,7 +255,7 @@ async fn run_for(db: &Db, candidates: Vec<Candidate>) -> Result<BackfillReport, 
     report.games_considered = games.len();
 
     for candidate in &candidates {
-        let game_id = match match_recording(candidate, &games) {
+        let game_id = match resolve_game(candidate, &games) {
             Match::One(game_id) => game_id,
             Match::Ambiguous => {
                 report.ambiguous += 1;
@@ -353,16 +385,67 @@ mod tests {
         }
     }
 
+    /// A candidate with no `game_id` of its own, which is what makes the
+    /// clock match run at all: a row that carries one never reaches it.
     fn recording(started_at: i64, duration_s: Option<f64>) -> Candidate {
         Candidate {
             needs_gold: false,
             id: 1,
             started_at,
             duration_s,
+            game_id: None,
         }
     }
 
+    /// A row that already knows its game is not matched on the clock at all,
+    /// **even when the clock would have answered confidently and differently**.
+    ///
+    /// The recovered-recording case (#193). The identity survives a killed
+    /// daemon, so the pass has a fact where it used to have an inference, and
+    /// the two disagreeing is exactly when it matters which one wins.
+    #[test]
+    fn a_row_that_knows_its_game_is_not_matched_on_the_clock() {
+        // A history whose only game overlaps the recording perfectly, so the
+        // clock answers it with no ambiguity at all.
+        let games = [game(5147823901, 1_000, 100_000)];
+        assert_eq!(
+            resolve_game(&recording(1_000, Some(100.0)), &games),
+            Match::One(5147823901),
+            "with no id of its own, the clock decides"
+        );
+
+        let known = Candidate {
+            game_id: Some(999),
+            ..recording(1_000, Some(100.0))
+        };
+        assert_eq!(
+            resolve_game(&known, &games),
+            Match::One(999),
+            "the row read this from the client during the game; the clock guessed"
+        );
+    }
+
+    /// And it holds where the clock would have refused to answer. A row with
+    /// an id needs no overlap, which is the case that matters most: a
+    /// recovered recording whose game has aged out of match history is still
+    /// resolvable, where before it was unmatched forever.
+    #[test]
+    fn a_known_id_needs_no_game_in_the_history_at_all() {
+        let known = Candidate {
+            game_id: Some(999),
+            ..recording(1_000, Some(100.0))
+        };
+        assert_eq!(resolve_game(&known, &[]), Match::One(999));
+        assert_eq!(
+            resolve_game(&recording(1_000, Some(100.0)), &[]),
+            Match::NoneFound,
+            "and without one there is nothing to go on"
+        );
+    }
+
     /// The ordinary case: a recording starts a few seconds before the game
+    /// clock does and stops a few after, because it covers the loading
+    /// screen and the client's `gameDuration` does not.    /// The ordinary case: a recording starts a few seconds before the game
     /// clock does and stops a few after, because it covers the loading
     /// screen and the client's `gameDuration` does not.
     #[test]

@@ -381,6 +381,28 @@ pub struct GameIdentity {
     pub is_custom: bool,
 }
 
+impl GameIdentity {
+    /// Folds a newer read into this one, keeping anything already known.
+    ///
+    /// The same asymmetry `LiveSummary::absorb` has, for the same reason. The
+    /// identity is read once per game from a client that can go away before
+    /// the recording ends, and a later read that comes back empty is the
+    /// client not answering rather than the game not having an id. Once seen,
+    /// it has to survive however many empty reads follow.
+    ///
+    /// `is_custom` is a plain `bool` with no "unknown", so it follows whatever
+    /// read carried an id. A read with no id says nothing about it either way.
+    pub fn absorb(&mut self, newer: GameIdentity) {
+        if newer.game_id.is_some() {
+            self.game_id = newer.game_id;
+            self.is_custom = newer.is_custom;
+        }
+        if newer.queue_id.is_some() {
+            self.queue_id = newer.queue_id;
+        }
+    }
+}
+
 /// The slice of the session response we read. Every field is optional and
 /// defaulted: this shape is taken from the LCU's own OpenAPI spec, not
 /// from a response anyone here has seen, so a client that nests things

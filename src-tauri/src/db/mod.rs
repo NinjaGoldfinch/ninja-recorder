@@ -498,6 +498,10 @@ pub struct LiveMatch {
     pub kda_a: Option<i64>,
     pub game_mode: Option<String>,
     pub cs: Option<i64>,
+    /// From the gameflow session, not from Live Client Data, which never
+    /// exposes either. Read once per game while it is still running.
+    pub game_id: Option<i64>,
+    pub queue: Option<i64>,
 }
 
 /// Disk retention policy (DEVELOPMENT.md §6): `None` means that
@@ -869,13 +873,20 @@ impl Db {
     /// The finalize overwrites all of these anyway, so this is not a second
     /// opinion about a finished recording. It is what a recording that never
     /// finishes gets to keep.
+    ///
+    /// `game_id` and `queue` come from the gameflow session rather than from
+    /// the polls, and are held to the same rule by `GameIdentity::absorb`: the
+    /// caller never hands back an id it once read, so the assignment is safe
+    /// for them too. They are what promotes a recovered recording onto the
+    /// exact-id patch path instead of the backfill's clock match (#193).
     pub fn update_live_summary(&self, recording_id: i64, m: &LiveMatch) -> Result<(), DbError> {
         let conn = self.pool.write();
         conn.execute(
             "UPDATE recordings SET
                 champion = ?2, role = ?3, win = ?4,
                 kda_k = ?5, kda_d = ?6, kda_a = ?7,
-                game_mode = ?8, cs = ?9
+                game_mode = ?8, cs = ?9,
+                game_id = ?10, queue = ?11
              WHERE id = ?1",
             params![
                 recording_id,
@@ -887,6 +898,8 @@ impl Db {
                 m.kda_a,
                 m.game_mode,
                 m.cs,
+                m.game_id,
+                m.queue,
             ],
         )?;
         Ok(())
@@ -1547,7 +1560,7 @@ impl Db {
         // window", and the finalize would overwrite the answer afterwards
         // anyway.
         let mut stmt = conn.prepare(
-            "SELECT id, started_at, duration_s,
+            "SELECT id, started_at, duration_s, game_id,
                     game_id IS NOT NULL AND NOT EXISTS (
                         SELECT 1 FROM samples
                          WHERE samples.recording_id = recordings.id
@@ -1566,7 +1579,8 @@ impl Db {
                 id: row.get(0)?,
                 started_at: row.get(1)?,
                 duration_s: row.get(2)?,
-                needs_gold: row.get(3)?,
+                game_id: row.get(3)?,
+                needs_gold: row.get(4)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
@@ -1905,6 +1919,58 @@ mod tests {
         let end = &db.unfinished_recordings().unwrap()[0];
         assert_eq!(end.kda_k, Some(3), "a merge would have kept the 1");
         assert_eq!(end.win, Some(true));
+    }
+
+    /// The identity reaches the row through the same write, so a recovered
+    /// recording carries the id the gameflow session gave it. That is what
+    /// puts it on the backfill's exact path rather than its clock match.
+    #[test]
+    fn the_live_summary_carries_the_game_identity() {
+        let db = Db::open_temporary().unwrap();
+        let id = db.begin_recording("C:/vods/recording-5d.mp4", 1_000).unwrap();
+        db.update_live_summary(
+            id,
+            &LiveMatch {
+                champion: Some("Ahri".into()),
+                game_id: Some(5147823901),
+                queue: Some(420),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let row = db.get_recording(id).unwrap().unwrap();
+        assert_eq!(row.game_id, Some(5147823901));
+        assert_eq!(row.queue, Some(420));
+    }
+
+    /// And a row that carries one is still a backfill candidate, because
+    /// `role`, `patch` and `win` come from a finalize that never ran. That is
+    /// the case `backfill::resolve_game` exists to answer.
+    #[test]
+    fn a_recovered_row_with_an_id_is_still_a_candidate_and_carries_it() {
+        let db = Db::open_temporary().unwrap();
+        let id = db.begin_recording("C:/vods/recording-5e.mp4", 1_000).unwrap();
+        db.update_live_summary(
+            id,
+            &LiveMatch {
+                champion: Some("Ahri".into()),
+                game_id: Some(5147823901),
+                queue: Some(420),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // The daemon restarts and finishes the abandoned row from the file.
+        db.recover_recording(id, Some(42.0), 4_096, 5_000).unwrap();
+
+        let candidates = db.recordings_missing_metadata().unwrap();
+        assert_eq!(candidates.len(), 1, "role, patch and win are still missing");
+        assert_eq!(
+            candidates[0].game_id,
+            Some(5147823901),
+            "and the pass is told which game, rather than having to work it out"
+        );
     }
 
     /// And it does not finish the row. A card with a champion on it is still

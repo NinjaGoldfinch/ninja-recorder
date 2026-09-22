@@ -526,6 +526,25 @@ duration from the session clock, the file's size, the audio layout, the
 diagnostics and the scoreboard blob. `cs` is the one field that crosses that
 line, because it has a column of its own and is on the card.
 
+**The game identity rides along with it**, and it is not from the polls at
+all: `game_id` and `queue` are read once from the gameflow session at
+`InProgress` and were held on the supervisor until the finalize. They are
+absorbed onto the session the same way the summary is, so a client that goes
+away mid-game cannot hand back an id the recording already read, and the
+finalize takes the union of the session's copy and the supervisor's rather
+than either alone, because a recording with no successful poll has only the
+second.
+
+What that buys is not a label on the card. It is which of the two patch paths
+a recovered recording is eligible for. The deferred patch and the resume sweep
+need an exact `game_id` and may correct a champion; the backfill matches on the
+clock and may only fill (§4.2). A recovered row now carries the id, so
+`backfill::resolve_game` uses it and never consults the clock: the identity was
+what the client said at the time, and a clock match is an inference drawn
+afterwards from two timestamps. It also means a recovered recording is still
+resolvable after its game has aged out of match history, where before it was
+unmatched forever.
+
 **Samples are covered by the same rule, in the same way.** They were not at
 first: a sample was pushed from the poll that produced it but reached SQLite
 only at finalize, so a daemon killed mid-game left a recovered recording with
