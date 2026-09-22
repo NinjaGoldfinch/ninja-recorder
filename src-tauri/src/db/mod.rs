@@ -1534,6 +1534,18 @@ impl Db {
         // as permanent unmatched noise. Requiring a `game_id` limits it to
         // recordings that were matched to a real game and therefore *should*
         // have a curve.
+        //
+        // `finished_at IS NOT NULL` is the other half of being narrow, and it
+        // is about the row rather than the column. A recording that is in
+        // flight right now has an open row with almost nothing on it, so it
+        // matches the gap test on every column, and it is the one recording
+        // the LCU's match history cannot possibly know about: the game has not
+        // ended. Without this it is scanned on every run and counted as
+        // unmatched, which is the report describing the game being played as a
+        // failure. It also cannot be patched into a *wrong* game this way: a
+        // row with no duration falls back to "did it start inside this game's
+        // window", and the finalize would overwrite the answer afterwards
+        // anyway.
         let mut stmt = conn.prepare(
             "SELECT id, started_at, duration_s,
                     game_id IS NOT NULL AND NOT EXISTS (
@@ -1542,10 +1554,11 @@ impl Db {
                            AND samples.gold_diff IS NOT NULL
                     ) AS needs_gold
                FROM recordings
-              WHERE win IS NULL OR champion IS NULL OR role IS NULL
+              WHERE finished_at IS NOT NULL
+                AND (win IS NULL OR champion IS NULL OR role IS NULL
                  OR patch IS NULL OR queue IS NULL OR game_id IS NULL
                  OR scoreboard_json IS NULL OR cs IS NULL
-                 OR needs_gold
+                 OR needs_gold)
               ORDER BY started_at DESC",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -2564,6 +2577,41 @@ mod tests {
 
         let candidates = db.recordings_missing_metadata().unwrap();
         assert_eq!(candidates.len(), 1, "a missing scoreboard is worth a pass");
+        assert_eq!(candidates[0].id, id);
+    }
+
+    /// The recording being made right now is not a backfill candidate.
+    ///
+    /// Its row is open and almost empty, so it matches the gap test on every
+    /// column, and it is the one game the LCU's match history cannot know
+    /// about, because it has not ended. Scanning it means reporting the game
+    /// in progress as an unmatched failure on every run.
+    #[test]
+    fn a_recording_still_in_flight_is_not_a_candidate() {
+        let db = Db::open_temporary().unwrap();
+        let id = db.begin_recording("C:/vods/in-flight.mp4", 1_000).unwrap();
+
+        assert!(
+            db.recordings_missing_metadata().unwrap().is_empty(),
+            "an unfinished row is not something the LCU can complete"
+        );
+
+        // The same row, once a finalize has been through it and left the
+        // columns only the LCU can answer for.
+        db.finish_recording(
+            id,
+            &NewRecording {
+                path: "C:/vods/in-flight.mp4".into(),
+                started_at: 1_000,
+                champion: Some("Shyvana".into()),
+                finished_at: Some(2_000),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let candidates = db.recordings_missing_metadata().unwrap();
+        assert_eq!(candidates.len(), 1, "now it is worth a pass");
         assert_eq!(candidates[0].id, id);
     }
 

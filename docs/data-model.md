@@ -320,6 +320,11 @@ Two guards, and both matter more than the feature:
 - **The backfill still only fills.** It matches recordings to games *on the
   clock*, so a confident-looking single match is still a heuristic. Filling a
   gap on a guess is fair; overwriting good data on one is not.
+- **A recording still in flight is not a candidate.** The candidate query
+  requires `finished_at IS NOT NULL`. An open row is almost empty, so it
+  matches the gap test on every column, and it is the one game match history
+  cannot know about, because it has not ended. Without the filter every run
+  scans it and reports the game being played as unmatched.
 
 **It also rewrites the gold series**, which is the one thing it recovers that
 is not a column on `recordings`. The curve is written by the deferred patch,
