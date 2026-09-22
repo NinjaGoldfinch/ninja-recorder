@@ -20,7 +20,14 @@
 # against, not a floor.
 [toolchain]
 channel = "1.98.1"
-# `rustfmt` and `clippy` are gates, so they have to come with the toolchain
-# rather than be installed separately — a runner that skipped the install step
-# would otherwise skip the gate and still go green.
+# `clippy` is a gate, so it has to come with the toolchain rather than be
+# installed separately — a runner that skipped the install step would otherwise
+# skip the gate and still go green.
+#
+# `rustfmt` is **not** a gate and this tree is not rustfmt-formatted. It is
+# listed because `cargo fmt` should still work when someone reaches for it on a
+# single file, and because leaving it out makes the failure a missing component
+# rather than a diff. **Do not run `cargo fmt` across the tree**: it rewrites
+# 63 of the 76 source files, and no rustfmt configuration comes close to what
+# is committed. See CLAUDE.md, "The Rust tree is not rustfmt-formatted".
 components = ["rustfmt", "clippy"]

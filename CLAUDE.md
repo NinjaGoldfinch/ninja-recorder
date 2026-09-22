@@ -133,6 +133,39 @@ commands above are the only things that build it. Tauri's bundler installs
 shortcut at it. Leave the feature off anywhere else, and do not add it to
 `devtools` — that feature ships a bundle of its own.
 
+### The Rust tree is not rustfmt-formatted
+
+**Do not run `cargo fmt`.** There is no `rustfmt.toml`, no `cargo fmt --check`
+step in CI, and no hook: nothing has ever imposed a format on `src-tauri/src`,
+and it shows. Running it rewrites **63 of the 76 source files**, +2429/-897
+across roughly 35,000 lines, and every one of those lines is noise.
+
+It is not a matter of finding the right settings. The committed layout is
+hand-chosen case by case, with some call sites broken across lines for
+readability and others kept on one line at 85 columns, and it matches no
+rustfmt configuration. Measured against the tree:
+
+| Config | Hunks rustfmt would change |
+|---|---|
+| default | 502 |
+| `max_width = 100`, `use_small_heuristics = "Max"` | 493 |
+| `max_width = 110` | 437 |
+| `max_width = 120` | 441 |
+
+There is no minimum to find. The comments survive either way, because rustfmt
+leaves them alone by default, so what a run destroys is `git blame` over the
+whole daemon and every open branch's diff.
+
+**`cargo fmt` on a single file you are already rewriting is fine.** It is the
+tree-wide run that is the problem, and `rust-toolchain.toml` still lists the
+component so that reaching for it fails with a diff rather than a missing
+binary.
+
+Adopting rustfmt is a real option and it is tracked, not forbidden: the JS side
+already did exactly this, in one behaviour-free commit listed in
+`.git-blame-ignore-revs`. It needs the same treatment, and the decision is the
+repository owner's.
+
 ### Clippy runs without `--all-targets`, deliberately
 
 So it never compiles the test targets. A method only the tests call is dead

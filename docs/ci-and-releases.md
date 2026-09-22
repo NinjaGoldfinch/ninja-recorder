@@ -164,6 +164,18 @@ Clippy is **not** passed `--all-targets`, so the test targets are never
 compiled and anything only the tests call is dead code under `-D warnings`.
 A local run that adds `--all-targets` will not reproduce that failure.
 
+**There is no `cargo fmt` step, and adding one is not a one-line change.**
+`src-tauri/src` has never been run through rustfmt. It is hand-formatted, and a
+tree-wide `cargo fmt` rewrites 63 of its 76 files. No rustfmt configuration is
+close to what is committed: the default wants 502 hunks changed, a 100-column
+`use_small_heuristics = "Max"` wants 493, and widening to 110 or 120 columns
+only trades one set for another. Adopting rustfmt means a reformatting commit
+of its own, listed in `.git-blame-ignore-revs` exactly as the Biome one is, and
+then the gate. The Rust toolchain file still installs the component, so
+`cargo fmt` on a file someone is already rewriting works; see CLAUDE.md, "The
+Rust tree is not rustfmt-formatted", for why the tree-wide run is the one to
+avoid.
+
 ### The compiler is pinned
 
 `src-tauri/rust-toolchain.toml` names an exact stable version, and both
