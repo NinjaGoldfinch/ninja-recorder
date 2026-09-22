@@ -175,9 +175,12 @@ fail, for the reason #150 sets out: markers are only written at finalize, so
 killing the daemon loses every one.
 
 **#150 has since landed and these rows are open again, not passed.** A row is
-now written when recording starts and markers are written as each poll produces
-them, so a killed daemon leaves both behind; daemon startup finishes the
-abandoned row from the file. That is covered by unit tests, including one that
+now written when recording starts, and markers and advantage-curve samples are
+written as each poll produces them, so a killed daemon leaves all of it behind;
+daemon startup finishes the abandoned row from the file. The samples were not
+part of #150 and were fixed after it: they were never attributed to the wrong
+recording, but they reached the database only at finalize, so a recovered
+recording used to come back with its markers and a blank graph. That is covered by unit tests, including one that
 kills a recording by simply never finalizing it, but **no part of it has been
 run on hardware**. The four rows below about the library, the row and its
 markers are the observable form of the fix, and are what the next session
@@ -207,7 +210,7 @@ earlier dated note claims them.
 |---|---|---|
 | `daemon.log` holds the finalize, with no `WARN [notify]` | 5.0.5 | The notification was *seen*, so the absence of a warning is the only evidence the daemon took the path it was supposed to rather than a fallback |
 | The UI killed mid-game, all three rows | 5.0.6 | **WS3.4's exit criterion.** The other direction from the daemon kill, and the only untested one of the two |
-| The row and its markers survive a killed daemon | 4.1 | #150 landed specifically to make this true and has never been run |
+| The row, its markers and its curve survive a killed daemon | 4.1 | #150 landed specifically to make this true and has never been run |
 | Start on login, all four rows | 5.0.2 | The argument list is an on-disk contract written once and replayed for years |
 | The app comes back on the new version | 5.0.4 | The install was handed over; nothing confirmed what came back |
 - [ ] The recording does **not** appear in the library while the daemon is
@@ -220,6 +223,10 @@ earlier dated note claims them.
       alpha.49 and the reason #150 exists. Open the recording and check the
       timeline has marker glyphs on it, at positions that match what happened
       before the kill.
+- [ ] **The advantage graph is drawn, up to the kill.** Samples are written by
+      the poll that produced them for the same reason the markers are. A
+      recovered recording whose timeline has glyphs on it but whose graph is
+      blank is the shape of this half being broken.
 - [ ] **Record a second game to completion afterwards. Its markers are its
       own.** This is the half that looked right while being wrong: the Live
       Client Data API serves the whole game's event list rather than the events

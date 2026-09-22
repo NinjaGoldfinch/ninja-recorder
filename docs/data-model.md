@@ -402,8 +402,9 @@ stateDiagram-v2
     Recovered --> [*]: reconcile
     note right of Open
         Hidden from the library.
-        Markers are written here,
-        as each poll produces them.
+        Markers and samples are
+        written here, as each poll
+        produces them.
     end note
 ```
 
@@ -413,6 +414,12 @@ mid-game took every one of them with it, and the *next* recording to finish
 inherited them, because the Live Client Data API serves the whole game's event
 list rather than the events since the last poll. A partial MP4 is playable, and
 before this its markers had no equivalent guarantee.
+
+The advantage-curve samples were left behind by that change and fixed after it.
+They were never at risk of being attributed to the wrong recording, since each
+one is pushed from the poll that produced it, but they still reached SQLite
+only at finalize: a recovered recording came back with its markers and a blank
+graph. They are now written by the poll that produced them too.
 
 **Three writers, three different rules.**
 
@@ -429,9 +436,9 @@ and the path it ends with is a fact (`Recorder::stop`). Where the two differ,
 an upsert would finish a different row and strand the game's markers on an
 unfinished one that nothing ever shows.
 
-The finalize also **deletes and re-inserts** the markers rather than appending.
-Markers written during the game were resolved against whatever alignment was
-known at the time; the ones captured before game time first advanced used a 1:1
+The finalize also **deletes and re-inserts** the markers and the samples rather
+than appending. Both were resolved during the game against whatever alignment
+was known at the time; the ones from before game time first advanced used a 1:1
 fallback, and the finalize is where they get the alignment the whole game
 proved. See [recording-pipeline.md](recording-pipeline.md), "Timestamp
 alignment".

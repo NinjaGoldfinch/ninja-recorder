@@ -94,6 +94,22 @@ fn marker_row(m: &SessionMarker) -> db::NewMarker {
     }
 }
 
+fn sample_row(s: &SessionSample) -> db::NewSample {
+    db::NewSample {
+        game_time_s: s.game_time_s,
+        video_time_s: s.video_time_s,
+        our_team: s.diff.as_ref().map(|d| d.our_team.clone()),
+        // Left NULL on purpose. Gold is Riot's number now and arrives with
+        // the summary patch, as its own sparser rows: nothing during the game
+        // knows it (`lcu::timeline`).
+        gold_diff: None,
+        kill_diff: s.diff.as_ref().map(|d| d.kill_diff),
+        cs_diff: s.diff.as_ref().map(|d| d.cs_diff),
+        our_gold: Some(s.our_gold),
+        our_level: Some(s.our_level),
+    }
+}
+
 /// An advantage-curve sample before its video position is known. See
 /// `PendingMarker` for why the mapping is deferred.
 #[derive(Debug, Clone)]
@@ -390,6 +406,16 @@ impl RecordingSession {
     fn resolved_samples(&self) -> Vec<SessionSample> {
         let fallback = self.align.fallback();
         self.samples.iter().map(|s| s.resolve(fallback)).collect()
+    }
+
+    /// The sample this poll produced, if it produced one.
+    ///
+    /// `ingest` pushes at most one and already has fifteen call sites, so the
+    /// count taken before it is what says whether it did, rather than a
+    /// changed return type.
+    fn sample_added_since(&self, count_before: usize) -> Option<SessionSample> {
+        let fallback = self.align.fallback();
+        self.samples.get(count_before).map(|s| s.resolve(fallback))
     }
 }
 
@@ -931,7 +957,9 @@ impl Supervisor {
             return;
         };
         let elapsed_s = session.record_started_at.elapsed().as_secs_f64();
+        let samples_before = session.samples.len();
         let added = session.ingest(&snapshot, elapsed_s);
+        let new_sample = session.sample_added_since(samples_before);
         let recording_id = session.recording_id;
         // The session lock is dropped before publishing: `publish` runs the
         // sink inline, and holding this across it would put a `lib.rs` closure
@@ -966,6 +994,29 @@ impl Supervisor {
                     rows.len()
                 );
             }
+        }
+
+        // The same fix as the markers above, for the curve: #150 covered only
+        // half of this, and #185 is the other half. A killed daemon used to
+        // leave a recovered recording with its markers on the timeline and an
+        // empty graph underneath them, because samples were written only at
+        // finalize.
+        //
+        // One row per poll at 1 Hz, and only when game time moved, so this is
+        // a write a second during a game and nothing at all on a loading
+        // screen. Its position is provisional exactly as a marker's is, and
+        // the finalize deletes and re-inserts against the final alignment.
+        //
+        // Logged, never fatal, for the same reason as the markers: the
+        // in-memory copy survives and the finalize will write it.
+        if let Some(id) = recording_id
+            && let Some(sample) = new_sample.as_ref()
+            && let Err(e) = self.db.insert_samples(id, &[sample_row(sample)])
+        {
+            warn!(
+                "state_machine",
+                "could not write a live sample for recording {id}: {e}"
+            );
         }
 
         for marker in added {
@@ -1258,23 +1309,17 @@ impl Supervisor {
                             );
                         }
 
-                        let new_samples: Vec<db::NewSample> = samples
-                            .iter()
-                            .map(|s| db::NewSample {
-                                game_time_s: s.game_time_s,
-                                video_time_s: s.video_time_s,
-                                our_team: s.diff.as_ref().map(|d| d.our_team.clone()),
-                                // Left NULL on purpose. Gold is Riot's
-                                // number now and arrives with the summary
-                                // patch, as its own sparser rows — nothing
-                                // during the game knows it (`lcu::timeline`).
-                                gold_diff: None,
-                                kill_diff: s.diff.as_ref().map(|d| d.kill_diff),
-                                cs_diff: s.diff.as_ref().map(|d| d.cs_diff),
-                                our_gold: Some(s.our_gold),
-                                our_level: Some(s.our_level),
-                            })
-                            .collect();
+                        // Same delete-then-insert as the markers, and for the
+                        // same reason: the samples written during the game
+                        // resolved against whatever alignment was known then.
+                        if let Err(e) = self.db.delete_samples(id) {
+                            error!(
+                                "state_machine",
+                                "failed to clear the live samples for recording {id}: {e}"
+                            );
+                        }
+                        let new_samples: Vec<db::NewSample> =
+                            samples.iter().map(sample_row).collect();
                         if let Err(e) = self.db.insert_samples(id, &new_samples) {
                             error!(
                                 "state_machine",
@@ -2236,6 +2281,120 @@ mod tests {
             "resolved against the proven alignment, not the fallback: {}",
             settled[0].video_time_s
         );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- A killed daemon keeps its curve too ------------------------------
+
+    /// The other half of #150, which covered only the markers. Samples were
+    /// held in `session.samples` for the whole game and written once, at
+    /// finalize, so a daemon killed mid-game left a recovered recording with
+    /// its markers intact and an empty advantage graph behind them.
+    #[test]
+    fn a_killed_daemon_leaves_its_samples_in_the_database() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+        sup.on_snapshot(snapshot(210.5, &[3]));
+
+        // The daemon dies here. No finalize, ever.
+
+        let open = sup.db.unfinished_recordings().unwrap();
+        let samples = sup.db.get_samples(open[0].id).unwrap();
+        assert_eq!(samples.len(), 1, "written as the poll produced it");
+        assert_eq!(samples[0].game_time_s, 210.5);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// One sample per poll that moved the clock, and none from one that did
+    /// not. `ingest` skips a repeated timestamp so the graph has no vertical
+    /// artefact through it, and the live write has to skip exactly the same
+    /// polls or it would reintroduce one.
+    #[test]
+    fn a_poll_that_does_not_move_the_clock_writes_no_sample() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+
+        let id = sup.db.unfinished_recordings().unwrap()[0].id;
+
+        sup.on_snapshot(snapshot(210.5, &[3]));
+        assert_eq!(sup.db.get_samples(id).unwrap().len(), 1);
+
+        // The loading-screen and pause case: the poller re-fetches the same
+        // payload, game time unchanged.
+        sup.on_snapshot(snapshot(210.5, &[3]));
+        assert_eq!(
+            sup.db.get_samples(id).unwrap().len(),
+            1,
+            "a repeated timestamp is not a second point on the curve"
+        );
+
+        sup.on_snapshot(snapshot(211.5, &[3]));
+        assert_eq!(sup.db.get_samples(id).unwrap().len(), 2);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The finalize deletes and re-inserts the samples rather than appending,
+    /// exactly as it does the markers. Appending would draw every point on
+    /// the curve twice.
+    #[test]
+    fn a_finalize_replaces_the_live_samples_rather_than_appending() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+
+        sup.on_snapshot(snapshot(210.5, &[3]));
+        sup.on_snapshot(snapshot(211.5, &[3]));
+        sup.on_snapshot(snapshot(212.5, &[3]));
+
+        let id = sup.db.unfinished_recordings().unwrap()[0].id;
+        let live = sup.db.get_samples(id).unwrap().len();
+        assert_eq!(live, 3, "one per poll that moved the clock");
+
+        sup.stop_recording();
+
+        assert_eq!(
+            sup.db.get_samples(id).unwrap().len(),
+            live,
+            "the finalize rewrites the samples, it does not add to them"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Why the delete-and-reinsert is there rather than an insert guard. A
+    /// sample taken before the clock was ever seen to advance is resolved
+    /// against a 1:1 fallback when it is written live, and against the
+    /// alignment the game proved once there is one. The durable answer is the
+    /// second, and it is the one the curve's x-axis is drawn from.
+    #[test]
+    fn the_finalize_corrects_a_sample_written_before_the_clock_moved() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+
+        // The first poll of a game already in progress. Nothing has proven an
+        // offset yet, so the sample resolves 1:1 against its own game time.
+        sup.on_snapshot(snapshot(210.5, &[3]));
+        let id = sup.db.unfinished_recordings().unwrap()[0].id;
+        let live = sup.db.get_samples(id).unwrap()[0].video_time_s;
+        assert_eq!(live, 210.5, "the 1:1 fallback, which is all there is to go on");
+
+        // The clock advances while capture has barely run, which proves that
+        // game second 211.5 is the start of this video rather than 211 seconds
+        // into it.
+        sup.on_snapshot(snapshot(211.5, &[3]));
+        sup.stop_recording();
+
+        let settled = sup.db.get_samples(id).unwrap();
+        assert_eq!(settled.len(), 2);
+        assert_ne!(
+            settled[0].video_time_s, live,
+            "the live value was provisional and the finalize was supposed to replace it"
+        );
+        // A second before capture began, and `video_time_s` clamps at the
+        // start of the file.
+        assert_eq!(settled[0].video_time_s, 0.0);
 
         std::fs::remove_dir_all(&dir).ok();
     }
