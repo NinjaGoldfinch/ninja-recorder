@@ -1,4 +1,4 @@
-# ninja-recorder-v2
+# ninja-recorder
 
 A lightweight League of Legends VOD recorder for Windows. It records your games
 automatically, tags the timeline with in-game events, and gives you a review

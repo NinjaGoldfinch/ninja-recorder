@@ -767,7 +767,7 @@ jobs:
 
           ---
 
-          **This build is not fully verified.** v2 rebuilt the process model: the recorder is now a headless daemon and the window is a client of it. A live ranked game has now been captured end to end on real hardware: markers, the library row, playback and seeking, notifications raised with no window open, and a recording that carried on after the window was closed. What is still unchecked is the recorder being killed mid-game, the in-app updater's install half, and the resource budgets. Expect rough edges, and see https://github.com/NinjaGoldfinch/ninja-recorder-v2/issues/130 for what is still being checked.
+          **This build is not fully verified.** v2 rebuilt the process model: the recorder is now a headless daemon and the window is a client of it. A live ranked game has now been captured end to end on real hardware: markers, the library row, playback and seeking, notifications raised with no window open, and a recording that carried on after the window was closed. What is still unchecked is the recorder being killed mid-game, the in-app updater's install half, and the resource budgets. Expect rough edges, and see https://github.com/NinjaGoldfinch/ninja-recorder/issues/130 for what is still being checked.
 
           Unsigned build: Windows SmartScreen will warn on first run. No code-signing certificate is configured yet.
           CAVEATS

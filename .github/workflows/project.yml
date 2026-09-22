@@ -27,7 +27,7 @@
 # (https://github.com/settings/tokens/new), stored as the repository secret
 # `PROJECT_TOKEN`:
 #
-#     gh secret set PROJECT_TOKEN --repo NinjaGoldfinch/ninja-recorder-v2
+#     gh secret set PROJECT_TOKEN --repo NinjaGoldfinch/ninja-recorder
 #
 # Note what that costs: a classic `project` scope reaches **every** project on
 # the account, and `repo` is full control of every repository it can see. A
@@ -56,7 +56,7 @@ jobs:
     runs-on: ubuntu-latest
     # Skips cleanly when the secret is absent rather than failing loudly on every
     # issue. `secrets` is not allowed in a job-level `if`, so it goes through env.
-    if: ${{ github.repository == 'NinjaGoldfinch/ninja-recorder-v2' }}
+    if: ${{ github.repository == 'NinjaGoldfinch/ninja-recorder' }}
     steps:
       - name: Check the token is configured
         id: check

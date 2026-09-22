@@ -73,11 +73,24 @@ pub const PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZX
 /// reads the config back and fails if the two ever differ, the same way
 /// `daemon::IDENTIFIER` is pinned, and for the same reason: a mismatch would
 /// not crash anything. It would quietly check the wrong place forever.
+///
+/// ## The repository was renamed, and installed builds hold the old URL
+///
+/// This said `ninja-recorder-v2` until v1 was deprecated and this repository
+/// took the plain name. Every build already installed carries the old string
+/// baked in, and keeps updating because GitHub redirects a renamed
+/// repository's URLs indefinitely.
+///
+/// **That redirect only holds while nothing else claims the old name.** If a
+/// repository called `ninja-recorder-v2` is ever created under this account,
+/// the redirect stops and every build shipped before the rename silently
+/// checks a manifest that does not exist. So the old name is not free to
+/// reuse, which is a fact about the account rather than about this file.
 pub const STABLE_ENDPOINT: &str =
-    "https://github.com/NinjaGoldfinch/ninja-recorder-v2/releases/latest/download/latest.json";
+    "https://github.com/NinjaGoldfinch/ninja-recorder/releases/latest/download/latest.json";
 
 pub const ALPHA_ENDPOINT: &str =
-    "https://github.com/NinjaGoldfinch/ninja-recorder-v2/releases/download/alpha/alpha.json";
+    "https://github.com/NinjaGoldfinch/ninja-recorder/releases/download/alpha/alpha.json";
 
 impl Channel {
     /// Reads the stored pref. Anything unrecognised is **stable**, not an

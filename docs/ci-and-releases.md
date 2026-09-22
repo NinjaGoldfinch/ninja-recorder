@@ -329,7 +329,7 @@ endpoint, so stable installs ignore alphas with no filtering of our own. The
 channels *cannot* be separated by version comparison, because semver says
 `1.1.0-alpha.1 > 1.0.0`; they are separated by endpoint.
 
-Both are read from `NinjaGoldfinch/ninja-recorder-v2`: the repository this
+Both are read from `NinjaGoldfinch/ninja-recorder`: the repository this
 workflow publishes to. They pointed at v1's repository until the key landed
 here, which would have left every v2 install polling a manifest that never
 mentions a v2 release.

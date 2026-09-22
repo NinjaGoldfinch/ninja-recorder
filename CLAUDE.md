@@ -4,7 +4,7 @@ Guidance for Claude Code and anyone else working in this repo.
 
 ## The project
 
-`ninja-recorder-v2` — a League of Legends VOD recorder. **v2 is v1 with five
+`ninja-recorder` — a League of Legends VOD recorder. **v2 is v1 with five
 things being changed underneath it, one workstream at a time**, not a rewrite:
 Tauri, Rust, SQLite, files-as-truth, H.264/AAC in fragmented MP4 and the
 `Recorder` trait all stay. The frontend, the IPC contract, the process model,
@@ -15,6 +15,14 @@ The plan is in a separate repository:
 Section numbers cited below (§3.1, §4.7, Appendix D) are that repository's
 implementation plan. [docs/provenance.md](docs/provenance.md) records what was
 copied from v1, from which commit, and what is owed because of it.
+
+**This repository was `ninja-recorder-v2` until v1 was deprecated.** v1 is now
+[`ninja-recorder-deprecated`](https://github.com/NinjaGoldfinch/ninja-recorder-deprecated),
+archived, and this one holds the plain name. GitHub redirects the old URLs, which
+is what keeps already-installed builds updating: they carry the old endpoint
+baked in (`update.rs` says what that costs). **Do not create a repository called
+`ninja-recorder-v2`** — doing so would break that redirect and strand every
+build shipped before the rename.
 
 Read [docs/architecture.md](docs/architecture.md) before making a change you
 can't fully see the blast radius of.
