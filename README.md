@@ -18,19 +18,22 @@ backend): that last one being what eventually lets the licence change.
 > pinned toolchain and the quality gates. It is no longer that. The recorder is
 > a headless daemon and the window is a client of it over a named pipe, the
 > command and event surface is declared once in Rust and generated into
-> TypeScript, and the capture backend no longer injects into the game.
+> TypeScript, the frontend is Svelte 5 throughout with the vanilla shell gone,
+> and the capture backend no longer injects into the game.
 >
 > As of `v2.0.0-alpha.40` the whole loop has run on a live ranked game on
 > Windows: the client detected, the game captured, markers placed, the row in
 > the library, playback and seeking in the review player, notifications raised
 > by a daemon with no window open, and a recording that carried on after the
-> window was closed.
+> window was closed. Capture has run across many live Vanguard-protected games
+> since.
 >
 > **What that does not yet cover** is in
 > [docs/windows-verification.md](docs/windows-verification.md), which is
-> specific about it: the recorder being killed mid-game, the in-app updater's
-> install half, and the resource budgets. The frontend is still v1's, until WS4
-> replaces it. Expect rough edges and read the release notes.
+> specific about it: the recorder being killed mid-game, the updater's restart
+> after an install that otherwise succeeds, and the resource budgets, where the
+> install-size figure is missed rather than met. Expect rough edges and read the
+> release notes.
 >
 > Provenance: [docs/provenance.md](docs/provenance.md) ·
 > Plan: [ninja-recorder-v2-plan](https://github.com/NinjaGoldfinch/ninja-recorder-v2-plan)
@@ -44,20 +47,22 @@ not here. This repository is the code; that one is the argument for it.
 
 ## Workstreams
 
-From the implementation plan's §1. WS0, WS2 and WS5 depend on nothing and could
-start on day one; WS1's spike could too.
+From the implementation plan's §1. Status is as of 2026-09-23; the
+[workstream files](https://github.com/NinjaGoldfinch/ninja-recorder-v2-plan/tree/main/docs/workstreams)
+in the planning repository carry the detail, including what is done but not yet
+verified on Windows.
 
-| | WS | What | Gated by | Effort |
+| WS | What | Gated by | Effort | Status |
 |---|---|---|---|---|
-| [ ] | **WS0** | Baseline measurement: install size, idle RAM by Private Bytes | none | 1 wk, part-time |
-| [ ] | **WS1** | Capture backend: P0c go/no-go spike, then Option B; trimmed libobs as fallback | none (spike); gate (build) | 3 wk + 4 wk |
-| [ ] | **WS2** | Generated contract: commands *and* events declared once in Rust | none | 2–3 wk |
-| [ ] | **WS3** | Daemon / UI split over named-pipe JSON-RPC | WS2, WS6 | 3 wk |
-| [ ] | **WS4** | Svelte 5 strangler migration, player last as an imperative island | WS2 | 5–6 wk |
-| [ ] | **WS5** | Toolchain pin, edition 2024, Biome, Vitest, svelte-check, cargo-deny | none | 2 wk |
-| [ ] | **WS6** | SQLite WAL, `busy_timeout`, writer + reader pool, `query_only` UI connection | none | 1 wk |
-| [ ] | **WS7** | Measure against C3 and ship v2.0.0 | everything | 1 wk |
-| [ ] | **WS8** | Remove libobs, audit, relicense, ship v2.1.0 | one release of WS7 in the field | 1–2 wk |
+| **WS0** | Baseline measurement: install size, idle RAM by Private Bytes | none | 1 wk, part-time | In progress, 2 of 3 |
+| **WS1** | Capture backend: P0c go/no-go spike, then Option B; trimmed libobs as fallback | none (spike); gate (build) | 3 wk + 4 wk | In progress; every remaining task needs the Windows box |
+| **WS2** | Generated contract: commands *and* events declared once in Rust | none | 2–3 wk | Complete |
+| **WS3** | Daemon / UI split over named-pipe JSON-RPC | WS2, WS6 | 3 wk | Code complete, verified 26 of 28 |
+| **WS4** | Svelte 5 strangler migration, player last as an imperative island | WS2 | 5–6 wk | Complete and verified |
+| **WS5** | Toolchain pin, edition 2024, Biome, Vitest, svelte-check, cargo-deny | none | 2 wk | Complete |
+| **WS6** | SQLite WAL, `busy_timeout`, writer + reader pool, `query_only` UI connection | none | 1 wk | Complete |
+| **WS7** | Measure against C3 and ship v2.0.0 | everything | 1 wk | Not started |
+| **WS8** | Remove libobs, audit, relicense, ship v2.1.0 | one release of WS7 in the field | 1–2 wk | Not started |
 
 Roughly five months of part-time work to v2.0.0, plus a short v2.1.0.
 

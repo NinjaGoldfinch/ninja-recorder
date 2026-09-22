@@ -638,6 +638,11 @@ alternative was keeping all of `update.ts` alive to toggle one element's
 tears that root down, which is correct for elements that live as long as the
 window.
 
+**WS4.6 has since landed** (#164). The vanilla shell is gone, `index.html` is
+one div, and the app bar is `lib/components/shell/AppBar.svelte`;
+`appbar.svelte.ts` was deleted with it. The paragraph above is why it existed
+for the three workstreams in between.
+
 **Preferences are mirrored rather than moved.** `prefs.ts` keeps the localStorage
 cache that the inline boot script in `index.html` reads before first paint,
 which is the only thing preventing a theme flash, and SQLite stays the source of
