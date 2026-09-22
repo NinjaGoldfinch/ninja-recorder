@@ -10,9 +10,16 @@ from the dev box: it needs real Windows hardware, a real League client and
 Vanguard active
 ([DEVELOPMENT.md §1.1, §9](../DEVELOPMENT.md#11-riot-vanguard-the-constraint-that-shapes-everything)).
 
-**Still open:** the *install* half of the updater (§5.0.4) and the install-size
-budget (§5), which is missed rather than met. Fill in results inline as each
-remaining step is done.
+**Still open:** the install-size budget (§5), which is missed rather than met,
+and one §4.1 row that fails (#199). Fill in results inline as each remaining
+step is done.
+
+**2026-09-23, alpha.87 → alpha.89: the whole #130 sheet has a result, and one
+row fails.** The in-app update came back on its own for the first time, which
+closes the install half of §5.0.4. The daemon killed mid-game now leaves a
+complete, recovered row behind. The one failure is the recording the
+replacement daemon starts afterwards, which inherits the killed one's markers
+(#199). Ticks below from this pass are claimed by the dated notes beside them.
 
 **2026-09-18: the install half ran twice.** The first attempt, from alpha.45,
 reported "The update is not a readable archive: invalid Zip archive: Could not
@@ -220,24 +227,41 @@ earlier dated note claims them.
 | The row, its markers, its curve, its card and its game id survive a killed daemon | 4.1 | #150 landed specifically to make this true and has never been run |
 | Start on login, all four rows | 5.0.2 | The argument list is an on-disk contract written once and replayed for years |
 | The app comes back on the new version | 5.0.4 | The install was handed over; nothing confirmed what came back |
-- [ ] The recording does **not** appear in the library while the daemon is
+
+**2026-09-23, alpha.87: #150 holds on hardware, and the recording after it does
+not.** Run twice with the daemon killed from Task Manager mid-game: once in
+Practice Tool and once in a custom game, so that a match record existed for the
+backfill. The replacement daemon logged `startup recovery: finished 1
+interrupted recording(s)` within a second of starting. The recovered card came
+back with champion, KDA, CS and queue, with no outcome, and with its markers and
+CS-diff curve up to the cut. Fill in completed role, patch, outcome and the
+scoreboard. Items and spells are missing from the recovered card until then,
+and for good on Practice Tool, which has no match record (#200).
+
+**The last row fails.** The replacement daemon identifies the game still in
+progress and starts a second recording, and that recording carries every event
+of the game, the pre-kill ones included, at video time 0:00 (#199). In
+Practice Tool, even its own post-restart markers were stored at 0:00 (#198);
+that did not reproduce in the custom game.
+
+- [x] The recording does **not** appear in the library while the daemon is
       down. Its row exists but is unfinished, and an unfinished row is not a
       library entry.
-- [ ] The row appears on the next daemon start, with a duration read back from
+- [x] The row appears on the next daemon start, with a duration read back from
       the file, and **the card is filled in**: champion, KDA, queue and game
       mode as they stood at the last poll before the kill. The outcome is
       blank unless the game had actually ended, which is the one honest answer
       to a game that was still running. `role` and `patch` are blank too:
       those come from the LCU after a finalize that never happened.
-- [ ] **Run the backfill afterwards and the row completes.** It carries the
+- [x] **Run the backfill afterwards and the row completes.** It carries the
       game id the client gave it during the game, so the pass asks the LCU
       about that game directly rather than working out which one it was from
       the clock. `role`, `patch` and the outcome fill in.
-- [ ] **Markers up to the kill are in the row.** This is the row that failed on
+- [x] **Markers up to the kill are in the row.** This is the row that failed on
       alpha.49 and the reason #150 exists. Open the recording and check the
       timeline has marker glyphs on it, at positions that match what happened
       before the kill.
-- [ ] **The advantage graph is drawn, up to the kill.** Samples are written by
+- [x] **The advantage graph is drawn, up to the kill.** Samples are written by
       the poll that produced them for the same reason the markers are. A
       recovered recording whose timeline has glyphs on it but whose graph is
       blank is the shape of this half being broken.
@@ -248,11 +272,13 @@ earlier dated note claims them.
       everything that had already happened and attribute it to the file it was
       writing. A second recording carrying markers from the killed one, at
       offsets that belong to neither, is a regression.
+      **Fails on 2026-09-23 (#199):** exactly that regression, in both runs.
 
 And the version-skew case, which is the one that does **not** recover:
 
 - [ ] Run a UI from one build against a daemon from another whose `PROTOCOL`
-      differs. The strip says a restart is required and offers nothing else. It
+      differs. **Not runnable on 2026-09-23:** every published build has
+      `PROTOCOL = 1`, so no pair disagrees. The strip says a restart is required and offers nothing else. It
       must **not** ask the daemon to quit, because the daemon may be recording.
 
 ## 5. Resource measurements
@@ -295,12 +321,12 @@ process is what needs confirming.
 
 - [ ] A normal start still opens the window at 1160x800 with an 880x600
       minimum, titled `ninja-recorder`.
-- [ ] `ninja-recorder.exe --hidden` opens a window like any other start.
+- [x] `ninja-recorder.exe --hidden` opens a window like any other start.
       **The flag was removed at 2.0.0** (#71), so it is an unknown argument
       now and unknown arguments are ignored. This row inverted: it used to
       assert no window, and the passing result it had is kept below as a
       record of the behaviour that was replaced.
-- [ ] `ninja-recorder.exe --daemon` starts headless and stays running, with no
+- [x] `ninja-recorder.exe --daemon` starts headless and stays running, with no
       window and no taskbar button. It used to print a refusal and exit 2;
       since WS3.2 it is the daemon, and §5.0.5 is where it is checked.
 - [ ] Unknown arguments (a shell verb, a file path from "Open with") do not
@@ -461,14 +487,21 @@ same registry key make the point better than any argument: `Discord` and
 `Spotify` both run from AppData, from HKCU Run, with arguments, and neither is
 flagged. What they have that this build does not is a signature.
 
-- [ ] A fresh install registers **nothing**: the key is absent and the
+**2026-09-23, alpha.87: every row but the uninstall one passes.** A fresh
+install left the key absent. The `--hidden` entry opened a window at the first
+login, was rewritten to `--daemon` on the same login (`[autostart] login entry
+rewritten with the current arguments`), and the next login was a daemon start.
+The disabled-entry row came out the other way round from what it predicted,
+and better; see the row.
+
+- [x] A fresh install registers **nothing**: the key is absent and the
       Settings checkbox is off before it is ever touched.
 - [x] Ticking it creates the value, and it holds the installed exe's full path
       **followed by `--daemon`** (WS3.5). A path with no flag means a login
       start that opens a window, and so, since 2.0.0, does one ending in
       `--hidden`: that flag was removed (#71) and is ignored.
 - [x] Unticking it removes the value entirely.
-- [ ] The setting survives a restart of the app: reopen Settings and confirm
+- [x] The setting survives a restart of the app: reopen Settings and confirm
       the checkbox still reflects the key.
 - [x] **Sign out and back in.** Task Manager shows **one**
       `ninja-recorder.exe` and it is the daemon: no window and no taskbar
@@ -491,7 +524,7 @@ flagged. What they have that this build does not is a signature.
       whose parent is ours rather than counting them all.
 - [x] Open the app from that tray icon. Now there are two processes and still
       **one** tray icon, because the UI no longer builds its own (WS3.5).
-- [ ] **An entry written by an older build (`--hidden`) heals itself.** Set
+- [x] **An entry written by an older build (`--hidden`) heals itself.** Set
       the value by hand to the exe's path plus `--hidden`, sign out and back
       in. Expect a window to open, because the flag no longer means anything
       (#71). Then check the `Run` value again **without touching Settings**:
@@ -510,21 +543,25 @@ flagged. What they have that this build does not is a signature.
       > rather than a hidden one, with no WebView2 process parented to ours.
       > That was true of the behaviour it tested. #71 removed the flag rather
       > than choosing between its two possible meanings.
-- [ ] Delete the entry from **Task Manager → Startup** with the app running,
+- [x] Delete the entry from **Task Manager → Startup** with the app running,
       then reopen Settings: the checkbox must now read *off*. This is the case
       the "no `settings_kv` mirror" decision exists for
       ([DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave)).
-- [ ] Disabling the entry in Task Manager (rather than deleting it): note what
-      the checkbox says. Windows records that state outside the `Run` key, so
-      the app is expected to still report "on"; confirm it, and that toggling
-      off then on clears it.
+- [x] Disabling the entry in Task Manager (rather than deleting it): note what
+      the checkbox says. **It reads "off", not "on" as this row used to
+      predict.** Windows records the state outside the `Run` key, under
+      `Explorer\StartupApproved\Run`, and `auto-launch` 0.5 reads it:
+      `is_enabled` is true only when the `Run` value exists *and* that entry
+      does not mark it disabled. Ticking the box in the app writes the value and
+      resets that entry to enabled, so Windows showed it On again. The app and
+      Windows agree in both directions.
 - [ ] Uninstall with autostart enabled, then check the key: NSIS does not know
       about it, so a stale entry pointing at a removed exe is the expected and
       harmless outcome. Confirm it does not produce an error dialog on
       the next login.
-- [ ] Reinstall over an existing install with autostart on: the path must still
+- [x] Reinstall over an existing install with autostart on: the path must still
       resolve, or the entry silently stops working.
-- [ ] Both product names side by side (`ninja-recorder` and
+- [x] Both product names side by side (`ninja-recorder` and
       `ninja-recorder-dev`) get **separate** `Run` values; confirm enabling one
       does not show as enabled in the other.
 
@@ -602,10 +639,20 @@ stable release it precedes, so an alpha install offered a stable build is
 being offered an upgrade, and a stable install will never be offered an alpha
 at all. That is the design, not a fault.
 
+**2026-09-23: the install comes back.** alpha.87 to alpha.89 through the
+Install button: the installer ran, a window came back by itself, and Settings →
+About read the new version and offered nothing. It is the first run with #153's
+`/R`, and the first where nothing had to be started by hand. alpha.87 still
+polls the pre-rename `ninja-recorder-v2` URL, so the same run also shows
+GitHub's redirect carrying an old install to the new manifest.
+
 - [ ] Both manifests resolve and name the build they should:
       `curl -L .../releases/latest/download/latest.json` (stable) and
       `curl -L .../releases/download/alpha/alpha.json` (alpha). Each `url`
       must point at that release's **tagged** asset, not `/latest/`.
+      On 2026-09-23 the alpha manifest named a tagged asset. The stable one
+      answers 404 because no stable v2 release exists yet, which is expected
+      until v2.0.0 is cut.
 - [ ] Switching the channel re-checks immediately, and the row changes to
       describe the channel just selected rather than the one left behind.
 - [ ] A **stable** install is never offered an alpha, even with alphas newer
@@ -625,19 +672,20 @@ at all. That is the design, not a fault.
 - [x] Install. The app exits, the NSIS installer runs *passively* (a progress
       bar, no wizard to click through), and the app comes back. Settings →
       About now shows the new version and offers nothing.
-- [ ] The install did **not** create a second entry in Apps & Features, a
+- [x] The install did **not** create a second entry in Apps & Features, a
       second Start-menu shortcut, or a second install directory.
 - [x] Start-on-login, the close-button setting, the audio preset and the
       retention policy all survive the update; they live in `settings_kv` and
       the `Run` key, neither of which the installer touches.
 - [x] The VOD library survives it: recordings are still listed, and their files
       still play.
-- [ ] **Install the devtools bundle and confirm it offers nothing at all.**
+- [x] **Install the devtools bundle and confirm it offers nothing at all.**
       Settings → About must read "not available in this build". A dev bundle
       that updated itself would replace itself with the production app, which
       is exactly what renaming the product was meant to prevent.
-- [ ] Pull the network cable and press "Check now": the row reports the failure
-      in words and the app carries on recording normally.
+- [x] Pull the network cable and press "Check now": the row reports the failure
+      in words and the app carries on recording normally. It read "Could not
+      check for updates: error sending request for url (…alpha.json)".
 - [x] Tamper check, which needs a scratch release: replace the installer
       attached to a release without updating `latest.json`, and confirm the
       download is **rejected** rather than run. This is the only test that
@@ -689,13 +737,15 @@ backend is libobs, and this section is what stands in for that.
       user's daemon. With fast user switching, sign in as another account and
       run the same connect: it must fail with access denied rather than
       connecting.
-- [ ] A devtools build and a release build can run at the same time without
+- [x] A devtools build and a release build can run at the same time without
       either taking the other's clients. Their pipe names differ by that last
       segment; the database and the recordings folder are still shared.
+      So is `daemon.log`, with nothing on a line saying which build wrote it
+      (#202).
 - [ ] A second `ninja-recorder.exe --daemon` exits **0** immediately and
       silently, leaving the first running. Confirm the exit code and confirm
       the first daemon's log has nothing new in it.
-- [ ] Kill the daemon with Task Manager, then start it again. It binds the pipe
+- [x] Kill the daemon with Task Manager, then start it again. It binds the pipe
       on the first try: a killed daemon must not leave the name unusable.
 - [x] With the daemon running and a game in progress, the recording continues
       with no UI process at all. This is the whole point of the split, and it
@@ -728,6 +778,10 @@ for.
 | `daemon.log` holds the finalize, with no `WARN [notify]` | The notification was seen, so the absence of a warning is the only evidence the daemon took the path it was meant to rather than a fallback |
 | The row and its markers survive a killed daemon (§4.1) | #150 landed to make this true and it has never been run. It is also the state PR #180 fixes the review player for |
 
+**2026-09-23: both ran.** The finalize is in `daemon.log` with no `WARN [notify]`
+line, so that one passes. The killed daemon's row survives, and so do its
+markers; the recording started after it is the one that fails (#199, §4.1).
+
 **WS3.4's exit criterion passes**: the UI killed mid-game, relaunched, showing
 the recording still in flight with the elapsed time continuing, and a complete
 VOD afterwards. That is also WS1.2's (#6) exit criterion, which needs no
@@ -739,10 +793,10 @@ forwarded to the daemon over the pipe, and the daemon pushes a snapshot and a
 stream of events back. None of this can be checked off Windows, because it
 needs a window.
 
-- [ ] With no daemon running, launch the UI. It starts one (`daemon::spawn`),
+- [x] With no daemon running, launch the UI. It starts one (`daemon::spawn`),
       connects, and the library and settings render normally. Task Manager
       shows two `ninja-recorder.exe` processes.
-- [ ] `app_data_dir()/logs/` now holds both `ui.log` and `daemon.log`, and
+- [x] `app_data_dir()/logs/` now holds both `ui.log` and `daemon.log`, and
       neither rotates the other.
 - [x] **The exit criterion for 3.4.** Start a game and let recording begin.
       Kill the UI process from Task Manager, then launch it again. Within one
