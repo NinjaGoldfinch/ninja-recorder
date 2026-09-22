@@ -89,7 +89,7 @@ flowchart TB
 | `dev/` | Dev portal backend, compiled out without `--features devtools` | `dev_*` commands |
 | `dev/dispatch.rs` | Name-and-JSON dispatch over the `dev_*` commands that run in the daemon | `dispatch_dev`, `is_async_dev_command` |
 | `core/mod.rs` | Every command's logic, with no `tauri` types in any signature | `Ctx`, the command free functions |
-| `launch.rs` | Which mode argv asked for (`--daemon`, `--hidden`), and the flag constants autostart registers | `Launch::from_env`, `HIDDEN_FLAG` |
+| `launch.rs` | Which mode argv asked for (`--daemon`, or nothing), and the flag constant autostart registers | `Launch::from_env`, `DAEMON_FLAG` |
 | `daemon/mod.rs` | The headless process: paths without an `AppHandle`, the startup and shutdown order, and everything the UI's `setup` does minus the window | `run`, `Paths`, `IDENTIFIER` |
 | `daemon/rpc.rs` | The wire protocol, the endpoint's name, the listener that owns it, and the client's way in | `serve`, `endpoint`, `Listener`, `connect` |
 | `daemon/snapshot.rs` | The event stream's position and the state a `hello` is answered with | `Stream`, `Stream::source` |
@@ -210,9 +210,13 @@ quietly racing the daemon. It runs no migrations either, for the same reason
 and because migrations are a write.
 
 The main window is built in `lib.rs`'s `setup` rather than declared in
-`tauri.conf.json`, whose `app.windows` is empty: Tauri creates config windows
-automatically before `setup`, and a `--hidden` start needs to create none at
-all ([DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave)).
+`tauri.conf.json`, whose `app.windows` is empty. Tauri creates config windows
+automatically before `setup`, so declaring one there would build it before the
+code that decides its size and destination URL has run
+([DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave)).
+The original reason was a windowless `--hidden` start, which #71 removed; the
+tray's Open and the dev portal both build windows after startup too, so the
+seam is still load-bearing.
 
 ### The daemon, and what of it exists
 

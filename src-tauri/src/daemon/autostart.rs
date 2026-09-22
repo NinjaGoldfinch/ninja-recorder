@@ -32,6 +32,7 @@ use auto_launch::{AutoLaunch, AutoLaunchBuilder};
 
 use crate::core::Autostart;
 use crate::launch;
+use crate::{info, warn};
 
 /// The name the entry is filed under in `HKCU\...\Run`.
 ///
@@ -77,6 +78,41 @@ impl RegistryAutostart {
             .build()
             .map(RegistryAutostart)
             .map_err(|e| format!("cannot prepare the login entry: {e}"))
+    }
+}
+
+impl RegistryAutostart {
+    /// Rewrites an enabled login entry so it holds the current arguments.
+    ///
+    /// **This is what makes removing `--hidden` cost one window rather than
+    /// one per login** (#71). An entry written before WS3.5 still says
+    /// `--hidden`, which this build does not recognise, so Windows starts an
+    /// ordinary window at login. That window starts a daemon (`daemon::spawn`)
+    /// and this runs, so the entry is corrected on the same login that showed
+    /// the window and the next one is a daemon start.
+    ///
+    /// `enable()` on an already-enabled entry is a plain overwrite of the
+    /// value under `APP_NAME`, which is why this needs no comparison and no
+    /// reading of what is there: writing the right answer is cheaper than
+    /// working out whether it is already the right answer, and it is correct
+    /// whatever the entry said.
+    ///
+    /// Only when it is **already enabled**. Start-on-login is the user's
+    /// choice and an app that turned it on by itself would be doing something
+    /// nobody asked for; this only ever changes what an entry says, never
+    /// whether one exists.
+    pub fn refresh_if_enabled(&self) {
+        match self.0.is_enabled() {
+            Ok(true) => match self.0.enable() {
+                Ok(()) => info!("autostart", "login entry rewritten with the current arguments"),
+                // Not fatal: the entry keeps whatever it had, which at worst
+                // is the old flag, and the only cost is the window appearing
+                // again at the next login.
+                Err(e) => warn!("autostart", "could not rewrite the login entry: {e}"),
+            },
+            Ok(false) => {}
+            Err(e) => warn!("autostart", "could not read the login entry: {e}"),
+        }
     }
 }
 
@@ -140,5 +176,20 @@ mod tests {
     #[test]
     fn the_entry_registers_the_daemon() {
         assert_eq!(launch::autostart_args(), vec![launch::DAEMON_FLAG]);
+    }
+
+    /// And what it writes has to parse back to the daemon, which is the claim
+    /// `refresh_if_enabled` rests on: it overwrites an old entry with these
+    /// arguments, so if they did not round-trip it would replace one broken
+    /// login entry with another.
+    ///
+    /// The rewrite itself is not unit tested, because it writes to the real
+    /// `HKCU\...\Run` of whoever runs the suite. `windows-verification.md`
+    /// §5.0.2 is where it is checked.
+    #[test]
+    fn what_the_rewrite_writes_parses_back_to_a_daemon_start() {
+        let mode = launch::Launch::from_args(launch::autostart_args());
+        assert_eq!(mode, launch::Launch::Daemon);
+        assert!(!mode.creates_window(), "a login start must not open a window");
     }
 }

@@ -12,24 +12,20 @@
 //! Tauri runtime — and so it names no `tauri` type, for the reason
 //! `core`'s header gives.
 //!
-//! The contract is no longer hypothetical: `lib.rs` registers
-//! `tauri-plugin-autostart` with `HIDDEN_FLAG`, so on any machine where the
-//! user has turned start-on-login on, that exact string is sitting in the
-//! registry waiting to be handed back to a future build. The constants below
-//! are what both sides read, so the flag can't be changed on one side only.
-
-/// Start with no window, sitting in the tray.
-///
-/// This is the string autostart writes into `HKCU\...\Run`, which is why it
-/// is a constant rather than a literal in two places: the parser and the
-/// registration have to agree forever, including with builds that wrote the
-/// entry years earlier.
-pub const HIDDEN_FLAG: &str = "--hidden";
+//! The contract is not hypothetical, and it is the reason there is exactly one
+//! flag here rather than two. `--hidden` was what autostart wrote before
+//! WS3.5, so on any machine where start-on-login was turned on before that,
+//! the string is still sitting in the registry waiting to be handed back. It
+//! is **no longer recognised** (#71), which makes it an unknown argument and
+//! therefore ignored, so such a login opens a window once. `daemon::autostart`
+//! rewrites the entry the first time the daemon runs, so it happens once and
+//! not every login. The constant below is what both sides read, so the flag
+//! that replaced it can't be changed on one side only.
 
 /// Run headless. What `daemon::run` answers to, and what `daemon::spawn` hands
 /// the executable when the UI finds nobody listening.
 ///
-/// Not yet what autostart registers. See `autostart_args`.
+/// What autostart registers. See `autostart_args`.
 pub const DAEMON_FLAG: &str = "--daemon";
 
 /// The arguments written into `HKCU\...\Run` when the user ticks start-on-login.
@@ -46,17 +42,24 @@ pub const DAEMON_FLAG: &str = "--daemon";
 /// own (WS3.4), so opening the app after a login start no longer means two
 /// state machines watching one game.
 ///
-/// ## `--hidden` never stops working
+/// ## `--hidden` is gone, and the entries holding it heal themselves
 ///
 /// The registry holds whatever was written the day the box was ticked, and
 /// Windows hands it back to whatever build is installed years later. Every user
-/// who enabled autostart before this change still has `--hidden` in their `Run`
-/// key, and will until they toggle it off and on.
+/// who enabled autostart before WS3.5 still has `--hidden` in their `Run` key.
 ///
-/// So `Launch::UiHidden` is permanent, not transitional. Such a start gives a
-/// UI with no window, which then finds no daemon listening and starts one
-/// (`daemon::spawn`), and recording works. It costs one extra process compared
-/// with a fresh install, which is the price of not stranding anybody.
+/// It is no longer a flag (#71), so it parses as an unknown argument and is
+/// ignored, and such a login is an ordinary start: a window opens. That is the
+/// cost of removing it, and it is paid **once**, because `daemon::autostart`
+/// rewrites an enabled entry with these arguments the first time the daemon
+/// runs. The window that login opened starts a daemon itself, so the rewrite
+/// happens on the same login that showed the window, and the next one is a
+/// daemon start.
+///
+/// Keeping it as an alias was the alternative and was rejected: an alias is a
+/// second name for `--daemon` that no code path would ever produce, and it
+/// would have to be carried forever rather than for a release, because the
+/// registry never stops handing back what it was given.
 ///
 /// ## Why it is a function and not a `const`
 ///
@@ -73,14 +76,6 @@ pub enum Launch {
     /// Normal start: create the main window and show it.
     #[default]
     Ui,
-    /// Start with no window at all.
-    ///
-    /// Note this creates *no* window rather than a hidden one. A window
-    /// configured `visible: false` still constructs the WebView2 instance and
-    /// costs the full webview footprint, which defeats the point — the
-    /// intended caller is autostart-on-login, which wants to sit in the tray
-    /// costing nothing until asked for.
-    UiHidden,
     /// Headless recorder daemon.
     ///
     /// `main.rs` dispatches this straight to `daemon::run`, which since WS3.2
@@ -104,17 +99,12 @@ impl Launch {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        let mut mode = Launch::Ui;
         for arg in args {
-            match arg.as_ref() {
-                // `--daemon` wins: it is the stronger statement, and a
-                // daemon has no window to hide.
-                DAEMON_FLAG => return Launch::Daemon,
-                HIDDEN_FLAG => mode = Launch::UiHidden,
-                _ => {}
+            if arg.as_ref() == DAEMON_FLAG {
+                return Launch::Daemon;
             }
         }
-        mode
+        Launch::Ui
     }
 
     /// Reads the mode from the real process arguments.
@@ -179,14 +169,19 @@ mod tests {
         assert!(Launch::from_args::<_, &str>([]).creates_window());
     }
 
+    /// **`--hidden` is not a flag any more** (#71), so it falls through the
+    /// same branch as `-psn_0_12345`: unknown arguments are ignored, and what
+    /// is left is an ordinary start with a window.
+    ///
+    /// Pinned rather than left implicit, because it is the whole consequence
+    /// of the removal. Every `Run` key written before WS3.5 still holds the
+    /// string, so this assertion describes what those machines do at their
+    /// next login, once.
     #[test]
-    fn hidden_starts_without_a_window() {
+    fn hidden_is_an_unknown_argument_now_and_opens_a_window() {
         let mode = Launch::from_args(["--hidden"]);
-        assert_eq!(mode, Launch::UiHidden);
-        assert!(
-            !mode.creates_window(),
-            "a hidden start must create no window, not a hidden one"
-        );
+        assert_eq!(mode, Launch::Ui);
+        assert!(mode.creates_window());
     }
 
     /// Parsing `--daemon` and *implementing* it are separate questions, and
@@ -202,8 +197,11 @@ mod tests {
         assert!(!mode.creates_window());
     }
 
+    /// A stray `--hidden` beside `--daemon` cannot demote the daemon, in
+    /// either order. Worth keeping after the removal rather than deleting
+    /// with the flag: it is the shape a half-rewritten `Run` key would have.
     #[test]
-    fn daemon_wins_over_hidden_regardless_of_order() {
+    fn daemon_survives_a_leftover_hidden_in_either_order() {
         assert_eq!(Launch::from_args(["--hidden", "--daemon"]), Launch::Daemon);
         assert_eq!(Launch::from_args(["--daemon", "--hidden"]), Launch::Daemon);
     }
@@ -214,7 +212,7 @@ mod tests {
         // adds `-psn_...` on some launch paths, Windows passes shell verbs.
         assert_eq!(
             Launch::from_args(["-psn_0_12345", "--hidden", "/unexpected"]),
-            Launch::UiHidden
+            Launch::Ui
         );
         assert_eq!(Launch::from_args(["--not-a-flag"]), Launch::Ui);
     }
@@ -222,7 +220,6 @@ mod tests {
     #[test]
     fn only_the_ui_mode_creates_a_window() {
         assert!(Launch::Ui.creates_window());
-        assert!(!Launch::UiHidden.creates_window());
         assert!(!Launch::Daemon.creates_window());
     }
 
@@ -241,21 +238,18 @@ mod tests {
         assert!(!Launch::from_args(autostart_args()).creates_window());
     }
 
-    /// The other half of that contract, and the reason `--hidden` cannot be
-    /// deleted: every user who enabled autostart before WS3.5 still has it in
-    /// their `Run` key, and a build that stopped understanding it would strand
-    /// them with a login entry that does nothing.
+    /// The other half of that contract. An entry written before WS3.5 no
+    /// longer says anything this build understands, so it opens a window, and
+    /// what stops that repeating every login is `daemon::autostart` rewriting
+    /// the entry rather than anything here.
     #[test]
-    fn a_hidden_entry_written_by_an_older_build_still_works() {
-        let mode = Launch::from_args([HIDDEN_FLAG]);
-        assert_eq!(mode, Launch::UiHidden);
-        assert!(!mode.creates_window(), "it must still start without a window");
+    fn an_entry_written_by_an_older_build_is_an_ordinary_start() {
+        assert_eq!(Launch::from_args(["--hidden"]), Launch::Ui);
     }
 
     #[test]
-    fn the_autostart_flag_is_the_exact_string_already_in_the_registry() {
-        assert_eq!(HIDDEN_FLAG, "--hidden");
+    fn the_autostart_flag_is_the_exact_string_written_to_the_registry() {
         assert_eq!(DAEMON_FLAG, "--daemon");
-        assert_eq!(Launch::from_args([HIDDEN_FLAG]), Launch::UiHidden);
+        assert_eq!(Launch::from_args([DAEMON_FLAG]), Launch::Daemon);
     }
 }

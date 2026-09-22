@@ -1344,18 +1344,20 @@ it. `core` itself still names no async runtime, so callers choose the thread.
 
 ### Launch modes and the window
 
-`main.rs` reads a `Launch` mode out of argv before anything else:
-`--daemon` (reserved), `--hidden`, or nothing. Parsing lives in
-`src-tauri/src/launch.rs`, pure and unit-tested, and names no `tauri` type.
+`main.rs` reads a `Launch` mode out of argv before anything else: `--daemon`,
+or nothing. Parsing lives in `src-tauri/src/launch.rs`, pure and unit-tested,
+and names no `tauri` type. There was a third, `--hidden`, removed at 2.0.0 by
+#71 and covered below.
 
 **The flags are an on-disk contract, which is why they were fixed before the
 tray existed.** `tauri-plugin-autostart` writes the flag into `HKCU\…\Run`
 once, at enable time; a flag that changes meaning later silently strands every
-user who turned autostart on before the change. That is no longer hypothetical,
-since "Start on login" below registers `--hidden`, and `--daemon` is therefore
-recognised but *rejected with a message and exit code 2* rather than falling
-back to a normal window: a build that quietly ignored it would look like it
-worked while recording nothing.
+user who turned autostart on before the change. That is not hypothetical:
+"Start on login" below registered `--hidden` before WS3.5, which is what made
+removing it a decision with a cost rather than a tidy-up. `--daemon` was
+recognised but *rejected with a message and exit code 2* while it was
+reserved, rather than falling back to a normal window, because a build that
+quietly ignored it would look like it worked while recording nothing.
 
 **The main window is created in Rust, not by `tauri.conf.json`.** `app.windows`
 is now `[]`. Tauri creates entries in that array automatically, before `setup`
@@ -1378,10 +1380,12 @@ The marker list under them is left to scroll, because a window tall enough to
 show it as well would not fit on a 1080p desktop.
 
 Verified on macOS against the real binary: a default start registers a GUI
-window, `--hidden` starts with none and stays running, `--daemon` exits 2, and
-unknown arguments are ignored rather than fatal (both OSes hand launched apps
-arguments we never asked for). The windowless run also confirms Tauri's event
-loop survives with no windows, which is the daemon's prerequisite.
+window, a windowless start stays running, `--daemon` exited 2 while it was
+reserved, and unknown arguments are ignored rather than fatal (both OSes hand
+launched apps arguments we never asked for). The windowless run also confirms
+Tauri's event loop survives with no windows, which is the daemon's
+prerequisite. That run used `--hidden`, which no longer exists; `--daemon`
+makes the same point more strongly, since it builds no `tauri::App` at all.
 
 ### The tray, and what the close button does
 
@@ -1402,7 +1406,7 @@ point: a *hidden* window keeps WebView2 fully resident and reclaims nothing.
 Destroying the webview while the process lives on is what actually gets the
 footprint down, and the recording is unaffected either way. `hide` stays
 available for instant reopening. Measured on macOS: a window costs 4 WebKit
-handles, `--hidden` costs 0.
+handles, and a start that builds none costs 0.
 
 Keeping the process alive after its last window closes is
 `RunEvent::ExitRequested`. The discriminator is the exit code: `None` means
@@ -1443,10 +1447,9 @@ that costs anything until it is asked for.
 and exited 2, because registering a flag that launched nothing would have
 produced a login start that recorded nothing with no console to say why. The
 string goes into the registry once, at enable time, and the build that reads it
-back may be years newer, so `launch.rs` owns both flags as constants with a
-test pinning their spelling, and `Launch::UiHidden` is permanent rather than
-transitional: every machine that enabled this before the change still has
-`--hidden` in its `Run` key.
+back may be years newer, so `launch.rs` owns the flag as a constant with a test
+pinning its spelling. Every machine that enabled this before WS3.5 still has
+`--hidden` in its `Run` key, and what happens to those is below.
 
 **The daemon writes it, and that took two goes.** §3.1's table always put this
 with the daemon, for the obvious reason that the daemon is what login starts.
@@ -1780,7 +1783,7 @@ through a Start-menu shortcut that a `cargo run` binary does not have. That rule
 is the plugin's and it was kept, because it is a fact about Windows rather than
 about Tauri.
 
-### Login starts the daemon, and `--hidden` never stops working
+### Login starts the daemon, and `--hidden` is gone
 
 The Run key points at `--daemon` since WS3.5. Login starts the recorder and
 nothing else: no window, no WebView2, nothing costing anything until the user
@@ -1795,13 +1798,40 @@ means two state machines watching one game.
 
 The argument list is an on-disk contract. `tauri-plugin-autostart` writes it
 once, when the box is ticked, and Windows hands it back to whatever build is
-installed years later. Every user who enabled autostart before this change still
-has `--hidden` in their `Run` key and will until they toggle it off and on, so
-`Launch::UiHidden` is **permanent, not transitional**.
+installed years later. Every user who enabled autostart before WS3.5 still has
+`--hidden` in their `Run` key and will until something rewrites it.
 
-Such a start still works: a UI with no window, which finds no daemon listening
-and starts one, and records. It costs one extra process against a fresh install,
-which is the price of stranding nobody. A test pins that door open.
+**Q5 asked whether to keep that flag as an alias for one release or drop it at
+2.0.0, and the answer is to drop it** (#71). The case for keeping it was that
+an old entry goes on working; the case against is that it has no caller. No
+code path produces `--hidden`, nothing in the product offers it, and nobody
+types it. An alias would be a second name for `--daemon` that exists only to be
+found in a registry key, and "for one release" is not a thing the registry
+respects: it hands back what it was given for as long as the machine lives, so
+the alias would have to be carried forever or removed later with exactly this
+cost.
+
+**What the removal costs is one window, once.** The flag is now an unknown
+argument, and unknown arguments are ignored, so such an entry is an ordinary
+start and a window opens at login. That window starts a daemon
+(`daemon::spawn`), and the daemon calls
+`RegistryAutostart::refresh_if_enabled`, which rewrites an **already enabled**
+entry with the current arguments. So the correction happens on the same login
+that showed the window, and the next login is a daemon start.
+
+Two things about that rewrite are deliberate. It only touches an entry that is
+already enabled, because start-on-login is the user's choice and an app that
+turned it on by itself would be doing something nobody asked for; it changes
+what an entry says, never whether one exists. And it writes unconditionally
+rather than reading first and comparing: `enable()` on an enabled entry is a
+plain overwrite, and writing the right answer is cheaper than working out
+whether it is already the right answer.
+
+It is not unit tested, because it writes to the real `Run` key of whoever runs
+the suite. What is tested is that the arguments it writes parse back to a
+daemon start, so it cannot replace one broken entry with another.
+`windows-verification.md` §5.0.2 has the row that checks the rest, and it is
+about the window appearing exactly once.
 
 ### The tray icon is the daemon's, and only the daemon's
 

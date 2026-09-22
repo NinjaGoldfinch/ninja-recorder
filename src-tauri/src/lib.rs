@@ -554,10 +554,10 @@ pub(crate) fn create_main_window(app: &tauri::AppHandle, view: Option<&str>) -> 
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Only ever `Ui` or `UiHidden`: `main.rs` matches on the mode first and
-    // sends `Daemon` to `daemon::run`, which is the whole point of splitting
-    // the dispatch out of here. Read again rather than passed in so that the
-    // mobile entry point below still has one argument-free way in.
+    // Only ever `Ui`: `main.rs` matches on the mode first and sends `Daemon`
+    // to `daemon::run`, which is the whole point of splitting the dispatch out
+    // of here. Read again rather than passed in so that the mobile entry point
+    // below still has one argument-free way in.
     let mode = launch::Launch::from_env();
 
     // **Before the builder, not inside `setup`.** This is the correction the
