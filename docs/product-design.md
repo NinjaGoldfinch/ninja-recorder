@@ -387,6 +387,16 @@ one writer and four `query_only` readers under WAL, and the UI opens the same
 file read-only, so a write appearing in the wrong process fails at SQLite rather
 than racing.
 
+### The frontend
+
+v1 was vanilla TypeScript reaching into the DOM directly, with `review.ts` and
+`library.ts` each owning a screen and no test holding either of them. v2 is
+Svelte 5, migrated by strangler so the app kept working at every step: the pure
+logic came out of those two files first, then the library, then settings and
+the updater, and the review player last as an imperative island, because a
+`<video>` element wants to be driven rather than declared. Both files are
+deleted, the vanilla shell is gone, and `index.html` is one div.
+
 ### The gates
 
 v1 had 447 Rust tests and **zero** frontend tests, against 12,797 lines of
@@ -400,8 +410,8 @@ claim about types and framing, and the daemon and the UI are processes.
 ### What has *not* changed
 
 - **The capture backend.** Still libobs with WGC, still GPL-2.0, still the
-  reason this repository is. Option B is WS1 and has not started.
-- **The frontend.** Still vanilla TypeScript. The Svelte migration is WS4.
+  reason this repository is. Option B is WS1, in progress: both P0c spike arms
+  exist as crates, neither has been run, so the go/no-go gate is unanswered.
 - **The licence.** GPL-2.0-only until libobs goes (WS8).
 - **The recording pipeline.** The state machine, the marker tracker and the
   alignment logic are v1's, unchanged, and deliberately so: they were the part
