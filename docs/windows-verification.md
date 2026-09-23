@@ -1198,13 +1198,15 @@ no file at all (the muxer). None of it reaches CI.
       `Before:`, `After:` and `Remove:` lines into the table below. They are
       the staged directory before packaging, not the install.
 - [ ] **Quit the release build first** (tray → Quit) and leave it quit for the
-      whole section. Both builds share the identifier, so both write the same
-      `logs\libobs.log` and each daemon session rotates the other's away; and
-      two daemons would both try to record the game.
-- [ ] Before installing, copy `%APPDATA%\com.ninjarecorder.app\logs\libobs.log`
-      aside as `libobs.untrimmed.log`. It is the baseline the trimmed log is
-      compared against in 8.3, so it should come from a session that
-      recorded.
+      whole section, because two daemons would both try to record the game.
+      (Their logs no longer collide: since #212 a devtools build writes
+      `libobs-devtools.log`, a release build `libobs.log`.)
+- [ ] Before installing the trimmed build, install the **untrimmed** devtools
+      build of the same commit, record a session, and copy
+      `%APPDATA%\com.ninjarecorder.app\logs\libobs-devtools.log` aside as
+      `libobs.untrimmed.log`. It is the baseline the trimmed log is compared
+      against in 8.3: the same build and the same source tree, so the only
+      difference is the trim.
 - [ ] Install the trimmed devtools build. It installs beside the release one,
       in `%LOCALAPPDATA%\ninja-recorder-dev`.
 - [ ] **It is the trimmed one.** `%LOCALAPPDATA%\ninja-recorder-dev\libobs\`
@@ -1228,14 +1230,14 @@ no file at all (the muxer). None of it reaches CI.
 
 ### 8.3 The plugin-load log
 
-`libobs.log` is the worker's stderr (#69), at
-`%APPDATA%\com.ninjarecorder.app\logs\libobs.log`, one session kept as
-`libobs.1.log`.
+The worker's stderr (#69) is `libobs-devtools.log` in a devtools build, at
+`%APPDATA%\com.ninjarecorder.app\logs\libobs-devtools.log`, with one session
+kept as `libobs-devtools.1.log` (#212; a release build's is `libobs.log`).
 
 - [ ] **No failed module loads.**
 
       ```powershell
-      Select-String -Path "$env:APPDATA\com.ninjarecorder.app\logs\libobs.log" `
+      Select-String -Path "$env:APPDATA\com.ninjarecorder.app\logs\libobs-devtools.log" `
           -Pattern 'os_dlopen', 'Failed to', 'failed to load', 'not loaded', 'could not'
       ```
 
@@ -1284,7 +1286,7 @@ beside the result rather than as one number.
 | 8.1: the installed `libobs\` is the trimmed one | | |
 | 8.2: Practice Tool game recorded, encoder named | | |
 | 8.2: full game recorded, plays, seeks, stems present | | |
-| 8.3: `libobs.log` free of failed module loads | | |
+| 8.3: `libobs-devtools.log` free of failed module loads | | |
 | 8.3: module list matches the untrimmed log less coreaudio-encoder | | |
 | 8.4: trimmed devtools install (`measure.ps1` row) | | |
 | 8.4: trimmed `libobs\` folder (`measure.ps1` row) | | |
