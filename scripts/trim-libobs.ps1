@@ -153,7 +153,10 @@ $expected = New-Object System.Collections.Generic.List[object]
 $unknown = New-Object System.Collections.Generic.List[object]
 
 foreach ($file in $files) {
-    $relative = $file.FullName.Substring($root.Length).TrimStart('\', '/').Replace('\', '/')
+    # `-replace` rather than `.TrimStart('\', '/')`: PowerShell 7.5 runs on
+    # .NET 9, whose params ReadOnlySpan<char> overload makes that call fail
+    # to bind with "Argument types do not match".
+    $relative = ($file.FullName.Substring($root.Length) -replace '^[\\/]+', '').Replace('\', '/')
     $entry = [pscustomobject]@{
         Relative = $relative
         Bytes    = $file.Length
@@ -186,7 +189,7 @@ if ($Inventory) {
     # "which plugins are even here", not "which 400 files are here".
     Write-Host 'By directory:'
     $files |
-        Group-Object { $d = Split-Path $_.FullName -Parent; $d.Substring($root.Length).TrimStart('\', '/').Replace('\', '/') } |
+        Group-Object { $d = Split-Path $_.FullName -Parent; ($d.Substring($root.Length) -replace '^[\\/]+', '').Replace('\', '/') } |
         Sort-Object { ($_.Group | Measure-Object -Property Length -Sum).Sum } -Descending |
         ForEach-Object {
             $where = if ($_.Name) { $_.Name } else { '(root)' }
