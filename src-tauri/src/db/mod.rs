@@ -1490,22 +1490,6 @@ impl Db {
         .map_err(DbError::from)
     }
 
-    /// Recordings missing anything the backfill can fill, newest first.
-    ///
-    /// **Every column it writes, not just two.** This asked for
-    /// `win IS NULL OR champion IS NULL` while the backfill was only #56's
-    /// metadata pass, and kept asking for it after the backfill learned to
-    /// rebuild scoreboards — so a library whose rows all had a champion and
-    /// a result selected nothing, and the button did nothing at all. A row
-    /// with a champion can still be missing its scoreboard, its role, or
-    /// its patch.
-    ///
-    /// The cost of casting wide is one pass over rows that turn out to be
-    /// unfillable — a custom game never gets a queue id or a patch from
-    /// match history, so it is selected every time and matched every time.
-    /// That is a request the pass already makes and a comparison against a
-    /// list already in hand, and it is much cheaper than the alternative
-    /// failure, which is a button that silently does nothing.
     /// Recordings that were matched to a game but never finished being
     /// patched, newest first.
     ///
@@ -1524,7 +1508,39 @@ impl Db {
     ///
     /// `game_id IS NOT NULL` for the same reason it appears in
     /// `recordings_missing_metadata`: a recording that never reached match
-    /// history has nothing to ask for.
+    /// history has nothing to ask for. `finished_at IS NOT NULL` for the
+    /// reason #192 gave it there: a recording in flight is the one game
+    /// match history cannot know about yet, and a client reconnecting
+    /// mid-game would otherwise spend a request on it.
+    ///
+    /// **Unfinished means "match history has not answered", not "a column
+    /// is empty"** (#201). This used to ask whether any of `role`, `patch`,
+    /// `queue` or `win` was NULL, and a Practice Tool game never gets a
+    /// `role` from anyone: match history answers, the patch lands, and the
+    /// row still matched, so it was re-fetched and re-written at every
+    /// client connection for the whole window. ARAM and Arena are the same.
+    /// Two signals replace that, and the patch can clear both:
+    ///
+    /// - `patch IS NULL`. Nothing but a match-history answer writes `patch`:
+    ///   the live path has no version to give it, and the gameflow session
+    ///   supplies `game_id` and `queue` but not this. So it is the column
+    ///   whose absence means the summary never landed, and once it has,
+    ///   `role`, `queue` and `win` are whatever that answer said.
+    /// - A gold curve that is missing *and could be drawn*. The series is
+    ///   placed through the alignment the live samples were written with
+    ///   (`sample_alignment_offset`), so a recording with no samples at all
+    ///   can never gain one, and asking again only repeats the request.
+    ///   A Practice Tool game cannot either, samples or not: it has no
+    ///   enemy team, so every timeline frame has nothing to subtract from
+    ///   ours and `lcu::timeline::gold_series` returns no points. It is the
+    ///   one mode like that, and `game_mode` is written by the same poller
+    ///   that wrote the samples, so a row this branch can select always
+    ///   says which it was.
+    ///
+    ///   The branch exists for the curve that *could* be drawn and was not:
+    ///   `patch` swallows a timeline failure and writes the metadata anyway,
+    ///   because the timeline is the slower half and can lag the summary.
+    ///   That row has its `patch` and no curve, and only this finds it.
     pub fn recordings_awaiting_summary(
         &self,
         since_ms: i64,
@@ -1533,19 +1549,41 @@ impl Db {
         let mut stmt = conn.prepare(
             "SELECT id, game_id FROM recordings
               WHERE game_id IS NOT NULL
+                AND finished_at IS NOT NULL
                 AND started_at >= ?1
-                AND (role IS NULL OR patch IS NULL OR queue IS NULL OR win IS NULL
-                     OR NOT EXISTS (
-                         SELECT 1 FROM samples
-                          WHERE samples.recording_id = recordings.id
-                            AND samples.gold_diff IS NOT NULL
-                     ))
+                AND (patch IS NULL
+                     OR (COALESCE(game_mode, '') <> 'PRACTICETOOL'
+                         AND EXISTS (
+                             SELECT 1 FROM samples
+                              WHERE samples.recording_id = recordings.id
+                         )
+                         AND NOT EXISTS (
+                             SELECT 1 FROM samples
+                              WHERE samples.recording_id = recordings.id
+                                AND samples.gold_diff IS NOT NULL
+                         )))
               ORDER BY started_at DESC",
         )?;
         let rows = stmt.query_map([since_ms], |row| Ok((row.get(0)?, row.get(1)?)))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
     }
 
+    /// Recordings missing anything the backfill can fill, newest first.
+    ///
+    /// **Every column it writes, not just two.** This asked for
+    /// `win IS NULL OR champion IS NULL` while the backfill was only #56's
+    /// metadata pass, and kept asking for it after the backfill learned to
+    /// rebuild scoreboards — so a library whose rows all had a champion and
+    /// a result selected nothing, and the button did nothing at all. A row
+    /// with a champion can still be missing its scoreboard, its role, or
+    /// its patch.
+    ///
+    /// The cost of casting wide is one pass over rows that turn out to be
+    /// unfillable — a custom game never gets a queue id or a patch from
+    /// match history, so it is selected every time and matched every time.
+    /// That is a request the pass already makes and a comparison against a
+    /// list already in hand, and it is much cheaper than the alternative
+    /// failure, which is a button that silently does nothing.
     pub fn recordings_missing_metadata(&self) -> Result<Vec<crate::backfill::Candidate>, DbError> {
         let conn = self.pool.read();
         // `needs_gold` is computed here rather than inferred from the other
@@ -2805,9 +2843,133 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
+        // The live poller ran, so there is an alignment to draw a curve
+        // through, and the curve is what is still owed.
+        db.insert_samples(1, &[live_sample(30.0)]).unwrap();
         assert_eq!(db.recordings_awaiting_summary(0).unwrap().len(), 1, "no curve yet");
 
         db.replace_gold_samples(1, &[gold_sample(60.0, 100.0)]).unwrap();
+        assert!(db.recordings_awaiting_summary(0).unwrap().is_empty());
+    }
+
+    /// A 1 Hz sample from the live poller, which carries no gold.
+    fn live_sample(game_time_s: f64) -> NewSample {
+        NewSample {
+            game_time_s,
+            video_time_s: game_time_s + 5.0,
+            our_team: Some("ORDER".into()),
+            kill_diff: Some(0),
+            ..Default::default()
+        }
+    }
+
+    /// #201. A Practice Tool game gets its summary and never a role or a
+    /// gold curve, because it has no lane and no enemy team: the poller
+    /// wrote its samples, the timeline had nothing to subtract, and no
+    /// gold sample ever lands. Asking "is anything missing" kept it in the
+    /// sweep for two days, re-fetched at every client connection.
+    #[test]
+    fn the_resume_sweep_does_not_wait_for_what_a_practice_tool_game_never_has() {
+        let db = Db::open_temporary().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/practice.mp4".into(),
+            started_at: 10_000,
+            game_id: Some(7),
+            queue: Some(3140),
+            game_mode: Some("PRACTICETOOL".into()),
+            win: Some(false),
+            role: None,
+            patch: Some("16.18.123.4567".into()),
+            finished_at: Some(1),
+            ..Default::default()
+        })
+        .unwrap();
+        db.insert_samples(1, &[live_sample(30.0), live_sample(31.0)]).unwrap();
+
+        assert!(db.recordings_awaiting_summary(0).unwrap().is_empty());
+    }
+
+    /// `patch` is the column only match history writes, so a row without
+    /// one is a row the summary never reached — whatever the live path and
+    /// the gameflow session already put on it.
+    #[test]
+    fn the_resume_sweep_waits_for_match_history_to_answer() {
+        let db = Db::open_temporary().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/interrupted.mp4".into(),
+            started_at: 10_000,
+            game_id: Some(7),
+            queue: Some(420),
+            win: Some(true),
+            role: Some("Jungle".into()),
+            patch: None,
+            finished_at: Some(1),
+            ..Default::default()
+        })
+        .unwrap();
+        db.replace_gold_samples(1, &[gold_sample(60.0, 100.0)]).unwrap();
+
+        assert_eq!(db.recordings_awaiting_summary(0).unwrap(), vec![(1, 7)]);
+    }
+
+    /// The case the curve branch is for: `patch` swallows a timeline that
+    /// is not ready yet and writes the summary anyway, so the row has its
+    /// `patch` and no curve. A Practice Tool exemption must not reach it.
+    #[test]
+    fn the_resume_sweep_still_waits_for_a_curve_the_timeline_owed() {
+        let db = Db::open_temporary().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/ranked.mp4".into(),
+            started_at: 10_000,
+            game_id: Some(7),
+            queue: Some(420),
+            game_mode: Some("CLASSIC".into()),
+            win: Some(true),
+            role: Some("Jungle".into()),
+            patch: Some("16.18.123.4567".into()),
+            finished_at: Some(1),
+            ..Default::default()
+        })
+        .unwrap();
+        db.insert_samples(1, &[live_sample(30.0)]).unwrap();
+
+        assert_eq!(db.recordings_awaiting_summary(0).unwrap(), vec![(1, 7)]);
+    }
+
+    /// The curve is placed through the live samples' alignment, so a
+    /// recording whose poller never came up can never gain one. Its summary
+    /// has landed; asking again would only repeat the request.
+    #[test]
+    fn the_resume_sweep_does_not_wait_for_a_curve_that_cannot_be_drawn() {
+        let db = Db::open_temporary().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/no-poller.mp4".into(),
+            started_at: 10_000,
+            game_id: Some(7),
+            patch: Some("16.18".into()),
+            finished_at: Some(1),
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert!(db.recordings_awaiting_summary(0).unwrap().is_empty());
+    }
+
+    /// #192's guard, on the path it was missing from: a recording in flight
+    /// is the one game match history cannot know about yet.
+    #[test]
+    fn the_resume_sweep_skips_a_recording_still_in_flight() {
+        let db = Db::open_temporary().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/live.mp4".into(),
+            started_at: 10_000,
+            game_id: Some(7),
+            finished_at: None,
+            ..Default::default()
+        })
+        .unwrap();
+        db.insert_samples(1, &[live_sample(30.0)]).unwrap();
+
         assert!(db.recordings_awaiting_summary(0).unwrap().is_empty());
     }
 

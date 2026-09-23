@@ -663,10 +663,26 @@ row shows no sign of the gap, because champion, KDA and outcome all come from
 the live path at finalize. The failure therefore looks arbitrary, when what it
 turns on is "did the app stay open for a minute after the game ended" (#137).
 
-So the state is **derived rather than stored**: a recording with a `game_id`
-that is missing `role`, `patch`, `queue`, `win` or a gold curve *is* an
-unfinished patch. No column, no migration, nothing to keep in sync with
-reality, because the row already says everything needed.
+So the state is **derived rather than stored**: a *finished* recording with a
+`game_id` that is missing its `patch`, or that has live samples but no gold
+curve in a mode that can have one, *is* an unfinished patch. No column, no migration, nothing to keep in
+sync with reality, because the row already says everything needed.
+
+Those two signals are chosen because the patch can clear both (#201).
+`patch` is the one column only match history writes, so its absence means
+the summary never landed; once it has, `role`, `queue` and `win` hold
+whatever that answer said. Asking for them directly kept every Practice
+Tool, ARAM and Arena row in the sweep, because none of those ever has a
+`role`, and each was re-fetched and re-written at every client connection for
+two days. The curve is only owed when there are live samples to align it
+through, which is the condition `write_gold_series` itself needs, and when
+the game has an enemy team to subtract: a Practice Tool timeline has none,
+so `gold_series` returns nothing and the row is excluded by its `game_mode`.
+What the curve signal is for is a timeline that lagged the summary: `patch`
+logs that failure and writes the metadata anyway, leaving a row with its
+`patch` and no curve. An open row
+(`finished_at IS NULL`) is never a candidate: that is the game being played,
+and match history cannot know about it yet.
 
 `match_summary::resume_pending` runs that query when a client becomes
 reachable, which is `start_gameflow_watch` rather than startup: the app can
