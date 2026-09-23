@@ -139,11 +139,14 @@ function Test-AnyMatch {
     return $false
 }
 
+# A plain loop, not `@($Entries) | Measure-Object`: wrapping a generic List
+# passed in as a parameter in `@()` throws "Argument types do not match"
+# under PowerShell 7, which is what stopped this script's first real run.
 function Get-Bytes {
     param($Entries)
-    $list = @($Entries)
-    if ($list.Count) { return [long](($list | Measure-Object -Property Bytes -Sum).Sum) }
-    return [long]0
+    $sum = [long]0
+    foreach ($entry in $Entries) { $sum += [long]$entry.Bytes }
+    return $sum
 }
 
 $files = @(Get-ChildItem -LiteralPath $root -Recurse -File)
@@ -153,9 +156,6 @@ $expected = New-Object System.Collections.Generic.List[object]
 $unknown = New-Object System.Collections.Generic.List[object]
 
 foreach ($file in $files) {
-    # `-replace` rather than `.TrimStart('\', '/')`: PowerShell 7.5 runs on
-    # .NET 9, whose params ReadOnlySpan<char> overload makes that call fail
-    # to bind with "Argument types do not match".
     $relative = ($file.FullName.Substring($root.Length) -replace '^[\\/]+', '').Replace('\', '/')
     $entry = [pscustomobject]@{
         Relative = $relative
@@ -171,7 +171,8 @@ foreach ($file in $files) {
 
 # Everything not kept is what a trim would remove; whether it is allowed to
 # is the split between expected and unrecognised.
-$doomed = @($expected) + @($unknown)
+# `.ToArray()` first, for the reason Get-Bytes gives.
+$doomed = @($expected.ToArray()) + @($unknown.ToArray())
 
 $total = if ($files.Count) { [long](($files | Measure-Object -Property Length -Sum).Sum) } else { [long]0 }
 $keptBytes = Get-Bytes $kept
