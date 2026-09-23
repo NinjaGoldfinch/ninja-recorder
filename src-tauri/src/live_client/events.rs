@@ -1026,16 +1026,105 @@ fn names_match(a: &str, b: &str) -> bool {
     !a.is_empty() && !b.is_empty() && base(a) == base(b)
 }
 
+/// How far before the moment capture began an event can be and still be
+/// treated as this recording's. See `MarkerTracker::disown_earlier_events`.
+///
+/// Two seconds because both ways of getting the edge wrong are cheap at
+/// that size, and only one of them is cheap at any size. Too small, and
+/// jitter in the estimate of when capture began (the poll's own latency,
+/// the gap between `Recorder::start` returning and `record_started_at`
+/// being read) could disown an event that is really on the video: that
+/// marker is gone for good, because Live Client Data does not outlive the
+/// game. Too large, and an event from just before the start is kept: it
+/// clamps to 0:00, which is within this many seconds of where it happened.
+/// The second failure is the one to lean towards.
+const INHERITED_EVENT_TOLERANCE_S: f64 = 2.0;
+
 /// De-duplicates markers across repeated polls of the same game — each
 /// poll returns the *entire* event list so far, not just what's new.
+///
+/// A tracker belongs to one recording, which is also what makes that list
+/// a hazard at the start of one: the first poll hands over every event of
+/// the game so far, and a recording that began mid-game (a daemon restarted
+/// part-way through, #199; a reconnect) was not there for most of them.
+/// `disown_earlier_events` is what keeps those off it.
 #[derive(Debug, Default)]
 pub struct MarkerTracker {
     seen_event_ids: HashSet<i64>,
+    /// Whether `disown_earlier_events` has had its one call. Separate from
+    /// `seen_event_ids` being empty, which it still is after a first poll
+    /// whose event list was empty.
+    disowned: bool,
 }
 
 impl MarkerTracker {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Marks every event in the recording's **first** snapshot that happened
+    /// before capture began as already seen, so `ingest` never turns it into
+    /// a marker. Returns how many it disowned; every later call is a no-op
+    /// and returns 0.
+    ///
+    /// `capture_began_at_game_time_s` is the game clock at the instant video
+    /// time 0 was captured, estimated from the first poll as its `gameTime`
+    /// less the capture time already elapsed when it landed.
+    ///
+    /// **Why.** The Live Client Data API serves the whole game's event list,
+    /// not the events since the last poll, and dedupe is against this
+    /// tracker's own memory. A recording that starts mid-game therefore used
+    /// to take every earlier event as its own on its first poll, and since
+    /// `TimeAlignment::video_time_s` clamps anything before the start to 0,
+    /// they all piled up at 0:00 (#199). The recording that was running when
+    /// they happened already has them, at the right positions.
+    ///
+    /// **Why game time, and not a negative video time.** The obvious filter
+    /// is "drop anything that resolves to before the video started", and it
+    /// is wrong on both paths a marker is written by. On the first poll of a
+    /// mid-game recording no alignment has been proven yet, so a marker is
+    /// written live against the 1:1 fallback, where game second 106 is video
+    /// second 106 and nothing looks early (see `AlignmentTracker` and
+    /// `the_finalize_corrects_a_sample_written_before_the_clock_moved`). And
+    /// when the alignment itself is wrong, as it may be in a Practice Tool
+    /// whose clock pauses or skips (#198), a video-time filter would drop the
+    /// recording's *own* events along with the inherited ones, silently. This
+    /// compares the event's game time with the game time at which capture
+    /// began, both read off the same clock, so no alignment is involved and
+    /// #198 cannot make it worse.
+    ///
+    /// **Why only the first snapshot.** Every event that could have been
+    /// inherited is already in that list, because the list is cumulative.
+    /// Anything that first appears later happened while this recording was
+    /// running, whatever its timestamp says, so it is never disowned: a game
+    /// clock that jumped backwards could not take one of the recording's own
+    /// events with it. The same property is what makes a Live Client outage
+    /// inside one recording harmless. The session and this tracker survive
+    /// it, the polls after it are not a first snapshot, and dedupe on
+    /// `EventID` carries on exactly as before.
+    ///
+    /// **The loading-screen case is unaffected.** A recording that starts
+    /// before game time 0 sees a frozen `gameTime` of 0 on its first poll,
+    /// with some capture already elapsed, so the estimate is at or below 0
+    /// and no event is ever earlier than it. Errors in the estimate lean the
+    /// same way: a clock frozen by a pause or a slow first poll makes it
+    /// *earlier* than the truth, which keeps more rather than less.
+    pub fn disown_earlier_events(
+        &mut self,
+        snapshot: &AllGameData,
+        capture_began_at_game_time_s: f64,
+    ) -> usize {
+        if std::mem::replace(&mut self.disowned, true) {
+            return 0;
+        }
+        let cutoff = capture_began_at_game_time_s - INHERITED_EVENT_TOLERANCE_S;
+        let mut disowned = 0;
+        for event in &snapshot.events.events {
+            if event.event_time < cutoff && self.seen_event_ids.insert(event.event_id) {
+                disowned += 1;
+            }
+        }
+        disowned
     }
 
     /// Returns only markers for events not already seen by this tracker.
@@ -1715,6 +1804,77 @@ mod tests {
         // Same snapshot polled again (as happens every tick) — nothing new.
         let second = tracker.ingest(&snapshot);
         assert!(second.is_empty());
+    }
+
+    /// #199. The first poll of a recording that began mid-game carries the
+    /// whole game's events, and only the ones after capture began are its.
+    #[test]
+    fn a_tracker_disowns_what_happened_before_capture_began() {
+        let mut tracker = MarkerTracker::new();
+        let snapshot = fixture();
+
+        // Capture began at game time 500: GameStart through the turret at
+        // 480 happened before it.
+        assert_eq!(tracker.disown_earlier_events(&snapshot, 500.0), 8);
+
+        let kinds: Vec<MarkerKind> = tracker.ingest(&snapshot).iter().map(|m| m.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![MarkerKind::Dragon, MarkerKind::Baron, MarkerKind::Ace],
+            "the dragon at 540 onwards, and none of what came before"
+        );
+    }
+
+    /// The edge is soft on purpose. An event a moment before the estimate of
+    /// when capture began may well be on the video, and keeping one that
+    /// is not costs a marker at 0:00, where losing one that is costs it for
+    /// good.
+    #[test]
+    fn an_event_just_before_capture_began_is_kept() {
+        let mut tracker = MarkerTracker::new();
+        // First blood and its kill are at 210.5, a second and a half early.
+        assert_eq!(tracker.disown_earlier_events(&fixture(), 212.0), 2);
+
+        let kinds: Vec<MarkerKind> = tracker.ingest(&fixture()).iter().map(|m| m.kind).collect();
+        assert!(kinds.contains(&MarkerKind::FirstBlood));
+        assert!(kinds.contains(&MarkerKind::Kill));
+    }
+
+    /// A recording that starts on the loading screen sees a frozen clock at
+    /// 0 with some capture already behind it, so the estimate is below 0 and
+    /// nothing is ever earlier than that.
+    #[test]
+    fn a_recording_from_the_loading_screen_disowns_nothing() {
+        let mut tracker = MarkerTracker::new();
+        // `gameTime` 0 on a poll that landed 4s into capture.
+        assert_eq!(tracker.disown_earlier_events(&fixture(), -4.0), 0);
+        assert_eq!(tracker.ingest(&fixture()).len(), 8, "every marker the fixture has");
+    }
+
+    /// Only the first call counts. Everything a recording could have
+    /// inherited is on its first poll's list, because the list is
+    /// cumulative, so a later call has nothing to add and a clock that went
+    /// backwards, or a Live Client that came back after an outage, cannot
+    /// take one of the recording's own events with it.
+    #[test]
+    fn only_the_first_snapshot_is_disowned_from() {
+        let mut tracker = MarkerTracker::new();
+        let mut first = fixture();
+        first.events.events.retain(|e| e.event_id <= 3);
+
+        assert_eq!(tracker.disown_earlier_events(&first, 600.0), 4);
+        assert!(tracker.ingest(&first).is_empty());
+
+        assert_eq!(
+            tracker.disown_earlier_events(&fixture(), 2000.0),
+            0,
+            "a second call is a no-op"
+        );
+        assert_eq!(
+            tracker.ingest(&fixture()).len(),
+            6,
+            "the death at 340 onwards, all first seen after the first poll"
+        );
     }
 
     #[test]

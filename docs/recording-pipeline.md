@@ -143,7 +143,7 @@ while a recording is in flight.
 | Game crashes mid-match | Live Client Data stops responding → `LiveClientDown` → finalize normally; footage up to the crash is kept |
 | Client crashes mid-match | lockfile disappears → finalize, then `Idle` |
 | Client crashes before the game loads | `WaitingForGame` → `Idle`, nothing recorded, nothing to finalize |
-| Reconnect to a game in progress | Identical to a fresh start; the machine has no memory of *how* it reached `WaitingForGame`, so recording begins when 2999 answers (later than a from-the-start recording) |
+| Reconnect to a game in progress | Identical to a fresh start; the machine has no memory of *how* it reached `WaitingForGame`, so recording begins when 2999 answers (later than a from-the-start recording), and carries only the events after that (see "A recording started mid-game") |
 | Practice Tool | Reports the same `InProgress`/`Reconnect` phases, so it is not special-cased |
 | Dodge / cancelled champ select | `WaitingForGame` bounces back to `ClientRunning` without ever recording |
 | Client restart during finalize | Handled regardless of ordering against `FinalizeComplete` |
@@ -167,7 +167,8 @@ flowchart TB
     SNAP["/liveclientdata/allgamedata"] --> ID["Match activePlayer against allPlayers"]
     SNAP --> EV["the events list"]
     ID --> CL
-    EV --> DEDUP["Drop events already seen<br/><small>matched on EventID; the endpoint<br/>returns the whole list every poll</small>"]
+    EV --> DIS["First poll only: disown events<br/>from before capture began<br/><small>game time, not video time (#199)</small>"]
+    DIS --> DEDUP["Drop events already seen<br/><small>matched on EventID; the endpoint<br/>returns the whole list every poll</small>"]
     DEDUP --> CL{"classify_event<br/><small>are we named in it?</small>"}
     CL -->|"no"| DROP["dropped<br/><small>never becomes a marker</small>"]
     CL -->|"killer / victim / assister"| K["kill · death · assist"]
@@ -463,6 +464,41 @@ out which rows changed.
 A reconnect's first poll reports a clock already at, say, 600, which is
 indistinguishable from a frozen one until it ticks. That costs one poll of
 accuracy (sub-second) instead of the minutes a wrong offset would cost.
+
+#### A recording started mid-game
+
+A reconnect, or a daemon killed mid-game and replaced by one that identifies
+the same game, starts a recording whose first poll carries **the whole game's
+event list**. `MarkerTracker` dedupes on `EventID` against its own memory, and
+a new recording's tracker has none, so every earlier event used to become one
+of its markers, and each one clamped to 0:00 at finalize (#199). The recording
+that was running when they happened already has them.
+
+So on the recording's first poll, and only that one,
+`MarkerTracker::disown_earlier_events` marks as seen every event from before
+capture began: earlier than `gameTime − elapsed` at that poll, less a 2 s
+tolerance. The comparison is between two readings of the game clock and never
+involves the alignment, for two reasons:
+
+- On that first poll no alignment is proven yet, so the live write resolves
+  1:1 and an inherited event does not *look* early. A filter on a negative
+  video time would only have caught it at finalize.
+- When the alignment is wrong, as it may be in a Practice Tool whose clock
+  pauses or skips (#198), a video-time filter would drop the recording's own
+  events too.
+
+Only the first poll's list is disowned from, because the list is cumulative:
+everything a recording could have inherited is already on it, and an event
+that first appears later happened while it was recording, whatever its
+timestamp says. A Live Client outage inside one recording keeps its session
+and tracker, so the polls after it change nothing. A recording that starts on
+the loading screen sees a frozen `gameTime` of 0 with capture already running,
+which puts the estimate below 0 and disowns nothing. Every error in the
+estimate (a pause, a slow first poll) makes it earlier than the truth, which
+keeps more rather than less.
+
+Samples need no equivalent. The endpoint has no history for the curve, so a
+sample is only ever the state at the poll that took it.
 
 ## 4. Finalize
 
