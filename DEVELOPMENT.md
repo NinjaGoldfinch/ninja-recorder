@@ -2350,6 +2350,28 @@ game on the **Game** preset and check the track for real samples. Doing that
 first makes `p0c-audio` confirm a known answer rather than discover one, which
 is the cheaper order and needs no new build.
 
+### What "root PID documented" is asking
+
+#7's exit criterion has a third clause, and it is the design document's first
+open question: process loopback captures a **process tree**, so which process
+is its root? Audio comes from `League of Legends.exe`, not from the
+`LeagueClient*.exe` processes the LCU integration tracks, and a wrong root
+produces silence rather than an error. The plan's answer is the game process,
+found by its window and `GetWindowThreadProcessId`.
+
+`p0c-audio` does not take that on trust. Before capturing it prints the root,
+whether the process name and the game window's owner agree on it, the root's
+ancestors and descendants, and where every Discord and League client process
+sits relative to it. That turns the clause into a recorded fact about this
+machine: whether the game runs under the client's tree, and whether Discord is
+outside the game's.
+
+It also captures a control. `PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE`
+records everything *except* the game's tree, so Discord should be in that file
+and the game should not. Without it, "Discord absent" from the include run
+cannot be told apart from "Discord was not playing". The procedure is
+[`spikes/p0c-audio/README.md`](spikes/p0c-audio/README.md).
+
 ### What the spikes are allowed to decide
 
 Naming this in advance is the point of the section, for the same reason Q1a was
@@ -2375,6 +2397,7 @@ deliverable; everything above is the frame it goes in.
 | Daemon-only RAM while recording | P0b | |
 | Process loopback isolates game audio from Discord | P0c-1 | |
 | Root PID the capture was attached to | P0c-1 | |
+| Control: Discord audible in the exclude-mode capture | P0c-1 | |
 | WGC frames reach a fragmented MP4 | P0c-2 | |
 | Worst drift over ten minutes, in frames | P0c-2 | |
 | A file killed at minute five is playable | P0c-2 | |

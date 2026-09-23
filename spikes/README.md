@@ -19,7 +19,7 @@ the directory rather than an accident of layout:
 
 | Crate | Question | Issue |
 |---|---|---|
-| `p0c-audio` | Can WASAPI process loopback isolate one application's audio? | #7 |
+| [`p0c-audio`](p0c-audio/README.md) | Can WASAPI process loopback isolate one application's audio, and which PID is the root? | #7 |
 | `p0c-video` | Does WGC reach a fragmented MP4, and does a killed file play? | #8 |
 
 ## What a spike is not
@@ -33,16 +33,24 @@ exercise exists to keep clean.
 
 ## Running one
 
-From the box, with the toolchain the repo pins:
+From the box. `rust-toolchain.toml` here pins the same compiler as
+`src-tauri/`, because rustup only looks in the working directory and its
+parents and `src-tauri/` is neither; bump the two together.
 
 ```powershell
 cd spikes\p0c-audio
 cargo run --release -- --help
 ```
 
-Checking one from anywhere:
+A spike with its own run guide says so in the table above; `p0c-audio`'s is
+the procedure for #7.
+
+Checking one from anywhere (no MSVC linker needed, because `check` does not
+link):
 
 ```bash
+rustup target add x86_64-pc-windows-msvc
 cd spikes/p0c-audio
 cargo check --target x86_64-pc-windows-msvc
+cargo clippy --target x86_64-pc-windows-msvc -- -D warnings
 ```

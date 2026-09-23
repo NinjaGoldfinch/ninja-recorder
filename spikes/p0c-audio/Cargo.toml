@@ -29,16 +29,27 @@ path = "src/main.rs"
 # travel in. `windows::core::implement` needs no feature: it is re-exported
 # from `windows-core`, which is not optional.
 windows = { version = "0.62", features = [
+    # `RtlGetVersion`, for the build number. `GetVersionEx` lies to a binary
+    # with no compatibility manifest, and whether process loopback exists at
+    # all is a build-number question.
+    "Wdk_System_SystemServices",
     "Win32_Foundation",
     # `CreateEventW` takes a SECURITY_ATTRIBUTES pointer, so windows-rs gates it
     # on this feature. Without it the function is "configured out" and the error
-    # points at the import rather than at the missing feature.
+    # points at the import rather than at the missing feature. It also carries
+    # the token query that says whether the run was elevated.
     "Win32_Security",
     "Win32_Media_Audio",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
+    # The process table the root-PID report is built from.
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_SystemInformation",
     "Win32_System_Variant",
     "Win32_System_Threading",
+    # The game window, found the way `recorder/libobs/window.rs` finds it, and
+    # its owner: the plan's way of choosing the root PID.
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 # `#[implement]` expands to `windows_core::` paths, so the macro needs the crate
