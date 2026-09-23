@@ -314,9 +314,9 @@ workstream should be rewritten to say what it means.
   in-progress or abandoned recording out of the library; `finish_recording`
   completes it **by id**, because the path a recording starts with is a
   prediction and the path it ends with is a fact. Markers, advantage-curve
-  samples, the match-summary columns and the game identity are written as the
-  polls produce them and rewritten at finalize, so a killed daemon keeps all
-  four.
+  samples, the match-summary columns, the scoreboard and the game identity are
+  written as the polls produce them and rewritten at finalize, so a killed
+  daemon keeps all five.
   If you add a writer, decide which of those it is: `insert_recording` upserts on `path` and is now only
   for `reconcile` and the no-id fallback. A new query that lists recordings has
   to decide whether it wants `finished_at IS NOT NULL`, and the answer is

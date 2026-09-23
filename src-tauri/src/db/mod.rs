@@ -483,10 +483,11 @@ pub struct MatchMetadata {
 /// mid-game leaves a card that says what it was playing instead of a blank
 /// one.
 ///
-/// It carries only the columns the live client itself answers for. The blobs
-/// the finalize assembles are not here, meaning the scoreboard, the audio
-/// layout and the diagnostics, because each of those is a product of the
-/// finalize rather than of a poll.
+/// It carries only the columns the live client itself answers for. The
+/// scoreboard is one of them: it is read off the polls exactly as the KDA is,
+/// and a recovered card without it has no items, spells or runes (#200). The
+/// audio layout and the diagnostics are not here, because each of those is a
+/// product of the finalize rather than of a poll.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LiveMatch {
     pub champion: Option<String>,
@@ -498,6 +499,10 @@ pub struct LiveMatch {
     pub kda_a: Option<i64>,
     pub game_mode: Option<String>,
     pub cs: Option<i64>,
+    /// The last-good live scoreboard, already serialized. A string rather
+    /// than the struct so the "did anything change" comparison is made on
+    /// the same bytes the column would receive.
+    pub scoreboard_json: Option<String>,
     /// From the gameflow session, not from Live Client Data, which never
     /// exposes either. Read once per game while it is still running.
     pub game_id: Option<i64>,
@@ -879,6 +884,13 @@ impl Db {
     /// caller never hands back an id it once read, so the assignment is safe
     /// for them too. They are what promotes a recovered recording onto the
     /// exact-id patch path instead of the backfill's clock match (#193).
+    ///
+    /// `scoreboard_json` is held to the rule too: the session keeps the last
+    /// poll that carried a player list rather than the last poll, so a
+    /// scoreboard once known is never handed back as `None` (#200). It is a
+    /// plain assignment and not `replace_scoreboard`, whose `cs` coalesces
+    /// toward the LCU's figure, because while the row is open the live client
+    /// is the only source there is.
     pub fn update_live_summary(&self, recording_id: i64, m: &LiveMatch) -> Result<(), DbError> {
         let conn = self.pool.write();
         conn.execute(
@@ -886,7 +898,8 @@ impl Db {
                 champion = ?2, role = ?3, win = ?4,
                 kda_k = ?5, kda_d = ?6, kda_a = ?7,
                 game_mode = ?8, cs = ?9,
-                game_id = ?10, queue = ?11
+                game_id = ?10, queue = ?11,
+                scoreboard_json = ?12
              WHERE id = ?1",
             params![
                 recording_id,
@@ -900,6 +913,7 @@ impl Db {
                 m.cs,
                 m.game_id,
                 m.queue,
+                m.scoreboard_json,
             ],
         )?;
         Ok(())
@@ -1971,6 +1985,31 @@ mod tests {
             Some(5147823901),
             "and the pass is told which game, rather than having to work it out"
         );
+    }
+
+    /// The scoreboard reaches the row through the same write, and survives
+    /// the recovery, which sets only what the file answers for. A recovered
+    /// card has items, spells and runes rather than a champion alone (#200).
+    #[test]
+    fn the_live_summary_carries_the_scoreboard_through_a_recovery() {
+        let db = Db::open_temporary().unwrap();
+        let id = db.begin_recording("C:/vods/recording-5f.mp4", 1_000).unwrap();
+        db.update_live_summary(
+            id,
+            &LiveMatch {
+                champion: Some("Ahri".into()),
+                cs: Some(42),
+                scoreboard_json: Some(r#"{"players":[]}"#.into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // The daemon is killed; the next one finishes the row from the file.
+        db.recover_recording(id, Some(42.0), 4_096, 5_000).unwrap();
+
+        let row = db.get_recording(id).unwrap().unwrap();
+        assert_eq!(row.scoreboard_json.as_deref(), Some(r#"{"players":[]}"#));
+        assert_eq!(row.cs, Some(42));
     }
 
     /// And it does not finish the row. A card with a champion on it is still

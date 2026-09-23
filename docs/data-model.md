@@ -415,8 +415,9 @@ stateDiagram-v2
     Recovered --> [*]: reconcile
     note right of Open
         Hidden from the library.
-        Markers, samples and the
-        match summary are written
+        Markers, samples, the
+        match summary and the
+        scoreboard are written
         here, as the polls
         produce them.
     end note
@@ -443,12 +444,22 @@ is a plain assignment rather than a merge: this is the live client writing the
 columns it owns while it still owns them, and it never hands back a field it
 once knew.
 
+The **scoreboard** was left out of that write and was the fourth (#200): a
+recovered card had a champion and a score but no items, spells or runes,
+because `scoreboard_json` was still written only at finalize. It now goes
+through `update_live_summary` with the rest, under the same rule: the session
+keeps the last poll that carried a player list, so the assignment cannot erase
+one. A recovered recording's scoreboard is therefore the one standing when its
+footage ends. The resume sweep's `replace_scoreboard` still supersedes it where
+the LCU has a document; the backfill's `fill_scoreboard` fills only a NULL and
+leaves it alone.
+
 **Five writers, each with its own rule about `finished_at`.** The heading used to say three, and the table has had more than that since `recover_unfinished` landed.
 
 | Writer | Method | `finished_at` |
 |---|---|---|
 | Supervisor, at start | `begin_recording` | NULL, and upserts on `path` so a leftover row is reclaimed |
-| Supervisor, per poll | `update_live_summary` | untouched: the row stays hidden while it fills in, summary columns and game identity alike |
+| Supervisor, per poll | `update_live_summary` | untouched: the row stays hidden while it fills in, summary columns, scoreboard and game identity alike |
 | Supervisor, at finalize | `finish_recording` | set, and matched **by id** |
 | `reconcile`, importing | `insert_recording` | set from the file's mtime |
 | `recover_unfinished` | `recover_recording` | set from the file's mtime |

@@ -522,9 +522,18 @@ nothing, because a KDA moves on a kill rather than on a tick, and the loading
 screen and the end-of-game screen produce repeats and nothing else.
 
 **What stays at the finalize is what the finalize is the source of**: the
-duration from the session clock, the file's size, the audio layout, the
-diagnostics and the scoreboard blob. `cs` is the one field that crosses that
-line, because it has a column of its own and is on the card.
+duration from the session clock, the file's size, the audio layout and the
+diagnostics. The scoreboard blob was on that list and should not have been
+(#200): it is read off the polls exactly as the KDA is, so a recovered card had
+a champion and a score and no items, spells or runes. It now rides the same
+write, held to the same rule, because the session keeps the last poll that
+carried a player list and never hands one back for `None`. That makes the write
+roughly poll-rate while the game runs, since someone's CS moves most seconds,
+which is what the curve already costs; the loading screen, a pause and the
+end-of-game screen still write nothing. A recovered recording's scoreboard is
+the one standing at the last poll before the kill, which is also where its
+footage ends. The resume sweep still replaces it with the LCU's where the game
+has a document; the backfill, being fill-only (§4.2), no longer does.
 
 **The game identity rides along with it**, and it is not from the polls at
 all: `game_id` and `queue` are read once from the gameflow session at

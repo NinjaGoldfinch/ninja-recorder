@@ -42,6 +42,7 @@ sequenceDiagram
         S->>S: MarkerTracker → new markers (kill, death, dragon …)
         S->>S: team_diff → one advantage sample
         S->>S: LiveSummary::absorb → champion, KDA, mode, outcome
+        S->>S: scoreboard (last good) → items, spells, runes
         S->>S: GameIdentity::absorb → game id, queue
         S->>D: write them as they arrive (so a crash keeps them)
     end
@@ -433,8 +434,8 @@ flowchart TB
 ```
 
 The **match summary** rides the same path for the same reason, and needs no
-mapping: champion, KDA, game mode and outcome are written to the open row as
-the polls establish them, and only when a poll establishes something new. See
+mapping: champion, KDA, game mode, outcome and the scoreboard are written to
+the open row as the polls establish them, and only when a poll establishes something new. See
 [data-model.md](data-model.md) for why that write is an assignment rather than
 a merge. The **game identity** rides with it, absorbed from the
 gameflow session rather than from the poll, which is why a killed daemon
@@ -723,8 +724,11 @@ a live client without playing a game.
 All ten champions, their KDA and CS, the items and spells they finished with,
 and our own rune page come from the Live Client Data poll, the same 1 Hz
 stream the markers and the advantage curve already ride. Nothing extra is
-requested, and the LCU is not involved: it is written at finalize from what
-the game itself was saying while it was running.
+requested, and the LCU is not involved: it is written to the open row with the
+match summary whenever a poll changes it, and again at finalize, from what the
+game itself was saying while it was running. A daemon killed mid-game leaves
+the scoreboard as it stood at the last poll, which is where the footage ends
+too (#200).
 
 **Last good, not last.** The poll carrying `GameEnd` is often the last one that
 succeeds; the ones after it, during the end-of-game screen or as the process
