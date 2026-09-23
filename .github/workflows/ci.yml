@@ -20,6 +20,14 @@ on:
         description: "Mint a version and publish a release"
         type: boolean
         default: false
+      # WS1.1, the P0a arm (#5). Trims the staged libobs to
+      # scripts/libobs-keep.txt in the **devtools** entry only, which is never
+      # published, so a release cannot ship a trimmed backend whatever this is
+      # set to. See the trim step in `build`.
+      libobs_trim:
+        description: "Trim libobs to the P0a keep-list (devtools installer only)"
+        type: boolean
+        default: false
 
 # Superseded pull-request runs are cancelled, which is most of the minute
 # saving. Pushes to main are deliberately NOT grouped together: each one
@@ -357,6 +365,11 @@ jobs:
             devtools: true
     needs: version
     runs-on: ${{ matrix.platform }}
+    # `1` only for the devtools entry of a manual run that asked for it. On a
+    # push `inputs` is empty, so this is empty too, and the production entry
+    # never sees it set at all.
+    env:
+      LIBOBS_TRIM: ${{ matrix.devtools && inputs.libobs_trim && '1' || '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -438,18 +451,19 @@ jobs:
       # the download step), so bump FFMPEG_EPOCH in the key to pull a
       # fresher build; GitHub also evicts caches untouched for 7 days,
       # which refreshes it on its own.
-      - name: Cache libobs backend + ffmpeg
+      #
+      # Restore and save are separate steps, and the save runs straight after
+      # staging, before the opt-in trim below. So the cache only ever holds
+      # the untrimmed directory: a trimmed run cannot poison it for the
+      # builds that ship, and a trimmed run restoring it still trims from
+      # the full set, which is what makes its "before" size true.
+      - name: Restore libobs backend + ffmpeg
         if: matrix.platform == 'windows-latest'
         id: libobs-cache
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
           path: src-tauri/target/libobs
-          # The trim flag is part of the key, and has to be. `actions/cache`
-          # saves at post-job, so a run with LIBOBS_TRIM on would otherwise
-          # write a *trimmed* directory under the untrimmed key, and every
-          # later build would restore it and ship a trimmed backend without
-          # anyone asking for one. Two keys keeps the two artefacts apart.
-          key: libobs-${{ runner.os }}-${{ steps.libobs-rev.outputs.rev }}-ffmpeg-epoch2-trim${{ vars.LIBOBS_TRIM || '0' }}
+          key: libobs-${{ runner.os }}-${{ steps.libobs-rev.outputs.rev }}-ffmpeg-epoch2
 
       # Builds the out-of-process libobs worker from our capture-backend
       # fork (github.com/NinjaGoldfinch/libobs-recorder — see
@@ -479,22 +493,6 @@ jobs:
           Copy-Item "$($dllDir.FullName)/*" src-tauri/target/libobs -Recurse -Force
           Copy-Item ../libobs-recorder-build/target/release/extprocess_recorder.exe src-tauri/target/libobs/extprocess_recorder.exe -Force
 
-      # WS1.1, the P0a arm (#5). Off by default and opt-in per run, because the
-      # keep-list has not been compared against a real staged directory yet and
-      # a wrongly removed plugin still builds, still packages, and then does not
-      # capture. Set the repository or workflow variable LIBOBS_TRIM to 1 to
-      # turn it on for a dispatch, take the size from the log, and play a game
-      # before believing it.
-      - name: Trim libobs to the keep-list (opt-in)
-        if: matrix.platform == 'windows-latest' && vars.LIBOBS_TRIM == '1'
-        shell: pwsh
-        run: ./scripts/trim-libobs.ps1 -Inventory
-
-      - name: Apply the libobs keep-list (opt-in)
-        if: matrix.platform == 'windows-latest' && vars.LIBOBS_TRIM == '1'
-        shell: pwsh
-        run: ./scripts/trim-libobs.ps1 -Apply
-
       # The **lgpl** build, not gpl. Every ffmpeg invocation this app makes is
       # `-c copy` — the faststart remux (`recorder/libobs/mod.rs`) and stem
       # extraction (`audio_tracks.rs`) are both stream copies, and libobs does
@@ -521,6 +519,33 @@ jobs:
           $bin = Get-ChildItem ffmpeg-extracted -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
           New-Item -ItemType Directory -Force -Path src-tauri/target/libobs | Out-Null
           Copy-Item $bin.FullName src-tauri/target/libobs/ffmpeg.exe -Force
+
+      - name: Save libobs backend + ffmpeg
+        if: matrix.platform == 'windows-latest' && steps.libobs-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: src-tauri/target/libobs
+          key: ${{ steps.libobs-cache.outputs.cache-primary-key }}
+
+      # WS1.1, the P0a arm (#5): trim the staged backend to
+      # scripts/libobs-keep.txt. Only in the devtools entry of a manual run
+      # with `libobs_trim` ticked (the job-level LIBOBS_TRIM above), because
+      # the trim has not been verified on hardware and a wrongly removed
+      # plugin still builds, still packages, and then does not capture.
+      #
+      # After the ffmpeg step, so the sizes it prints cover the whole resource
+      # folder the installer ships. The inventory pass comes first because its
+      # output is what to read if the apply refuses: a staged file on neither
+      # side of the keep-list stops the run rather than being deleted.
+      - name: Inventory libobs against the keep-list (opt-in)
+        if: env.LIBOBS_TRIM == '1'
+        shell: pwsh
+        run: ./scripts/trim-libobs.ps1 -Inventory
+
+      - name: Trim libobs to the keep-list (opt-in)
+        if: env.LIBOBS_TRIM == '1'
+        shell: pwsh
+        run: ./scripts/trim-libobs.ps1 -Apply
 
       # Native, on Windows's own runner — never cross-compiled. NSIS rather
       # than MSI, matching the documented installer choice
@@ -646,10 +671,12 @@ jobs:
           }
           Write-Host "the installer ships the app alone, and its shortcut starts $named.exe"
 
+      # A trimmed build says so in its name, so it cannot be mistaken for the
+      # devtools build of the same commit when the two sit side by side.
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ninja-recorder${{ matrix.devtools && '-devtools' || '' }}-${{ matrix.platform }}-${{ github.sha }}
+          name: ninja-recorder${{ matrix.devtools && '-devtools' || '' }}${{ env.LIBOBS_TRIM == '1' && '-libobs-trim' || '' }}-${{ matrix.platform }}-${{ github.sha }}
           path: src-tauri/target/release/bundle
           retention-days: 7
           if-no-files-found: error

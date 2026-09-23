@@ -2393,6 +2393,32 @@ answered in advance.
 | Stage 2 passes | Option B is viable and WS1.6 builds it. |
 | Stage 2 fails | Option B is not viable, WS1.7's trimmed libobs becomes the shipping backend rather than the fallback, and WS8 stops. This is the only result that ends the relicensing plan. |
 
+### P0a's keep-list, and where a trimmed backend may go
+
+**The keep-list is read off the directory CI stages, not written from what the
+recorder is believed to use.** The first draft was the second kind, and against
+the real `libobs_32.0.4` tree it would have removed `srt.dll` and `librist.dll`,
+which `avformat` imports and `obs.dll` imports `avformat`, so libobs itself
+would not have loaded; `libcurl.dll`, which `win-capture` imports; the D3D11
+and WinRT graphics modules; `obs-ffmpeg-mux.exe`, which is the output; and
+NVENC, which in that version is its own plugin. Every entry now carries the
+import or the call site that justifies it, and Appendix C's step 5 is answered
+the same way: `avdevice` and `avfilter` cannot go, because `obs-ffmpeg`
+imports the first and the first imports the second.
+
+**A file the list does not recognise stops the trim.** The staged directory is
+whatever the fork's highest `libobs_*` folder holds, so a fork bump changes it,
+and a keep-list that deletes whatever it does not name would delete a new
+dependency without anyone having looked at it. Expected removals are named
+too, and a file on neither side is refused rather than removed.
+
+**Until both P0a rows above are filled, a trimmed backend reaches the devtools
+installer and nothing else.** It is switched by a manual-run input that only
+the devtools matrix entry reads, and the devtools bundle is never published.
+The alternative, a repository variable, would have trimmed the next release
+the moment somebody set it to try the devtools build. Making the keep-list the
+staging step for everything is WS1.7's, after the box has said it records.
+
 ### The measurements
 
 Empty until the box produces them. Filling a cell here is WS1.5's actual

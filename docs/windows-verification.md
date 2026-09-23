@@ -1158,6 +1158,126 @@ console said anything. A component that throws takes its subtree with it and
 leaves a gap rather than an error, so **an empty area is a finding**, not a
 layout preference.
 
+## 8. The trimmed libobs backend (WS1.1, #5)
+
+The P0a arm: does the capture backend still record with everything off the
+keep-list removed, and how big is it then? The keep-list is
+[`scripts/libobs-keep.txt`](../scripts/libobs-keep.txt); how to build a trimmed
+installer is in
+[ci-and-releases.md](ci-and-releases.md#trimming-libobs-is-opt-in-and-only-ever-reaches-the-devtools-installer).
+The results go in
+[DEVELOPMENT.md §16](../DEVELOPMENT.md#16-the-capture-gate-and-what-it-is-allowed-to-decide)'s
+two P0a rows as well as here.
+
+**The failure this is looking for is quiet.** A plugin removed wrongly still
+builds, packages and installs. What it does then is fail to load, and the
+symptom is a recording that never starts ("no hardware H.264 encoder
+available" when an encoder probe went), a file with no video (win-capture), or
+no file at all (the muxer). None of it reaches CI.
+
+### 8.1 Build and install
+
+- [ ] Run CI by hand (Actions → CI → Run workflow) with **`libobs_trim`**
+      ticked, and take the `ninja-recorder-devtools-libobs-trim-windows-latest-<sha>`
+      artifact. Not the plain `-devtools-` one from the same run, which is
+      untrimmed.
+- [ ] From that run's **Trim libobs to the keep-list** step, copy the
+      `Before:`, `After:` and `Remove:` lines into the table below. They are
+      the staged directory before packaging, not the install.
+- [ ] **Quit the release build first** (tray → Quit) and leave it quit for the
+      whole section. Both builds share the identifier, so both write the same
+      `logs\libobs.log` and each daemon session rotates the other's away; and
+      two daemons would both try to record the game.
+- [ ] Before installing, copy `%APPDATA%\com.ninjarecorder.app\logs\libobs.log`
+      aside as `libobs.untrimmed.log`. It is the baseline the trimmed log is
+      compared against in 8.3, so it should come from a session that
+      recorded.
+- [ ] Install the trimmed devtools build. It installs beside the release one,
+      in `%LOCALAPPDATA%\ninja-recorder-dev`.
+- [ ] **It is the trimmed one.** `%LOCALAPPDATA%\ninja-recorder-dev\libobs\`
+      has no `obs-plugins\64bit\locales\`, no `libobs-opengl.dll` and no
+      `coreaudio-encoder.dll`, and does have `obs-ffmpeg-mux.exe`,
+      `libobs-winrt.dll` and the three `obs-*-test.exe` probes.
+
+### 8.2 Record and play
+
+- [ ] With the League client running, `extprocess_recorder.exe` appears and
+      the dev portal's health panel reads `libobs (ready)`, not
+      `libobs (unavailable: ...)`.
+- [ ] **A Practice Tool game records**, and `daemon-devtools.log` names a
+      hardware encoder rather than the "no hardware H.264 encoder" refusal.
+- [ ] **A full game records** start to finish. That is the exit criterion's
+      "real game", and Practice Tool is the cheap rehearsal for it.
+- [ ] It plays in the review player, seeks (the faststart remux ran against
+      the bundled `ffmpeg.exe`), and markers land where they should.
+- [ ] Every audio stem the preset promises is present and not silent, which
+      is `win-wasapi` loaded and working.
+
+### 8.3 The plugin-load log
+
+`libobs.log` is the worker's stderr (#69), at
+`%APPDATA%\com.ninjarecorder.app\logs\libobs.log`, one session kept as
+`libobs.1.log`.
+
+- [ ] **No failed module loads.**
+
+      ```powershell
+      Select-String -Path "$env:APPDATA\com.ninjarecorder.app\logs\libobs.log" `
+          -Pattern 'os_dlopen', 'Failed to', 'failed to load', 'not loaded', 'could not'
+      ```
+
+      Paste whatever it finds into #5, even if it looks harmless.
+- [ ] **Only coreaudio-encoder has gone.** Compare the module and encoder lines
+      against `libobs.untrimmed.log`: `win-capture`, `win-wasapi`,
+      `obs-ffmpeg`, `obs-nvenc`, `obs-qsv11` and `obs-x264` should load in
+      both, and an encoder the untrimmed log listed should not be missing from
+      the trimmed one.
+- [ ] `win-capture` loads cleanly even though nothing in this build injects.
+      Its hook payload is kept, and the question for a later trim is whether
+      it would still load without it; a warning here about graphics offsets
+      is the thing to note.
+
+### 8.4 Size
+
+- [ ] The installed build, with the daemon running:
+
+      ```powershell
+      .\scripts\measure.ps1 -ProcessName ninja-recorder-dev -ArgumentFilter '--daemon' `
+          -Label 'P0a: trimmed libobs, devtools install' `
+          -InstallPath "$env:LOCALAPPDATA\ninja-recorder-dev"
+      ```
+
+- [ ] The `libobs` folder alone, which is the figure that carries across to a
+      release build, since only the app binary differs between the two:
+
+      ```powershell
+      .\scripts\measure.ps1 -ProcessName ninja-recorder-dev -ArgumentFilter '--daemon' `
+          -Label 'P0a: trimmed libobs, libobs folder' `
+          -InstallPath "$env:LOCALAPPDATA\ninja-recorder-dev\libobs"
+      ```
+
+- [ ] The same two against an **untrimmed** devtools build of the same commit,
+      so the saving is a difference between two measurements rather than one
+      measurement and a remembered figure.
+
+The P0a pass mark is the plan's: under 200 MB with a clean recording. It is a
+release-install figure, so it is the release build's size less the difference
+between the two `libobs` folders, and that sum is worth writing out in full
+beside the result rather than as one number.
+
+| What | Result | Notes |
+|---|---|---|
+| CI trim step: `Before:` / `After:` / `Remove:` (staged directory) | | |
+| 8.1: the installed `libobs\` is the trimmed one | | |
+| 8.2: Practice Tool game recorded, encoder named | | |
+| 8.2: full game recorded, plays, seeks, stems present | | |
+| 8.3: `libobs.log` free of failed module loads | | |
+| 8.3: module list matches the untrimmed log less coreaudio-encoder | | |
+| 8.4: trimmed devtools install (`measure.ps1` row) | | |
+| 8.4: trimmed `libobs\` folder (`measure.ps1` row) | | |
+| 8.4: untrimmed devtools install and `libobs\` folder, same commit | | |
+| Under 200 MB as a release install, and the sum that says so | | |
+
 ## Outcome
 
 - [ ] All boxes above checked

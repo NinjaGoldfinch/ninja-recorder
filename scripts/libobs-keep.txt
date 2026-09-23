@@ -1,39 +1,71 @@
 # Which staged libobs files survive a trim (WS1.1, P0a, #5).
 #
 # One glob per line, relative to the staged directory, matched case
-# insensitively with backslashes normalised to forward slashes. Anything not
-# matched is a removal candidate.
+# insensitively with backslashes normalised to forward slashes. `**` means any
+# depth. A plain line KEEPS what it matches. A line starting with `!` names an
+# EXPECTED REMOVAL. A file matching neither is unrecognised, and `-Apply`
+# refuses to run while one exists: a file nobody has looked at is not deleted
+# on the strength of not being on a list. Keep wins if a file matches both.
 #
-# THIS LIST IS PROVISIONAL AND MUST NOT BE APPLIED UNVERIFIED.
+# Where this came from. Plan Appendix C gives the candidates and the floor. The
+# list below is that floor checked against the directory CI actually stages:
+# the fork's `build-helper/libobs_32.0.4/` at the revision Cargo.lock pins
+# (7c651640; the staging step takes the highest-sorting `libobs_*`), with every
+# kept binary's import table read (`objdump -p`, which is `dumpbin /dependents`
+# for a machine without Visual Studio). Three things Appendix C expects are
+# not in that directory: obs-browser and its CEF runtime (only its locale
+# `.pak` files are), obs-outputs (the fork records through `ffmpeg_muxer`,
+# which lives in obs-ffmpeg), and a separate AMF plugin (AMF is `h264_texture_amf`
+# in obs-ffmpeg, plus `obs-amf-test.exe`).
 #
-# It was written from what the recorder demonstrably uses, not from an
-# inventory of a real staged directory, because no such directory exists off
-# Windows. Run `trim-libobs.ps1 -Inventory` on the box first: it prints what is
-# actually there with sizes, which is what turns this from a guess into a
-# keep-list. A plugin removed wrongly does not fail the build; it fails a
-# recording, quietly, which is why the script is a dry run unless told
-# otherwise and why the exit criterion is a clean plugin-load log plus a
-# recording that plays.
+# A fork bump that changes the libobs version changes this directory. The
+# unrecognised-file refusal is what makes that a failed trim rather than a
+# silently missing dependency; `trim-libobs.ps1 -Inventory` prints what to
+# look at.
 #
-# Every line says why. An entry with no reason is an entry nobody can audit
-# later, and this file exists to be audited: it is the difference between a
-# 248 MB install and a smaller one, and also the difference between capture
-# working and not.
+# Still not verified on hardware. A plugin removed wrongly does not fail the
+# build; it fails a recording, quietly. The exit criterion is a recording that
+# plays and a clean plugin-load log in `libobs.log`
+# (docs/windows-verification.md section 8).
 
 # --- The worker and the library it drives ----------------------------------
 
 # The out-of-process recorder itself. Without this there is no backend at all.
 extprocess_recorder.exe
 
-# libobs proper, and the threading shim it links against.
+# libobs proper, and the threading shim it and four plugins import.
 obs.dll
 w32-pthreads.dll
 
-# --- Plugins the presets actually name --------------------------------------
+# The graphics module. The fork asks for `libobs-d3d11.dll` on Windows by name
+# (`GRAPHICS_MODULE` in intprocess-recorder/src/recorder/mod.rs); without it
+# obs_reset_video fails and nothing starts.
+libobs-d3d11.dll
 
-# Windows.Graphics.Capture. This is the video source, and the whole reason the
-# fork exists: upstream's game_capture injects and DEVELOPMENT.md 1.1 forbids
-# it.
+# Windows.Graphics.Capture. win-capture loads this at runtime rather than
+# importing it, so no import table shows the dependency, and `window_capture`
+# forced to WGC is the only video source the recorder creates.
+libobs-winrt.dll
+
+# The separate muxer process `ffmpeg_muxer` spawns. It is the output the fork
+# creates, so without this there is capture and no file.
+obs-ffmpeg-mux.exe
+
+# The encoder probes. Each hardware encoder plugin runs its helper to decide
+# whether to register at all, so a missing helper looks exactly like a missing
+# GPU, and the recorder then refuses to record (DEVELOPMENT.md 2.4).
+obs-nvenc-test.exe
+obs-qsv-test.exe
+obs-amf-test.exe
+
+# --- Plugins --------------------------------------------------------------
+
+# window_capture, the video source. Its data directory also carries the game
+# capture hook payload (graphics-hook*, inject-helper*, get-graphics-offsets*),
+# which the recorder never uses because it never injects (DEVELOPMENT.md 1.1).
+# Kept anyway, about 1 MB: game_capture is registered by the same module and
+# looks for them, and whether win-capture loads cleanly without them is a
+# question for the box, not a deletion to make blind.
 obs-plugins/64bit/win-capture.dll
 data/obs-plugins/win-capture/**
 
@@ -43,29 +75,40 @@ data/obs-plugins/win-capture/**
 obs-plugins/64bit/win-wasapi.dll
 data/obs-plugins/win-wasapi/**
 
-# The muxer and the hardware encoders. obs-ffmpeg carries the fragmented MP4
-# output and the NVENC/AMF/QSV paths, so this is the file the encoder detection
-# in section 16 is about.
+# ffmpeg_muxer (the output), ffmpeg_aac (the audio encoder) and
+# h264_texture_amf.
 obs-plugins/64bit/obs-ffmpeg.dll
 data/obs-plugins/obs-ffmpeg/**
 
-# The software encoder, which is the fallback on a machine with no usable
-# hardware encoder. 68 says that machine is one of the two configurations
-# available for testing, so this is not speculative.
+# jim_nvenc and ffmpeg_nvenc. In the 32.0.4 build NVENC is its own plugin; the
+# fork's 31.0.1 build still had it inside obs-ffmpeg, which is the entry a
+# keep-list written from memory of older OBS gets wrong.
+obs-plugins/64bit/obs-nvenc.dll
+
+# obs_qsv11_v2, Intel Quick Sync.
+obs-plugins/64bit/obs-qsv11.dll
+data/obs-plugins/obs-qsv11/**
+
+# The software encoder. The recorder never selects it (is_acceptable_encoder
+# excludes OBS_X264, DEVELOPMENT.md 2.4), and Appendix C step 4 drops it. That
+# step also asks for available_encoders() to be confirmed still enumerating the
+# hardware encoders without it, which has not been done, and the saving is
+# 36 KB: libx264-164.dll stays regardless, because avcodec imports it.
 obs-plugins/64bit/obs-x264.dll
+data/obs-plugins/obs-x264/**
 
 # --- Runtime data libobs loads by path --------------------------------------
 
-# Locale and effect files. libobs reads these at startup and a missing one is
-# a startup failure rather than a degraded feature.
+# Effect files. libobs compiles these at startup; a missing one is a startup
+# failure rather than a degraded feature.
 data/libobs/**
 
-# --- The DLLs the above link against ----------------------------------------
+# --- The DLLs the above import ----------------------------------------------
 #
-# Kept as a group on purpose. Working out which ffmpeg DLL each plugin actually
-# needs is exactly the kind of trimming that looks fine and fails on somebody
-# else's machine, and the inventory run is what should decide whether it is
-# worth the bytes.
+# Every one of these is in a kept binary's import table, so none is optional.
+# Appendix C step 5 asked whether avfilter and avdevice could go: they cannot,
+# because obs-ffmpeg imports avdevice and avdevice imports avfilter. postproc
+# is not staged at all.
 avcodec-*.dll
 avdevice-*.dll
 avfilter-*.dll
@@ -76,8 +119,62 @@ swscale-*.dll
 zlib.dll
 libx264-*.dll
 
+# avformat imports both, and obs.dll imports avformat, so removing either one
+# stops obs.dll itself from loading. obs-ffmpeg imports them directly too.
+librist.dll
+srt.dll
+
+# win-capture imports it, so without it the video source does not load.
+libcurl.dll
+
 # ffmpeg.exe, staged into this same folder so LibObsRecorder::stop can remux to
 # a seekable faststart MP4 after capture. Optional at runtime, and the app
 # degrades to unseekable-but-playable without it, so removing it is a product
 # decision rather than a trim.
 ffmpeg.exe
+
+# --- Expected removals ------------------------------------------------------
+
+# The OpenGL graphics module. The fork asks for it only off Windows.
+!libobs-opengl.dll
+
+# An AAC encoder backed by Apple's CoreAudio, if iTunes is installed. The fork
+# encodes audio with ffmpeg_aac.
+!obs-plugins/64bit/coreaudio-encoder.dll
+!data/obs-plugins/coreaudio-encoder/**
+
+# Appendix C step 1: obs-browser and its Chromium payload. Only the CEF locale
+# packs are staged, orphaned from the plugin they belong to, and they are the
+# largest single cut. The other patterns match nothing today and are here so
+# a libobs version that does stage the browser is trimmed rather than refused.
+!obs-plugins/64bit/locales/*.pak
+!obs-plugins/64bit/obs-browser*
+!obs-plugins/64bit/*cef*
+!obs-plugins/64bit/chrome_*
+!data/obs-plugins/obs-browser/**
+
+# Appendix C step 3: sources, filters and outputs the recorder never creates.
+# None is staged today. obs-filters is deliberately NOT here: Appendix C flags
+# that the fork's multi-track patch may attach a gain filter, so if a future
+# libobs stages it, it arrives unrecognised and the trim stops until somebody
+# has checked.
+!obs-plugins/64bit/obs-vst.dll
+!data/obs-plugins/obs-vst/**
+!obs-plugins/64bit/obs-websocket.dll
+!data/obs-plugins/obs-websocket/**
+!obs-plugins/64bit/decklink*.dll
+!data/obs-plugins/decklink*/**
+!obs-plugins/64bit/aja*.dll
+!data/obs-plugins/aja*/**
+!obs-plugins/64bit/vlc-video.dll
+!data/obs-plugins/vlc-video/**
+!obs-plugins/64bit/rtmp-services.dll
+!data/obs-plugins/rtmp-services/**
+!obs-plugins/64bit/image-source.dll
+!data/obs-plugins/image-source/**
+!obs-plugins/64bit/text-freetype2.dll
+!data/obs-plugins/text-freetype2/**
+!obs-plugins/64bit/obs-text.dll
+!data/obs-plugins/obs-text/**
+!obs-plugins/64bit/obs-transitions.dll
+!data/obs-plugins/obs-transitions/**
