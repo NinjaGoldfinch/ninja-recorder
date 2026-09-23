@@ -320,7 +320,16 @@ impl RecordingSession {
     /// Folds one Live Client Data poll into the session: updates the match
     /// summary the finalize writes, updates the game-time-to-video-time
     /// alignment, collects any markers new since the last poll, and appends
-    /// an advantage-curve sample.
+    /// an advantage-curve sample. On the first poll it also sets aside every
+    /// event from before capture began, so a recording started mid-game does
+    /// not take the whole game's history as its own (#199).
+    ///
+    /// Samples need no such thing. A sample is the state *at* the poll that
+    /// produced it, not an entry in a history the endpoint replays, so the
+    /// first poll of a mid-game recording yields one sample, for the moment
+    /// capture began, and nothing earlier. Its live position is the 1:1
+    /// fallback and the finalize corrects it, as it does for any sample taken
+    /// before the clock was seen to move.
     ///
     /// `elapsed_s` is how long capture had been running when this poll
     /// landed, passed in rather than read from `record_started_at` so tests
@@ -361,6 +370,31 @@ impl RecordingSession {
         // `tracker.ingest`, so those events would never be deduped and would
         // reappear as duplicates on the next poll.
         let alignment = self.align.observe(game_time_s, elapsed_s);
+
+        // A recording carries the events that happened while it was running,
+        // and nothing from before it (#199). Only the first poll's list can
+        // hold anything older, so only the first call does anything; see
+        // `disown_earlier_events` for why this is measured in game time rather
+        // than filtered on a resolved video time.
+        //
+        // `game_time_s - elapsed_s` is the game clock at video time 0, taken
+        // as if the clock ran the whole time capture did. On the loading
+        // screen it did not, which puts the estimate below 0 and disowns
+        // nothing: the normal recording is untouched.
+        let disowned = self
+            .tracker
+            .disown_earlier_events(snapshot, game_time_s - elapsed_s);
+        if disowned > 0 {
+            // Info, not debug: once per recording at most, and it is the
+            // line that explains a recording with fewer markers than the
+            // game had.
+            info!(
+                "state_machine",
+                "recording began mid-game (game time {game_time_s:.1}, {elapsed_s:.1}s \
+                 captured); {disowned} earlier event(s) belong to whatever was recording \
+                 then, not to this recording"
+            );
+        }
 
         let fresh = self.tracker.ingest(snapshot);
         // One line per poll, at debug: 1 Hz would bury the log at any
@@ -2486,6 +2520,130 @@ mod tests {
         assert_eq!(settled[0].video_time_s, 0.0);
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- A recording started mid-game inherits nothing (#199) -------------
+
+    /// The shared fixture's events up to minute ten. Six of them are ours:
+    /// first blood and the kill it came with (210.5), a death (340), an
+    /// assist (355.2), a turret (480) and a dragon (540). Six markers, if any
+    /// of them were let through.
+    const EARLIER: [i64; 8] = [0, 1, 2, 3, 4, 5, 7, 8];
+
+    /// Moves the session's capture clock so that `elapsed_s` reads `secs` on
+    /// the next poll. `on_snapshot` reads the real clock, and a supervisor
+    /// test cannot wait fifteen minutes for a game to happen.
+    fn pretend_capture_has_run_for(sup: &Supervisor, secs: f64) {
+        let mut guard = sup.session.lock().unwrap();
+        let session = guard.as_mut().expect("a recording is in progress");
+        session.record_started_at = Instant::now() - Duration::from_secs_f64(secs);
+    }
+
+    /// **The bug, reproduced.** A daemon killed mid-game is replaced by one
+    /// that identifies the same game and starts a second recording, whose
+    /// first poll carries the whole game's event list. Every earlier event
+    /// used to become a marker on it, and at finalize every one of them
+    /// clamped to 0:00. The recording that was running at the time already
+    /// has them.
+    ///
+    /// Both paths, because they are resolved differently: the live write
+    /// happens before any alignment is proven and would have put these at
+    /// their 1:1 game times, and only the finalize clamped them to 0.
+    #[test]
+    fn a_recording_started_mid_game_does_not_inherit_the_games_earlier_events() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+        let id = sup.db.unfinished_recordings().unwrap()[0].id;
+
+        // Ten minutes in, and the list already holds six events of ours.
+        sup.on_snapshot(snapshot(600.0, &EARLIER));
+        assert!(
+            sup.db.get_markers(id).unwrap().is_empty(),
+            "nothing on the first poll's list happened during this recording"
+        );
+
+        // The clock ticks, which is what proves the alignment. Still nothing.
+        pretend_capture_has_run_for(&sup, 1.0);
+        sup.on_snapshot(snapshot(601.0, &EARLIER));
+        assert!(sup.db.get_markers(id).unwrap().is_empty());
+
+        // Fifteen minutes of capture later we take Baron, at game time 1500.
+        pretend_capture_has_run_for(&sup, 900.0);
+        let mut later = EARLIER.to_vec();
+        later.push(10);
+        sup.on_snapshot(snapshot(1500.5, &later));
+
+        let live = sup.db.get_markers(id).unwrap();
+        assert_eq!(live.len(), 1, "only the event this recording saw happen: {live:?}");
+        assert_eq!(live[0].kind, "baron");
+        // Game time 1500 is 0.5s before the poll that landed 900s into
+        // capture. Within a second because `elapsed_s` is a real clock.
+        assert!(
+            (live[0].video_time_s - 899.5).abs() < 1.0,
+            "at the moment it happened in this video: {}",
+            live[0].video_time_s
+        );
+
+        sup.stop_recording();
+
+        let settled = sup.db.get_markers(id).unwrap();
+        assert_eq!(
+            settled.len(),
+            1,
+            "the finalize rewrites from the session, and the session never had them"
+        );
+        assert_eq!(settled[0].kind, "baron");
+        assert!(
+            (settled[0].video_time_s - 899.5).abs() < 1.0,
+            "and the finalize puts it in the same place: {}",
+            settled[0].video_time_s
+        );
+        assert!(
+            settled.iter().all(|m| m.video_time_s > 0.0),
+            "nothing piled up at 0:00"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The other side of the line. Capture began a few seconds before this
+    /// poll, and an event from inside those seconds is on the video even
+    /// though it is already on the first poll's list.
+    #[test]
+    fn an_event_between_capture_starting_and_the_first_poll_is_kept() {
+        let mut session = empty_session();
+
+        // Capture has run 5s by the time the first poll lands at 212.0, so
+        // the video starts at game time ~207 and the kill at 210.5 is on it.
+        let added = session.ingest(&snapshot(212.0, &[2, 3]), 5.0);
+        assert_eq!(added.len(), 2, "first blood and the kill that earned it");
+
+        session.ingest(&snapshot(213.0, &[2, 3]), 6.0);
+        let markers = session.resolved_markers();
+        assert_eq!(markers.len(), 2);
+        // Offset proven at the second poll: 6 - 213 = -207.
+        assert_eq!(markers[0].video_time_s, 3.5);
+    }
+
+    /// Only the first poll's list is ever disowned from. An event that
+    /// first shows up later happened while this recording was running,
+    /// whatever its timestamp says, so a game clock that misbehaves (the
+    /// Practice Tool's can pause and skip, #198) cannot take one of the
+    /// recording's own events with it. The same is what makes an outage of
+    /// the Live Client inside one recording harmless: the polls after it
+    /// are not a first poll.
+    #[test]
+    fn an_event_first_seen_after_the_first_poll_is_always_kept() {
+        let mut session = empty_session();
+        session.ingest(&snapshot(600.0, &[0, 1, 2, 3]), 0.0);
+        assert!(session.markers.is_empty());
+
+        // The dragon's timestamp (540) is earlier than the game time capture
+        // began at, but it was not on the first list, so it is this
+        // recording's.
+        let added = session.ingest(&snapshot(601.0, &[0, 1, 2, 3, 8]), 1.0);
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0].marker.kind, live_client::MarkerKind::Dragon);
     }
 
     // --- A killed daemon keeps its card too -------------------------------

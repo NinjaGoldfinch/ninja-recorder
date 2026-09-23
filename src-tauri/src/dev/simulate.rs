@@ -119,7 +119,14 @@ pub fn dev_inject_snapshot(
     let parsed: AllGameData = serde_json::from_value(snapshot)
         .map_err(|e| format!("not a valid Live Client Data payload: {e}"))?;
 
+    // Read before the payload is consumed, for the note below.
+    let game_time_s = parsed.game_data.game_time;
+    let had_events = !parsed.events.events.is_empty();
+
     let before = ctx.supervisor.dev_session_view();
+    // A session's first poll always yields a sample, so none yet means this
+    // injection is that first poll.
+    let first_poll = before.as_ref().is_some_and(|b| b.sample_count == 0);
     ctx.supervisor.dev_on_snapshot(parsed);
     let after = ctx.supervisor.dev_session_view();
 
@@ -133,14 +140,31 @@ pub fn dev_inject_snapshot(
     };
 
     let status = ctx.supervisor.status();
+    // The next most likely surprise after injecting with nothing open: a
+    // mid-game fixture injected as a recording's first poll yields no
+    // markers, because a recording does not inherit the events from before
+    // it began (#199). That is the pipeline working, and it looks exactly
+    // like the pipeline failing unless it is said.
+    let first_poll_note = (first_poll && had_events && markers_added == 0 && game_time_s > 0.0)
+        .then(|| {
+            format!(
+                "This was the recording's first poll, at game time {game_time_s:.1}, so any \
+                 event from before capture began was set aside as an earlier recording's. \
+                 Inject a later payload with new events to see markers."
+            )
+        });
     Ok(InjectReport {
         accepted: after.is_some(),
-        note: after.is_none().then(|| {
-            "No recording session is open, so the snapshot was discarded. Dispatch \
-             LockfilePresent → GameflowPhase(InProgress) first — the supervisor only \
-             collects markers between Recorder::start and Recorder::stop."
-                .to_string()
-        }),
+        note: if after.is_none() {
+            Some(
+                "No recording session is open, so the snapshot was discarded. Dispatch \
+                 LockfilePresent → GameflowPhase(InProgress) first — the supervisor only \
+                 collects markers between Recorder::start and Recorder::stop."
+                    .to_string(),
+            )
+        } else {
+            first_poll_note
+        },
         markers_added,
         samples_added,
         session: after,
