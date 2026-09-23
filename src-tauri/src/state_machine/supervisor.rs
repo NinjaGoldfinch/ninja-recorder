@@ -455,6 +455,15 @@ impl RecordingSession {
     /// is the one field here that does: it is the only part of the scoreboard
     /// with a column of its own, because it is shown on the card and sorted
     /// by.
+    ///
+    /// The scoreboard itself rides along (#200): items, spells and runes are
+    /// on the card too, and a killed daemon lost them while keeping the rest.
+    /// It is serialized here so the "anything new?" comparison sees what the
+    /// column would. That makes this poll-rate while the game runs, because
+    /// ten players' CS moves most seconds, which is about as often as the
+    /// curve already writes a sample; the loading screen, a pause and the end-of-game screen
+    /// still cost nothing. Serialization failing costs the scoreboard and
+    /// nothing else, as it does at finalize.
     fn live_row(&self) -> db::LiveMatch {
         db::LiveMatch {
             champion: self.live.champion.clone(),
@@ -469,6 +478,10 @@ impl RecordingSession {
                 .as_ref()
                 .and_then(|s| s.players.iter().find(|p| p.is_us))
                 .map(|p| p.cs),
+            scoreboard_json: self
+                .scoreboard
+                .as_ref()
+                .and_then(|s| serde_json::to_string(s).ok()),
             game_id: self.game.game_id,
             queue: self.game.queue_id,
         }
@@ -2669,6 +2682,54 @@ mod tests {
         assert_eq!(open[0].kda_d, Some(1));
         assert_eq!(open[0].kda_a, Some(2));
         assert_eq!(open[0].win, None, "the game had not ended, so it is not a loss");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The fourth thing a crash took (#200). Champion and KDA survived the
+    /// kill, but items, spells and runes live in `scoreboard_json`, which
+    /// only the finalize wrote, so the recovered card was half a card.
+    #[test]
+    fn a_killed_daemon_leaves_its_scoreboard_behind() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+        sup.on_snapshot(fixture_snapshot("mid-game"));
+
+        // The daemon dies here. No finalize, ever.
+
+        let open = sup.db.unfinished_recordings().unwrap();
+        let json = open[0]
+            .scoreboard_json
+            .as_deref()
+            .expect("the scoreboard reached the row before the kill");
+        let board: live_client::Scoreboard = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            Some(&board),
+            live_client::scoreboard(&fixture_snapshot("mid-game")).as_ref(),
+            "the whole scoreboard the poll produced, not a summary of it"
+        );
+        let us = board.players.iter().find(|p| p.is_us).expect("we are on it");
+        assert!(!us.items.is_empty(), "items are what the recovered card was missing");
+        assert_eq!(open[0].cs, Some(us.cs), "the column and the blob agree");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A poll with no player list after a good one does not take the
+    /// scoreboard back. The session keeps the last good one, and the write is
+    /// an assignment, so this is the property that makes that safe.
+    #[test]
+    fn a_poll_without_players_does_not_erase_the_written_scoreboard() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+        sup.on_snapshot(fixture_snapshot("mid-game"));
+        let before = sup.db.unfinished_recordings().unwrap()[0].scoreboard_json.clone();
+        assert!(before.is_some());
+
+        sup.on_snapshot(fixture_snapshot("unmatched"));
+
+        let after = sup.db.unfinished_recordings().unwrap()[0].scoreboard_json.clone();
+        assert_eq!(after, before);
 
         std::fs::remove_dir_all(&dir).ok();
     }
