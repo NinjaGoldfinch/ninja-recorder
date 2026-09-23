@@ -20,7 +20,7 @@ the directory rather than an accident of layout:
 | Crate | Question | Issue |
 |---|---|---|
 | [`p0c-audio`](p0c-audio/README.md) | Can WASAPI process loopback isolate one application's audio, and which PID is the root? | #7 |
-| `p0c-video` | Does WGC reach a fragmented MP4, and does a killed file play? | #8 |
+| [`p0c-video`](p0c-video/README.md) | Does WGC reach a fragmented MP4 with audio in step, does a killed file play, and which encoder does Media Foundation load? | #8 |
 
 ## What a spike is not
 
@@ -43,7 +43,7 @@ cargo run --release -- --help
 ```
 
 A spike with its own run guide says so in the table above; `p0c-audio`'s is
-the procedure for #7.
+the procedure for #7 and `p0c-video`'s is the procedure for #8.
 
 Checking one from anywhere (no MSVC linker needed, because `check` does not
 link):

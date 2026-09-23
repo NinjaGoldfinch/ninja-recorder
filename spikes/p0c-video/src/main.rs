@@ -1,59 +1,261 @@
-//! **P0c stage 2 (WS1.4, #8): frames out of WGC and into a fragmented MP4.**
+//! **P0c stage 2 (WS1.4, #8): WGC frames into a fragmented MP4, and what a
+//! kill leaves behind.**
 //!
-//! Three claims, and the third is the one the process split rests on:
+//! The plan's exit criterion (§4.5) is three clauses, and this binary exists
+//! to turn each into a printed number rather than an impression:
 //!
-//! 1. Windows.Graphics.Capture produces frames for what League actually runs
-//!    in, without injecting anything. Injection is a hard constraint, not a
-//!    preference (DEVELOPMENT.md §1.1).
-//! 2. Those frames reach a Media Foundation `SinkWriter` and come out as
-//!    H.264 with the presentation clock intact. The run reports the worst gap
-//!    between where a frame's timestamp said it was and where the wall clock
-//!    said it should be, in frame intervals.
-//! 3. **A file killed mid-write is still playable.** That is what makes "the
-//!    daemon can die and the recording survives" a claim rather than a hope,
-//!    and it is why the sink is fragmented MP4 rather than ordinary MP4: the
-//!    `moov` atom goes first, so every fragment written before the kill stands
-//!    on its own.
+//! 1. **Drift under one frame over ten minutes.** Video is written on a 60 fps
+//!    grid kept by the performance counter, repeating the last WGC frame when
+//!    nothing new arrived; audio comes from a WASAPI endpoint whose own clock
+//!    counts the samples. The run measures how far the device clock walks
+//!    away from the video's, corrects it by slipping single samples, and then
+//!    measures the file to see what the encoder and muxer did to the result.
+//!    `clock.rs` holds the arithmetic and is tested on any host.
+//! 2. **A file killed at minute five is playable.** `--kill-after 300` runs
+//!    the capture as a child and terminates it with `TerminateProcess`, which
+//!    is what Task Manager's End task does: no destructor, no finalize, no
+//!    flush. Then it checks what is on disk (`verify.rs`): the MP4's boxes
+//!    read directly, a full decode with ffmpeg, and the app's own faststart
+//!    remux.
+//! 3. **Encoder detection.** `--list` enumerates the GPUs with their PCI vendor
+//!    IDs and every H.264 encoder Media Foundation offers, hardware and
+//!    software; the run reports the one the sink writer actually loaded and
+//!    whether its vendor matches the adapter. `--encoder hardware` refuses to
+//!    run on a machine with none, which is the plan's "refuse on none".
 //!
-//! ## Running it
+//! **No injection, anywhere.** Frames come from Windows.Graphics.Capture, the
+//! same public API the Snipping Tool uses; nothing is loaded into the game.
+//! That is a hard constraint, not a preference (DEVELOPMENT.md §1.1).
 //!
-//! ```text
-//! p0c-video --list
-//! p0c-video --monitor 0 --seconds 600 --out sample.mp4
-//! p0c-video --window "League of Legends (TM) Client" --seconds 600
-//! ```
+//! `README.md` next to this file is the run guide for #8. It has never been
+//! built on Windows or run; everything here is checked from Linux with
+//! `cargo check --target x86_64-pc-windows-msvc`, which does not link.
 //!
-//! The exit criterion asks for a ten-minute sample with the process killed at
-//! minute five. Do both: one clean run for drift, one killed run for the file.
-//! **Kill it from Task Manager, not with Ctrl+C** — a clean shutdown finalizes
-//! the sink, which is the case that was never in doubt.
+//! ## What it is deliberately not
 //!
-//! ## The vendor half of the exit criterion cannot be met
-//!
-//! #8 asks for encoder detection on two GPU vendors. #68 settled that only
-//! NVIDIA and software-only are available, so what this can establish is that
-//! an H.264 encoder is selected and initialises on this machine, and what
-//! happens when none is. The AMF and oneVPL orderings stay unverified, and
-//! `SetInputMediaType` is where a machine with no usable encoder says so: its
-//! error message says to record what was offered, because "no encoder" is a
-//! finding rather than a failed run.
+//! Not `recorder/own/`. The BGRA-to-NV12 conversion is left to the video
+//! processor the sink writer inserts rather than a shader of our own; the
+//! audio is one endpoint rather than the mic, loopback and system mix on one
+//! clock; the drift correction slips samples rather than resampling. Each is a
+//! thing WS1.6 has to build properly, and each is chosen here because it
+//! cannot make a pass look better than the real pipeline would.
+
+// The capture half is Windows-only, so off Windows these are exercised by
+// their tests and nothing else.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+mod clock;
+mod mp4;
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+mod pcm;
+mod probe;
+mod verify;
+
+#[cfg(target_os = "windows")]
+mod win;
+
+use std::path::PathBuf;
+
+pub const FPS: u32 = 60;
+
+#[derive(Clone, Debug)]
+pub enum Target {
+    /// The game window, found by class (`RiotWindowClass`) the way
+    /// `recorder/libobs/window.rs` finds it.
+    Game,
+    Window(String),
+    Monitor(usize),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Encoder {
+    /// Hardware H.264 only. Refuses to start without one, and fails the run
+    /// if the sink writer quietly loaded a software encoder instead.
+    Hardware,
+    /// Hardware transforms disabled: Microsoft's software H.264 encoder.
+    /// #68's second arm, and what every machine without a supported GPU gets.
+    Software,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudioSource {
+    /// The default render endpoint, in loopback: what the speakers play.
+    System,
+    /// The default capture endpoint: usually a USB headset, whose crystal is
+    /// the one most likely to disagree with the machine's.
+    Mic,
+    None,
+}
+
+#[derive(Clone, Debug)]
+pub struct Args {
+    pub list: bool,
+    pub verify: Option<PathBuf>,
+    pub target: Target,
+    pub seconds: u64,
+    pub out: PathBuf,
+    pub encoder: Encoder,
+    pub adapter: u32,
+    pub audio: AudioSource,
+    pub audio_clock: clock::AudioClock,
+    pub kill_after: Option<u64>,
+    pub ffmpeg: Option<PathBuf>,
+    pub no_verify: bool,
+    /// Internal: this process is the capture half of a `--kill-after` run,
+    /// and terminates itself at that point instead of spawning anything.
+    pub child: bool,
+}
+
+pub fn usage() -> String {
+    "p0c-video - WS1.4 (#8), the WGC + Media Foundation spike\n\
+     \n\
+     What to capture (default: the League game window, by class RiotWindowClass):\n\
+       --window <text>      a window whose title contains this\n\
+       --monitor <n>        a display, by its index in --list\n\
+     \n\
+     The run:\n\
+       --seconds <n>        how long (default 600, the exit criterion's ten minutes)\n\
+       --out <path>         the MP4 (default p0c-video.mp4; overwritten)\n\
+       --encoder <e>        hardware (default; refuses without one) or software\n\
+       --adapter <n>        the GPU to capture and encode on, from --list (default 0)\n\
+       --audio <a>          system (default: loopback of the default output), mic, none\n\
+       --audio-clock <c>    qpc (default: corrected onto the video clock) or device\n\
+                            (uncorrected sample count, to see the raw drift in the file)\n\
+       --kill-after <s>     run the capture as a child and TerminateProcess it at <s>\n\
+                            seconds, as Task Manager's End task would, then check the file\n\
+     \n\
+     Checking:\n\
+       --verify <file>      check an existing file and exit (works on any OS)\n\
+       --ffmpeg <path>      the ffmpeg to decode with (default: the installed app's\n\
+                            bundled copy, then PATH)\n\
+       --no-verify          skip the file check after a run\n\
+     \n\
+       --list               GPUs, H.264 encoders, monitors and windows; captures nothing\n\
+     \n\
+     spikes/p0c-video/README.md is the procedure for #8."
+        .to_string()
+}
+
+fn value<I: Iterator<Item = String>>(args: &mut I, flag: &str) -> Result<String, String> {
+    args.next()
+        .ok_or_else(|| format!("{flag} needs a value\n\n{}", usage()))
+}
+
+fn number<T: std::str::FromStr>(text: &str, flag: &str) -> Result<T, String> {
+    text.parse()
+        .map_err(|_| format!("{flag} wants a number, got {text:?}"))
+}
+
+pub fn parse_args<I: Iterator<Item = String>>(mut args: I) -> Result<Args, String> {
+    let mut parsed = Args {
+        list: false,
+        verify: None,
+        target: Target::Game,
+        seconds: 600,
+        out: PathBuf::from("p0c-video.mp4"),
+        encoder: Encoder::Hardware,
+        adapter: 0,
+        audio: AudioSource::System,
+        audio_clock: clock::AudioClock::Qpc,
+        kill_after: None,
+        ffmpeg: None,
+        no_verify: false,
+        child: false,
+    };
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--list" => parsed.list = true,
+            "--verify" => parsed.verify = Some(PathBuf::from(value(&mut args, &arg)?)),
+            "--window" => parsed.target = Target::Window(value(&mut args, &arg)?),
+            "--monitor" => parsed.target = Target::Monitor(number(&value(&mut args, &arg)?, &arg)?),
+            "--seconds" => parsed.seconds = number(&value(&mut args, &arg)?, &arg)?,
+            "--out" => parsed.out = PathBuf::from(value(&mut args, &arg)?),
+            "--encoder" => {
+                parsed.encoder = match value(&mut args, &arg)?.as_str() {
+                    "hardware" => Encoder::Hardware,
+                    "software" => Encoder::Software,
+                    other => {
+                        return Err(format!("--encoder is hardware or software, not {other:?}"));
+                    }
+                }
+            }
+            "--adapter" => parsed.adapter = number(&value(&mut args, &arg)?, &arg)?,
+            "--audio" => {
+                parsed.audio = match value(&mut args, &arg)?.as_str() {
+                    "system" => AudioSource::System,
+                    "mic" => AudioSource::Mic,
+                    "none" => AudioSource::None,
+                    other => return Err(format!("--audio is system, mic or none, not {other:?}")),
+                }
+            }
+            "--audio-clock" => {
+                parsed.audio_clock = match value(&mut args, &arg)?.as_str() {
+                    "qpc" => clock::AudioClock::Qpc,
+                    "device" => clock::AudioClock::Device,
+                    other => return Err(format!("--audio-clock is qpc or device, not {other:?}")),
+                }
+            }
+            "--kill-after" => parsed.kill_after = Some(number(&value(&mut args, &arg)?, &arg)?),
+            "--ffmpeg" => parsed.ffmpeg = Some(PathBuf::from(value(&mut args, &arg)?)),
+            "--no-verify" => parsed.no_verify = true,
+            "--child" => parsed.child = true,
+            "--help" | "-h" => return Err(usage()),
+            other => return Err(format!("unknown argument {other:?}\n\n{}", usage())),
+        }
+    }
+    if parsed.seconds == 0 {
+        return Err("--seconds must be at least 1".to_string());
+    }
+    if let Some(kill) = parsed.kill_after
+        && kill >= parsed.seconds
+    {
+        return Err(format!(
+            "--kill-after {kill} is not before --seconds {}: the run would finish cleanly first",
+            parsed.seconds
+        ));
+    }
+    Ok(parsed)
+}
+
+/// `--verify <file>`: the file check on its own, which is also what to run
+/// after killing a capture from Task Manager by hand.
+fn verify_only(args: &Args, file: &std::path::Path) -> Result<(), String> {
+    let findings = verify::check(
+        file,
+        args.ffmpeg.as_deref(),
+        args.audio != AudioSource::None,
+    )?;
+    print!("{}", verify::render(file, &findings, FPS));
+    Ok(())
+}
 
 #[cfg(not(target_os = "windows"))]
-fn main() {
-    eprintln!(
-        "p0c-video captures Windows.Graphics.Capture, which exists only on Windows.\n\
-         It is checked elsewhere (cargo check --target x86_64-pc-windows-msvc) and run on the box."
-    );
-    std::process::exit(2);
+fn main() -> std::process::ExitCode {
+    let result = parse_args(std::env::args().skip(1)).and_then(|args| match &args.verify {
+        Some(file) => verify_only(&args, file),
+        None => Err(
+            "p0c-video captures with Windows.Graphics.Capture, which exists only on \
+                     Windows.\nIt is checked elsewhere (cargo check --target \
+                     x86_64-pc-windows-msvc) and run on the box.\n--verify <file> works here."
+                .to_string(),
+        ),
+    });
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("p0c-video: {err}");
+            std::process::ExitCode::from(2)
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
 fn main() -> std::process::ExitCode {
-    match windows_impl::run() {
-        Ok(report) => {
-            println!("{report}");
-            std::process::ExitCode::SUCCESS
-        }
+    let result = parse_args(std::env::args().skip(1)).and_then(|args| match &args.verify {
+        Some(file) => verify_only(&args, file),
+        None => win::run(&args),
+    });
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("p0c-video: {err}");
             std::process::ExitCode::FAILURE
@@ -61,648 +263,36 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-#[cfg(target_os = "windows")]
-mod windows_impl {
-    use std::fmt::Write as _;
-    use std::path::PathBuf;
-    use std::sync::mpsc::{channel, Receiver, Sender};
-    use std::time::{Duration, Instant};
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    use windows::core::{Interface, Result as WinResult, HSTRING};
-    use windows::Foundation::TypedEventHandler;
-    use windows::Graphics::Capture::{
-        Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession,
-    };
-    use windows::Graphics::DirectX::DirectXPixelFormat;
-    use windows::Graphics::SizeInt32;
-    use windows::Win32::Foundation::{HMODULE, HWND, LPARAM, RECT, TRUE};
-    use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
-    use windows::Win32::Graphics::Direct3D11::{
-        D3D11CreateDevice, ID3D11Device, ID3D11Texture2D, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-        D3D11_SDK_VERSION,
-    };
-    use windows::Win32::Graphics::Dxgi::IDXGIDevice;
-    use windows::Win32::Graphics::Gdi::{
-        EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
-    };
-    use windows::Win32::Media::MediaFoundation::{
-        IMFAttributes, IMFDXGIDeviceManager, IMFMediaType, IMFSinkWriter, MFCreateAttributes,
-        MFCreateDXGIDeviceManager, MFCreateDXGISurfaceBuffer, MFCreateMediaType,
-        MFCreateSample, MFCreateSinkWriterFromURL, MFMediaType_Video, MFStartup,
-        MFVideoFormat_H264, MFVideoFormat_RGB32, MFShutdown, MFSTARTUP_FULL,
-        MFTranscodeContainerType_FMPEG4, MF_MPEG4SINK_MOOV_BEFORE_MDAT, MF_MT_AVG_BITRATE,
-        MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE,
-        MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
-        MF_SINK_WRITER_D3D_MANAGER, MF_TRANSCODE_CONTAINERTYPE, MFVideoInterlace_Progressive,
-    };
-    use windows::Win32::System::WinRT::Direct3D11::{
-        CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess,
-    };
-    use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
-    };
-
-    /// 100-nanosecond units, which is Media Foundation's clock everywhere.
-    const HNS_PER_SECOND: i64 = 10_000_000;
-
-    const FPS: u32 = 60;
-    /// 8 Mbps, which is what #12's quality comparison is specified against.
-    const BITRATE: u32 = 8_000_000;
-
-    pub struct Args {
-        pub target: Target,
-        pub seconds: u64,
-        pub out: PathBuf,
+    fn parse(line: &str) -> Result<Args, String> {
+        parse_args(line.split_whitespace().map(str::to_string))
     }
 
-    pub enum Target {
-        Monitor(usize),
-        Window(String),
-        List,
+    #[test]
+    fn the_defaults_are_the_gate_run() {
+        let a = parse("").unwrap();
+        assert!(matches!(a.target, Target::Game));
+        assert_eq!(a.seconds, 600);
+        assert_eq!(a.encoder, Encoder::Hardware);
+        assert_eq!(a.audio, AudioSource::System);
+        assert_eq!(a.audio_clock, clock::AudioClock::Qpc);
+        assert_eq!(a.kill_after, None);
     }
 
-    pub fn run() -> Result<String, String> {
-        let args = parse_args()?;
-        if let Target::List = args.target {
-            return list_targets();
-        }
-
-        // MF owns a thread pool and a clock; both have to be up before any
-        // `MFCreate*` call and torn down after the sink writer is dropped.
-        unsafe { MFStartup(mf_version(), MFSTARTUP_FULL) }
-            .map_err(|e| format!("MFStartup failed: {e}"))?;
-        let result = capture(&args);
-        let _ = unsafe { MFShutdown() };
-        result
+    #[test]
+    fn a_kill_must_come_before_the_end() {
+        assert!(parse("--kill-after 300").is_ok());
+        assert!(parse("--seconds 300 --kill-after 300").is_err());
     }
 
-    /// `MF_VERSION`, which windows-rs does not expose as a constant: it is
-    /// `(MF_SDK_VERSION << 16) | MF_API_VERSION`, and both halves are fixed.
-    pub fn mf_version() -> u32 {
-        const MF_SDK_VERSION: u32 = 0x0002;
-        const MF_API_VERSION: u32 = 0x0070;
-        (MF_SDK_VERSION << 16) | MF_API_VERSION
-    }
-
-    // --- Targets ---------------------------------------------------------
-
-    struct Monitor {
-        handle: HMONITOR,
-        bounds: RECT,
-    }
-
-    fn monitors() -> Vec<Monitor> {
-        // SAFETY: the callback only appends to the vector behind `lparam`,
-        // and `EnumDisplayMonitors` is synchronous, so the borrow cannot
-        // outlive this call.
-        unsafe extern "system" fn collect(
-            handle: HMONITOR,
-            _dc: HDC,
-            _clip: *mut RECT,
-            lparam: LPARAM,
-        ) -> windows::core::BOOL {
-            let found = unsafe { &mut *(lparam.0 as *mut Vec<Monitor>) };
-            let mut info = MONITORINFO {
-                cbSize: size_of::<MONITORINFO>() as u32,
-                ..Default::default()
-            };
-            if unsafe { GetMonitorInfoW(handle, &mut info) }.as_bool() {
-                found.push(Monitor {
-                    handle,
-                    bounds: info.rcMonitor,
-                });
-            }
-            TRUE
-        }
-
-        let mut found: Vec<Monitor> = Vec::new();
-        let _ = unsafe {
-            EnumDisplayMonitors(
-                None,
-                None,
-                Some(collect),
-                LPARAM(&raw mut found as isize),
-            )
-        };
-        found
-    }
-
-    struct Window {
-        handle: HWND,
-        title: String,
-        pid: u32,
-    }
-
-    fn windows_with_titles() -> Vec<Window> {
-        unsafe extern "system" fn collect(handle: HWND, lparam: LPARAM) -> windows::core::BOOL {
-            let found = unsafe { &mut *(lparam.0 as *mut Vec<Window>) };
-            if unsafe { IsWindowVisible(handle) }.as_bool() {
-                let mut buffer = [0u16; 512];
-                let len = unsafe { GetWindowTextW(handle, &mut buffer) };
-                if len > 0 {
-                    let mut pid = 0u32;
-                    unsafe { GetWindowThreadProcessId(handle, Some(&mut pid)) };
-                    found.push(Window {
-                        handle,
-                        title: String::from_utf16_lossy(&buffer[..len as usize]),
-                        pid,
-                    });
-                }
-            }
-            TRUE
-        }
-
-        let mut found: Vec<Window> = Vec::new();
-        let _ = unsafe { EnumWindows(Some(collect), LPARAM(&raw mut found as isize)) };
-        found
-    }
-
-    /// Everything capturable, so the run can name a target without guessing.
-    ///
-    /// The window list carries process ids because #7's audio spike wants one
-    /// and the two are usually run against the same game in the same sitting.
-    fn list_targets() -> Result<String, String> {
-        let mut out = String::new();
-        let _ = writeln!(out, "Monitors:");
-        for (i, monitor) in monitors().iter().enumerate() {
-            let width = monitor.bounds.right - monitor.bounds.left;
-            let height = monitor.bounds.bottom - monitor.bounds.top;
-            let _ = writeln!(out, "  --monitor {i}    {width}x{height}");
-        }
-        let _ = writeln!(out);
-        let _ = writeln!(out, "Windows:");
-        for window in windows_with_titles() {
-            let _ = writeln!(out, "  pid {:>6}  {}", window.pid, window.title);
-        }
-        let _ = writeln!(out);
-        let _ = writeln!(
-            out,
-            "League runs the client and the game as separate windows. Capture the one that is\n\
-             actually rendering the match, and note its pid for p0c-audio."
-        );
-        Ok(out)
-    }
-
-    fn capture_item(target: &Target) -> Result<GraphicsCaptureItem, String> {
-        // WGC's items are WinRT and the handles are Win32, so the bridge is
-        // an interop interface obtained from the WinRT activation factory.
-        let interop: IGraphicsCaptureItemInterop =
-            windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()
-                .map_err(|e| format!("no capture interop factory: {e} (needs Windows 10 1803+)"))?;
-
-        match target {
-            Target::Monitor(index) => {
-                let found = monitors();
-                let monitor = found
-                    .get(*index)
-                    .ok_or_else(|| format!("no monitor {index}; --list shows {}", found.len()))?;
-                unsafe { interop.CreateForMonitor(monitor.handle) }
-                    .map_err(|e| format!("CreateForMonitor failed: {e}"))
-            }
-            Target::Window(title) => {
-                let needle = title.to_lowercase();
-                let window = windows_with_titles()
-                    .into_iter()
-                    .find(|w| w.title.to_lowercase().contains(&needle))
-                    .ok_or_else(|| format!("no visible window matching {title:?}; try --list"))?;
-                unsafe { interop.CreateForWindow(window.handle) }
-                    .map_err(|e| format!("CreateForWindow failed: {e}"))
-            }
-            Target::List => Err("nothing to capture".to_string()),
-        }
-    }
-
-    // --- The pipeline ----------------------------------------------------
-
-    fn capture(args: &Args) -> Result<String, String> {
-        let item = capture_item(&args.target)?;
-        let size = item.Size().map_err(|e| format!("item has no size: {e}"))?;
-        // H.264 wants even dimensions and a window can be any size.
-        let width = (size.Width as u32) & !1;
-        let height = (size.Height as u32) & !1;
-        if width == 0 || height == 0 {
-            return Err("the capture target has no area".to_string());
-        }
-
-        let (device, d3d) = create_d3d_device()?;
-        let writer = create_sink_writer(&args.out, width, height, &device)?;
-        let stream = 0u32;
-
-        let pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
-            &d3d,
-            DirectXPixelFormat::B8G8R8A8UIntNormalized,
-            // Two buffers is the documented minimum that still lets the
-            // compositor hand over a frame while we hold one.
-            2,
-            SizeInt32 {
-                Width: width as i32,
-                Height: height as i32,
-            },
-        )
-        .map_err(|e| format!("could not create the frame pool: {e}"))?;
-
-        let (tx, rx): (Sender<()>, Receiver<()>) = channel();
-        let token = pool
-            .FrameArrived(&TypedEventHandler::new(
-                move |_pool: windows_core::Ref<Direct3D11CaptureFramePool>, _| -> WinResult<()> {
-                    // The handler does nothing but wake the writing thread.
-                    // Encoding on the compositor's callback is how a capture
-                    // ends up stuttering the thing it is capturing.
-                    let _ = tx.send(());
-                    Ok(())
-                },
-            ))
-            .map_err(|e| format!("could not subscribe to FrameArrived: {e}"))?;
-
-        let session = pool
-            .CreateCaptureSession(&item)
-            .map_err(|e| format!("could not create the capture session: {e}"))?;
-        // The yellow border is a system affordance and on some builds it can
-        // be turned off. Leave it on: a capture that hides itself is exactly
-        // what the no-injection constraint exists to avoid looking like.
-        let _ = session.SetIsBorderRequired(true);
-        hide_cursor_if_possible(&session);
-
-        unsafe { writer.BeginWriting() }.map_err(|e| format!("BeginWriting failed: {e}"))?;
-        session
-            .StartCapture()
-            .map_err(|e| format!("StartCapture failed: {e}"))?;
-
-        let stats = pump(&pool, &rx, &writer, stream, args.seconds)?;
-
-        // A clean finalize, which is the case that was never in doubt. The
-        // interesting run is the one killed from Task Manager before reaching
-        // this line.
-        session.Close().ok();
-        pool.RemoveFrameArrived(token).ok();
-        pool.Close().ok();
-        unsafe { writer.Finalize() }.map_err(|e| format!("Finalize failed: {e}"))?;
-
-        Ok(report(args, width, height, &stats))
-    }
-
-    struct Stats {
-        frames: u64,
-        dropped: u64,
-        elapsed: Duration,
-        /// Largest gap between a frame's presentation time and where the
-        /// wall clock said it should be, in frame intervals.
-        worst_drift_frames: f64,
-    }
-
-    fn pump(
-        pool: &Direct3D11CaptureFramePool,
-        rx: &Receiver<()>,
-        writer: &IMFSinkWriter,
-        stream: u32,
-        seconds: u64,
-    ) -> Result<Stats, String> {
-        let started = Instant::now();
-        let deadline = started + Duration::from_secs(seconds);
-        let frame_interval = HNS_PER_SECOND / i64::from(FPS);
-
-        let mut frames: u64 = 0;
-        let mut dropped: u64 = 0;
-        let mut worst_drift_frames = 0.0f64;
-
-        while Instant::now() < deadline {
-            // A timeout rather than a blocking wait: a capture that stops
-            // producing frames is a finding, and a spike that hangs reports
-            // nothing at all.
-            if rx.recv_timeout(Duration::from_secs(2)).is_err() {
-                return Err(format!(
-                    "no frame arrived for two seconds, after {frames}. The session was still\n\
-                     open, so this is the compositor having stopped rather than us having\n\
-                     stopped asking."
-                ));
-            }
-
-            // Drain: one wake can cover several frames, and leaving one in
-            // the pool makes the next arrive late and the drift meaningless.
-            while let Ok(frame) = pool.TryGetNextFrame() {
-                let surface = frame
-                    .Surface()
-                    .map_err(|e| format!("frame has no surface: {e}"))?;
-                let access: IDirect3DDxgiInterfaceAccess = surface
-                    .cast()
-                    .map_err(|e| format!("surface is not a DXGI interface: {e}"))?;
-                let texture: ID3D11Texture2D = unsafe { access.GetInterface() }
-                    .map_err(|e| format!("could not reach the texture: {e}"))?;
-
-                let system_relative = frame
-                    .SystemRelativeTime()
-                    .map(|t| t.Duration)
-                    .unwrap_or_default();
-
-                match write_frame(writer, stream, &texture, frames, frame_interval) {
-                    Ok(()) => {
-                        // Drift is measured against the frame's own clock
-                        // rather than against ours: the question is whether
-                        // the presentation times we write stay in step with
-                        // what the compositor said, not whether this loop is
-                        // punctual.
-                        if system_relative > 0 && frames > 0 {
-                            let expected = frames as i64 * frame_interval;
-                            let elapsed_hns = started.elapsed().as_nanos() as i64 / 100;
-                            let gap = (elapsed_hns - expected).abs() as f64;
-                            let in_frames = gap / frame_interval as f64;
-                            if in_frames > worst_drift_frames {
-                                worst_drift_frames = in_frames;
-                            }
-                        }
-                        frames += 1;
-                    }
-                    Err(_) => dropped += 1,
-                }
-                drop(frame);
-            }
-        }
-
-        Ok(Stats {
-            frames,
-            dropped,
-            elapsed: started.elapsed(),
-            worst_drift_frames,
-        })
-    }
-
-    /// Wraps one captured texture as an `IMFSample` and hands it to the sink.
-    ///
-    /// No copy and no CPU readback: the texture stays on the GPU and the
-    /// encoder reads it there, which is the whole reason for giving the sink
-    /// writer a D3D manager.
-    fn write_frame(
-        writer: &IMFSinkWriter,
-        stream: u32,
-        texture: &ID3D11Texture2D,
-        index: u64,
-        frame_interval: i64,
-    ) -> Result<(), String> {
-        unsafe {
-            let buffer = MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, texture, 0, false)
-                .map_err(|e| format!("MFCreateDXGISurfaceBuffer failed: {e}"))?;
-            let sample = MFCreateSample().map_err(|e| format!("MFCreateSample failed: {e}"))?;
-            sample
-                .AddBuffer(&buffer)
-                .map_err(|e| format!("AddBuffer failed: {e}"))?;
-            sample
-                .SetSampleTime(index as i64 * frame_interval)
-                .map_err(|e| format!("SetSampleTime failed: {e}"))?;
-            sample
-                .SetSampleDuration(frame_interval)
-                .map_err(|e| format!("SetSampleDuration failed: {e}"))?;
-            writer
-                .WriteSample(stream, &sample)
-                .map_err(|e| format!("WriteSample failed: {e}"))
-        }
-    }
-
-    fn create_d3d_device() -> Result<
-        (
-            ID3D11Device,
-            windows::Graphics::DirectX::Direct3D11::IDirect3DDevice,
-        ),
-        String,
-    > {
-        let mut device: Option<ID3D11Device> = None;
-        unsafe {
-            D3D11CreateDevice(
-                None,
-                D3D_DRIVER_TYPE_HARDWARE,
-                // The software rasterizer module, which is only consulted for
-                // `D3D_DRIVER_TYPE_SOFTWARE`. Null is the documented value for
-                // every other driver type, not an omission.
-                HMODULE::default(),
-                // BGRA support is required by WGC, and its absence is a
-                // confusing failure much later if it is not asked for here.
-                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                None,
-                D3D11_SDK_VERSION,
-                Some(&mut device),
-                None,
-                None,
-            )
-        }
-        .map_err(|e| format!("D3D11CreateDevice failed: {e}"))?;
-        let device = device.ok_or("D3D11CreateDevice returned no device")?;
-
-        let dxgi: IDXGIDevice = device
-            .cast()
-            .map_err(|e| format!("the D3D device is not a DXGI device: {e}"))?;
-        let inspectable = unsafe { CreateDirect3D11DeviceFromDXGIDevice(&dxgi) }
-            .map_err(|e| format!("CreateDirect3D11DeviceFromDXGIDevice failed: {e}"))?;
-        let winrt_device = inspectable
-            .cast()
-            .map_err(|e| format!("the WinRT device is not an IDirect3DDevice: {e}"))?;
-        Ok((device, winrt_device))
-    }
-
-    fn create_sink_writer(
-        out: &PathBuf,
-        width: u32,
-        height: u32,
-        device: &ID3D11Device,
-    ) -> Result<IMFSinkWriter, String> {
-        unsafe {
-            // The device manager is what lets the encoder read the captured
-            // texture where it already is.
-            let mut reset_token = 0u32;
-            let mut manager: Option<IMFDXGIDeviceManager> = None;
-            MFCreateDXGIDeviceManager(&mut reset_token, &mut manager)
-                .map_err(|e| format!("MFCreateDXGIDeviceManager failed: {e}"))?;
-            let manager = manager.ok_or("MFCreateDXGIDeviceManager returned nothing")?;
-            manager
-                .ResetDevice(device, reset_token)
-                .map_err(|e| format!("ResetDevice failed: {e}"))?;
-
-            let mut attributes: Option<IMFAttributes> = None;
-            MFCreateAttributes(&mut attributes, 4)
-                .map_err(|e| format!("MFCreateAttributes failed: {e}"))?;
-            let attributes = attributes.ok_or("MFCreateAttributes returned nothing")?;
-            attributes
-                .SetUnknown(&MF_SINK_WRITER_D3D_MANAGER, &manager)
-                .map_err(|e| format!("could not attach the D3D manager: {e}"))?;
-            attributes
-                .SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)
-                .map_err(|e| format!("could not enable hardware transforms: {e}"))?;
-
-            // **Fragmented MP4, and this is the line the third claim rests
-            // on.** An ordinary MP4 writes its index at the end, so a file
-            // killed mid-write has no `moov` and plays nowhere. Fragmented
-            // MP4 writes the header first and self-contained fragments after
-            // it, so whatever reached disk before the kill is a valid file.
-            attributes
-                .SetGUID(&MF_TRANSCODE_CONTAINERTYPE, &MFTranscodeContainerType_FMPEG4)
-                .map_err(|e| format!("could not select fragmented MP4: {e}"))?;
-            attributes
-                .SetUINT32(&MF_MPEG4SINK_MOOV_BEFORE_MDAT, 1)
-                .map_err(|e| format!("could not ask for moov first: {e}"))?;
-
-            let writer = MFCreateSinkWriterFromURL(&HSTRING::from(out.as_os_str()), None, &attributes)
-            .map_err(|e| format!("MFCreateSinkWriterFromURL failed: {e}"))?;
-
-            let target = media_type(&MFVideoFormat_H264, width, height, Some(BITRATE))?;
-            let stream = writer
-                .AddStream(&target)
-                .map_err(|e| format!("AddStream failed: {e}"))?;
-
-            let source = media_type(&MFVideoFormat_RGB32, width, height, None)?;
-            writer
-                .SetInputMediaType(stream, &source, None)
-                .map_err(|e| {
-                    format!(
-                        "SetInputMediaType failed: {e}\n\
-                         This is where a machine with no usable H.264 encoder says so, which is\n\
-                         itself a finding: record which encoders `--list` offered."
-                    )
-                })?;
-
-            Ok(writer)
-        }
-    }
-
-    fn media_type(
-        subtype: &windows_core::GUID,
-        width: u32,
-        height: u32,
-        bitrate: Option<u32>,
-    ) -> Result<IMFMediaType, String> {
-        unsafe {
-            let media_type =
-                MFCreateMediaType().map_err(|e| format!("MFCreateMediaType failed: {e}"))?;
-            media_type
-                .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
-                .map_err(|e| format!("could not set the major type: {e}"))?;
-            media_type
-                .SetGUID(&MF_MT_SUBTYPE, subtype)
-                .map_err(|e| format!("could not set the subtype: {e}"))?;
-            media_type
-                .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)
-                .map_err(|e| format!("could not set the interlace mode: {e}"))?;
-            // Both of these are packed pairs in one 64-bit attribute, high
-            // half first. Setting them the obvious way (two 32-bit values)
-            // fails at `AddStream` with an error that names neither.
-            media_type
-                .SetUINT64(&MF_MT_FRAME_SIZE, pack(width, height))
-                .map_err(|e| format!("could not set the frame size: {e}"))?;
-            media_type
-                .SetUINT64(&MF_MT_FRAME_RATE, pack(FPS, 1))
-                .map_err(|e| format!("could not set the frame rate: {e}"))?;
-            media_type
-                .SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pack(1, 1))
-                .map_err(|e| format!("could not set the pixel aspect ratio: {e}"))?;
-            if let Some(bitrate) = bitrate {
-                media_type
-                    .SetUINT32(&MF_MT_AVG_BITRATE, bitrate)
-                    .map_err(|e| format!("could not set the bitrate: {e}"))?;
-            }
-            Ok(media_type)
-        }
-    }
-
-    const fn pack(high: u32, low: u32) -> u64 {
-        ((high as u64) << 32) | low as u64
-    }
-
-    /// Not every build has this, and its absence is not a failure: the cursor
-    /// in the capture is cosmetic for a spike about frames and timestamps.
-    fn hide_cursor_if_possible(session: &GraphicsCaptureSession) {
-        let _ = session.SetIsCursorCaptureEnabled(false);
-    }
-
-    fn report(args: &Args, width: u32, height: u32, stats: &Stats) -> String {
-        let seconds = stats.elapsed.as_secs_f64();
-        let achieved = if seconds > 0.0 {
-            stats.frames as f64 / seconds
-        } else {
-            0.0
-        };
-
-        let mut out = String::new();
-        let _ = writeln!(out, "Captured {width}x{height} for {seconds:.1}s.");
-        let _ = writeln!(out, "  file            {}", args.out.display());
-        let _ = writeln!(out, "  frames written  {}", stats.frames);
-        let _ = writeln!(out, "  frames dropped  {}", stats.dropped);
-        let _ = writeln!(out, "  achieved fps    {achieved:.2} (asked for {FPS})");
-        let _ = writeln!(
-            out,
-            "  worst drift     {:.2} frame(s)",
-            stats.worst_drift_frames
-        );
-        let _ = writeln!(out);
-        let _ = writeln!(
-            out,
-            "The exit criterion is drift under one frame, and this run {}.",
-            if stats.worst_drift_frames < 1.0 {
-                "meets it"
-            } else {
-                "does not"
-            }
-        );
-        let _ = writeln!(
-            out,
-            "\nNow the half this run cannot tell you: kill the process from Task Manager at\n\
-             about minute five of a ten-minute run and open the file that is left. A clean\n\
-             finalize was never in doubt; a killed one is what the daemon's whole design\n\
-             assumes."
-        );
-        out
-    }
-
-    // --- Arguments -------------------------------------------------------
-
-    fn parse_args() -> Result<Args, String> {
-        let mut target = None;
-        let mut seconds = 600u64;
-        let mut out = PathBuf::from("p0c-video.mp4");
-
-        let mut args = std::env::args().skip(1);
-        while let Some(arg) = args.next() {
-            match arg.as_str() {
-                "--list" => target = Some(Target::List),
-                "--monitor" => {
-                    let value = args.next().ok_or("--monitor needs an index")?;
-                    let index = value
-                        .parse::<usize>()
-                        .map_err(|_| format!("--monitor wants a number, got {value:?}"))?;
-                    target = Some(Target::Monitor(index));
-                }
-                "--window" => {
-                    target = Some(Target::Window(
-                        args.next().ok_or("--window needs part of a title")?,
-                    ));
-                }
-                "--seconds" => {
-                    let value = args.next().ok_or("--seconds needs a number")?;
-                    seconds = value
-                        .parse::<u64>()
-                        .map_err(|_| format!("--seconds wants a number, got {value:?}"))?;
-                }
-                "--out" => out = PathBuf::from(args.next().ok_or("--out needs a path")?),
-                "--help" | "-h" => return Err(usage()),
-                other => return Err(format!("unknown argument {other:?}\n\n{}", usage())),
-            }
-        }
-
-        Ok(Args {
-            target: target.ok_or_else(|| format!("nothing to capture.\n\n{}", usage()))?,
-            seconds,
-            out,
-        })
-    }
-
-    fn usage() -> String {
-        "p0c-video — WS1.4 (#8), the WGC + Media Foundation spike\n\
-         \n\
-           --monitor <n>     capture a display, by its index in --list\n\
-           --window <text>   capture a window whose title contains this\n\
-           --seconds <n>     how long for (default 600)\n\
-           --out <path>      where the MP4 goes (default p0c-video.mp4)\n\
-           --list            monitors and windows, with process ids\n\
-         \n\
-         Two runs answer #8: one clean for drift, and one killed from Task Manager at\n\
-         about minute five, to see what the file is worth afterwards."
-            .to_string()
+    #[test]
+    fn bad_values_are_refused() {
+        assert!(parse("--encoder nvenc").is_err());
+        assert!(parse("--monitor one").is_err());
+        assert!(parse("--seconds 0").is_err());
+        assert!(parse("--wat").is_err());
     }
 }
