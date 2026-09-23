@@ -201,6 +201,8 @@ flowchart LR
 - **A chosen backend that cannot be built is refused, never replaced by the
   other one.** The UI shows it disabled with the daemon's reason, so in
   practice this is only reached by a row written some other way.
+- **The Settings row is devtools-only until WS1.6**, which un-hides it. The
+  setting and the commands are live in every build.
 
 The reasoning is
 [DEVELOPMENT.md §16, "The switch, and when it applies"](../DEVELOPMENT.md#the-switch-and-when-it-applies).

@@ -815,7 +815,16 @@ loads instead of from the `prefs.ts` cache, and applies whatever
 It is one of two rows in the settings form that can come back disabled, when
 the build has no autostart control or the read failed.
 
-**The capture backend is the other.** `capture_backend` is a `settings_kv`
+**The capture backend is the other, and it is devtools-only until WS1.6.**
+`Settings.svelte` renders the Advanced group, which holds only this row, when
+`hasDevCommands()` answers true: the same probe that reveals the dev portal
+button, so there is no second devtools flag. In a release build the group is
+absent. Today the row could only offer libobs with the own backend disabled,
+and WS1.6, which builds the own backend and makes it the default, deletes the
+gate ([DEVELOPMENT.md §16](../DEVELOPMENT.md#the-switch-and-when-it-applies)).
+`Settings.test.ts` checks both builds.
+
+`capture_backend` is a `settings_kv`
 key, but it is not read through `prefs.ts` and not written with
 `set_ui_pref`, because writing the row is not the change: the daemon has to
 check the backend can be built here, refuse while a game is in progress, and

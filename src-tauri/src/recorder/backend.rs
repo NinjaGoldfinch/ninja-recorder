@@ -36,7 +36,8 @@ use super::{FailedRecorder, Recorder};
 /// this `#[default]` is part of that task, not a separate decision — the plan
 /// has Option B as the default the moment it exists (§4.5). A user who picked
 /// libobs explicitly keeps it across that flip, because the flip only changes
-/// what a *missing* key means.
+/// what a *missing* key means. The same change un-hides the Settings row,
+/// which is devtools-only until then (`Settings.svelte`).
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, ts_rs::TS,
 )]

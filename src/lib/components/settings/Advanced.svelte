@@ -6,6 +6,9 @@
   the own backend exists as a choice before it exists as code, and a missing
   option would say nothing about why. The reasons and the live backend's name
   come from the daemon, and are interpolated, never rendered as markup.
+
+  Rendered only in a devtools build until WS1.6 (`Settings.svelte` holds the
+  gate); WS1.6 un-hides it along with flipping the default.
 -->
 
 <script lang="ts">

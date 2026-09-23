@@ -6,6 +6,7 @@
 -->
 
 <script lang="ts">
+import { hasDevCommands } from "../../../bridge";
 import { showView } from "../../../router";
 import { whenDaemonReachable } from "../../stores/daemon.svelte";
 import {
@@ -42,6 +43,23 @@ import Storage from "./Storage.svelte";
  * In the component rather than at startup because the component is the thing
  * that needs the answers, and mounting it is what makes the view exist.
  */
+/**
+ * **The Advanced group is devtools-only until WS1.6.** It holds one row, the
+ * capture backend, and today that row can only offer libobs with the own
+ * backend disabled beside it: a control that does nothing is not worth a
+ * release user's attention. WS1.6, which builds the own backend and makes it
+ * the default, deletes this gate. The setting, the daemon's handling of it
+ * and the two commands are all live in every build; only the row is hidden.
+ *
+ * Detected the way the dev portal button is, by asking whether the `dev_*`
+ * commands exist, so there is no second devtools flag to drift from the
+ * Cargo feature (`AppBar.svelte`).
+ */
+let showAdvanced = $state(false);
+void hasDevCommands().then((yes) => {
+  showAdvanced = yes;
+});
+
 $effect(() => {
   whenDaemonReachable(() => {
     void loadAutostart();
@@ -65,5 +83,7 @@ $effect(() => {
 <Notifications />
 <AudioSettings />
 <Storage />
-<Advanced />
+{#if showAdvanced}
+  <Advanced />
+{/if}
 <About />

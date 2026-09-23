@@ -2504,6 +2504,20 @@ so that it cannot happen by accident, and it belongs in WS1.6's own change:
 the same change that makes `own` constructible. It moves only the users who
 never chose. Someone who picked libobs explicitly has a stored row and keeps it.
 
+**The Settings row is devtools-only until WS1.6, and WS1.6 un-hides it.**
+Today the row can offer one backend, with the other disabled beside it, and a
+control that changes nothing is not worth a release user's attention. So the
+Advanced group, which holds only this row, renders only where the `dev_*`
+commands exist: the check the dev portal button already makes
+(`hasDevCommands`), rather than a second devtools flag. Everything behind the
+row is live in every build: the key, the daemon's choice at startup, the
+refusal, and both commands. WS1.6 removes the gate in the same change that
+flips the default, which is the change that gives the row something to switch
+to. Until then a release build has no way to show the "Nothing will be
+recorded" warning, which is acceptable because it has no way to save an
+unbuildable choice either: the only writer that bypasses the checks is
+`set_ui_pref`, and nothing in a release build calls it with this key.
+
 **A backend that cannot be built is refused, never substituted.** The choice
 is `recorder::backend::choose`, a pure function of the setting and what this
 build offers, and a chosen backend that cannot be built becomes a
@@ -2518,8 +2532,9 @@ beside the ones it cannot build, the settings row shows the unbuildable one
 disabled with that reason, and `set_capture_backend` refuses it again for any
 caller that got past the control. What remains is a row written some other
 way: a downgrade from a build that had the own backend, or a raw
-`set_ui_pref`. The daemon then records nothing, and the settings row says so
-in a warning rather than only through a disabled button.
+`set_ui_pref`. The daemon then records nothing, and the settings row (in a
+devtools build, until WS1.6) says so in a warning rather than only through a
+disabled button.
 
 **A change applies to the next recording, and never to the current one.**
 Two answers were available. "At the next daemon start" is simplest, but the

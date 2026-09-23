@@ -11,9 +11,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  */
 
 const call = vi.hoisted(() => vi.fn());
+// Whether this is a devtools build. Hoisted so a test can say which; a
+// release build unless it does.
+const hasDevCommands = vi.hoisted(() => vi.fn());
 vi.mock("../../../bridge", () => ({
   call,
-  hasDevCommands: vi.fn().mockResolvedValue(false),
+  hasDevCommands,
   assetUrl: (p: string) => p,
 }));
 // `whenDaemonReachable` runs its callback once the handshake lands. The view
@@ -71,6 +74,8 @@ function stubBackend(over: Record<string, unknown> = {}) {
 beforeEach(async () => {
   vi.resetModules();
   call.mockReset();
+  hasDevCommands.mockReset();
+  hasDevCommands.mockResolvedValue(false);
   stubBackend();
 
   svelte = await import("svelte");
@@ -187,6 +192,27 @@ describe("the audio panel", () => {
 });
 
 describe("the capture backend", () => {
+  // The row is devtools-only until WS1.6, so everything below except the
+  // release-build case runs as a devtools build.
+  beforeEach(() => {
+    hasDevCommands.mockResolvedValue(true);
+  });
+
+  it("is not shown at all in a release build", async () => {
+    hasDevCommands.mockResolvedValue(false);
+    const el = render();
+    await settle();
+    expect(el.querySelector('[aria-label="Capture backend"]')).toBeNull();
+    expect(el.textContent).not.toContain("Advanced");
+  });
+
+  it("is shown in a devtools build", async () => {
+    const el = render();
+    await settle();
+    expect(el.querySelector('[aria-label="Capture backend"]')).not.toBeNull();
+    expect(el.textContent).toContain("Advanced");
+  });
+
   const choice = (el: HTMLElement, label: string) =>
     [...el.querySelectorAll<HTMLButtonElement>('[aria-label="Capture backend"] button')].find(
       (b) => b.textContent?.trim() === label,

@@ -1299,13 +1299,18 @@ Settings → Advanced → **Capture backend** chooses what the daemon records
 with: `libobs`, or the own backend (Option B). Until WS1.6 the own backend is
 not in the build, so on today's installer this section checks the half that
 exists: the row, the refusals, and that a switch reaches the *next* recording
-and never the current one. Why it works this way is
+and never the current one.
+
+**Use the devtools build.** The row is devtools-only until WS1.6 un-hides it,
+and every step below also needs the dev portal. The release build is checked
+for one thing only, the first box. Why it works this way is
 [DEVELOPMENT.md §16, "The switch, and when it applies"](../DEVELOPMENT.md#the-switch-and-when-it-applies).
 
 The backend-comparison table WS1.7's exit criterion asks for, both backends
 recording the same game, needs WS1.6 and is not here yet.
 
-- [ ] **The row renders.** `libobs` is selected, **Own** is disabled, and the
+- [ ] **A release build shows no Advanced group** in Settings at all.
+- [ ] **The row renders** in the devtools build. `libobs` is selected, **Own** is disabled, and the
       row says "Own isn't available: the own capture backend is not in this
       build yet." "In use now" reads `libobs (idle)` with no client open.
 - [ ] **The daemon log names the setting.** `daemon.log`'s
@@ -1339,6 +1344,7 @@ recording the same game, needs WS1.6 and is not here yet.
 
 | What | Result | Notes |
 |---|---|---|
+| 9: a release build shows no Advanced group | | |
 | 9: switch the setting, and the next recording uses the chosen backend | | |
 | 9: refused mid-game; the recording in flight is unaffected | | |
 | 9: an unbuildable saved backend records nothing and says why | | |
