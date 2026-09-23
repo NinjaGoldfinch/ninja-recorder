@@ -803,7 +803,10 @@ needs a window.
 - [ ] **#202.** With the release and devtools builds both installed and both
       running, `logs/` holds `daemon.log` and `daemon-devtools.log` (and
       `ui.log` beside `ui-devtools.log`), and no line from one build appears in
-      the other's file. Each daemon session's first lines name its version,
+      the other's file. Start capture in both: `libobs.log` and
+      `libobs-devtools.log` both have content, and starting the second
+      worker leaves the first build's file where it was rather than moving
+      it to `.1.log`. Each daemon session's first lines name its version,
       build and pid: `ninja-recorder <version> (release build), pid <n>`.
 - [x] **The exit criterion for 3.4.** Start a game and let recording begin.
       Kill the UI process from Task Manager, then launch it again. Within one
@@ -992,7 +995,8 @@ modes here are silent, and the app's own UI will not show you most of them.
       worker's stderr is redirected into it before the process spawns
       (#69); confirm libobs's own startup lines, the encoder it chose and
       the adapter it picked are all in there, and that the dev portal's Log
-      panel can select and read the file.
+      panel can select and read the file. (A devtools build's worker writes
+      `libobs-devtools.log` instead; see the #202 row.)
 - [ ] Does gameflow report a distinct phase while spectating? If it reports
       `InProgress`, spectated games are currently recorded, which the design
       says they should not be.

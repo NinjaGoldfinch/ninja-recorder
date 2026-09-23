@@ -489,6 +489,26 @@ pub fn dir() -> Option<PathBuf> {
     Some(sink.dir.clone())
 }
 
+/// The libobs worker's log in this build: the active file and the one
+/// previous session kept beside it. Names only — the caller joins them to
+/// `dir`.
+///
+/// Not a `Process`, because nothing here writes it: the worker inherits a
+/// stderr pointed at it (`recorder::libobs::worker_log`), and that module
+/// rotates it by hand when the worker first starts. That rotation is the
+/// reason it carries the build as well (#202's rule, one file later): both
+/// builds' daemons share `logs/`, and a daemon starting its worker would
+/// otherwise push the other build's live libobs log to `.1` and delete the
+/// one before it.
+///
+/// Here rather than beside its caller because that module only compiles on
+/// Windows, and the names are pinned by a test that has to run everywhere.
+#[cfg(any(target_os = "windows", test))]
+pub fn libobs_file_names() -> [String; 2] {
+    let stem = if cfg!(feature = "devtools") { "libobs-devtools" } else { "libobs" };
+    [format!("{stem}.log"), format!("{stem}.1.log")]
+}
+
 /// The log file names this module may have written, newest first. Names
 /// only — the caller joins them to `dir`.
 #[cfg(feature = "devtools")]
@@ -898,6 +918,20 @@ mod tests {
             ["ui.log", "daemon.log"]
         };
         assert_eq!([Process::Ui.file_name(), Process::Daemon.file_name()], expected);
+    }
+
+    /// The same rule for the file the libobs worker writes, which this
+    /// module names but does not write. A release build keeps the names
+    /// every shipped version used, and neither build's pair overlaps the
+    /// other's, so starting one daemon's worker cannot rotate the other's.
+    #[test]
+    fn each_build_keeps_a_libobs_log_of_its_own() {
+        let expected = if cfg!(feature = "devtools") {
+            ["libobs-devtools.log", "libobs-devtools.1.log"]
+        } else {
+            ["libobs.log", "libobs.1.log"]
+        };
+        assert_eq!(libobs_file_names(), expected.map(String::from));
     }
 
     #[cfg(feature = "devtools")]

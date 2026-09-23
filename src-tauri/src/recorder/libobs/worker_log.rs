@@ -37,8 +37,9 @@ use std::sync::OnceLock;
 /// backend goes cold and warm again.
 static REDIRECTED: OnceLock<Option<PathBuf>> = OnceLock::new();
 
-/// Points this process's standard error at `logs/libobs.log`, so the
-/// worker spawned after it inherits the handle.
+/// Points this process's standard error at `logs/libobs.log` (or
+/// `libobs-devtools.log` in a devtools build, #202; `log::libobs_file_names`
+/// has the reason), so the worker spawned after it inherits the handle.
 ///
 /// Returns where it went, or `None` when nothing was done — which is the
 /// normal answer in a debug build, where there *is* a console and taking
@@ -61,13 +62,14 @@ fn install() -> Option<PathBuf> {
     }
 
     let dir = crate::log::dir()?;
-    let path = dir.join("libobs.log");
+    let [active, previous] = crate::log::libobs_file_names();
+    let path = dir.join(active);
 
     // One previous session kept, then overwritten. Appending forever would
     // grow unbounded — libobs is chatty at startup — and truncating
     // outright would lose the session that crashed, which is the one
     // anybody is looking for.
-    let previous = dir.join("libobs.1.log");
+    let previous = dir.join(previous);
     let _ = std::fs::remove_file(&previous);
     let _ = std::fs::rename(&path, &previous);
 
