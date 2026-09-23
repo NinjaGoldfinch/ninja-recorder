@@ -1902,7 +1902,9 @@ No change to the fork, no IPC change, and, being a file rather than a pipe, no
 way to block the worker by failing to drain it, which the piped version
 would risk. One previous session is kept as `libobs.1.log`: appending
 forever grows unbounded, and truncating outright loses the session that
-crashed, which is the one anybody is looking for.
+crashed, which is the one anybody is looking for. A devtools build writes
+`libobs-devtools.log` and `libobs-devtools.1.log` instead, for the reason in
+"One log file per process" below.
 
 Only in builds with no console (`debug_assertions` is exactly the condition
 `main.rs` gates `windows_subsystem` on), because taking stderr away from a
@@ -2611,6 +2613,14 @@ process's first lines also name its version, build and pid, because a file name
 separates builds but not a reinstall, an update or a restart of the same one.
 The build suffix is the whole change: the data directory, the database and the
 recordings folder stay shared on purpose.
+
+The libobs worker's file follows the same rule, one fix later. Nothing in
+`log.rs` writes it, but each daemon rotates it by hand when its capture worker
+first starts, so a release daemon starting capture pushed a running devtools
+daemon's live `libobs.log` to `libobs.1.log` and deleted the one before it, and
+the other way round. A devtools build now writes `libobs-devtools.log`; the
+names come from `log::libobs_file_names`, which sits outside the Windows-only
+recorder so the test pinning them runs everywhere.
 
 ### Startup and shutdown order
 

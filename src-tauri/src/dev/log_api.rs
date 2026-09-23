@@ -78,8 +78,9 @@ pub fn dev_log_files() -> Result<Vec<LogFileInfo>, String> {
 }
 
 /// Our own files first, in rotation order, then anything else the
-/// directory holds — on Windows that is `libobs.log`, which the capture
-/// worker writes and which nothing else would list (#69).
+/// directory holds — on Windows that is `libobs-devtools.log`, which the
+/// capture worker writes and which nothing else would list (#69), and a
+/// release build's files when one is installed beside this one.
 fn log_files_in(dir: &std::path::Path) -> Vec<LogFileInfo> {
     let ours = crate::log::file_names();
     let mut files: Vec<LogFileInfo> = ours
