@@ -373,6 +373,33 @@ export type AudioSourceKind = { "kind": "game" } | { "kind": "desktop" } | { "ki
 
 export type AudioTrackSpec = { label: string, sources: Array<number>, };
 
+export type CaptureBackend = "libobs" | "own";
+
+export type CaptureBackendOption = { backend: CaptureBackend, 
+/**
+ * Why it cannot be built here, or `null` when it can. A reason rather
+ * than a flag, because the settings row shows it beside the disabled
+ * choice and a bare "unavailable" gives nobody anything to act on.
+ */
+unavailable: string | null, };
+
+export type CaptureBackendStatus = { 
+/**
+ * The saved choice, or the default if none was ever saved.
+ */
+configured: CaptureBackend, 
+/**
+ * What the live backend says it is (`Recorder::backend_name`), e.g.
+ * `libobs (ready)` or `unavailable (…)`. The two differ when the
+ * configured backend was refused, and this is how the row finds out.
+ */
+active: string, 
+/**
+ * Every backend this build knows about, available or not, in the order
+ * the control lists them.
+ */
+options: Array<CaptureBackendOption>, };
+
 export type EnforcementReport = { deleted: Array<number>, freed_bytes: number, };
 
 export type GameState = "Idle" | "ClientRunning" | "WaitingForGame" | "Recording" | "Finalizing";

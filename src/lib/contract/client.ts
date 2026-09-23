@@ -8,7 +8,7 @@
 //   events    src-tauri/src/contract/events.rs (contract_events!)
 //   types     src-tauri/src/contract/types.rs  (the boundary list)
 
-import type { AudioInputDevice, AudioPreset, AutostartStatus, BackfillReport, DiskUsage, EnforcementReport, IconRequest, IconSet, LcuStatus, MarkerRow, QuitOutcome, ReconcileReport, RecordingRow, RetentionPolicy, SampleRow, SupervisorStatus, UpdateStatus } from "./types";
+import type { AudioInputDevice, AudioPreset, AutostartStatus, BackfillReport, CaptureBackend, CaptureBackendStatus, DiskUsage, EnforcementReport, IconRequest, IconSet, LcuStatus, MarkerRow, QuitOutcome, ReconcileReport, RecordingRow, RetentionPolicy, SampleRow, SupervisorStatus, UpdateStatus } from "./types";
 
 /**
  * How a command reaches the backend. Supplied by the caller rather
@@ -60,6 +60,10 @@ export function createClient(invoke: Invoke) {
       invoke("get_audio_preset", {}) as Promise<AudioPreset>,
     set_audio_preset: (preset: AudioPreset): Promise<null> =>
       invoke("set_audio_preset", { preset }) as Promise<null>,
+    get_capture_backend: (): Promise<CaptureBackendStatus> =>
+      invoke("get_capture_backend", {}) as Promise<CaptureBackendStatus>,
+    set_capture_backend: (backend: CaptureBackend): Promise<CaptureBackendStatus> =>
+      invoke("set_capture_backend", { backend }) as Promise<CaptureBackendStatus>,
     list_audio_inputs: (): Promise<Array<AudioInputDevice>> =>
       invoke("list_audio_inputs", {}) as Promise<Array<AudioInputDevice>>,
     extract_audio_track: (recordingPath: string, trackIndex: number): Promise<string> =>

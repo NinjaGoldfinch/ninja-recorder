@@ -51,6 +51,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::contract::events::{Event, LibraryChangeReason, ShutdownReason};
 use crate::recorder::Recorder;
+use crate::recorder::backend::{self as capture, CaptureBackend, CaptureBackendOption};
 use crate::{core, db, fixtures, log, match_summary, retention, state_machine, trim};
 use crate::{error, info, warn};
 
@@ -170,30 +171,71 @@ fn ffmpeg() -> Option<PathBuf> {
     crate::which_ffmpeg()
 }
 
-/// The capture backend this build and this OS can offer.
+/// The capture backends this build and this OS can offer, and how to build
+/// each: the I/O half of the `capture_backend` switch (WS1.7). Which one is
+/// built is `recorder::backend::choose`'s decision, not this type's.
 ///
-/// The same decision `lib.rs` makes, and deliberately a copy rather than a
-/// shared helper: `lib.rs`'s version resolves through an `AppHandle`, which is
-/// the type this module may not name. What is shared is the thing that
-/// matters — `Recorder` — and a backend that failed to resolve reports itself
-/// rather than taking the process down, because the library, retention and the
-/// LCU watchers all work without it.
-fn backend() -> Box<dyn Recorder> {
+/// Stateless: the worker path is looked up per call, so a repair install that
+/// puts the worker back is offered without a restart. A backend that cannot
+/// be built is reported, not hidden, and a chosen one that cannot be built
+/// becomes a `FailedRecorder` rather than taking the process down, because
+/// the library, retention and the LCU watchers all work without it.
+struct DaemonBackends;
+
+impl DaemonBackends {
+    /// The libobs worker, if it is staged beside the executable.
     #[cfg(target_os = "windows")]
-    {
-        let worker = resource_dir().map(|dir| dir.join("libobs").join("extprocess_recorder.exe"));
-        match worker {
-            Some(path) if path.exists() => {
-                Box::new(crate::recorder::libobs::LibObsRecorder::new(path, ffmpeg()))
-            }
-            _ => Box::new(crate::recorder::FailedRecorder(
-                "the libobs worker is not beside the executable".to_string(),
+    fn libobs_worker() -> Result<PathBuf, String> {
+        resource_dir()
+            .map(|dir| dir.join("libobs").join("extprocess_recorder.exe"))
+            .filter(|path| path.exists())
+            .ok_or_else(|| "the libobs worker is not beside the executable".to_string())
+    }
+
+    /// Off Windows there is no libobs and never was: the `libobs` choice
+    /// builds `StubRecorder`, which is what this dev loop has always recorded
+    /// with, so the setting changes nothing on a Linux or macOS box.
+    #[cfg(not(target_os = "windows"))]
+    fn libobs_worker() -> Result<PathBuf, String> {
+        Ok(PathBuf::new())
+    }
+}
+
+impl crate::recorder::backend::Backends for DaemonBackends {
+    fn options(&self) -> Vec<CaptureBackendOption> {
+        vec![
+            CaptureBackendOption {
+                backend: CaptureBackend::Libobs,
+                unavailable: Self::libobs_worker().err(),
+            },
+            // **WS1.6 replaces this entry** with a real availability check, in
+            // the same change that fills `recorder/own/` and flips
+            // `CaptureBackend`'s default.
+            CaptureBackendOption {
+                backend: CaptureBackend::Own,
+                unavailable: Some(capture::OWN_NOT_BUILT.to_string()),
+            },
+        ]
+    }
+
+    fn build(&self, backend: CaptureBackend) -> Box<dyn Recorder> {
+        match backend {
+            #[cfg(target_os = "windows")]
+            CaptureBackend::Libobs => match Self::libobs_worker() {
+                Ok(worker) => {
+                    Box::new(crate::recorder::libobs::LibObsRecorder::new(worker, ffmpeg()))
+                }
+                Err(why) => Box::new(crate::recorder::FailedRecorder(why)),
+            },
+            #[cfg(not(target_os = "windows"))]
+            CaptureBackend::Libobs => Box::new(crate::recorder::stub::StubRecorder::new()),
+            // `choose` never lets this through while the option above says
+            // unavailable, so this arm is the refusal said twice rather than a
+            // path anything takes. WS1.6 constructs the own backend here.
+            CaptureBackend::Own => Box::new(crate::recorder::FailedRecorder(
+                capture::OWN_NOT_BUILT.to_string(),
             )),
         }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        Box::new(crate::recorder::stub::StubRecorder::new())
     }
 }
 
@@ -440,10 +482,28 @@ async fn start(paths: Paths) -> Result<Option<Started>, DaemonError> {
         DaemonError::Db { path: paths.db.clone(), source }
     })?);
 
-    let backend = backend();
-    // Which backend you get depends on the OS and on whether the worker binary
-    // was found, and the difference decides whether recording works at all.
-    info!("recorder", "backend: {}", backend.backend_name());
+    // **Read once, here, and then only replaced by `set_capture_backend`.**
+    // The setting is chosen in Settings and applied to the next recording by
+    // swapping the box inside `recorder`, so nothing re-reads it per game.
+    //
+    // An unreadable setting is the default, loudly, rather than no backend:
+    // the database opened a line ago, so this is a bad read rather than a
+    // missing library, and refusing to record over it would be the worse
+    // failure.
+    let setting = db.get_capture_backend().unwrap_or_else(|e| {
+        error!("recorder", "cannot read capture_backend, using the default: {e}");
+        CaptureBackend::default()
+    });
+    let backend = capture::construct(setting, &DaemonBackends);
+    // Which backend you get depends on the setting, the OS and whether the
+    // chosen backend can be built here, and the difference decides whether
+    // recording works at all.
+    info!(
+        "recorder",
+        "backend: {} (capture_backend = {})",
+        backend.backend_name(),
+        setting.as_pref()
+    );
     let recorder: Arc<Mutex<Box<dyn Recorder>>> = Arc::new(Mutex::new(backend));
 
     let supervisor = state_machine::Supervisor::new(
@@ -565,6 +625,10 @@ async fn start(paths: Paths) -> Result<Option<Started>, DaemonError> {
         // on waiting for Ctrl-C. That is a dev-box shape rather than a shipped
         // one: `pump::run` already refused on this platform and said so.
         ctx.set_quit_requester(Box::new(pump::stop));
+        // What `set_capture_backend` may choose between, from the same type
+        // the startup backend above was built from, so the two cannot
+        // disagree about what this build offers.
+        ctx.set_backends(Box::new(DaemonBackends));
         // Start-on-login. `None` here is what the settings row renders as
         // "not available in this build", which is what it said on every build
         // between WS3.4 and #151: the commands moved to this process and the

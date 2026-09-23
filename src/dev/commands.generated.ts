@@ -109,6 +109,15 @@ export const COMMANDS: PortalCommand[] = [
     args: [],
   },
   {
+    name: "get_capture_backend",
+    group: "Recorder",
+    dev: false,
+    overRpc: true,
+    danger: false,
+    description: "The capture_backend setting (libobs or own), the backend actually live, and which backends this build can construct, each with the reason when it cannot. Refuses in a process that does not own the recorder.",
+    args: [],
+  },
+  {
     name: "get_disk_usage",
     group: "Disk",
     dev: false,
@@ -291,6 +300,17 @@ export const COMMANDS: PortalCommand[] = [
     description: "Adds or removes the login entry for this executable, then returns what the platform says afterwards, which is not always what was asked for. Writes outside the app's own data: enabling here really does register the running binary, dev build included.",
     args: [
       { name: "enabled", kind: "boolean", default: "False", help: "", optional: false },
+    ],
+  },
+  {
+    name: "set_capture_backend",
+    group: "Recorder",
+    dev: false,
+    overRpc: true,
+    danger: true,
+    description: "Saves which capture backend the daemon builds and puts it in place for the next recording. Refuses a backend this build cannot construct, and refuses while a game is in progress: the backend is never swapped mid-recording.",
+    args: [
+      { name: "backend", kind: "string", default: "libobs", help: "libobs or own. Replaces the live backend for the next recording; refused mid-game and for a backend this build cannot construct.", optional: false },
     ],
   },
   {

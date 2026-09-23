@@ -700,6 +700,11 @@ macro_rules! production_form_table {
         danger: false,
         args: [],
     }
+    get_capture_backend {
+        group: "Recorder",
+        danger: false,
+        args: [],
+    }
     get_disk_usage {
         group: "Disk",
         danger: false,
@@ -807,6 +812,13 @@ macro_rules! production_form_table {
         danger: true,
         args: [
             { name: "enabled", kind: "boolean", default: "False", help: "", optional: false },
+        ],
+    }
+    set_capture_backend {
+        group: "Recorder",
+        danger: true,
+        args: [
+            { name: "backend", kind: "string", default: "libobs", help: "libobs or own. Replaces the live backend for the next recording; refused mid-game and for a backend this build cannot construct.", optional: false },
         ],
     }
     set_pinned {

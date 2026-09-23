@@ -8,8 +8,8 @@
  *
  * What is held here is the half that comes from the backend and can change
  * without anyone touching a control: the registry's autostart entry, the audio
- * preset the recorder will actually use, the retention policy, the recordings
- * folder, and the version.
+ * preset the recorder will actually use, the capture backend, the retention
+ * policy, the recordings folder, and the version.
  */
 
 import { call } from "../../bridge";
@@ -23,6 +23,7 @@ import type {
   EnforcementReport,
   RetentionPolicy,
 } from "../../types";
+import type { CaptureBackend, CaptureBackendStatus } from "../contract/types";
 import { knownPreset, presetFor, usesMic } from "../settings/audio";
 import { backfillSummary } from "../settings/backfill";
 import {
@@ -89,6 +90,10 @@ let audioPreset = $state<AudioPresetKey>("game");
 let micDeviceId = $state("");
 let micDevices = $state<AudioInputDevice[]>([]);
 
+let captureBackend = $state<CaptureBackendStatus | null>(null);
+let captureBackendError = $state<string | null>(null);
+let captureBackendBusy = $state(false);
+
 let retention = $state<RetentionForm>({
   sizeEnabled: false,
   sizeGb: "",
@@ -128,6 +133,15 @@ export const settings = {
   /** Whether the device picker should be usable for the current preset. */
   get micEnabled() {
     return usesMic(audioPreset);
+  },
+  get captureBackend() {
+    return captureBackend;
+  },
+  get captureBackendError() {
+    return captureBackendError;
+  },
+  get captureBackendBusy() {
+    return captureBackendBusy;
   },
   get retention() {
     return retention;
@@ -234,6 +248,48 @@ export async function saveAudioPreset(key: AudioPresetKey, mic = micDeviceId): P
     audioPreset = previousPreset;
     micDeviceId = previousMic;
     toast(`Couldn't save the audio setting: ${err}`, "error");
+  }
+}
+
+// --- Capture backend -------------------------------------------------------
+
+/**
+ * Which backend the daemon records with, which ones this build can construct,
+ * and what is live. Read from the daemon rather than from the prefs cache for
+ * the reason autostart is: availability is the daemon's answer, not a stored
+ * value, and a worker restored by a repair install changes it.
+ */
+export async function loadCaptureBackend(): Promise<void> {
+  try {
+    captureBackend = await call<CaptureBackendStatus>("get_capture_backend");
+    captureBackendError = null;
+  } catch (err) {
+    // Readable rather than silent, and the control is disabled with it:
+    // guessing "libobs" here would claim a choice nobody read back.
+    console.error("Failed to read the capture backend", err);
+    captureBackend = null;
+    captureBackendError = `Couldn't read this setting: ${err}`;
+  }
+}
+
+/**
+ * Asks the daemon to switch, and shows what it reports afterwards.
+ *
+ * **Applies the response, not the request**, like `setAutostart`: the daemon
+ * refuses mid-game and refuses a backend it cannot build, and a control that
+ * moved before the answer would claim a switch that did not happen. Nothing
+ * is written optimistically, so a refusal has nothing to roll back.
+ */
+export async function saveCaptureBackend(backend: CaptureBackend): Promise<void> {
+  if (captureBackend?.configured === backend) return;
+  captureBackendBusy = true;
+  try {
+    captureBackend = await call<CaptureBackendStatus>("set_capture_backend", { backend });
+    captureBackendError = null;
+  } catch (err) {
+    toast(`Couldn't change the capture backend: ${err}`, "error");
+  } finally {
+    captureBackendBusy = false;
   }
 }
 

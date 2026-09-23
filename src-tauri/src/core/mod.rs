@@ -28,10 +28,11 @@ pub mod dispatch;
 #[cfg_attr(not(feature = "devtools"), allow(unused_imports))]
 pub use dispatch::{command_names, dispatch, dispatch_blocking, is_async_command};
 
-use crate::warn;
+use crate::{info, warn};
 use crate::db;
 use crate::lcu;
 use crate::recorder::audio::{AudioInputDevice, AudioPreset};
+use crate::recorder::backend::{self, Backends, CaptureBackend, CaptureBackendStatus};
 use crate::recorder::{RecordConfig, Recorder};
 use crate::state_machine;
 use crate::update::{self, CheckResult, UpdateRequest, UpdateStatus};
@@ -105,6 +106,11 @@ pub struct Ctx {
     /// a sharper one: a `quit_recorder` that worked under `cargo test` would
     /// shut down the test binary partway through the suite.
     on_quit_request: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Which capture backends this process can build, and how. Set by the
+    /// daemon, the only process that owns a `Recorder` worth replacing;
+    /// `None` in the UI and in every unit test that does not install one, and
+    /// the two `capture_backend` commands refuse rather than guess.
+    backends: Option<Box<dyn Backends>>,
 }
 
 impl Ctx {
@@ -128,6 +134,7 @@ impl Ctx {
             update: Mutex::new(CheckResult::Pending),
             on_update_request: None,
             on_quit_request: None,
+            backends: None,
         }
     }
 
@@ -159,6 +166,12 @@ impl Ctx {
     /// ends its message loop. See `quit_recorder`.
     pub fn set_quit_requester(&mut self, request: Box<dyn Fn() + Send + Sync>) {
         self.on_quit_request = Some(request);
+    }
+
+    /// What the `capture_backend` setting can choose between. Set once, by the
+    /// daemon, with the same implementation it built the startup backend from.
+    pub fn set_backends(&mut self, backends: Box<dyn Backends>) {
+        self.backends = Some(backends);
     }
 
     /// `set_library_changed_notifier`.
@@ -784,6 +797,90 @@ pub fn set_audio_preset(ctx: &Ctx, preset: AudioPreset) -> Result<(), String> {
     // layout can actually fail this.
     preset.layout().validate()?;
     ctx.db.set_audio_preset(&preset).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------- capture backend
+
+fn backends(ctx: &Ctx) -> Result<&dyn Backends, String> {
+    ctx.backends.as_deref().ok_or_else(|| {
+        "this process does not own the recorder, so it has no capture backend to choose"
+            .to_string()
+    })
+}
+
+/// The `capture_backend` setting, the backend actually live, and what this
+/// build can offer. The settings row renders all three.
+pub fn get_capture_backend(ctx: &Ctx) -> Result<CaptureBackendStatus, String> {
+    let backends = backends(ctx)?;
+    Ok(CaptureBackendStatus {
+        configured: ctx.db.get_capture_backend().map_err(|e| e.to_string())?,
+        active: ctx.recorder.lock().map_err(|e| e.to_string())?.backend_name(),
+        options: backends.options(),
+    })
+}
+
+/// Saves the `capture_backend` setting and puts the chosen backend in place
+/// for the **next recording**, then reports the result.
+///
+/// Three refusals, all before anything is written, so a refusal is never a
+/// half-applied change:
+///
+/// - **A backend this build cannot construct.** The control already shows it
+///   disabled; this is the backend's own copy of that rule, so a stale window
+///   or the dev portal cannot save a choice that would refuse every game.
+/// - **A game in progress**, by the rule the updater uses and for the same
+///   reason: both drop the live backend, and `update::installable` already
+///   says when that is safe, from the supervisor's state *and* the recorder's
+///   own answer. Never a swap mid-recording.
+/// - **No backends seam**: a process that does not own the recorder.
+///
+/// The swap happens under the recorder lock, which `start` also takes, so the
+/// check and the replacement cannot be split by a recording beginning. The
+/// supervisor's state is read *before* that lock is taken, because the
+/// supervisor takes its own locks and then the recorder's, and the reverse
+/// order here could deadlock against it.
+///
+/// Choosing what is already configured changes nothing, so a second click
+/// does not tear down a warm backend to build the same one again.
+pub fn set_capture_backend(
+    ctx: &Ctx,
+    backend: CaptureBackend,
+) -> Result<CaptureBackendStatus, String> {
+    let backends = backends(ctx)?;
+    backend::choose(backend, &backends.options())
+        .map_err(|why| format!("The {} capture backend can't be used: {why}", backend.as_pref()))?;
+
+    if ctx.db.get_capture_backend().map_err(|e| e.to_string())? != backend {
+        let state = ctx.supervisor.status().state;
+        let mut recorder = ctx.recorder.lock().map_err(|e| e.to_string())?;
+        update::installable(&state, recorder.is_recording())
+            .map_err(|why| format!("The capture backend can't be changed while {why}"))?;
+
+        ctx.db.set_capture_backend(backend).map_err(|e| e.to_string())?;
+
+        // Cold first, then the replacement: `release` is what stops the libobs
+        // worker, and dropping the box without it would leave the old worker
+        // to its `Drop`.
+        recorder.release();
+        let mut next = backend::construct(backend, backends);
+        // Keep §2.2's pre-warm: if the client is already open, the old backend
+        // was warm and a game is plausible, so the new one should be too.
+        // Only a pre-warm: `start` brings it up itself if this fails.
+        if !matches!(state, state_machine::GameState::Idle)
+            && let Err(e) = next.prepare()
+        {
+            warn!("recorder", "capture backend not ready: {e}");
+        }
+        info!(
+            "recorder",
+            "backend: {} (capture_backend = {}, changed in Settings)",
+            next.backend_name(),
+            backend.as_pref()
+        );
+        *recorder = next;
+    }
+
+    get_capture_backend(ctx)
 }
 
 // -------------------------------------------------------------------- audio

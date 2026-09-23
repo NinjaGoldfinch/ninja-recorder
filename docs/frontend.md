@@ -37,12 +37,12 @@ flowchart TB
     ICONS["lib/stores/icons.svelte.ts<br/><small>owns: when art has arrived</small>"]
     REVV["lib/components/review/<br/><small>Review (imperative island), Timeline,<br/>PlayerControls, MarkerList, MarkerTimes</small>"]
     REVS["lib/stores/review.svelte.ts<br/><small>owns: which recording, its markers,<br/>samples and window</small>"]
-    SETV["lib/components/settings/<br/><small>Settings, Appearance, BackgroundTray,<br/>Notifications, AudioSettings, Storage,<br/>About, Update, UpdateNotes, SettingRow</small>"]
-    SETS["lib/stores/settings.svelte.ts<br/><small>owns: autostart, audio, retention,<br/>the folder, mirrored prefs</small>"]
+    SETV["lib/components/settings/<br/><small>Settings, Appearance, BackgroundTray,<br/>Notifications, AudioSettings, Storage,<br/>Advanced, About, Update, UpdateNotes, SettingRow</small>"]
+    SETS["lib/stores/settings.svelte.ts<br/><small>owns: autostart, audio, capture backend,<br/>retention, the folder, mirrored prefs</small>"]
     UPD["lib/stores/update.svelte.ts<br/><small>owns: the update status</small>"]
     TL["lib/timeline/<br/><small>window, clusters, graph, stem,<br/>markers, navigate · pure, tested</small>"]
     LIBP["lib/library/<br/><small>filters, sort, stats, scoreboard<br/>pure, tested</small>"]
-    SETP["lib/settings/<br/><small>notes, backfill, retention, audio,<br/>update, about · pure, tested</small>"]
+    SETP["lib/settings/<br/><small>notes, backfill, retention, audio,<br/>capture, update, about · pure, tested</small>"]
     REVP["lib/review/<br/><small>hotkeys, playback<br/>pure, tested</small>"]
     BRIDGE["bridge.ts<br/><small>composition root: picks a transport,<br/>exposes the generated client</small>"]
     TRANSPORT["lib/transport/<br/><small>pipe.ts (live) · mock.ts<br/>invoke.ts kept for the dev portal</small>"]
@@ -735,7 +735,7 @@ stay in the UI process; `dev_registered_commands` must stay direct because
 a shipped build.
 
 > **`src/types.ts` is no longer the source of truth either.** Since WS2.2 all
-> 37 types crossing the boundary derive `ts_rs::TS` beside their serde derives,
+> 43 types crossing the boundary derive `ts_rs::TS` beside their serde derives,
 > and WS2.5's generator emits the TypeScript from those. The hand-written
 > interfaces in `src/types.ts` are what that replaces.
 >
@@ -795,6 +795,7 @@ a shipped build.
 | `get_autostart` / `set_autostart` | `AutostartStatus` | settings → background & tray |
 | `get_audio_preset` / `set_audio_preset` | `AudioPreset` / nothing | settings → audio |
 | `list_audio_inputs` | `Vec<AudioInputDevice>` | settings → microphone picker |
+| `get_capture_backend` / `set_capture_backend` | `CaptureBackendStatus` | settings → advanced → capture backend |
 | `extract_audio_track` | path to a cached sidecar | review player, stem selection |
 | `lcu_status` | `LcuStatus` | header strip |
 | `game_state_status` | `SupervisorStatus` | header strip, About block |
@@ -811,8 +812,32 @@ from Task Manager, so `settings.ts` reads it from `get_autostart` when the view
 loads instead of from the `prefs.ts` cache, and applies whatever
 `set_autostart` reports *back* rather than the value it just sent
 ([DEVELOPMENT.md §12](../DEVELOPMENT.md#12-process-model-a-recorder-daemon-and-a-ui-that-can-leave)).
-It is the only row in the settings form that can come back disabled, when the
-build has no autostart control or the read failed.
+It is one of two rows in the settings form that can come back disabled, when
+the build has no autostart control or the read failed.
+
+**The capture backend is the other, and it is devtools-only until WS1.6.**
+`Settings.svelte` renders the Advanced group, which holds only this row, when
+`hasDevCommands()` answers true: the same probe that reveals the dev portal
+button, so there is no second devtools flag. In a release build the group is
+absent. Today the row could only offer libobs with the own backend disabled,
+and WS1.6, which builds the own backend and makes it the default, deletes the
+gate ([DEVELOPMENT.md §16](../DEVELOPMENT.md#the-switch-and-when-it-applies)).
+`Settings.test.ts` checks both builds.
+
+`capture_backend` is a `settings_kv`
+key, but it is not read through `prefs.ts` and not written with
+`set_ui_pref`, because writing the row is not the change: the daemon has to
+check the backend can be built here, refuse while a game is in progress, and
+swap the live recorder
+([DEVELOPMENT.md §16](../DEVELOPMENT.md#the-switch-and-when-it-applies)).
+`Advanced.svelte` renders what `get_capture_backend` reports: every backend
+the daemon knows about, one it cannot build **disabled with the daemon's
+reason** beside it (the own backend, until WS1.6), and the backend actually
+live. A click calls `set_capture_backend` and the control shows the status it
+returns, never the value it sent, so a refusal leaves it where it was and
+raises a toast. The row says that a change applies from the next recording.
+Every string in it that came from the daemon is interpolated, never rendered
+as markup.
 
 ### Event surface
 

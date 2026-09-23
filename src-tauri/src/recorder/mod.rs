@@ -4,6 +4,7 @@
 //! types directly; see DEVELOPMENT.md §2.2.
 
 pub mod audio;
+pub mod backend;
 pub mod devices;
 #[cfg(target_os = "windows")]
 pub mod libobs;
@@ -98,8 +99,9 @@ pub trait Recorder: Send {
     fn stop(&mut self) -> Result<RecordingOutput, RecorderError>;
     fn is_recording(&self) -> bool;
     /// Which backend is actually live, for diagnostics. Which one you get
-    /// is decided at runtime (`lib.rs`'s `setup`) by target OS *and* by
-    /// whether libobs managed to initialize, so it can't be inferred from
+    /// is decided at runtime (`daemon::backends`, through `backend::choose`)
+    /// by target OS, by the `capture_backend` setting *and* by whether the
+    /// chosen backend can be built, so it can't be inferred from
     /// `cfg!` at the call site — the dev portal and any future
     /// user-facing "recording unavailable" message both need to ask the
     /// object itself. `FailedRecorder` folds its init error in here,
@@ -131,16 +133,20 @@ pub trait Recorder: Send {
 
 /// A backend that refuses, and says why.
 ///
-/// Two callers, on every platform since WS3.4. It stands in for the real
-/// backend when that fails to initialize (Windows only, see
-/// `libobs::LibObsRecorder::new`), because startup must not fail just because
-/// capture is unavailable: LCU polling, the VOD library and the review UI do
-/// not depend on it, so the app should open and surface the original error only
-/// if the user tries to record.
+/// Three callers. It stands in for the real backend when that cannot be
+/// brought up (Windows only, see `libobs::LibObsRecorder::new`), because
+/// startup must not fail just because capture is unavailable: LCU polling, the
+/// VOD library and the review UI do not depend on it, so the app should open
+/// and surface the original error only if the user tries to record.
 ///
 /// And it is what the **UI process** holds, where refusing is the correct
 /// behaviour rather than a degraded one: that process does not record, and
 /// `StubRecorder` would fabricate a file instead of saying so.
+///
+/// And since WS1.7 it is what the `capture_backend` setting gets when it names
+/// a backend this build cannot construct (`backend::construct`), which is the
+/// own backend until WS1.6 lands it. Refused with the reason, never recorded
+/// on the other backend in its place.
 pub struct FailedRecorder(pub String);
 
 impl Recorder for FailedRecorder {

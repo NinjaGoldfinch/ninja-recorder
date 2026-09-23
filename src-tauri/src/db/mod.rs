@@ -12,6 +12,7 @@ use crate::warn;
 use rusqlite::{params, Connection, OptionalExtension};
 use rusqlite_migration::{Migrations, M};
 use crate::recorder::audio::AudioPreset;
+use crate::recorder::backend::CaptureBackend;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -52,6 +53,12 @@ pub enum DbError {
 /// unseeded store as `theme` — a missing key means "use the default", which
 /// is what keeps adding a preference a zero-migration change.
 const AUDIO_PRESET_KEY: &str = "audio_preset";
+
+/// `settings_kv` key holding the `CaptureBackend`, spelled as the plan spells
+/// it (§4.5). Unseeded like the rest: a missing key means the default, which
+/// is what lets WS1.6 move everyone who never chose onto the own backend by
+/// changing `CaptureBackend`'s `#[default]` alone.
+const CAPTURE_BACKEND_KEY: &str = "capture_backend";
 
 static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
     let migrations = vec![M::up(
@@ -1726,6 +1733,26 @@ impl Db {
         let json = serde_json::to_string(preset).map_err(|e| DbError::Encode(e.to_string()))?;
         self.set_ui_pref(AUDIO_PRESET_KEY, &json)
     }
+
+    /// Which capture backend the daemon builds. A missing or unrecognised
+    /// value is the default (`CaptureBackend::from_pref`), which on a
+    /// downgrade is the right answer: the older build cannot construct
+    /// whatever the newer one wrote.
+    pub fn get_capture_backend(&self) -> Result<CaptureBackend, DbError> {
+        let conn = self.pool.read();
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings_kv WHERE key = ?1",
+                [CAPTURE_BACKEND_KEY],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(CaptureBackend::from_pref(raw.as_deref()))
+    }
+
+    pub fn set_capture_backend(&self, backend: CaptureBackend) -> Result<(), DbError> {
+        self.set_ui_pref(CAPTURE_BACKEND_KEY, backend.as_pref())
+    }
 }
 
 #[cfg(test)]
@@ -2369,6 +2396,39 @@ mod tests {
         let db = Db::open_temporary().unwrap();
         db.set_ui_pref(AUDIO_PRESET_KEY, "{not json").unwrap();
         assert_eq!(db.get_audio_preset().unwrap(), AudioPreset::Game);
+    }
+
+    /// Pinned beside `CaptureBackend`'s own test, because this is the path the
+    /// daemon actually reads at startup: a fresh library builds libobs until
+    /// WS1.6 flips the default.
+    #[test]
+    fn capture_backend_defaults_to_libobs_when_unset() {
+        let db = Db::open_temporary().unwrap();
+        assert_eq!(db.get_capture_backend().unwrap(), CaptureBackend::Libobs);
+    }
+
+    #[test]
+    fn capture_backend_round_trips_through_settings_kv() {
+        let db = Db::open_temporary().unwrap();
+        for backend in [CaptureBackend::Own, CaptureBackend::Libobs] {
+            db.set_capture_backend(backend).unwrap();
+            assert_eq!(db.get_capture_backend().unwrap(), backend);
+        }
+        // Stored as the plain string, so `get_ui_prefs` and the dev portal's
+        // SQL panel show what the plan calls it.
+        assert_eq!(
+            db.get_ui_prefs().unwrap().get(CAPTURE_BACKEND_KEY).map(String::as_str),
+            Some("libobs")
+        );
+    }
+
+    /// A value written by a newer build, or by hand, is the default rather
+    /// than an error that would leave the daemon with no backend to choose.
+    #[test]
+    fn an_unrecognised_capture_backend_falls_back_to_the_default() {
+        let db = Db::open_temporary().unwrap();
+        db.set_ui_pref(CAPTURE_BACKEND_KEY, "mediafoundation").unwrap();
+        assert_eq!(db.get_capture_backend().unwrap(), CaptureBackend::default());
     }
 
     #[test]

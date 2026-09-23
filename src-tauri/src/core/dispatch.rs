@@ -397,6 +397,10 @@ dispatch_table! {
     ctx_result  get_audio_preset() -> crate::recorder::audio::AudioPreset;
     /// Chooses what gets captured and how it is split across mp4 audio tracks. Track 0 is always the combined mix.
     ctx_result  set_audio_preset(preset: crate::recorder::audio::AudioPreset) -> ();
+    /// The capture_backend setting (libobs or own), the backend actually live, and which backends this build can construct, each with the reason when it cannot. Refuses in a process that does not own the recorder.
+    ctx_result  get_capture_backend() -> crate::recorder::backend::CaptureBackendStatus;
+    /// Saves which capture backend the daemon builds and puts it in place for the next recording. Refuses a backend this build cannot construct, and refuses while a game is in progress: the backend is never swapped mid-recording.
+    ctx_result  set_capture_backend(backend: crate::recorder::backend::CaptureBackend) -> crate::recorder::backend::CaptureBackendStatus;
     /// Audio input devices for the microphone picker, default first. Empty off Windows.
     bare_result list_audio_inputs() -> Vec<crate::recorder::audio::AudioInputDevice>;
     /// Extracts one audio stem to a cached sidecar so the review player can play it. Rejects track 0, which plays from the video itself.
@@ -538,6 +542,155 @@ mod tests {
         }
     }
 
+    /// The `capture_backend` switch (WS1.7). What is worth pinning is the
+    /// refusals, because each one guards against a recording that would be
+    /// lost or fabricated, and that the swap reaches the recorder the
+    /// supervisor shares.
+    mod capture_backend {
+        use super::*;
+        use crate::core::{get_capture_backend, set_capture_backend};
+        use crate::recorder::backend::{
+            Backends, CaptureBackend, CaptureBackendOption, OWN_NOT_BUILT,
+        };
+        use crate::recorder::{RecordConfig, RecorderError, RecordingOutput};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        /// A recorder that is only a name, and optionally mid-game.
+        struct Named(&'static str, bool);
+
+        impl Recorder for Named {
+            fn start(&mut self, _config: RecordConfig) -> Result<(), RecorderError> {
+                unreachable!("nothing here records")
+            }
+            fn stop(&mut self) -> Result<RecordingOutput, RecorderError> {
+                unreachable!("nor stops")
+            }
+            fn is_recording(&self) -> bool {
+                self.1
+            }
+            fn backend_name(&self) -> String {
+                self.0.to_string()
+            }
+        }
+
+        /// A build offering libobs, and the own backend only if `own_built`.
+        /// Counts constructions so a no-op can be told from a rebuild.
+        struct Fake {
+            own_built: bool,
+            builds: Arc<AtomicUsize>,
+        }
+
+        impl Backends for Fake {
+            fn options(&self) -> Vec<CaptureBackendOption> {
+                vec![
+                    CaptureBackendOption { backend: CaptureBackend::Libobs, unavailable: None },
+                    CaptureBackendOption {
+                        backend: CaptureBackend::Own,
+                        unavailable: (!self.own_built).then(|| OWN_NOT_BUILT.to_string()),
+                    },
+                ]
+            }
+            fn build(&self, backend: CaptureBackend) -> Box<dyn Recorder> {
+                self.builds.fetch_add(1, Ordering::SeqCst);
+                Box::new(Named(backend.as_pref(), false))
+            }
+        }
+
+        fn ctx_with(own_built: bool) -> (Ctx, Arc<AtomicUsize>) {
+            let builds = Arc::new(AtomicUsize::new(0));
+            let mut ctx = ctx();
+            ctx.set_backends(Box::new(Fake { own_built, builds: Arc::clone(&builds) }));
+            (ctx, builds)
+        }
+
+        /// The UI forwards both commands to the daemon, so this only runs where
+        /// the seam is set; anywhere else, answering would describe a recorder
+        /// that is not there.
+        #[test]
+        fn a_process_that_does_not_own_the_recorder_refuses() {
+            let err = get_capture_backend(&ctx()).expect_err("no seam");
+            assert!(err.contains("does not own the recorder"), "{err}");
+            let err = set_capture_backend(&ctx(), CaptureBackend::Libobs).expect_err("no seam");
+            assert!(err.contains("does not own the recorder"), "{err}");
+        }
+
+        #[test]
+        fn the_status_reports_the_setting_the_live_backend_and_every_option() {
+            let (ctx, _) = ctx_with(false);
+            let status = get_capture_backend(&ctx).unwrap();
+            assert_eq!(status.configured, CaptureBackend::Libobs);
+            assert_eq!(status.active, "stub");
+            assert_eq!(status.options.len(), 2);
+            assert_eq!(
+                status.options[1].unavailable.as_deref(),
+                Some(OWN_NOT_BUILT),
+                "the unbuilt backend is listed, with its reason, not left out"
+            );
+        }
+
+        /// **Before WS1.6 this is the whole feature's safety property**: the
+        /// own backend cannot be chosen, and trying writes nothing.
+        #[test]
+        fn an_unbuilt_backend_cannot_be_chosen() {
+            let (ctx, builds) = ctx_with(false);
+            let err = set_capture_backend(&ctx, CaptureBackend::Own).expect_err("unbuilt");
+            assert!(err.contains(OWN_NOT_BUILT), "{err}");
+            assert_eq!(ctx.db.get_capture_backend().unwrap(), CaptureBackend::Libobs);
+            assert_eq!(builds.load(Ordering::SeqCst), 0);
+            assert_eq!(ctx.recorder.lock().unwrap().backend_name(), "stub");
+        }
+
+        #[test]
+        fn a_change_replaces_the_recorder_the_supervisor_shares() {
+            let (ctx, builds) = ctx_with(true);
+            let status = set_capture_backend(&ctx, CaptureBackend::Own).unwrap();
+
+            assert_eq!(status.configured, CaptureBackend::Own);
+            assert_eq!(status.active, "own");
+            assert_eq!(ctx.db.get_capture_backend().unwrap(), CaptureBackend::Own);
+            assert_eq!(builds.load(Ordering::SeqCst), 1);
+            // The same `Arc` the supervisor was built with, so the next game
+            // it starts is on the new backend.
+            assert_eq!(ctx.recorder.lock().unwrap().backend_name(), "own");
+        }
+
+        #[test]
+        fn choosing_the_current_backend_rebuilds_nothing() {
+            let (ctx, builds) = ctx_with(true);
+            set_capture_backend(&ctx, CaptureBackend::Libobs).unwrap();
+            assert_eq!(builds.load(Ordering::SeqCst), 0);
+            assert_eq!(ctx.recorder.lock().unwrap().backend_name(), "stub");
+        }
+
+        /// Never a swap mid-recording: refused, nothing saved, and the live
+        /// recorder is the one that was recording.
+        #[test]
+        fn a_recording_in_flight_is_never_swapped() {
+            let (ctx, builds) = ctx_with(true);
+            *ctx.recorder.lock().unwrap() = Box::new(Named("busy", true));
+
+            let err = set_capture_backend(&ctx, CaptureBackend::Own).expect_err("recording");
+            assert!(err.contains("recording is in progress"), "{err}");
+            assert_eq!(ctx.db.get_capture_backend().unwrap(), CaptureBackend::Libobs);
+            assert_eq!(builds.load(Ordering::SeqCst), 0);
+            assert_eq!(ctx.recorder.lock().unwrap().backend_name(), "busy");
+        }
+
+        /// `every_command_round_trips` reaches `set_capture_backend` without a
+        /// seam, so it only proves the argument parses. This proves the wire
+        /// spelling reaches the swap.
+        #[tokio::test]
+        async fn the_wire_spelling_reaches_the_swap() {
+            let (ctx, _) = ctx_with(true);
+            let out = dispatch(&ctx, "set_capture_backend", json!({ "backend": "own" }))
+                .await
+                .unwrap();
+            assert_eq!(out["configured"], "own");
+            assert_eq!(out["active"], "own");
+            assert_eq!(out["options"][1]["unavailable"], Value::Null);
+        }
+    }
+
     /// A representative argument payload per command, in the **camelCase the
     /// frontend actually sends** — `bridge.ts` passes its args object through
     /// untouched, so this is the real wire shape.
@@ -556,6 +709,10 @@ mod tests {
             "set_autostart" => json!({ "enabled": true }),
             // Internally tagged on `preset`, so the value is an object.
             "set_audio_preset" => json!({ "preset": { "preset": "game" } }),
+            // Refused here: the test `Ctx` has no backends seam, so this
+            // exercises the argument mapping and never replaces a recorder.
+            // `capture_backend` below drives it with one installed.
+            "set_capture_backend" => json!({ "backend": "libobs" }),
             "extract_audio_track" => json!({ "recordingPath": "/tmp/nope.mp4", "trackIndex": 1 }),
             // Every list empty, so `resolve_icons` has nothing to look
             // up and the suite never reaches a CDN — this exercises the
