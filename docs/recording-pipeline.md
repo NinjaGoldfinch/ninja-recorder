@@ -813,6 +813,18 @@ the live client reports **names**. Both are stored as they arrive rather than
 one being converted into the other, since converting would need Data Dragon in
 a path that otherwise only talks to the League client.
 
+**And the gold curve, where one is owed.** A row matched to a game can be
+complete in every other column and still have lost its curve (#137), so the
+candidate query flags it separately as `needs_gold`, by the same rule the resume
+sweep uses: it has live samples to align the curve through, and its
+`game_mode` is not `PRACTICETOOL`, whose timeline has no enemy team to subtract
+and yields no points. Without samples `write_gold_series` would give up before
+asking; without the mode check every Fill in spent a sides request and a
+timeline request on each Practice Tool row and wrote nothing. Such a row is
+still scanned, for the `role` it never has, and patched like any other; the
+report only counts curves recovered, so it never calls the missing one a
+failure.
+
 **More than one match is refused, not resolved.** A card labelled with the
 wrong game is worse than one left unlabelled: the value of this library is that
 what it says about a VOD is true, and a wrong label is invisible, because
