@@ -91,6 +91,12 @@ pub struct PlayerEntry {
     /// path needs no id-to-name table at all (`lcu::match_data` does).
     #[serde(rename = "championName", default)]
     pub champion_name: String,
+    /// The same champion as a string-table key,
+    /// `game_character_displayname_Viego`. Read only to recognise Viego,
+    /// because it does not depend on the client's language the way
+    /// `championName` does (#203).
+    #[serde(rename = "rawChampionName", default)]
+    pub raw_champion_name: String,
     /// "ORDER" (blue side) or "CHAOS" (red side).
     #[serde(default)]
     pub team: String,
@@ -449,6 +455,11 @@ pub struct LiveSummary {
     /// `update_match_metadata` fills `role` only when it is NULL for
     /// exactly that reason.
     pub role: Option<String>,
+    /// Whether `champion` was reported as Viego, which is the one champion
+    /// the API can report as somebody else (#203). Not a column and not on
+    /// the wire: it exists so `absorb` can tell a possession from a pick.
+    #[serde(skip)]
+    pub viego: bool,
 }
 
 impl LiveSummary {
@@ -460,10 +471,14 @@ impl LiveSummary {
     /// lands — so an outcome, once seen, has to survive however many empty
     /// polls follow it. The same holds for a snapshot that briefly fails
     /// to match us in `allPlayers`.
+    ///
+    /// `champion` has one more exception, decided by `settle_champion`: a
+    /// Viego stays a Viego.
     pub fn absorb(&mut self, newer: LiveSummary) {
-        if newer.champion.is_some() {
-            self.champion = newer.champion;
-        }
+        (self.champion, self.viego) = settle_champion(
+            (self.champion.take(), self.viego),
+            (newer.champion, newer.viego),
+        );
         if newer.kda.is_some() {
             self.kda = newer.kda;
         }
@@ -477,6 +492,52 @@ impl LiveSummary {
             self.role = newer.role;
         }
     }
+}
+
+/// Which champion a recording was played on, given what it knew and what the
+/// newest poll says. Each side is `(champion, reported as Viego)`.
+///
+/// **A possession is not a pick** (#203). Viego's passive takes over a
+/// champion he helped kill, and while it lasts Live Client Data reports him
+/// under that champion's name. A game that ended mid-possession therefore
+/// left its last poll saying `Malphite` about a Viego, and "the newer value
+/// wins" wrote that to the row. No other champion changes mid-game (a Gnar's
+/// forms are folded back by `normalize_champion`), so:
+///
+/// - A poll that reports Viego is believed, whatever came before. It is also
+///   what corrects a recording that started mid-possession, once the
+///   possession ends.
+/// - Once Viego has been seen, any other name is a possession and is ignored.
+/// - Otherwise the newer value wins, as it does for every other field.
+///
+/// A recording that sees only a possession, never Viego himself, keeps the
+/// possessed name: nothing in the live data can tell it apart. That is what
+/// the deferred patch's `correct_champion` is for, where the LCU answers.
+pub(crate) fn settle_champion(
+    known: (Option<String>, bool),
+    newer: (Option<String>, bool),
+) -> (Option<String>, bool) {
+    match (known, newer) {
+        (_, (Some(name), true)) => (Some(name), true),
+        (known @ (Some(_), true), _) => known,
+        (_, (Some(name), false)) => (Some(name), false),
+        (known, (None, _)) => known,
+    }
+}
+
+/// Whether this entry is Viego, by the language-independent key when the
+/// response carries one and by the display name when it does not (the
+/// hand-trimmed fixtures, and any client that drops the field).
+///
+/// **Unverified off Windows: what `rawChampionName` says mid-possession.**
+/// `championName` is known to change (#203). If the key changes with it, a
+/// possessing poll is not Viego here and `settle_champion` ignores it; if the
+/// key stays `Viego`, it *is* Viego here and `self_summary` names it `Viego`
+/// rather than taking the display name. Either way the row says Viego, which
+/// is why the answer does not have to be known.
+fn is_viego(player: &PlayerEntry) -> bool {
+    player.raw_champion_name.trim() == "game_character_displayname_Viego"
+        || player.champion_name.trim() == "Viego"
 }
 
 /// Live Client Data's position, in the words the `role` column already
@@ -768,12 +829,21 @@ pub(crate) fn normalize_champion(name: &str) -> String {
 
 pub fn self_summary(snapshot: &AllGameData) -> LiveSummary {
     let us = find_us(snapshot);
+    let viego = us.is_some_and(is_viego);
 
     LiveSummary {
-        champion: us
-            .map(|p| p.champion_name.trim())
-            .filter(|c| !c.is_empty())
-            .map(normalize_champion),
+        // `Viego` by name whenever the entry is Viego by key, so a possession
+        // the key sees through cannot put the possessed name on the row. The
+        // English name, as `normalize_champion` and `ddragon`'s `en_US`
+        // lookups already assume.
+        champion: if viego {
+            Some("Viego".to_string())
+        } else {
+            us.map(|p| p.champion_name.trim())
+                .filter(|c| !c.is_empty())
+                .map(normalize_champion)
+        },
+        viego,
         kda: us.map(|p| Kda {
             kills: p.scores.kills,
             deaths: p.scores.deaths,
@@ -1417,6 +1487,92 @@ mod tests {
         accumulated.absorb(self_summary(&later));
 
         assert_eq!(accumulated.kda.unwrap().kills, 9);
+    }
+
+    // --- A possession is not a pick (#203) ---------------------------------
+
+    /// Our fixture entry, recast as whoever `name` is, with `raw` as its
+    /// `rawChampionName` (empty when the response carries none).
+    fn as_champion(name: &str, raw: &str) -> AllGameData {
+        let mut snapshot = fixture();
+        let us = &mut snapshot.all_players[0];
+        us.champion_name = name.into();
+        us.raw_champion_name = raw.into();
+        snapshot
+    }
+
+    /// The game #203 was found in: Viego from the start, then a possession
+    /// of Malphite that the game ended during. The last poll says Malphite;
+    /// the row has to say Viego.
+    #[test]
+    fn a_viego_who_ends_the_game_possessing_someone_is_still_viego() {
+        let mut live = LiveSummary::default();
+        live.absorb(self_summary(&as_champion("Viego", "game_character_displayname_Viego")));
+        live.absorb(self_summary(&as_champion(
+            "Malphite",
+            "game_character_displayname_Malphite",
+        )));
+
+        assert_eq!(live.champion.as_deref(), Some("Viego"));
+    }
+
+    /// The same, if the key sees through the possession and only the display
+    /// name changes. Which of the two a real client does is not known off
+    /// Windows, and the answer must not depend on it.
+    #[test]
+    fn a_possession_the_key_sees_through_is_still_viego() {
+        let mut live = LiveSummary::default();
+        live.absorb(self_summary(&as_champion("Viego", "game_character_displayname_Viego")));
+        live.absorb(self_summary(&as_champion("Malphite", "game_character_displayname_Viego")));
+
+        assert_eq!(live.champion.as_deref(), Some("Viego"));
+    }
+
+    /// A recording that starts mid-possession, as one does after a daemon
+    /// restart, first sees the possessed name. The possession ending is what
+    /// corrects it.
+    #[test]
+    fn a_recording_that_starts_mid_possession_is_corrected_when_it_ends() {
+        let mut live = LiveSummary::default();
+        live.absorb(self_summary(&as_champion("Malphite", "")));
+        assert_eq!(live.champion.as_deref(), Some("Malphite"), "nothing can tell yet");
+
+        live.absorb(self_summary(&as_champion("Viego", "")));
+        live.absorb(self_summary(&as_champion("Vi", "")));
+
+        assert_eq!(live.champion.as_deref(), Some("Viego"));
+    }
+
+    /// Recognised by name when the response has no key, which is every
+    /// hand-trimmed fixture and any client that stops sending it.
+    #[test]
+    fn viego_is_recognised_by_name_without_the_key() {
+        let summary = self_summary(&as_champion("Viego", ""));
+        assert!(summary.viego);
+        assert_eq!(summary.champion.as_deref(), Some("Viego"));
+    }
+
+    /// Nobody else is affected: a champion that is not Viego still tracks the
+    /// newest poll, as every other field does.
+    #[test]
+    fn settling_leaves_every_other_champion_to_the_newest_poll() {
+        assert_eq!(
+            settle_champion((Some("Ahri".into()), false), (Some("Lux".into()), false)),
+            (Some("Lux".into()), false)
+        );
+        assert_eq!(
+            settle_champion((Some("Ahri".into()), false), (None, false)),
+            (Some("Ahri".into()), false),
+            "and a poll that cannot place us gives nothing back"
+        );
+        assert_eq!(
+            settle_champion((Some("Viego".into()), true), (None, false)),
+            (Some("Viego".into()), true)
+        );
+        assert_eq!(
+            settle_champion((None, false), (Some("Viego".into()), true)),
+            (Some("Viego".into()), true)
+        );
     }
 
     /// Real capture (Practice Tool, 2026-09-01): `activePlayer` had both
