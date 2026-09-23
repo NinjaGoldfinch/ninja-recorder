@@ -1600,6 +1600,18 @@ impl Db {
         // recordings that were matched to a real game and therefore *should*
         // have a curve.
         //
+        // And narrower again, by the rule `recordings_awaiting_summary` has
+        // used since #209, so the two cannot disagree about which rows owe a
+        // curve. It needs live samples, because `write_gold_series` places
+        // the curve through their alignment and gives up before asking for
+        // anything when there are none. And it needs a mode with an enemy
+        // team: a Practice Tool game has none, so `lcu::timeline::gold_series`
+        // returns no points for it, and every Fill in spent a sides request
+        // and a timeline request on each such row to write nothing. That row
+        // is still scanned, for the `role` it never has, which is the
+        // cast-wide cost described above and asks the client for nothing of
+        // its own.
+        //
         // `finished_at IS NOT NULL` is the other half of being narrow, and it
         // is about the row rather than the column. A recording that is in
         // flight right now has an open row with almost nothing on it, so it
@@ -1613,7 +1625,13 @@ impl Db {
         // anyway.
         let mut stmt = conn.prepare(
             "SELECT id, started_at, duration_s, game_id,
-                    game_id IS NOT NULL AND NOT EXISTS (
+                    game_id IS NOT NULL
+                    AND COALESCE(game_mode, '') <> 'PRACTICETOOL'
+                    AND EXISTS (
+                        SELECT 1 FROM samples
+                         WHERE samples.recording_id = recordings.id
+                    )
+                    AND NOT EXISTS (
                         SELECT 1 FROM samples
                          WHERE samples.recording_id = recordings.id
                            AND samples.gold_diff IS NOT NULL
@@ -3035,10 +3053,97 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
+        // The live poller ran, so there is an alignment to draw a curve
+        // through.
+        db.insert_samples(1, &[live_sample(30.0)]).unwrap();
 
         let candidates = db.recordings_missing_metadata().unwrap();
         assert_eq!(candidates.len(), 1);
         assert!(candidates[0].needs_gold);
+    }
+
+    /// #209's rule, on the backfill. A Practice Tool game reaches match
+    /// history, so it has a `game_id`, a `queue` and a `patch`, and its
+    /// poller wrote samples; but it has no enemy team, so its timeline
+    /// yields no gold and it never gets a curve. It never gets a `role`
+    /// either, which is what still selects it.
+    #[test]
+    fn the_backfill_does_not_ask_a_practice_tool_game_for_a_gold_curve() {
+        let db = Db::open_temporary().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/practice.mp4".into(),
+            started_at: 1,
+            champion: Some("Shyvana".into()),
+            win: Some(false),
+            role: None,
+            patch: Some("16.18.123.4567".into()),
+            queue: Some(3140),
+            game_mode: Some("PRACTICETOOL".into()),
+            game_id: Some(7),
+            scoreboard_json: Some("{}".into()),
+            cs: Some(40),
+            finished_at: Some(1),
+            ..Default::default()
+        })
+        .unwrap();
+        db.insert_samples(1, &[live_sample(30.0), live_sample(31.0)]).unwrap();
+
+        let candidates = db.recordings_missing_metadata().unwrap();
+        assert_eq!(candidates.len(), 1, "scanned for the role it never has");
+        assert!(!candidates[0].needs_gold);
+    }
+
+    /// The exemption is by mode, not by shape: the same row from a game
+    /// with an enemy team still owes its curve.
+    #[test]
+    fn the_backfill_still_asks_a_classic_game_for_its_gold_curve() {
+        let db = Db::open_temporary().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/ranked.mp4".into(),
+            started_at: 1,
+            champion: Some("Shyvana".into()),
+            win: Some(false),
+            role: None,
+            patch: Some("16.18.123.4567".into()),
+            queue: Some(420),
+            game_mode: Some("CLASSIC".into()),
+            game_id: Some(7),
+            scoreboard_json: Some("{}".into()),
+            cs: Some(40),
+            finished_at: Some(1),
+            ..Default::default()
+        })
+        .unwrap();
+        db.insert_samples(1, &[live_sample(30.0)]).unwrap();
+
+        let candidates = db.recordings_missing_metadata().unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].needs_gold);
+    }
+
+    /// A recording whose poller never came up has no alignment, so
+    /// `write_gold_series` gives up before asking. Complete in every other
+    /// column, it is not a candidate at all.
+    #[test]
+    fn the_backfill_does_not_ask_for_a_curve_that_cannot_be_drawn() {
+        let db = Db::open_temporary().unwrap();
+        db.insert_recording(&NewRecording {
+            path: "/no-poller.mp4".into(),
+            started_at: 1,
+            champion: Some("Shyvana".into()),
+            win: Some(true),
+            role: Some("Jungle".into()),
+            patch: Some("16.17".into()),
+            queue: Some(420),
+            game_id: Some(7),
+            scoreboard_json: Some("{}".into()),
+            cs: Some(262),
+            finished_at: Some(1),
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert!(db.recordings_missing_metadata().unwrap().is_empty());
     }
 
     /// The narrowing that keeps the report honest. A recording with no
