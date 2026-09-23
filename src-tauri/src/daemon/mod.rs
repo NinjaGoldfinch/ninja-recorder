@@ -415,6 +415,14 @@ async fn start(paths: Paths) -> Result<Option<Started>, DaemonError> {
     if let Some(path) = log_file {
         info!("daemon", "logging to {}", path.display());
     }
+    // Which binary this session is, on the first line it writes. The file
+    // name already separates the builds (#202), but a reinstall, an update or
+    // a second daemon of the same build only shows up as a new pid or version.
+    info!("daemon", "ninja-recorder {} ({} build), pid {}",
+        env!("CARGO_PKG_VERSION"),
+        rpc::BUILD,
+        std::process::id()
+    );
     info!("daemon", "listening on {}", endpoint.display());
 
     // Before the supervisor starts polling — see `fixtures::set_base_dir`.

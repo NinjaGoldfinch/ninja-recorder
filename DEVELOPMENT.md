@@ -2598,6 +2598,20 @@ process can be told about. So the stem names the role: `ui.log` and
 table said all along. The dev portal lists its own files and picks the daemon's
 up through the same directory scan that already finds `libobs.log`.
 
+**And one per build** (#202). The devtools build keeps the release identifier so
+its portal reads the real library, which puts both builds' logs in the same
+directory, and with both installed that is the same problem again one level up:
+two daemons appending to one `daemon.log`, lines interleaved with nothing to say
+whose they are, each rotating the other's file away. It cost a verification
+pass real time reconstructing which daemon recorded which half of a game from
+the `listening on` lines. So a devtools build writes `daemon-devtools.log` and
+`ui-devtools.log`, the way its pipe name and Run value already carry the build,
+and a release build keeps the names every shipped version has used. Each
+process's first lines also name its version, build and pid, because a file name
+separates builds but not a reinstall, an update or a restart of the same one.
+The build suffix is the whole change: the data directory, the database and the
+recordings folder stay shared on purpose.
+
 ### Startup and shutdown order
 
 The log is opened first, before anything that can fail. That is a correction:

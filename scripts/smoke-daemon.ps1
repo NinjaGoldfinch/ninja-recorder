@@ -24,9 +24,14 @@
     The binary to start. Defaults to the debug build, which is what CI has
     already compiled by this point.
 
+.PARAMETER Build
+    Which build `Exe` is: `devtools` (the default, because that is what CI
+    compiles here) or `release`. It decides the pipe name and the log file,
+    both of which carry the build: `daemon-devtools.log` or `daemon.log`.
+
 .PARAMETER PipeName
     The endpoint to expect, without the `\\.\pipe\` prefix. Defaults to the
-    devtools build's, because that is what CI compiles here.
+    one `Build` names.
 
 .NOTES
     Deliberately not a `cargo test`. The protocol tests already drive `serve`
@@ -37,7 +42,9 @@
 [CmdletBinding()]
 param(
     [string]$Exe = "src-tauri/target/debug/ninja-recorder.exe",
-    [string]$PipeName = "ninja-recorder.com.ninjarecorder.app.devtools",
+    [ValidateSet('devtools', 'release')]
+    [string]$Build = 'devtools',
+    [string]$PipeName = "ninja-recorder.com.ninjarecorder.app.$Build",
     [int]$StartTimeoutSeconds = 30
 )
 
@@ -48,7 +55,9 @@ function Note($message) { Write-Host "  $message" }
 function Fail($message) { $script:failures += $message; Write-Host "  FAIL: $message" }
 
 $logDir = Join-Path $env:APPDATA "com.ninjarecorder.app\logs"
-$logFile = Join-Path $logDir "daemon.log"
+# Per build since #202, because both builds share this directory.
+$logName = if ($Build -eq 'devtools') { "daemon-devtools.log" } else { "daemon.log" }
+$logFile = Join-Path $logDir $logName
 $stdout = Join-Path $env:TEMP "daemon-stdout.txt"
 $stderr = Join-Path $env:TEMP "daemon-stderr.txt"
 
@@ -80,12 +89,12 @@ if ($daemon.HasExited) {
     Write-Host "The daemon exited with code $($daemon.ExitCode) before binding anything."
     Write-Host "--- stderr ---"; Get-Content $stderr -EA SilentlyContinue
     Write-Host "--- stdout ---"; Get-Content $stdout -EA SilentlyContinue
-    Write-Host "--- daemon.log ---"; Get-Content $logFile -EA SilentlyContinue
+    Write-Host "--- $logName ---"; Get-Content $logFile -EA SilentlyContinue
     throw "the daemon did not stay running"
 }
 if (-not $bound) {
     Stop-Process -Id $daemon.Id -Force -EA SilentlyContinue
-    Write-Host "--- daemon.log ---"; Get-Content $logFile -EA SilentlyContinue
+    Write-Host "--- $logName ---"; Get-Content $logFile -EA SilentlyContinue
     throw "no pipe named $PipeName appeared within $StartTimeoutSeconds seconds"
 }
 Note "the pipe is bound: \\.\pipe\$PipeName"
@@ -154,6 +163,13 @@ if ($log -match 'the tray will be invisible') {
     Note "no tray line in the log at all; this build may not have one"
 }
 
+# --- the log says which binary wrote it (#202) ------------------------------
+if ($log -match [regex]::Escape("($Build build), pid $($daemon.Id)")) {
+    Note "the log names the build and the pid"
+} else {
+    Fail "no line in $logName names the $Build build and pid $($daemon.Id)"
+}
+
 # --- a second daemon must leave quietly, and say nothing --------------------
 #
 # Compared by *reading* the file rather than by `(Get-Item).Length`. Windows
@@ -176,7 +192,7 @@ if ($after -eq $before) {
 
 Stop-Process -Id $daemon.Id -Force -EA SilentlyContinue
 
-Write-Host "--- daemon.log ---"
+Write-Host "--- $logName ---"
 Get-Content $logFile -EA SilentlyContinue
 Write-Host "--- stderr ---"
 Get-Content $stderr -EA SilentlyContinue

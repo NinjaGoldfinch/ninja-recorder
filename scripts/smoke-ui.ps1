@@ -23,6 +23,12 @@
 .PARAMETER Exe
     The binary to start, with no arguments, which is what `Launch::Ui` means.
 
+.PARAMETER Build
+    Which build `Exe` is: `devtools` (the default, because that is what CI
+    compiles) or `release`. The log files carry the build: a devtools build
+    writes `ui-devtools.log` and `daemon-devtools.log`, a release build
+    `ui.log` and `daemon.log`.
+
 .NOTES
     A headless runner is not a desktop. What this can assert is that the
     process starts, reaches `setup`, and connects; what it cannot assert is
@@ -32,6 +38,8 @@
 [CmdletBinding()]
 param(
     [string]$Exe = "src-tauri/target/debug/ninja-recorder.exe",
+    [ValidateSet('devtools', 'release')]
+    [string]$Build = 'devtools',
     [int]$TimeoutSeconds = 45
 )
 
@@ -41,8 +49,12 @@ function Note($m) { Write-Host "  $m" }
 function Fail($m) { $script:failures += $m; Write-Host "  FAIL: $m" }
 
 $logDir = Join-Path $env:APPDATA "com.ninjarecorder.app\logs"
-$uiLog = Join-Path $logDir "ui.log"
-$daemonLog = Join-Path $logDir "daemon.log"
+# Per build since #202, because both builds share this directory.
+$suffix = if ($Build -eq 'devtools') { "-devtools" } else { "" }
+$uiLogName = "ui$suffix.log"
+$daemonLogName = "daemon$suffix.log"
+$uiLog = Join-Path $logDir $uiLogName
+$daemonLog = Join-Path $logDir $daemonLogName
 $stdout = Join-Path $env:TEMP "ui-stdout.txt"
 $stderr = Join-Path $env:TEMP "ui-stderr.txt"
 
@@ -58,8 +70,8 @@ $ui = Start-Process -FilePath $Exe -PassThru -NoNewWindow `
     -RedirectStandardOutput $stdout -RedirectStandardError $stderr
 
 function Show-Everything {
-    Write-Host "--- ui.log ---";     Get-Content $uiLog -EA SilentlyContinue
-    Write-Host "--- daemon.log ---"; Get-Content $daemonLog -EA SilentlyContinue
+    Write-Host "--- $uiLogName ---"; Get-Content $uiLog -EA SilentlyContinue
+    Write-Host "--- $daemonLogName ---"; Get-Content $daemonLog -EA SilentlyContinue
     Write-Host "--- stderr ---";     Get-Content $stderr -EA SilentlyContinue
     Write-Host "--- stdout ---";     Get-Content $stdout -EA SilentlyContinue
 }
@@ -87,9 +99,9 @@ if ($ui.HasExited -and -not $reached) {
 if (-not $reached) {
     Show-Everything
     Get-Process ninja-recorder -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
-    throw "no ui.log after $TimeoutSeconds seconds, and the process is still running"
+    throw "no $uiLogName after $TimeoutSeconds seconds, and the process is still running"
 }
-Note "the UI reached setup and opened ui.log"
+Note "the UI reached setup and opened $uiLogName"
 
 # --- did it find a daemon? -------------------------------------------------
 #

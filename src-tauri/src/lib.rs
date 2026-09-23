@@ -588,7 +588,11 @@ pub fn run() {
         },
         Err(e) => eprintln!("[log] no app data directory, so no log file: {e}"),
     }
-    info!("launch", "the window process is starting ({mode:?})");
+    info!("launch", "the window process is starting ({mode:?}): ninja-recorder {} ({} build), pid {}",
+        env!("CARGO_PKG_VERSION"),
+        daemon::rpc::BUILD,
+        std::process::id()
+    );
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
