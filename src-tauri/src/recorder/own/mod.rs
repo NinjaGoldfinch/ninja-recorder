@@ -13,9 +13,10 @@
 //!    constraint, not a preference (DEVELOPMENT.md §1.1).
 //! 2. D3D11 for the texture path.
 //! 3. Media Foundation `SinkWriter` for H.264/AAC into fragmented MP4.
-//! 4. Process loopback for per-application game audio — the stage the P0c
-//!    gate is really about, and the one that decides whether Option B can
-//!    replace libobs rather than merely join it.
+//! 4. Process loopback for per-application game audio — P0c stage 1, proved
+//!    by `spikes/p0c-audio`. The libobs fork calls the same Windows API, so
+//!    its result decides whether *either* backend can isolate game audio,
+//!    not whether Option B can replace libobs (DEVELOPMENT.md §16).
 //!
 //! `recorder/libobs/` stays as the fallback and as a selectable second backend
 //! for exactly one release. WS8 deletes it.

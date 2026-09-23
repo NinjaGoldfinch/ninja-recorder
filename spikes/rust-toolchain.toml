@@ -1,0 +1,13 @@
+# The spikes build with the compiler the app is pinned to.
+#
+# rustup looks for this file in the working directory and its parents, and
+# `src-tauri/rust-toolchain.toml` is not a parent of `spikes/<crate>/`, so
+# without this a spike built with whatever the box had as its default. A spike
+# result that could be "the compiler was different" is the ambiguity the
+# spikes exist to avoid.
+#
+# **Bump it with `src-tauri/rust-toolchain.toml`, in the same PR.** That file
+# says why the pin is exact.
+[toolchain]
+channel = "1.98.1"
+components = ["clippy"]

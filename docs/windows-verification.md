@@ -926,6 +926,12 @@ modes here are silent, and the app's own UI will not show you most of them.
       against League on this machine, and a silent one says it does not. Either
       way the spike is then confirming a known answer rather than discovering
       one, which is the cheaper order to do them in. See #67.
+- [ ] **Run `spikes/p0c-audio` for #7**, following
+      [its README](../spikes/p0c-audio/README.md): the process-tree report,
+      then an include and an exclude capture with League in game and Discord
+      audible. Paste the output into #7; the results go in
+      [DEVELOPMENT.md §16](../DEVELOPMENT.md#16-the-capture-gate-and-what-it-is-allowed-to-decide)'s
+      P0c-1 rows, not here.
 - [ ] Record with each preset. Confirm the track *count* and order match the
       table in §2.5, and that a Game-only recording contains no microphone
       audio.
