@@ -18,14 +18,29 @@ path = "src/main.rs"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62", features = [
+    # `RtlGetVersion`, for the build number: GetVersionEx lies to a binary
+    # with no compatibility manifest.
+    "Wdk_System_SystemServices",
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
+    # `timeBeginPeriod`, so the cadence loop sleeps to the millisecond.
+    "Win32_Media",
+    "Win32_Media_Audio",
     "Win32_Media_MediaFoundation",
     "Win32_System_Com",
+    # The PROPVARIANT `IMMDevice::Activate` takes: windows-rs gates the
+    # method on both of these, and names neither when it is missing.
+    "Win32_System_Com_StructuredStorage",
+    # QueryPerformanceCounter: the one clock video, audio and WGC share.
+    "Win32_System_Performance",
+    "Win32_System_SystemInformation",
+    "Win32_System_Variant",
+    # TerminateProcess, for the kill.
+    "Win32_System_Threading",
     "Win32_System_WinRT",
     "Win32_System_WinRT_Direct3D11",
     "Win32_System_WinRT_Graphics_Capture",
@@ -36,4 +51,7 @@ windows = { version = "0.62", features = [
     "Graphics_DirectX_Direct3D11",
     "Foundation",
 ] }
+
+# `#[implement]` expands to `windows_core::` paths, so the crate it names has
+# to be a direct dependency, at the version `windows` itself uses.
 windows-core = "0.62.2"

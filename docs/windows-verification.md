@@ -944,6 +944,15 @@ modes here are silent, and the app's own UI will not show you most of them.
       audible. Paste the output into #7; the results go in
       [DEVELOPMENT.md §16](../DEVELOPMENT.md#16-the-capture-gate-and-what-it-is-allowed-to-decide)'s
       P0c-1 rows, not here.
+- [ ] **Run `spikes/p0c-video` for #8**, following
+      [its README](../spikes/p0c-video/README.md): `--list`, a clean
+      ten-minute run, a `--kill-after 300` run and a two-minute
+      `--encoder software` run, with ninja-recorder quit and League in a
+      Practice Tool game in borderless or windowed mode. Each run checks its
+      own file with the bundled `ffmpeg.exe`. Paste the output into #8; the
+      results go in
+      [DEVELOPMENT.md §16](../DEVELOPMENT.md#16-the-capture-gate-and-what-it-is-allowed-to-decide)'s
+      P0c-2 rows, not here.
 - [ ] Record with each preset. Confirm the track *count* and order match the
       table in §2.5, and that a Game-only recording contains no microphone
       audio.

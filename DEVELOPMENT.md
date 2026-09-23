@@ -2383,6 +2383,35 @@ and the game should not. Without it, "Discord absent" from the include run
 cannot be told apart from "Discord was not playing". The procedure is
 [`spikes/p0c-audio/README.md`](spikes/p0c-audio/README.md).
 
+### What the drift row is measuring
+
+#8's "drift under one frame" is the plan's **audio against video** at the end
+of a ten-minute sample (§4.5), not video against the wall clock. The first
+version of `spikes/p0c-video` measured the second, had no audio at all, and
+compared a frame count with elapsed time, which reports the game's frame rate
+rather than any drift.
+
+Video goes on a 60 fps grid kept by the performance counter; audio is counted
+by the sound card, whose crystal is not that one. WASAPI stamps each packet
+with the counter, which is what makes the two comparable. The spike reports
+three figures and the row wants all three:
+
+- **Raw**: the card's clock against the counter, uncorrected, with its ppm.
+  What a pipeline that timestamped audio by sample count would carry, and so
+  the size of the correction WS1.6's resampler has to make.
+- **Written**: the misalignment left after the spike slips single samples to
+  hold audio on the counter. This is the figure the gate reads.
+- **File**: audio end minus video end as ffmpeg decodes the result. Audio is
+  padded to the last video tick before finalizing, so an offset here was
+  added by the encoder or muxer. Its resolution is one AAC frame, 21 ms,
+  which is more than a video frame.
+
+The kill is `TerminateProcess`, what Task Manager's End task calls, so the
+killed file is what a crashed daemon would leave. "Playable" is measured, not
+looked at: the boxes read directly, a full decode, and the app's own faststart
+remux, and then a person opening it. The procedure is
+[`spikes/p0c-video/README.md`](spikes/p0c-video/README.md).
+
 ### What the spikes are allowed to decide
 
 Naming this in advance is the point of the section, for the same reason Q1a was
@@ -2439,12 +2468,14 @@ deliverable; everything above is the frame it goes in.
 | Worst drift over ten minutes, in frames | P0c-2 | |
 | A file killed at minute five is playable | P0c-2 | |
 | Encoder selected, and what was offered | P0c-2 | |
+| Software-only encode (#68's second arm): initialises, and holds 60 fps | P0c-2 | |
 
 **The vendor half of #8's exit criterion cannot be met.** It asks for encoder
 detection on two GPU vendors; #68 settled that only NVIDIA and software-only
 are available here, so the AMF and oneVPL orderings stay unverified. That is a
-recorded gap rather than a pending measurement, and the row above says what was
-offered rather than pretending to cover it.
+recorded gap rather than a pending measurement, and the rows above say what was
+offered and whether the software path works, rather than pretending to cover
+it.
 
 ---
 
