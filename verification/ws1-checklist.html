@@ -1,0 +1,817 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ninja-recorder: WS1 and fix verification, 2026-09-23</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1d1f; --muted: #6b6b70; --line: #e2e2e0;
+    --code: #f0f0ee; --accent: #3b5bdb; --ok: #1f8a4c; --ok-bg: #e7f5ec; --bad: #c92a2a; --bad-bg: #fdecec;
+    --warn: #a15c00; --warn-bg: #fff4e0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151517; --panel: #1e1e21; --ink: #ececef; --muted: #9a9aa2; --line: #313136;
+      --code: #26262a; --accent: #7c95ff; --ok: #4cc27f; --ok-bg: #173323; --bad: #ff6b6b; --bad-bg: #3a1c1c;
+      --warn: #f0b049; --warn-bg: #3a2d14;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); padding: 12px 20px; }
+  header h1 { font-size: 17px; margin: 0 0 6px; }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .progress { flex: 1 1 240px; height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; min-width: 160px; }
+  .progress > div { height: 100%; background: var(--accent); width: 0; transition: width .2s; }
+  button { font: inherit; font-size: 13px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  main { max-width: 980px; margin: 0 auto; padding: 16px 20px 80px; }
+  nav.toc { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; }
+  nav.toc a { color: var(--ink); text-decoration: none; display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; }
+  nav.toc a:hover { color: var(--accent); }
+  section.task { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin: 0 0 18px; padding: 4px 18px 16px; }
+  section.task > h2 { font-size: 18px; margin: 14px 0 2px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .issue { font-size: 13px; color: var(--muted); font-weight: normal; }
+  .why { color: var(--muted); margin: 2px 0 10px; }
+  h3 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 18px 0 6px; }
+  ol.steps { padding-left: 22px; margin: 6px 0; }
+  ol.steps li { margin: 6px 0; }
+  pre { background: var(--code); border-radius: 6px; padding: 10px 12px; overflow-x: auto; font: 12.5px/1.45 ui-monospace, "Cascadia Code", Consolas, monospace; margin: 6px 0; position: relative; white-space: pre; }
+  pre button.copy { position: absolute; top: 6px; right: 6px; font-size: 11px; padding: 2px 7px; opacity: .8; }
+  code { background: var(--code); border-radius: 4px; padding: 1px 4px; font: 12.5px ui-monospace, Consolas, monospace; }
+  .note { border-left: 3px solid var(--warn); background: var(--warn-bg); padding: 8px 12px; border-radius: 0 6px 6px 0; margin: 8px 0; }
+  .check { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; border-bottom: 1px dashed var(--line); }
+  .check:last-child { border-bottom: 0; }
+  .check input { margin-top: 4px; width: 16px; height: 16px; flex: none; }
+  .field { display: grid; grid-template-columns: 260px 1fr; gap: 4px 14px; align-items: start; padding: 7px 0; border-bottom: 1px dashed var(--line); }
+  .field label { font-weight: 500; }
+  .field .hint { grid-column: 2; color: var(--muted); font-size: 12.5px; }
+  .field input[type=text], .field input[type=number], .field select, .field textarea {
+    width: 100%; font: inherit; font-size: 14px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink);
+  }
+  .field textarea { font: 12px/1.4 ui-monospace, Consolas, monospace; min-height: 90px; resize: vertical; }
+  @media (max-width: 700px) { .field { grid-template-columns: 1fr; } .field .hint, .msg { grid-column: 1 !important; } }
+  .msg { grid-column: 2; font-size: 12.5px; padding: 3px 8px; border-radius: 5px; }
+  .msg:empty { display: none; }
+  .ok { color: var(--ok); background: var(--ok-bg); }
+  .bad { color: var(--bad); background: var(--bad-bg); }
+  .warn { color: var(--warn); background: var(--warn-bg); }
+  .parsed { grid-column: 2; font-size: 12.5px; }
+  .parsed div { padding: 2px 8px; border-radius: 4px; margin: 2px 0; }
+  .status { font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 10px; background: var(--line); color: var(--muted); }
+  .result-row { display: flex; gap: 12px; align-items: center; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+  .result-row select { font: inherit; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  .result-row textarea { flex: 1 1 100%; font: inherit; font-size: 14px; min-height: 50px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
+  dialog { max-width: 900px; width: 92vw; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--ink); }
+  dialog textarea { width: 100%; height: 60vh; font: 12px/1.4 ui-monospace, Consolas, monospace; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>ninja-recorder: WS1 and fix verification</h1>
+  <div class="bar">
+    <div class="progress" title="Required items complete"><div id="progress"></div></div>
+    <span id="progress-text" class="status">0%</span>
+    <button class="primary" id="export-md">Export results (markdown)</button>
+    <button id="export-json">Save JSON</button>
+    <button id="import-json">Load JSON</button>
+    <button id="reset">Reset</button>
+  </div>
+</header>
+
+<main>
+  <p class="why">Work through the tasks in order, because later ones reuse builds and games set up by earlier ones. Your progress is saved in this browser as you go. Fields check what you enter, and the "paste output" boxes read the pasted text and pull out the facts that decide the result. <strong>Export results</strong> produces markdown grouped by issue, ready to paste into each one.</p>
+  <nav class="toc" id="toc"></nav>
+  <div id="sections"></div>
+</main>
+
+<dialog id="dlg">
+  <p id="dlg-title" style="margin-top:0;font-weight:600"></p>
+  <textarea id="dlg-text"></textarea>
+  <div class="bar" style="margin-top:8px">
+    <button class="primary" id="dlg-copy">Copy</button>
+    <button id="dlg-download">Download</button>
+    <button id="dlg-apply" hidden>Load this JSON</button>
+    <button id="dlg-close">Close</button>
+  </div>
+</dialog>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------- constants
+const REPO = "https://github.com/NinjaGoldfinch/ninja-recorder";
+const MIN_ALPHA = 98;          // #212 and #213 landed in alpha.97 and alpha.98
+const LATEST_ALPHA = 101;      // alpha.101 = 17c6071, tree 798986e, the same tree as the trim run
+const TRIM_RUN = 35829801809;  // trimmed devtools artifact (f347ddb, tree 798986e)
+const MAIN_RUN = 35830656950;  // untrimmed devtools artifact (17c6071, tree 798986e)
+const LOG = String.raw`$env:APPDATA\com.ninjarecorder.app\logs`;
+const AAC_FRAME_MS = 1024 / 48;   // 21.33 ms
+const FRAME_MS = 1000 / 60;       // 16.67 ms
+
+// ---------------------------------------------------------------- helpers
+const num = (v) => { const n = Number(String(v).trim().replace(/,/g, "")); return String(v).trim() === "" || !isFinite(n) ? null : n; };
+const req = (v) => String(v ?? "").trim() !== "";
+const R = (ok, msg) => ({ ok, msg });
+const parseTimes = (s) => String(s).split(/[,\s]+/).filter(Boolean).map(t => {
+  const m = t.match(/^(\d+):(\d{1,2})$/); return m ? (+m[1]) * 60 + (+m[2]) : NaN; });
+const alphaOf = (v) => { const m = String(v).trim().match(/^v?2\.0\.0-alpha\.(\d+)$/); return m ? +m[1] : null; };
+
+function vAlpha(v) {
+  if (!req(v)) return R(null, "");
+  const n = alphaOf(v);
+  if (n === null) return R(false, "Expected something like 2.0.0-alpha.101");
+  if (n < MIN_ALPHA) return R(false, `alpha.${n} predates #212/#213; install alpha.${MIN_ALPHA} or later (alpha.${LATEST_ALPHA} recommended)`);
+  return R(true, n >= LATEST_ALPHA ? "Has every fix" : `OK; alpha.${LATEST_ALPHA} also carries the trim fix`);
+}
+const vReq = (hint) => (v) => req(v) ? R(true, "") : R(null, hint || "");
+const vPattern = (re, bad) => (v) => !req(v) ? R(null, "") : re.test(String(v).trim()) ? R(true, "") : R(false, bad);
+const vEquals = (want) => (v) => !req(v) ? R(null, "") :
+  String(v).trim().toLowerCase() === want.toLowerCase() ? R(true, "") : R(false, `Expected "${want}": this is the bug`);
+
+// A parsed fact: [label, value, ok|null|false]
+const F = (label, value, ok) => ({ label, value, ok });
+
+// ---------------------------------------------------------------- output parsers
+function parseAudio(mode) {
+  return (t) => {
+    if (!req(t)) return [];
+    const out = [];
+    const v = t.match(/(AUDIO CAPTURED|SILENCE CAPTURED|NOTHING CAPTURED|ONLY NOISE CAPTURED|activation was refused)/);
+    if (v) {
+      const good = v[1] === "AUDIO CAPTURED";
+      out.push(F(`${mode} verdict`, v[1], good ? true : false));
+    } else out.push(F(`${mode} verdict`, "not found: paste the whole output, including the == result == block", false));
+    const root = t.match(/^root\s+(\d+)\s+(.+)$/m);
+    if (root) out.push(F("root", `${root[1]} ${root[2].trim()}`, /League of Legends\.exe/i.test(root[2]) ? true : false));
+    const el = t.match(/^elevated\s+(\S+)/m);
+    if (el) out.push(F("elevated", el[1], /false|no/i.test(el[1]) ? true : false));
+    return out;
+  };
+}
+
+function parseList(t) {
+  if (!req(t)) return [];
+  const out = [];
+  const root = t.match(/^root\s+(\d+)\s+(.+)$/m);
+  out.push(root ? F("root PID", `${root[1]} (${root[2].trim()})`, /League of Legends\.exe/i.test(root[2]))
+                : F("root PID", "no 'root' line: was League in game?", false));
+  const how = t.match(/^resolved by\s+(.+)$/m);
+  if (how) {
+    const disagree = /different|differs|another|mismatch|not the same|does not match/i.test(how[1]);
+    out.push(F("resolved by", how[1].trim(), disagree ? false : true));
+  }
+  const el = t.match(/^elevated\s+(\S+)/m);
+  if (el) out.push(F("elevated", el[1], /false|no/i.test(el[1])));
+  const win = t.match(/^windows\s+(.+)$/m);
+  if (win) out.push(F("windows", win[1].trim(), null));
+  const disc = t.split(/\r?\n/).filter(l => /discord/i.test(l));
+  if (disc.length) {
+    const inside = disc.filter(l => !/outside the tree/i.test(l));
+    out.push(F("Discord processes", `${disc.length} listed; ${inside.length ? inside.length + " NOT outside the tree" : "all outside the tree"}`, inside.length === 0));
+  } else out.push(F("Discord processes", "none listed: Discord must be running for #7", false));
+  const anc = t.match(/ancestors?[\s\S]{0,400}/i);
+  if (anc) out.push(F("game launched from inside the client's tree", /LeagueClient/i.test(anc[0]) ? "yes (LeagueClient is an ancestor)" : "no LeagueClient among the ancestors", null));
+  return out;
+}
+
+function driftFacts(t) {
+  const m = t.match(/Worst drift over ten minutes, in frames\s*:\s*([\d.]+)\s*f written \(([^)]*)\),\s*([\d.]+)\s*f raw device drift \(([^)]*)\),\s*file end offset\s*([+\-]?[\d.]+|-)/);
+  if (!m) return null;
+  return { written: +m[1], clock: m[2], raw: +m[3], ppm: m[4], file: m[5] === "-" ? null : +m[5] };
+}
+
+function parseVideoClean(t) {
+  if (!req(t)) return [];
+  const out = [];
+  const reach = t.match(/WGC frames reach a fragmented MP4\s*:\s*(.+)/);
+  out.push(reach ? F("frames reach a fragmented MP4", reach[1].trim(), /^yes/i.test(reach[1].trim()))
+                 : F("frames reach a fragmented MP4", "no §16 rows block: paste the whole output", false));
+  const d = driftFacts(t);
+  if (d) {
+    out.push(F("drift written", `${d.written} f (${d.clock})`, d.written < 1));
+    out.push(F("raw device drift", `${d.raw} f, ${d.ppm}`, null));
+    if (d.file !== null) {
+      const agree = Math.abs(d.file * FRAME_MS - d.written * FRAME_MS) <= AAC_FRAME_MS + 0.01;
+      out.push(F("file end offset", `${d.file} f = ${(d.file * FRAME_MS).toFixed(1)} ms; ${agree ? "agrees with written within one AAC frame" : "differs from written by more than one AAC frame (21.3 ms)"}`, agree));
+    } else out.push(F("file end offset", "not measured (no ffmpeg found?)", false));
+  } else if (reach) out.push(F("drift", "no drift row: was audio on?", false));
+  const v = t.match(/^verdict\s+(.+)$/m);
+  if (v) out.push(F("file verdict", v[1].trim(), /^PLAYABLE/.test(v[1].trim())));
+  const ld = t.match(/^loaded\s+(.+)$/m);
+  if (ld) out.push(F("encoder loaded", ld[1].trim(), /nvidia|nvenc|amd|amf|intel|qsv|quick ?sync/i.test(ld[1]) ? true : null));
+  if (/WARNING/i.test(t)) out.push(F("warnings", "the output contains WARNING lines; read them", null));
+  const vt = t.match(/^video timing\s+(.+)$/m);
+  if (vt) out.push(F("video timing", vt[1].trim(), null));
+  const ct = t.match(/^content\s+(.+)$/m);
+  if (ct) { const mean = ct[1].match(/mean\s+([\d.]+)/); out.push(F("content", ct[1].trim(), mean ? +mean[1] > 5 : null)); }
+  return out;
+}
+
+function parseVideoKilled(t) {
+  if (!req(t)) return [];
+  const out = [];
+  const v = t.match(/^verdict\s+(.+)$/m);
+  out.push(v ? F("killed file verdict", v[1].trim(), /^PLAYABLE/.test(v[1].trim()))
+             : F("killed file verdict", "no verdict line: paste the whole output, including the file check", false));
+  const fr = t.match(/^fragmented\s+(.+)$/m);
+  if (fr) out.push(F("fragmented", fr[1].trim(), /^yes/i.test(fr[1].trim())));
+  const tl = t.match(/^tail lost\s+(.+)$/m);
+  if (tl) out.push(F("tail lost", tl[1].trim(), null));
+  const fs = t.match(/^faststart remux\s+(.+)$/m);
+  if (fs) out.push(F("faststart remux", fs[1].trim(), /fail/i.test(fs[1]) ? false : true));
+  const d = driftFacts(t);
+  if (d) out.push(F("drift written (to the kill)", `${d.written} f`, d.written < 1));
+  return out;
+}
+
+function parseVideoSoftware(t) {
+  if (!req(t)) return [];
+  const out = [];
+  const ld = t.match(/^loaded\s+(.+)$/m);
+  out.push(ld ? F("software encoder loaded", ld[1].trim(), true) : F("software encoder", "no 'loaded' line: did it initialise?", false));
+  const vt = t.match(/^video timing\s+(.+)$/m);
+  if (vt) { const late = vt[1].match(/([\d.]+)\s*frame\(s\) late/); out.push(F("holds 60 fps", vt[1].trim(), late ? +late[1] < 1 : null)); }
+  const v = t.match(/^verdict\s+(.+)$/m);
+  if (v) out.push(F("file verdict", v[1].trim(), /^PLAYABLE/.test(v[1].trim())));
+  return out;
+}
+
+function parseVideoList(t) {
+  if (!req(t)) return [];
+  const out = [];
+  const gpus = t.match(/(NVIDIA|AMD|Radeon|Intel)[^\n]*/gi);
+  out.push(gpus ? F("GPU/encoder mentions", [...new Set(gpus.map(g => g.trim()))].slice(0, 4).join(" | "), true)
+                : F("GPUs", "no NVIDIA/AMD/Intel lines found", false));
+  if (/RiotWindowClass|League of Legends/i.test(t)) out.push(F("game window", "listed", true));
+  else out.push(F("game window", "not listed: run it in game", false));
+  return out;
+}
+
+function parseRecovery(t) {
+  if (!req(t)) return [];
+  const m = t.match(/startup recovery: finished (\d+) interrupted recording\(s\), removed (\d+) with no file/);
+  if (!m) return [F("startup recovery line", /startup recovery failed/.test(t) ? "startup recovery FAILED" : "not found", false)];
+  return [F("recovered", `${m[1]} interrupted recording(s), ${m[2]} removed`, +m[1] >= 1)];
+}
+
+function parseResume(t) {
+  if (!req(t)) return [F("after the reconnect", "empty output counts as a pass; type 'none' if the command printed nothing", null)];
+  if (/^\s*none\s*$/i.test(t)) return [F("resume sweep after the reconnect", "nothing logged", true)];
+  const resumed = (t.match(/resumed recording \d+/g) || []);
+  const resuming = (t.match(/resuming (\d+) unfinished patch/g) || []);
+  const out = [];
+  out.push(F("'resumed recording' lines", resumed.length ? resumed.join(", ") : "none", resumed.length === 0));
+  if (resuming.length) out.push(F("'resuming N' lines", resuming.join(", ") + " (a pending row was selected: check which)", false));
+  return out;
+}
+
+function parseBuildLines(t) {
+  if (!req(t)) return [];
+  const lines = t.split(/\r?\n/).filter(l => /\((release|devtools) build\), pid \d+/.test(l));
+  if (!lines.length) return [F("build lines", "no '(release|devtools build), pid N' lines found", false)];
+  const out = [];
+  let rel = 0, dev = 0, wrong = [];
+  for (const l of lines) {
+    const build = l.match(/\((release|devtools) build\)/)[1];
+    const file = (l.match(/([\w.-]+\.log):\d+:/) || [])[1] || "";
+    if (build === "release") rel++; else dev++;
+    const expectDev = /-devtools\.log$/.test(file);
+    if (file && expectDev !== (build === "devtools")) wrong.push(`${build} line in ${file}`);
+  }
+  out.push(F("release build lines", String(rel), rel > 0));
+  out.push(F("devtools build lines", String(dev), dev > 0));
+  out.push(F("each line in its own build's file", wrong.length ? wrong.join("; ") : "yes", wrong.length === 0));
+  return out;
+}
+
+function parseLogDir(t) {
+  if (!req(t)) return [];
+  const want = ["daemon.log", "daemon-devtools.log", "ui.log", "ui-devtools.log", "libobs.log", "libobs-devtools.log"];
+  return want.map(n => {
+    const re = new RegExp("(^|\\s)" + n.replace(/[.-]/g, "\\$&") + "\\s+(\\d+)", "m");
+    const m = t.match(re);
+    return m ? F(n, `${m[2]} bytes`, +m[2] > 0) : F(n, "missing", false);
+  });
+}
+
+function parseTrimPresence(t) {
+  if (!req(t)) return [];
+  const fails = t.split(/\r?\n/).filter(l => /\bFAIL\b/.test(l));
+  const passes = t.split(/\r?\n/).filter(l => /\bPASS\b/.test(l));
+  if (!fails.length && !passes.length) return [F("presence check", "no PASS/FAIL lines found", false)];
+  return [F("presence check", fails.length ? fails.map(s => s.trim()).join(" | ") : `${passes.length} PASS`, fails.length === 0 && passes.length >= 8)];
+}
+
+function parseEmptyMeansPass(label) {
+  return (t) => {
+    if (!req(t)) return [F(label, "type 'none' if the command printed nothing", null)];
+    if (/^\s*none\s*$/i.test(t)) return [F(label, "nothing found", true)];
+    const n = t.split(/\r?\n/).filter(l => l.trim()).length;
+    return [F(label, `${n} line(s) found: paste them into the issue even if they look harmless`, false)];
+  };
+}
+
+function parseModuleDiff(t) {
+  if (!req(t)) return [F("module diff", "type 'none' if Compare-Object printed nothing", null)];
+  if (/^\s*none\s*$/i.test(t)) return [F("module diff", "identical module lists", true)];
+  const lines = t.split(/\r?\n/).filter(l => /<=|=>/.test(l));
+  const extra = lines.filter(l => /=>/.test(l));
+  const gone = lines.filter(l => /<=/.test(l)).map(l => l.replace(/\s*<=\s*/, "").trim());
+  const unexpected = gone.filter(g => !/coreaudio-encoder|libobs-opengl/i.test(g));
+  const out = [F("only in the untrimmed log", gone.length ? gone.join(", ") : "none", unexpected.length === 0)];
+  if (extra.length) out.push(F("only in the trimmed log", extra.map(l => l.replace(/\s*=>\s*/, "").trim()).join(", "), null));
+  return out;
+}
+
+// ---------------------------------------------------------------- the tasks
+const PS_KILL_DAEMON = String.raw`Get-CimInstance Win32_Process -Filter "Name = 'ninja-recorder.exe'" |
+    Where-Object CommandLine -like '*--daemon*' |
+    ForEach-Object { "killing daemon pid $($_.ProcessId)"; Stop-Process -Id $_.ProcessId -Force }`;
+
+const SECTIONS = [
+{
+  id: "setup", title: "0. Setup and builds", issue: "", why: "Get the right builds, and record the machine facts every issue needs.",
+  steps: [
+    `Install <strong>release <a href="${REPO}/releases/tag/v2.0.0-alpha.${LATEST_ALPHA}" target="_blank">v2.0.0-alpha.${LATEST_ALPHA}</a></strong> (or let the in-app updater take you there). alpha.${MIN_ALPHA} is the oldest build that carries #200–#203 and #212/#213.`,
+    `Download the <strong>trimmed devtools</strong> installer from <a href="${REPO}/actions/runs/${TRIM_RUN}" target="_blank">run ${TRIM_RUN}</a>: artifact <code>ninja-recorder-devtools-libobs-trim-windows-latest-f347ddb…</code>. Keep it for task 6.`,
+    `Download the <strong>untrimmed devtools</strong> installer from <a href="${REPO}/actions/runs/${MAIN_RUN}" target="_blank">run ${MAIN_RUN}</a>: artifact <code>ninja-recorder-devtools-windows-latest-17c6071…</code>. It is the same source tree (<code>798986e</code>) as the trimmed one, so the two differ only by the trim. Artifacts expire after 7 days.`,
+    `Pull <code>main</code> on the box (<code>git pull</code>) so <code>spikes/</code> and <code>scripts/</code> match what you run.`,
+  ],
+  code: String.raw`# Machine facts for the fields below
+(Get-CimInstance Win32_OperatingSystem) | Select-Object Caption, BuildNumber
+Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion`,
+  fields: [
+    { k: "date", label: "Date", type: "text", v: vReq(), hint: "Pre-filled with today; change it if you run on another day.", init: () => new Date().toISOString().slice(0, 10) },
+    { k: "release", label: "Release build installed", type: "text", v: vAlpha, hint: "From Settings, or the installer's file name. For example 2.0.0-alpha.101." },
+    { k: "winbuild", label: "Windows build number", type: "text", v: vPattern(/^\d{5}(\.\d+)?$/, "Expected the build number, for example 26100"), hint: "BuildNumber from the command above." },
+    { k: "gpu", label: "GPU and driver version", type: "text", v: vReq(), hint: "For example: RTX 4070, 581.29" },
+    { k: "patch", label: "League patch", type: "text", v: vPattern(/^\d+\.\d+/, "Expected something like 16.18"), hint: "" },
+  ],
+  checks: [
+    { k: "dl_trim", label: "Trimmed devtools installer downloaded" },
+    { k: "dl_untrim", label: "Untrimmed devtools installer downloaded" },
+    { k: "pulled", label: "The repository on the box is at current main" },
+  ],
+},
+{
+  id: "t200", title: "1. A daemon killed mid-game", issue: "#200, and #198/#199 from #205",
+  why: "The recovered card keeps its items, spells and runes (#200). The recording that starts after the restart carries only its own markers, at the right video times (#198/#199).",
+  steps: [
+    `Release build running, and the devtools build <strong>not</strong> running. Start a <strong>Practice Tool</strong> game and let recording begin.`,
+    `<strong>Buy two or three items</strong> first, because items are what #200 is about. Then make one or two events before the kill: die to the enemy tower, or take a dragon. Note their game times.`,
+    `At about 2–3 minutes of game time, kill the daemon (the UI and the game stay up):`,
+    { code: PS_KILL_DAEMON },
+    `Start ninja-recorder from the Start menu if a new daemon hasn't appeared by itself. Task Manager should show two <code>ninja-recorder.exe</code>.`,
+    `Stay in the game at least another minute, and make one or two more events. Note their game times too. Then end the game.`,
+    `Read the recovery line:`,
+    { code: String.raw`Select-String -Path "${LOG}\daemon.log" -Pattern 'startup recovery' | Select-Object -Last 3` },
+    `Open the library. There are two cards for this game: the <strong>recovered</strong> one (the footage up to the kill) and the <strong>second</strong> one (from the restart to the end).`,
+  ],
+  pastes: [
+    { k: "recovery", label: "Paste: the startup recovery line", parse: parseRecovery },
+  ],
+  checks: [
+    { k: "items", label: "#200: the recovered card shows items, summoner spells and runes (Practice Tool has no match record to fill them in later)" },
+    { k: "card_rest", label: "The recovered card still has its champion, KDA, CS and CS-diff curve, and its pre-kill markers" },
+  ],
+  fields: [
+    { k: "pre_times", label: "Game times of the events before the kill", type: "text", v: vPattern(/^(\d+:\d{2})([,\s]+\d+:\d{2})*$/, "List them like 1:02, 2:15"), hint: "Read them off the game clock." },
+    { k: "kill_time", label: "Game time of the kill", type: "text", v: vPattern(/^\d+:\d{2}$/, "Like 2:20") },
+    { k: "post_times", label: "Game times of the events after the restart", type: "text", v: vPattern(/^(\d+:\d{2})([,\s]+\d+:\d{2})*$/, "List them like 2:39, 2:56") },
+    { k: "second_markers", label: "#199: markers listed on the second recording, as video times", type: "text",
+      v: (v, s) => {
+        if (!req(v)) return R(null, "");
+        const t = parseTimes(v);
+        if (t.some(isNaN)) return R(false, "List them like 0:16, 0:33, or 'none'");
+        const post = parseTimes(s.post_times || "").filter(n => !isNaN(n));
+        if (post.length && t.length !== post.length) return R(false, `${t.length} marker(s), but you made ${post.length} event(s) after the restart. More means it inherited markers from before the kill (#199)`);
+        if (t.length > 1 && t.every(n => n === 0)) return R(false, "Every marker at 0:00: that is #198");
+        return R(true, "Only its own markers");
+      }, hint: "Open the second card's review page. With the events above, expect exactly the post-restart ones." },
+    { k: "offset_ok", label: "#198: do those video times line up?", type: "select", options: ["", "yes, each is about (game time − the time the second recording started)", "no: at 0:00 or elsewhere"],
+      v: (v) => !req(v) ? R(null, "") : v.startsWith("yes") ? R(true, "") : R(false, "That is #198") },
+  ],
+},
+{
+  id: "t201", title: "2. The resume sweep leaves a finished Practice Tool row alone", issue: "#201 (#209)",
+  why: "Before the fix, each League client connect re-fetched and re-patched every Practice Tool row from the last 48 hours, logging 'resumed recording N'.",
+  steps: [
+    `Right after task 1's games (both Practice Tool rows count), with the release build running, <strong>run this before restarting anything</strong>:`,
+    { code: String.raw`$since = (Get-Date).ToUniversalTime()` },
+    `Quit the League client completely (tray → Exit), wait 10 s, and start it again. Wait until it is at the home screen, then give it another 30 s.`,
+    `In the <strong>same</strong> PowerShell window:`,
+    { code: String.raw`Get-Content "${LOG}\daemon.log" | Where-Object {
+    $_ -match '^(\S+Z) ' -and [datetime]::Parse($Matches[1]).ToUniversalTime() -gt $since
+} | Select-String 'resum'` },
+    `Paste what it printed. If it printed nothing, type <code>none</code>.`,
+  ],
+  pastes: [ { k: "resume", label: "Paste: 'resum' lines since the reconnect", parse: parseResume } ],
+  checks: [ { k: "connected", label: "daemon.log shows the client connecting again after $since (so the sweep had its chance to run)" } ],
+},
+{
+  id: "t203", title: "3. A game that ends while Viego is possessing someone", issue: "#203 (#208)",
+  why: "The card must say Viego, not the champion he was possessing when the game ended.",
+  steps: [
+    `Release build running. Create a <strong>custom game</strong>, add one bot to the enemy team, and pick <strong>Viego</strong>.`,
+    `Kill the bot champion. Viego's passive possesses the corpse. <strong>While possessing</strong>, end the game: either leave (Esc → Exit game), or time it so the nexus falls while you are possessing. Leaving is the easy way to reproduce it: the recording's last poll is then the possessed form, which is what #203 was.`,
+    `Open the new card in the library, and its review page.`,
+    `If it's easy, also take a note of what the in-game scoreboard called you while possessing.`,
+  ],
+  fields: [
+    { k: "possessed", label: "Champion possessed when the game ended", type: "text", v: vReq() },
+    { k: "ended", label: "How the game ended", type: "select", options: ["", "left the game while possessing", "nexus fell while possessing", "other (say in notes)"], v: vReq() },
+    { k: "card_champ", label: "Champion shown on the card", type: "text", v: vEquals("Viego"), hint: "The icon and the name." },
+  ],
+  checks: [ { k: "review_champ", label: "The review page names Viego too" } ],
+},
+{
+  id: "t7", title: "4. Audio spike: per-process loopback", issue: "#7 (WS1.3)",
+  why: "The gate question: can process loopback capture League's audio and nothing else (Discord), and which process is the root?",
+  note: "#66 (the v2.1 licence) is still open. #78 says to decide it before this run counts as the gate result; #7 disagrees. Run it anyway: as a rehearsal, or as the result if you've settled that.",
+  steps: [
+    `Ordinary (not elevated) PowerShell. League <strong>in game</strong> (Practice Tool is fine), game sound on. <strong>Discord audibly playing</strong> through the same output for the whole run: a voice channel, a Soundboard sound, or a stream. Nothing else making noise.`,
+    { code: String.raw`cd spikes\p0c-audio
+cargo build --release
+$spike = ".\target\release\p0c-audio.exe"
+& $spike --list 2>&1 | Tee-Object list.txt                  # the report, no capture
+& $spike 2>&1 | Tee-Object include.txt                      # 60 s: the game's tree only
+& $spike --mode exclude 2>&1 | Tee-Object exclude.txt       # 60 s: everything except the game` },
+    `Keep the game making noise during the captures (walk, cast, hit a dummy). If the report names more than one League process, or says the window belongs to another PID, write that down and re-run with <code>--pid &lt;n&gt;</code>.`,
+    `Then <strong>listen</strong> to both <code>p0c-audio-*.wav</code> files (Audacity or VLC). <strong>Don't attach them to the issue</strong>: the exclude file can contain other people's voices.`,
+  ],
+  pastes: [
+    { k: "list", label: "Paste: list.txt", parse: parseList },
+    { k: "include", label: "Paste: include.txt", parse: parseAudio("include") },
+    { k: "exclude", label: "Paste: exclude.txt", parse: parseAudio("exclude") },
+  ],
+  fields: [
+    { k: "inc_game", label: "include WAV: game audible?", type: "select", options: ["", "yes", "no"], v: (v) => !req(v) ? R(null, "") : v === "yes" ? R(true, "") : R(false, "Wrong root, or Vanguard in the way") },
+    { k: "inc_discord", label: "include WAV: Discord audible?", type: "select", options: ["", "no", "yes"], v: (v) => !req(v) ? R(null, "") : v === "no" ? R(true, "") : R(false, "Not isolating (unless the report put Discord inside the tree)") },
+    { k: "exc_discord", label: "exclude WAV: Discord audible?", type: "select", options: ["", "yes", "no"], v: (v) => !req(v) ? R(null, "") : v === "yes" ? R(true, "The control holds: Discord was playing") : R(false, "Inconclusive: Discord wasn't audible, so make it play and re-run") },
+    { k: "exc_game", label: "exclude WAV: game audible?", type: "select", options: ["", "no", "yes"], v: (v) => !req(v) ? R(null, "") : v === "no" ? R(true, "") : R(false, "The exclude mode leaked the game: note it") },
+    { k: "discord_src", label: "What Discord was playing", type: "text", v: vReq() },
+    { k: "other_noise", label: "Anything else making noise", type: "text", v: vReq("Type 'nothing' if nothing") },
+  ],
+  verdict: (s) => {
+    const a = s.inc_game, b = s.inc_discord, c = s.exc_discord;
+    if (!a || !b || !c) return null;
+    if (a === "yes" && b === "no" && c === "yes") return { ok: true, text: "PASS: process loopback isolates game audio from Discord" };
+    if (c === "no") return { ok: null, text: "INCONCLUSIVE: Discord wasn't audible in the control" };
+    return { ok: false, text: "FAIL: see the table in spikes/p0c-audio/README.md" };
+  },
+},
+{
+  id: "t8", title: "5. Video spike: WGC + Media Foundation", issue: "#8 (WS1.4)",
+  why: "Do WGC frames reach a fragmented MP4? Is audio/video drift under one frame over ten minutes? Does a file killed at minute five still play? Which encoder was picked?",
+  note: "It has never been built or run on Windows. A compile, link or runtime error is a finding: paste it as it is.",
+  steps: [
+    `<strong>Quit ninja-recorder</strong> (tray → Quit), but leave it installed: the spike uses its bundled <code>ffmpeg.exe</code>. League in a Practice Tool game for about 25 minutes, in <strong>Borderless or Windowed</strong>, never minimised. Game sound on. Ordinary PowerShell.`,
+    { code: String.raw`cd spikes\p0c-video
+cargo build --release
+$spike = ".\target\release\p0c-video.exe"
+& $spike --list 2>&1 | Tee-Object list.txt                                   # run it in game
+& $spike --out clean.mp4 2>&1 | Tee-Object clean.txt                         # 10 min, keep playing
+& $spike --out killed.mp4 --kill-after 300 2>&1 | Tee-Object killed.txt      # killed at 5 min
+& $spike --encoder software --seconds 120 --out software.mp4 2>&1 | Tee-Object software.txt` },
+    `If run 2 refuses with "no hardware H.264 encoder", keep the output (that's the plan's "refuse on none"). Then check <code>--adapter</code> against <code>--list</code>.`,
+    `Open <code>clean.mp4</code> and <code>killed.mp4</code> in VLC or Films &amp; TV. <strong>Don't attach the MP4s</strong> to the issue.`,
+    `Optional, if there's time: <code>--audio-clock device</code> and <code>--audio mic</code>; see the README.`,
+  ],
+  pastes: [
+    { k: "vlist", label: "Paste: list.txt", parse: parseVideoList },
+    { k: "clean", label: "Paste: clean.txt", parse: parseVideoClean },
+    { k: "killed", label: "Paste: killed.txt", parse: parseVideoKilled },
+    { k: "software", label: "Paste: software.txt", parse: parseVideoSoftware },
+  ],
+  fields: [
+    { k: "mode", label: "League window mode", type: "select", options: ["", "Borderless", "Windowed", "Fullscreen"],
+      v: (v) => !req(v) ? R(null, "") : v === "Fullscreen" ? R(false, "WGC may get black or nothing from exclusive fullscreen: re-run borderless") : R(true, "") },
+    { k: "res", label: "Resolution", type: "text", v: vPattern(/^\d{3,4}\s*[x×]\s*\d{3,4}$/i, "Like 2560x1440") },
+  ],
+  checks: [
+    { k: "clean_plays", label: "clean.mp4 plays from the start, seeks, and shows the game with sound" },
+    { k: "killed_plays", label: "killed.mp4 plays and shows the game (errors only at the cut)" },
+    { k: "sw_plays", label: "software.mp4 plays" },
+  ],
+},
+{
+  id: "t5", title: "6. Trimmed libobs backend", issue: "#5 (WS1.1), docs/windows-verification.md §8",
+  why: "Does the backend still record with 58 files (40 MB) removed, is the plugin-load log clean, and how big is the install?",
+  note: "Since #212 the devtools build writes <code>libobs-devtools.log</code> and <code>daemon-devtools.log</code>, not the <code>libobs.log</code> §8 still names. The commands below use the new names. Quit the release build for this whole task anyway, so two daemons don't record the same game.",
+  steps: [
+    `<strong>Baseline first, same source tree.</strong> Install the <strong>untrimmed</strong> devtools build (it goes to <code>%LOCALAPPDATA%\\ninja-recorder-dev</code>). Record a short Practice Tool game, then keep a copy of its libobs log and measure it:`,
+    { code: String.raw`Copy-Item "${LOG}\libobs-devtools.log" "$env:USERPROFILE\Desktop\libobs.untrimmed.log"
+.\scripts\measure.ps1 -ProcessName ninja-recorder-dev -ArgumentFilter '--daemon' -Label 'P0a: untrimmed, devtools install' -InstallPath "$env:LOCALAPPDATA\ninja-recorder-dev"
+.\scripts\measure.ps1 -ProcessName ninja-recorder-dev -ArgumentFilter '--daemon' -Label 'P0a: untrimmed, libobs folder' -InstallPath "$env:LOCALAPPDATA\ninja-recorder-dev\libobs"` },
+    `Also measure the <strong>release</strong> install. It's the figure the 200 MB mark is about. Run it with the release build open, then quit the release build again:`,
+    { code: String.raw`.\scripts\measure.ps1 -ArgumentFilter '--daemon' -Label 'release install' -InstallPath "$env:LOCALAPPDATA\ninja-recorder"` },
+    `Now install the <strong>trimmed</strong> devtools build over it, and check that it really is the trimmed one:`,
+    { code: String.raw`$l = "$env:LOCALAPPDATA\ninja-recorder-dev\libobs"
+'obs-plugins\64bit\locales','libobs-opengl.dll','obs-plugins\64bit\coreaudio-encoder.dll' |
+    ForEach-Object { if (Test-Path "$l\$_") { "FAIL still present: $_" } else { "PASS removed: $_" } }
+'obs-ffmpeg-mux.exe','libobs-winrt.dll','obs-nvenc-test.exe','obs-qsv-test.exe','obs-amf-test.exe' |
+    ForEach-Object { if (Test-Path "$l\$_") { "PASS kept: $_" } else { "FAIL missing: $_" } }` },
+    `With the League client running, open the dev portal. The health panel should read <code>libobs (ready)</code>. Record a <strong>Practice Tool</strong> game, then a <strong>full game</strong>. Play both back: seek, check the markers, switch between the audio tracks.`,
+    `Plugin-load log, then the comparison against the baseline:`,
+    { code: String.raw`Select-String -Path "${LOG}\libobs-devtools.log" -Pattern 'os_dlopen','Failed to','failed to load','not loaded','could not'` },
+    { code: String.raw`function Mods($f) { Select-String -Path $f -Pattern '([\w.-]+)\.dll\s*$' | ForEach-Object { $_.Matches[0].Groups[1].Value } | Sort-Object -Unique }
+Compare-Object (Mods "$env:USERPROFILE\Desktop\libobs.untrimmed.log") (Mods "${LOG}\libobs-devtools.log")` },
+    `Size of the trimmed build, with its daemon running:`,
+    { code: String.raw`.\scripts\measure.ps1 -ProcessName ninja-recorder-dev -ArgumentFilter '--daemon' -Label 'P0a: trimmed, devtools install' -InstallPath "$env:LOCALAPPDATA\ninja-recorder-dev"
+.\scripts\measure.ps1 -ProcessName ninja-recorder-dev -ArgumentFilter '--daemon' -Label 'P0a: trimmed, libobs folder' -InstallPath "$env:LOCALAPPDATA\ninja-recorder-dev\libobs"` },
+  ],
+  fields: [
+    { k: "ci_before", label: "CI trim step: Before (bytes)", type: "text", init: () => "230097064", v: vPattern(/^\d+$/, "Bytes"), hint: `From run ${TRIM_RUN}, pre-filled: 118 files, 219.4 MB.` },
+    { k: "ci_after", label: "CI trim step: After (bytes)", type: "text", init: () => "188144289", v: vPattern(/^\d+$/, "Bytes"), hint: "60 files, 179.4 MB." },
+    { k: "ci_remove", label: "CI trim step: Remove (bytes)", type: "text", init: () => "41952775",
+      v: (v, s) => { if (!req(v)) return R(null, ""); const b = num(s.ci_before), a = num(s.ci_after), r = num(v);
+        if (r === null) return R(false, "Bytes"); return (b !== null && a !== null && a + r === b) ? R(true, "After + Remove = Before") : R(false, "After + Remove doesn't equal Before"); }, hint: "58 files, 40.0 MB (18.2%)." },
+    { k: "untrim_install", label: "Untrimmed devtools install (MB)", type: "number", v: vPattern(/^\d+(\.\d+)?$/, "MB") },
+    { k: "untrim_libobs", label: "Untrimmed libobs\\ folder (MB)", type: "number", v: vPattern(/^\d+(\.\d+)?$/, "MB") },
+    { k: "release_install", label: "Release install (MB)", type: "number", v: vPattern(/^\d+(\.\d+)?$/, "MB") },
+    { k: "trim_install", label: "Trimmed devtools install (MB)", type: "number",
+      v: (v, s) => { if (!req(v)) return R(null, ""); const t = num(v), u = num(s.untrim_install); if (t === null) return R(false, "MB");
+        return u !== null && t >= u ? R(false, "Not smaller than the untrimmed install: is this the trimmed build?") : R(true, ""); } },
+    { k: "trim_libobs", label: "Trimmed libobs\\ folder (MB)", type: "number",
+      v: (v, s) => { if (!req(v)) return R(null, ""); const t = num(v), u = num(s.untrim_libobs); if (t === null) return R(false, "MB");
+        if (u === null) return R(true, ""); const saved = u - t;
+        return Math.abs(saved - 40.0) <= 3 ? R(true, `Saves ${saved.toFixed(1)} MB, matching CI's 40.0 MB`) : R(false, `Saves ${saved.toFixed(1)} MB, but CI removed 40.0 MB: check the build`); } },
+    { k: "encoder", label: "Encoder named in daemon-devtools.log", type: "text", v: vReq(), hint: "It should be a hardware encoder, not the 'no hardware H.264 encoder' refusal." },
+  ],
+  pastes: [
+    { k: "presence", label: "Paste: the trimmed-or-not check", parse: parseTrimPresence },
+    { k: "failedloads", label: "Paste: the Select-String for failed loads ('none' if empty)", parse: parseEmptyMeansPass("failed module loads") },
+    { k: "moddiff", label: "Paste: the Compare-Object output ('none' if empty)", parse: parseModuleDiff },
+  ],
+  checks: [
+    { k: "ready", label: "Dev portal health reads libobs (ready)" },
+    { k: "pt", label: "The Practice Tool game recorded" },
+    { k: "full", label: "A full game recorded start to finish, plays, seeks, and its markers are in place" },
+    { k: "stems", label: "Every audio track the preset promises is present and not silent (win-wasapi works)" },
+    { k: "wincap", label: "win-capture loads with no graphics-offsets warning (if there is one, note it)" },
+  ],
+  verdict: (s) => {
+    const rel = num(s.release_install), u = num(s.untrim_libobs), t = num(s.trim_libobs);
+    if (rel === null || u === null || t === null) return null;
+    const est = rel - (u - t);
+    return { ok: est < 200, text: `Release install with trimmed libobs = ${rel} − (${u} − ${t}) = ${est.toFixed(1)} MB: ${est < 200 ? "under" : "NOT under"} 200 MB` };
+  },
+},
+{
+  id: "t202", title: "7. Release and devtools side by side", issue: "#202 (#210) and #212",
+  why: "Each build writes its own daemon, UI and libobs logs, and each daemon session starts with a version/build/pid line.",
+  steps: [
+    `Run the release build and the (trimmed) devtools build <strong>at the same time</strong>, and start a Practice Tool game so both capture workers start. That means two recordings of one game, which is fine here.`,
+    `Before starting the game, note the size and time of the release build's <code>libobs.log</code>, then compare after both workers have started:`,
+    { code: String.raw`Get-ChildItem "${LOG}" | Sort-Object Name | Format-Table Name, Length, LastWriteTime -AutoSize` },
+    { code: String.raw`Select-String -Path "${LOG}\daemon.log","${LOG}\daemon-devtools.log" -Pattern '\((release|devtools) build\), pid' | Select-Object -Last 6` },
+    { code: String.raw`# Cross-contamination: each should print nothing (type 'none')
+Select-String -Path "${LOG}\daemon.log" -Pattern '\(devtools build\)'
+Select-String -Path "${LOG}\daemon-devtools.log" -Pattern '\(release build\)'` },
+  ],
+  pastes: [
+    { k: "logdir", label: "Paste: the log directory listing", parse: parseLogDir },
+    { k: "buildlines", label: "Paste: the build/pid lines", parse: parseBuildLines },
+    { k: "cross", label: "Paste: the cross-contamination check ('none' if empty)", parse: parseEmptyMeansPass("lines in the other build's file") },
+  ],
+  checks: [
+    { k: "rotation", label: "Starting the second worker left the first build's libobs log in place: not moved to .1.log, and its size didn't reset" },
+  ],
+},
+];
+
+// ---------------------------------------------------------------- state
+const KEY = "ninja-recorder-ws1-verification-2026-09-23";
+let state = {};
+try { state = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch { state = {}; }
+const S = (sec) => (state[sec] ||= {});
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {} };
+
+// ---------------------------------------------------------------- render
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function preBlock(code) {
+  const pre = document.createElement("pre");
+  pre.textContent = code;
+  const b = document.createElement("button");
+  b.className = "copy"; b.textContent = "Copy";
+  b.onclick = () => { navigator.clipboard?.writeText(code); b.textContent = "Copied"; setTimeout(() => b.textContent = "Copy", 1200); };
+  pre.appendChild(b);
+  return pre;
+}
+
+function renderSection(sec) {
+  const st = S(sec.id);
+  (sec.fields || []).forEach(f => { if (st[f.k] === undefined && f.init) st[f.k] = f.init(); });
+  const el = document.createElement("section");
+  el.className = "task"; el.id = sec.id;
+  el.innerHTML = `<h2>${esc(sec.title)} ${sec.issue ? `<span class="issue">${esc(sec.issue)}</span>` : ""} <span class="status" data-status></span></h2><p class="why">${esc(sec.why)}</p>`;
+  if (sec.note) { const n = document.createElement("div"); n.className = "note"; n.innerHTML = sec.note; el.appendChild(n); }
+
+  if (sec.steps) {
+    const h = document.createElement("h3"); h.textContent = "Steps"; el.appendChild(h);
+    const ol = document.createElement("ol"); ol.className = "steps";
+    let li = null;
+    for (const s of sec.steps) {
+      if (typeof s === "string") { li = document.createElement("li"); li.innerHTML = s; ol.appendChild(li); }
+      else if (s.code) (li || el).appendChild(preBlock(s.code));
+    }
+    el.appendChild(ol);
+  }
+  if (sec.code) el.appendChild(preBlock(sec.code));
+
+  if (sec.checks?.length) {
+    const h = document.createElement("h3"); h.textContent = "Checks"; el.appendChild(h);
+    for (const c of sec.checks) {
+      const row = document.createElement("label"); row.className = "check";
+      row.innerHTML = `<input type="checkbox"> <span>${c.label}</span>`;
+      const cb = row.querySelector("input"); cb.checked = !!st["c_" + c.k];
+      cb.onchange = () => { st["c_" + c.k] = cb.checked; save(); refresh(); };
+      el.appendChild(row);
+    }
+  }
+
+  if (sec.fields?.length) {
+    const h = document.createElement("h3"); h.textContent = "Results"; el.appendChild(h);
+    for (const f of sec.fields) el.appendChild(fieldRow(sec, f));
+  }
+  if (sec.pastes?.length) {
+    const h = document.createElement("h3"); h.textContent = "Paste output"; el.appendChild(h);
+    for (const p of sec.pastes) el.appendChild(pasteRow(sec, p));
+  }
+
+  const vd = document.createElement("div"); vd.dataset.verdict = ""; vd.className = "msg"; vd.style.marginTop = "10px";
+  el.appendChild(vd);
+
+  const rr = document.createElement("div"); rr.className = "result-row";
+  rr.innerHTML = `<strong>Result</strong>
+    <select data-result><option value="">Not run</option><option>Pass</option><option>Fail</option><option>Blocked</option><option>Partial</option></select>
+    <span class="status" data-suggest></span>
+    <textarea data-notes placeholder="Notes: anything odd, error text, what you'd want in the issue"></textarea>`;
+  const rs = rr.querySelector("[data-result]"); rs.value = st.result || "";
+  rs.onchange = () => { st.result = rs.value; save(); refresh(); };
+  const nt = rr.querySelector("[data-notes]"); nt.value = st.notes || "";
+  nt.oninput = () => { st.notes = nt.value; save(); };
+  el.appendChild(rr);
+  return el;
+}
+
+function fieldRow(sec, f) {
+  const st = S(sec.id);
+  const row = document.createElement("div"); row.className = "field";
+  const id = `${sec.id}-${f.k}`;
+  let input;
+  if (f.type === "select") {
+    input = document.createElement("select");
+    for (const o of f.options) { const op = document.createElement("option"); op.value = o; op.textContent = o || "—"; input.appendChild(op); }
+  } else { input = document.createElement("input"); input.type = f.type === "number" ? "text" : "text"; if (f.type === "number") input.inputMode = "decimal"; }
+  input.id = id; input.value = st[f.k] ?? "";
+  const lab = document.createElement("label"); lab.htmlFor = id; lab.textContent = f.label;
+  row.append(lab, input);
+  if (f.hint) { const h = document.createElement("div"); h.className = "hint"; h.textContent = f.hint; row.appendChild(h); }
+  const msg = document.createElement("div"); msg.className = "msg"; msg.dataset.msg = f.k; row.appendChild(msg);
+  const on = () => { st[f.k] = input.value; save(); refresh(); };
+  input.oninput = on; input.onchange = on;
+  return row;
+}
+
+function pasteRow(sec, p) {
+  const st = S(sec.id);
+  const row = document.createElement("div"); row.className = "field";
+  const id = `${sec.id}-${p.k}`;
+  const lab = document.createElement("label"); lab.htmlFor = id; lab.textContent = p.label;
+  const ta = document.createElement("textarea"); ta.id = id; ta.spellcheck = false; ta.value = st["p_" + p.k] || "";
+  ta.placeholder = "Paste here";
+  const parsed = document.createElement("div"); parsed.className = "parsed"; parsed.dataset.parsed = p.k;
+  row.append(lab, ta, parsed);
+  ta.oninput = () => { st["p_" + p.k] = ta.value; save(); refresh(); };
+  return row;
+}
+
+// ---------------------------------------------------------------- evaluation
+function evaluate(sec) {
+  const st = S(sec.id);
+  const facts = [];
+  let total = 0, done = 0, bad = 0;
+  for (const c of sec.checks || []) { total++; if (st["c_" + c.k]) done++; }
+  const fieldRes = {};
+  for (const f of sec.fields || []) {
+    const r = f.v ? f.v(st[f.k] ?? "", st) : R(req(st[f.k]) ? true : null, "");
+    fieldRes[f.k] = r; total++;
+    if (r.ok === true) done++; if (r.ok === false) bad++;
+  }
+  const pasteRes = {};
+  for (const p of sec.pastes || []) {
+    const fs = p.parse(st["p_" + p.k] || "");
+    pasteRes[p.k] = fs; total++;
+    const anyBad = fs.some(x => x.ok === false);
+    const anyGood = fs.some(x => x.ok === true);
+    if (anyBad) bad++; else if (anyGood) done++;
+    facts.push(...fs);
+  }
+  const verdict = sec.verdict ? sec.verdict(st) : null;
+  if (verdict && verdict.ok === false) bad++;
+  return { total, done, bad, fieldRes, pasteRes, verdict };
+}
+
+function refresh() {
+  let T = 0, D = 0;
+  const toc = [];
+  for (const sec of SECTIONS) {
+    const el = document.getElementById(sec.id);
+    const ev = evaluate(sec);
+    T += ev.total; D += ev.done;
+    for (const [k, r] of Object.entries(ev.fieldRes)) {
+      const m = el.querySelector(`[data-msg="${k}"]`);
+      m.textContent = r.msg || ""; m.className = "msg " + (r.ok === true ? "ok" : r.ok === false ? "bad" : (r.msg ? "warn" : ""));
+    }
+    for (const [k, fs] of Object.entries(ev.pasteRes)) {
+      const box = el.querySelector(`[data-parsed="${k}"]`);
+      box.innerHTML = fs.map(x => `<div class="${x.ok === true ? "ok" : x.ok === false ? "bad" : "warn"}"><strong>${esc(x.label)}:</strong> ${esc(x.value)}</div>`).join("");
+    }
+    const vd = el.querySelector("[data-verdict]");
+    if (ev.verdict) { vd.textContent = ev.verdict.text; vd.className = "msg " + (ev.verdict.ok === true ? "ok" : ev.verdict.ok === false ? "bad" : "warn"); }
+    else { vd.textContent = ""; vd.className = "msg"; }
+    const sug = el.querySelector("[data-suggest]");
+    const complete = ev.done === ev.total;
+    sug.textContent = ev.bad ? `${ev.bad} problem(s) found` : complete ? "Every check passes" : `${ev.done}/${ev.total} done`;
+    sug.className = "status " + (ev.bad ? "bad" : complete ? "ok" : "");
+    const res = S(sec.id).result || "";
+    const badge = el.querySelector("[data-status]");
+    badge.textContent = res || (ev.bad ? "problems" : complete ? "ready" : `${ev.done}/${ev.total}`);
+    badge.className = "status " + (res === "Pass" ? "ok" : res === "Fail" ? "bad" : res ? "warn" : ev.bad ? "bad" : "");
+    toc.push(`<a href="#${sec.id}"><span>${esc(sec.title)} ${sec.issue ? `<span class="issue">${esc(sec.issue)}</span>` : ""}</span><span class="${badge.className}">${esc(badge.textContent)}</span></a>`);
+  }
+  document.getElementById("toc").innerHTML = toc.join("");
+  const pct = T ? Math.round(100 * D / T) : 0;
+  document.getElementById("progress").style.width = pct + "%";
+  document.getElementById("progress-text").textContent = `${pct}% (${D}/${T})`;
+}
+
+// ---------------------------------------------------------------- export
+function markdown() {
+  const g = S("setup");
+  const lines = [];
+  lines.push(`# WS1 and fix verification, ${g.date || ""}`);
+  lines.push("");
+  lines.push(`Release build ${g.release || "?"}, Windows build ${g.winbuild || "?"}, ${g.gpu || "GPU ?"}, League ${g.patch || "?"}. Devtools builds: trimmed from run ${TRIM_RUN}, untrimmed from run ${MAIN_RUN} (both tree 798986e).`);
+  lines.push("");
+  lines.push("| Task | Issue | Result |"); lines.push("|---|---|---|");
+  for (const sec of SECTIONS.slice(1)) lines.push(`| ${sec.title.replace(/^\d+\.\s*/, "")} | ${sec.issue} | ${S(sec.id).result || "Not run"} |`);
+  for (const sec of SECTIONS) {
+    const st = S(sec.id), ev = evaluate(sec);
+    lines.push(""); lines.push(`## ${sec.title}${sec.issue ? ` (${sec.issue})` : ""}`); lines.push("");
+    lines.push(`**Result: ${st.result || "Not run"}**${ev.verdict ? `. ${ev.verdict.text}` : ""}`); lines.push("");
+    for (const c of sec.checks || []) lines.push(`- [${st["c_" + c.k] ? "x" : " "}] ${c.label.replace(/<[^>]+>/g, "")}`);
+    for (const f of sec.fields || []) {
+      const r = ev.fieldRes[f.k]; const v = st[f.k];
+      if (req(v)) lines.push(`- ${f.label}: ${v}${r.ok === false ? `, **${r.msg}**` : r.msg && r.ok ? ` (${r.msg})` : ""}`);
+    }
+    for (const p of sec.pastes || []) {
+      const fs = ev.pasteRes[p.k]; const raw = st["p_" + p.k];
+      if (!req(raw)) continue;
+      for (const x of fs) lines.push(`- ${x.label}: ${x.ok === false ? `**${x.value}**` : x.value}`);
+      lines.push(""); lines.push(`<details><summary>${p.label.replace(/^Paste:\s*/, "")}</summary>`); lines.push("");
+      lines.push("```"); lines.push(raw.replace(/```/g, "ʼʼʼ")); lines.push("```"); lines.push(""); lines.push("</details>");
+    }
+    if (req(st.notes)) { lines.push(""); lines.push(st.notes); }
+  }
+  return lines.join("\n");
+}
+
+const dlg = document.getElementById("dlg");
+function openDialog(title, text, filename, isImport) {
+  document.getElementById("dlg-title").textContent = title;
+  const ta = document.getElementById("dlg-text"); ta.value = text; ta.readOnly = !isImport;
+  document.getElementById("dlg-apply").hidden = !isImport;
+  document.getElementById("dlg-download").hidden = isImport;
+  document.getElementById("dlg-copy").hidden = isImport;
+  document.getElementById("dlg-download").onclick = () => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([ta.value], { type: "text/plain" })); a.download = filename; a.click();
+  };
+  dlg.showModal();
+}
+document.getElementById("dlg-copy").onclick = () => navigator.clipboard?.writeText(document.getElementById("dlg-text").value);
+document.getElementById("dlg-close").onclick = () => dlg.close();
+document.getElementById("dlg-apply").onclick = () => {
+  try { state = JSON.parse(document.getElementById("dlg-text").value); save(); location.reload(); }
+  catch (e) { alert("That isn't valid JSON: " + e.message); }
+};
+document.getElementById("export-md").onclick = () => openDialog("Results as markdown: paste each section into its issue", markdown(), `ws1-verification-${S("setup").date || "results"}.md`);
+document.getElementById("export-json").onclick = () => openDialog("Everything entered, as JSON: keep it to reload later", JSON.stringify(state, null, 2), "ws1-verification.json");
+document.getElementById("import-json").onclick = () => openDialog("Paste a saved JSON and load it (replaces what's here)", "", "", true);
+document.getElementById("reset").onclick = () => { if (confirm("Clear everything entered on this page?")) { state = {}; save(); location.reload(); } };
+
+// ---------------------------------------------------------------- boot
+const host = document.getElementById("sections");
+for (const sec of SECTIONS) host.appendChild(renderSection(sec));
+save();
+refresh();
+</script>
+</body>
+</html>
