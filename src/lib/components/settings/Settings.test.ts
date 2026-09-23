@@ -17,7 +17,7 @@ vi.mock("../../../bridge", () => ({
   assetUrl: (p: string) => p,
 }));
 // `whenDaemonReachable` runs its callback once the handshake lands. The view
-// uses it to gate four RPCs; here it fires immediately so those paths run.
+// uses it to gate five RPCs; here it fires immediately so those paths run.
 vi.mock("../../stores/daemon.svelte", () => ({
   whenDaemonReachable: (fn: () => void) => fn(),
   initDaemonStatus: vi.fn(),
@@ -30,6 +30,27 @@ let store: typeof import("../../stores/settings.svelte");
 type Svelte = typeof import("svelte");
 let svelte: Svelte;
 
+const NOT_BUILT = "the own capture backend is not in this build yet";
+
+/** What the daemon reports today: libobs chosen, the own backend unbuilt. */
+function backendStatus(over: Record<string, unknown> = {}) {
+  return {
+    configured: "libobs",
+    active: "libobs (idle)",
+    options: [
+      { backend: "libobs", unavailable: null },
+      { backend: "own", unavailable: NOT_BUILT },
+    ],
+    ...over,
+  };
+}
+
+/** Both backends buildable: the build WS1.6 produces. */
+const BOTH_BUILT = [
+  { backend: "libobs", unavailable: null },
+  { backend: "own", unavailable: null },
+];
+
 /** Answers each RPC the view makes on mount with something plausible. */
 function stubBackend(over: Record<string, unknown> = {}) {
   const answers: Record<string, unknown> = {
@@ -39,6 +60,7 @@ function stubBackend(over: Record<string, unknown> = {}) {
     list_audio_inputs: [],
     get_audio_preset: { preset: "game" },
     get_update_status: { kind: "upToDate" },
+    get_capture_backend: backendStatus(),
     ...over,
   };
   call.mockImplementation((name: string) =>
@@ -161,6 +183,97 @@ describe("the audio panel", () => {
     render();
     await settle();
     expect(store.settings.audioPreset).toBe("game");
+  });
+});
+
+describe("the capture backend", () => {
+  const choice = (el: HTMLElement, label: string) =>
+    [...el.querySelectorAll<HTMLButtonElement>('[aria-label="Capture backend"] button')].find(
+      (b) => b.textContent?.trim() === label,
+    );
+
+  it("renders every backend and shows the saved one as chosen", async () => {
+    const el = render();
+    await settle();
+    expect(choice(el, "libobs")?.getAttribute("aria-checked")).toBe("true");
+    expect(choice(el, "Own")?.getAttribute("aria-checked")).toBe("false");
+    expect(el.textContent).toContain("libobs (idle)");
+    expect(el.textContent).toContain("Applies from the next recording");
+  });
+
+  // Listed rather than left out, so the row can say why it cannot be picked.
+  it("disables a backend this build cannot construct, and says why", async () => {
+    const el = render();
+    await settle();
+    const own = choice(el, "Own");
+    expect(own?.disabled).toBe(true);
+    expect(own?.title).toBe(NOT_BUILT);
+    expect(choice(el, "libobs")?.disabled).toBe(false);
+    expect(el.textContent).toContain(`Own isn't available: ${NOT_BUILT}.`);
+  });
+
+  it("asks the daemon to switch, and shows what it reports back", async () => {
+    stubBackend({ get_capture_backend: backendStatus({ options: BOTH_BUILT }) });
+    const answers = call.getMockImplementation() as (n: string, a?: unknown) => unknown;
+    call.mockImplementation((name: string, args?: unknown) =>
+      name === "set_capture_backend"
+        ? Promise.resolve(
+            backendStatus({ configured: "own", active: "own (idle)", options: BOTH_BUILT }),
+          )
+        : answers(name, args),
+    );
+    const el = render();
+    await settle();
+
+    choice(el, "Own")?.click();
+    await settle();
+
+    expect(call).toHaveBeenCalledWith("set_capture_backend", { backend: "own" });
+    expect(choice(el, "Own")?.getAttribute("aria-checked")).toBe("true");
+    expect(el.textContent).toContain("own (idle)");
+  });
+
+  it("does not ask again for the backend that is already chosen", async () => {
+    const el = render();
+    await settle();
+    choice(el, "libobs")?.click();
+    await settle();
+    expect(call).not.toHaveBeenCalledWith("set_capture_backend", expect.anything());
+  });
+
+  // Mid-game the daemon refuses, and the control must not claim a switch that
+  // did not happen.
+  it("keeps the saved backend when the daemon refuses", async () => {
+    stubBackend({ get_capture_backend: backendStatus({ options: BOTH_BUILT }) });
+    const answers = call.getMockImplementation() as (n: string, a?: unknown) => unknown;
+    call.mockImplementation((name: string, args?: unknown) =>
+      name === "set_capture_backend"
+        ? Promise.reject(
+            new Error("The capture backend can't be changed while a recording is in progress"),
+          )
+        : answers(name, args),
+    );
+    const toasts = await import("../../stores/toast.svelte");
+    const el = render();
+    await settle();
+
+    choice(el, "Own")?.click();
+    await settle();
+
+    expect(choice(el, "libobs")?.getAttribute("aria-checked")).toBe("true");
+    expect(toasts.toastState.message).toContain("recording is in progress");
+  });
+
+  it("warns that nothing will be recorded when the saved backend cannot be built", async () => {
+    stubBackend({
+      get_capture_backend: backendStatus({
+        configured: "own",
+        active: `unavailable (${NOT_BUILT})`,
+      }),
+    });
+    const el = render();
+    await settle();
+    expect(el.querySelector(".callout-warn")?.textContent).toContain("Nothing will be recorded");
   });
 });
 

@@ -1293,6 +1293,56 @@ beside the result rather than as one number.
 | 8.4: untrimmed devtools install and `libobs\` folder, same commit | | |
 | Under 200 MB as a release install, and the sum that says so | | |
 
+## 9. The capture backend switch (WS1.7, #11)
+
+Settings → Advanced → **Capture backend** chooses what the daemon records
+with: `libobs`, or the own backend (Option B). Until WS1.6 the own backend is
+not in the build, so on today's installer this section checks the half that
+exists: the row, the refusals, and that a switch reaches the *next* recording
+and never the current one. Why it works this way is
+[DEVELOPMENT.md §16, "The switch, and when it applies"](../DEVELOPMENT.md#the-switch-and-when-it-applies).
+
+The backend-comparison table WS1.7's exit criterion asks for, both backends
+recording the same game, needs WS1.6 and is not here yet.
+
+- [ ] **The row renders.** `libobs` is selected, **Own** is disabled, and the
+      row says "Own isn't available: the own capture backend is not in this
+      build yet." "In use now" reads `libobs (idle)` with no client open.
+- [ ] **The daemon log names the setting.** `daemon.log`'s
+      `[recorder] backend:` line reads
+      `libobs (idle) (capture_backend = libobs)`.
+- [ ] **Refused mid-game.** Today's build offers only one buildable backend,
+      so a switch has to be staged by hand. Before a Practice Tool game, set
+      the row to `own` from the dev portal's Commands panel with `set_ui_pref`
+      (`key` `capture_backend`, `value` `own`). That writes the row and nothing
+      else: the daemon keeps recording on libobs. In the game, call
+      `set_capture_backend` with `libobs`. It is refused with "can't be changed
+      while a recording is in progress", the recording carries on and
+      finalizes normally, and `get_capture_backend` still reports `own` as
+      configured.
+- [ ] **Switch, and the next recording uses it.** Back in the lobby with the
+      client open, make the same `set_capture_backend` call, or click
+      `libobs` in the row. `daemon.log` gains a
+      `[recorder] backend: … (capture_backend = libobs, changed in Settings)`
+      line, Task Manager shows **one** `extprocess_recorder.exe` rather than
+      two (the old worker was released before the new one came up), and the
+      next game records, with `diagnostics_json.backend` (dev portal →
+      Library) naming libobs. Once WS1.6 lands, repeat this with a real switch
+      to `own` and back.
+- [ ] **A saved backend that cannot be built refuses, and says so.** Set the
+      row to `own` with `set_ui_pref` and restart the daemon (tray → Quit,
+      then start the app). The log's backend line reads
+      `unavailable (the own capture backend is not in this build yet)`, the
+      Settings row shows the "Nothing will be recorded" warning, a game
+      produces **no** recording rather than one made on libobs, and choosing
+      `libobs` in the row puts recording back without a restart.
+
+| What | Result | Notes |
+|---|---|---|
+| 9: switch the setting, and the next recording uses the chosen backend | | |
+| 9: refused mid-game; the recording in flight is unaffected | | |
+| 9: an unbuildable saved backend records nothing and says why | | |
+
 ## Outcome
 
 - [ ] All boxes above checked

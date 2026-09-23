@@ -74,6 +74,7 @@ trait Recorder {
 Backends:
 - `LibObsRecorder`: Windows, the real one.
 - `StubRecorder`: every non-Windows build. It sleeps, then copies a fixture MP4 into place. Keeps the entire app layer developable and testable without Windows. Nothing ships it; since the macOS bundle was dropped it exists purely for the dev loop and `cargo test` (§9).
+- The own backend (Option B, `recorder/own/`): empty until WS1.6. Which of it and libobs the daemon builds is the `capture_backend` setting, and what happens when the chosen one cannot be built is §16's "The switch, and when it applies".
 
 **Decision: the backend is warm only while the League client is.** Bringing
 `LibObs` up spawns the out-of-process worker *and* sends it `Init`, which runs
@@ -1641,6 +1642,9 @@ Three were found by using the app, one at a time, months apart:
   "start-on-login is not available in this build" on a build where it is
   (#151).
 
+(A fourth seam arrived later and was set in the daemon from the start: the
+capture backends `set_capture_backend` chooses between, WS1.7, #11.)
+
 The pattern is worth naming because it is not a bug in any of those three. It
 is one consequence of a correct change, arriving three times, in code that
 every gate passed. The compiler cannot help: the seams are `Option`s by design,
@@ -2477,6 +2481,85 @@ recorded gap rather than a pending measurement, and the rows above say what was
 offered and whether the software path works, rather than pretending to cover
 it.
 
+### The switch, and when it applies
+
+WS1.7's `capture_backend` setting, built ahead of the backend it switches to.
+The plan keeps libobs selectable for exactly one release after Option B
+ships, so that a recording Option B gets wrong has a fallback a user can pick
+without a reinstall, and `RecordingDiagnostics::backend` already says which
+backend wrote each file (§4.5 of the plan). The trimmed-libobs half of WS1.7
+is not part of this: the trim stays devtools-only until the P0a rows above are
+filled.
+
+**It is a `settings_kv` key, `capture_backend = libobs | own`**, spelled as
+the plan spells it. No migration: a missing key is the default, the same as
+every other key in that table ([data-model.md](docs/data-model.md#what-lives-in-settings_kv)).
+
+**The default is libobs, and WS1.6 flips it to `own`.** Not because libobs is
+the preferred answer; the plan's default is Option B. A default the build
+cannot construct would refuse every game for everyone who never opened
+Settings, and until `recorder/own/` exists that is what `own` would do. The
+flip is a one-line change to `CaptureBackend`'s `#[default]`, pinned by a test
+so that it cannot happen by accident, and it belongs in WS1.6's own change:
+the same change that makes `own` constructible. It moves only the users who
+never chose. Someone who picked libobs explicitly has a stored row and keeps it.
+
+**A backend that cannot be built is refused, never substituted.** The choice
+is `recorder::backend::choose`, a pure function of the setting and what this
+build offers, and a chosen backend that cannot be built becomes a
+`FailedRecorder` carrying the reason: the refusal path a missing libobs
+worker has always taken. It does not fall back to the other backend. The
+setting is the user's answer to "which one", and a silent substitution is the
+thing that would make a bad recording impossible to attribute.
+
+In practice the refusal is hard to reach, because the setting cannot be
+chosen that way. The daemon lists every backend it knows about with a reason
+beside the ones it cannot build, the settings row shows the unbuildable one
+disabled with that reason, and `set_capture_backend` refuses it again for any
+caller that got past the control. What remains is a row written some other
+way: a downgrade from a build that had the own backend, or a raw
+`set_ui_pref`. The daemon then records nothing, and the settings row says so
+in a warning rather than only through a disabled button.
+
+**A change applies to the next recording, and never to the current one.**
+Two answers were available. "At the next daemon start" is simplest, but the
+daemon lives in the tray for weeks, so the setting would appear to do nothing
+until a reboot. So `set_capture_backend` replaces the backend in place: the
+daemon holds one `Arc<Mutex<Box<dyn Recorder>>>` shared with the supervisor,
+and the command swaps the box inside it. What makes that safe is the lock and
+the gate:
+
+- the swap happens under the recorder lock, which `start` also takes, so the
+  check and the replacement cannot be split by a recording beginning;
+- it is refused while a game is in progress, by `update::installable`, the
+  rule the updater already uses to decide when the live backend may be dropped.
+  A game that is loading counts, because capture starts the moment Live Client
+  Data answers, and so does a finalize;
+- the old backend is `release`d before it is dropped, and the new one is
+  `prepare`d if the client is already open, so §2.2's pre-warm survives a
+  switch in the client's lobby.
+
+A refusal writes nothing, so the saved value and the live backend cannot
+disagree because of one. The daemon also reads the setting once at startup,
+which covers the case of a row changed while it was not running.
+
+**Why two commands rather than a pref.** Every other `settings_kv` key is
+written by `set_ui_pref`, which writes the row and does nothing else. That is
+right for a key the daemon re-reads per use, and wrong for this one: the
+daemon has to refuse an unbuildable backend, refuse mid-game, and replace a
+live object, and the UI has to know which backends exist before it can draw
+the control at all. `get_capture_backend` and `set_capture_backend` carry that,
+and `set_capture_backend` returns what the daemon holds afterwards, which the
+control renders instead of what it asked for. Both refuse in a process that
+does not own the recorder, like `quit_recorder`.
+
+**What only Windows can confirm** is the row in
+[windows-verification.md §9](docs/windows-verification.md#9-the-capture-backend-switch-ws17-11):
+that switching in the client's lobby leaves one worker process rather than two,
+and that the next game records on the backend the row says is in use. The
+comparison WS1.7's exit criterion asks for, both backends recording the same
+game, waits on WS1.6.
+
 ---
 
 ## 17. Contract and transport
@@ -2737,6 +2820,19 @@ at all. That leaves no log by construction, whoever opens it. The difference is
 that the silence is now itself a result: a launch that still writes nothing has
 ruled out everything after the loader, which is the half of the search space
 this could not previously separate.
+
+### A setting the daemon acts on gets its own command
+
+`set_ui_pref` writes a `settings_kv` row and nothing else, which is enough for
+every key the daemon re-reads when it needs it. `capture_backend` is the first
+key where writing the row is not the change: the daemon has to validate it
+against what this build can construct, refuse it mid-game, and replace a live
+`Recorder`. So it has a `get_capture_backend`/`set_capture_backend` pair
+(WS1.7), and the setter returns the daemon's state afterwards rather than an
+acknowledgement, the shape `set_autostart` already has. The next setting that
+has to take effect in the daemon rather than be read by it should follow that
+shape, not `set_ui_pref`'s. The reasoning is §16's "The switch, and when it
+applies".
 
 ---
 

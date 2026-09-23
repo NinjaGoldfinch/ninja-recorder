@@ -361,6 +361,7 @@ agree**, because either can be the one reading a key the other never wrote.
 | `theme` | `system` / `light` / `dark` | `system` | `src/prefs.ts`, plus the pre-paint boot script |
 | `defaultSort` | `newest` / `oldest` / `longest` / `champion` | `newest` | `src/prefs.ts` |
 | `audio_preset` | JSON `AudioPreset` | `Game` | `db::get_audio_preset` |
+| `capture_backend` | `libobs` / `own` | `libobs`, until WS1.6 flips it to `own` | `db::get_capture_backend`, once at daemon startup; written only by `set_capture_backend`, which also swaps the live backend ([DEVELOPMENT.md §16](../DEVELOPMENT.md#the-switch-and-when-it-applies)) |
 | `closeAction` | `close-window` / `hide` / `quit` | `close-window` | `core::CloseAction` |
 | `notifications` | `on` / `off` | `on` | `core::NotificationPrefs` |
 | `notifyRecordingStarted` | `on` / `off` | `off` | `core::NotificationPrefs` |

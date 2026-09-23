@@ -76,7 +76,9 @@ flowchart TB
 | `state_machine/machine.rs` | The pure `(state, event) → (state, actions)` function | `StateMachine::handle` |
 | `state_machine/supervisor.rs` | Spawning/aborting watchers, driving the recorder, finalizing | `Supervisor` |
 | `recorder/mod.rs` | The `Recorder` trait and its config/error types | `Recorder`, `RecordConfig` |
+| `recorder/backend.rs` | The `capture_backend` setting, and the pure choice of which backend to build from it | `CaptureBackend`, `choose`, `construct`, `Backends` |
 | `recorder/libobs/` | Windows capture backend (WGC + hardware encode) | `LibObsRecorder` |
+| `recorder/own/` | Option B, the target backend (WGC → D3D11 → Media Foundation). Empty until WS1.6 | — |
 | `recorder/stub.rs` | Non-Windows dev backend that copies a fixture MP4 | `StubRecorder` |
 | `ddragon.rs` | Champion art from Data Dragon, fetched on first use and cached on disk | `champion_icon` |
 | `db/mod.rs` | Schema, migrations, every query | `Db` |
@@ -141,9 +143,12 @@ behind a three-method trait and nothing above it knows libobs exists.
 ```mermaid
 flowchart TB
     SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release"}
-    T -->|"#[cfg(windows)]"| L["LibObsRecorder<br/><small>WGC window capture,<br/>NVENC/AMF/QSV H.264,<br/>one AAC track per audio source,<br/>fragmented MP4 + faststart remux</small>"]
-    T -->|"everything else"| S["StubRecorder<br/><small>copies fixtures/sample.mp4</small>"]
+    T -->|"libobs, #[cfg(windows)]"| L["LibObsRecorder<br/><small>WGC window capture,<br/>NVENC/AMF/QSV H.264,<br/>one AAC track per audio source,<br/>fragmented MP4 + faststart remux</small>"]
+    T -.->|"own, WS1.6"| O["recorder/own/<br/><small>Option B: WGC → D3D11 →<br/>Media Foundation. Empty</small>"]
+    T -->|"libobs, everything else"| S["StubRecorder<br/><small>copies fixtures/sample.mp4</small>"]
+    T -->|"chosen but not buildable"| F["FailedRecorder<br/><small>refuses every start,<br/>with the reason</small>"]
     style T fill:#ede7f6,stroke:#5e35b1
+    style O stroke-dasharray: 5 5
 ```
 
 The stub is not a mock: it writes a real, playable file into the real
@@ -165,6 +170,40 @@ mid-game and the library row has to describe the file that exists
 ([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#25-multi-track-audio)). Both types are
 plain Rust in `recorder/audio.rs`; the libobs vocabulary stops at
 `to_obs_tracks`, so nothing above the trait grows a libobs dependency.
+
+### Which backend is behind it
+
+The daemon decides, from the `capture_backend` setting (`libobs` or `own`,
+in `settings_kv`), and nothing above the trait can tell which one it got. The
+UI process never links any of them: it holds a `FailedRecorder` whose reason
+is that it does not record.
+
+```mermaid
+flowchart LR
+    KV[("settings_kv<br/>capture_backend")] --> C{"backend::choose<br/><small>pure</small>"}
+    OPT["DaemonBackends::options<br/><small>libobs: worker staged?<br/>own: not built until WS1.6</small>"] --> C
+    C -->|"buildable"| B["DaemonBackends::build"]
+    C -->|"not buildable: the reason"| F["FailedRecorder(reason)"]
+    B --> BOX["the recorder box<br/><small>one Arc · Mutex · Box dyn Recorder,<br/>shared by the supervisor and Ctx</small>"]
+    F --> BOX
+    SET["set_capture_backend<br/><small>refused mid-game or<br/>for an unbuildable backend</small>"] -->|"swap under the lock"| BOX
+```
+
+- **At startup** the daemon reads the setting once, `choose`s, and builds.
+  The log's `[recorder] backend:` line names the result and the setting.
+- **A change** through `set_capture_backend` is saved and swapped into the
+  shared box at once, so it is the **next recording** that uses it. It is
+  refused while a game is loading, recording or finalizing, by the same rule
+  the updater uses, and the swap happens under the recorder lock that `start`
+  takes, so a recording is never switched under.
+- **The default is `libobs` until WS1.6**, which fills `recorder/own/` and
+  flips it to `own` in the same change.
+- **A chosen backend that cannot be built is refused, never replaced by the
+  other one.** The UI shows it disabled with the daemon's reason, so in
+  practice this is only reached by a row written some other way.
+
+The reasoning is
+[DEVELOPMENT.md §16, "The switch, and when it applies"](../DEVELOPMENT.md#the-switch-and-when-it-applies).
 
 ## Frontend
 

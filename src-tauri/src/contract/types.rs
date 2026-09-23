@@ -94,6 +94,9 @@ macro_rules! all_boundary_types {
             crate::recorder::audio::AudioPreset,
             crate::recorder::audio::AudioSourceKind,
             crate::recorder::audio::AudioTrackSpec,
+            crate::recorder::backend::CaptureBackend,
+            crate::recorder::backend::CaptureBackendOption,
+            crate::recorder::backend::CaptureBackendStatus,
             crate::retention::EnforcementReport,
             crate::state_machine::machine::GameState,
             crate::state_machine::supervisor::FinalizedRecording,
@@ -171,7 +174,7 @@ mod tests {
             }};
         }
         let n = all_boundary_types!(check);
-        assert_eq!(n, 40, "the boundary type list changed; update the count deliberately");
+        assert_eq!(n, 43, "the boundary type list changed; update the count deliberately");
     }
 
     /// The decision above, made executable. Rendering with ts-rs's default

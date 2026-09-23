@@ -27,6 +27,7 @@ import type {
   SupervisorStatus,
   UpdateStatus,
 } from "../../types";
+import type { CaptureBackendStatus } from "../contract/types";
 import type { Transport } from "./index";
 
 function row(
@@ -283,6 +284,16 @@ const MOCKS: Record<string, unknown> = {
   get_ui_prefs: {},
   get_audio_preset: { preset: "game" } satisfies AudioPreset,
   set_audio_preset: null,
+  // Today's build: the own backend is listed and refused, which is the state
+  // worth seeing in a browser session.
+  get_capture_backend: {
+    configured: "libobs",
+    active: "libobs (idle)",
+    options: [
+      { backend: "libobs", unavailable: null },
+      { backend: "own", unavailable: "the own capture backend is not in this build yet" },
+    ],
+  } satisfies CaptureBackendStatus,
   list_audio_inputs: [
     { id: "mic-usb", name: "Blue Yeti", is_default: true },
     { id: "mic-webcam", name: "HD Webcam Microphone", is_default: false },
@@ -351,6 +362,18 @@ async function mock<T>(command: string, args?: Record<string, unknown>): Promise
       const at = FIXTURE_ROWS.findIndex((r) => r.id === args?.recordingId);
       if (at >= 0) FIXTURE_ROWS.splice(at, 1);
       return undefined as T;
+    }
+    // Refuses what the daemon refuses, so the disabled option is the only
+    // thing keeping a browser session from choosing it, as in the real app.
+    case "set_capture_backend": {
+      const status = MOCKS.get_capture_backend as CaptureBackendStatus;
+      const option = status.options.find((o) => o.backend === args?.backend);
+      if (!option || option.unavailable !== null) {
+        throw new Error(`The ${String(args?.backend)} capture backend can't be used`);
+      }
+      status.configured = option.backend;
+      status.active = `${option.backend} (idle)`;
+      return structuredClone(status) as T;
     }
     case "set_ui_pref":
     case "open_recordings_folder":
