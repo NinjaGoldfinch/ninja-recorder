@@ -273,8 +273,10 @@ Step 11 asks the other half of the question. The daemon smoke asks whether the
 recorder runs; `smoke-ui.ps1` asks whether the *window* process reaches its own
 startup, starts a daemon when none is listening, and completes a handshake over
 the pipe. `ui::link` logs the connection's health, so "daemon connection:
-Connected" in `ui.log` is WS3.4's whole path proving itself: window process,
-spawn, pipe, hello.
+Connected" in the UI's log is WS3.4's whole path proving itself: window
+process, spawn, pipe, hello. CI builds with `devtools`, so that file is
+`ui-devtools.log`; both scripts take `-Build release` for a release binary,
+which writes `ui.log` and `daemon.log` instead (#202).
 
 It was added because of the failure it is shaped around. A UI that dies before
 `log::init` leaves no log, and a windowed build throws away the stderr that

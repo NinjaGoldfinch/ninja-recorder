@@ -133,14 +133,16 @@ where
     //
     // Without this the symptom is a console window that flashes and closes,
     // and nothing anywhere saying what happened. With it there is a line naming
-    // the code, which points at `daemon.log` and the reason it recorded.
+    // the code, which points at the daemon's log and the reason it recorded.
+    // Named through `log`, because the file is per build (#202).
     if let Some(child) = child.as_mut()
         && let Ok(Some(status)) = child.try_wait()
     {
-        warn!("daemon", "the daemon exited immediately ({status}); see daemon.log");
+        let log_name = crate::log::Process::Daemon.file_name();
+        warn!("daemon", "the daemon exited immediately ({status}); see {log_name}");
         return Err(io::Error::other(format!(
             "the recorder exited straight away ({status}). Its log is in \
-             app_data_dir()/logs/daemon.log"
+             app_data_dir()/logs/{log_name}"
         )));
     }
 

@@ -332,7 +332,7 @@ where
 /// whichever started first would silently own the other's clients — a dev
 /// portal driving the release daemon's recorder, or the reverse. Scoping the
 /// name by build identity is what keeps them apart (implementation plan §4.2).
-const BUILD: &str = if cfg!(feature = "devtools") { "devtools" } else { "release" };
+pub(crate) const BUILD: &str = if cfg!(feature = "devtools") { "devtools" } else { "release" };
 
 /// The address the daemon binds and a client connects to.
 ///

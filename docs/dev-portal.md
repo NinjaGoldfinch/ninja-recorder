@@ -207,9 +207,12 @@ entry `overRpc`.
 `rpc`, which since WS3.4 forwards over the pipe rather than dispatching in the
 UI process. So Overview's counts, Database's tables, Simulate's state injection
 and Log's files all describe the daemon: the process that owns the library, the
-supervisor and the recorder. The Log panel's active file is `daemon.log`, and
-`ui.log` shows up in the same list through the directory scan that already
-finds `libobs.log`.
+supervisor and the recorder. The Log panel's active file is
+`daemon-devtools.log`, because the portal only exists in a devtools build and
+that build names its logs after itself (#202). `ui-devtools.log` shows up in the
+same list through the directory scan that already finds `libobs.log`, and so do
+a release build's `daemon.log` and `ui.log` when one is installed beside it:
+they share the directory, but no longer a file.
 
 The six UI-table commands are the exception and are meant to be: they report or
 act on *this* process, which is the one with a window.

@@ -707,6 +707,8 @@ backend is libobs, and this section is what stands in for that.
       on a machine where nothing else happened to be hosting WebView2.)
 - [x] `app_data_dir()/logs/daemon.log` is created and names the pipe it bound.
       The UI's own log is `ui.log` beside it, and neither rotates the other.
+      (A devtools build writes `daemon-devtools.log` and `ui-devtools.log`
+      since #202; this row was checked before that split.)
 - [x] The pipe exists while the daemon runs. From PowerShell:
       `[System.IO.Directory]::GetFiles("\\.\pipe\") -match "ninja-recorder"`
       should list `ninja-recorder.com.ninjarecorder.app.release`, or
@@ -798,6 +800,11 @@ needs a window.
       shows two `ninja-recorder.exe` processes.
 - [x] `app_data_dir()/logs/` now holds both `ui.log` and `daemon.log`, and
       neither rotates the other.
+- [ ] **#202.** With the release and devtools builds both installed and both
+      running, `logs/` holds `daemon.log` and `daemon-devtools.log` (and
+      `ui.log` beside `ui-devtools.log`), and no line from one build appears in
+      the other's file. Each daemon session's first lines name its version,
+      build and pid: `ninja-recorder <version> (release build), pid <n>`.
 - [x] **The exit criterion for 3.4.** Start a game and let recording begin.
       Kill the UI process from Task Manager, then launch it again. Within one
       reconnect it shows the recording still in flight, with the elapsed time
@@ -812,6 +819,8 @@ needs a window.
       database, supervisor and recorder: Overview's counts, Database's tables,
       Simulate's state injection and Log's files should all describe the daemon
       process, and the Log panel's active file should be `daemon.log`.
+      Since #202 that file is `daemon-devtools.log`, because the portal only
+      exists in a devtools build; this row was checked before the split.
 - [ ] Version skew: run the UI from one build against a daemon from another
       whose `PROTOCOL` differs. The UI must say a restart is required and must
       **not** ask the daemon to quit, because it might be recording.

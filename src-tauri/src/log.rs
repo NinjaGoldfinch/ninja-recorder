@@ -57,20 +57,38 @@ const KEEP_ROTATED: usize = 2;
 /// rotating the other's file out from under it — a rename is not something the
 /// other process can be told about. So the stem names the role
 /// (implementation plan §3.1's ownership table).
+///
+/// **And the build, for the same reason** (#202). A devtools build keeps the
+/// release identifier so the portal reads the real library, which puts both
+/// builds' logs in the same directory. Two daemons, one from each, are two
+/// sinks on one file: their lines interleave with nothing saying whose they
+/// are, and each rotates the other's file away. So a devtools build writes
+/// `daemon-devtools.log` and `ui-devtools.log`, the way its pipe name and its
+/// Run value already carry the build, and a release build keeps the names
+/// every shipped version has used.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Process {
-    /// `ui.log`. The Tauri process: windows, the webview, the dev portal.
+    /// `ui.log`, or `ui-devtools.log`. The Tauri process: windows, the
+    /// webview, the dev portal.
     Ui,
-    /// `daemon.log`. The headless recorder.
+    /// `daemon.log`, or `daemon-devtools.log`. The headless recorder.
     Daemon,
 }
 
 impl Process {
     fn stem(self) -> &'static str {
-        match self {
-            Process::Ui => "ui",
-            Process::Daemon => "daemon",
+        match (self, cfg!(feature = "devtools")) {
+            (Process::Ui, false) => "ui",
+            (Process::Ui, true) => "ui-devtools",
+            (Process::Daemon, false) => "daemon",
+            (Process::Daemon, true) => "daemon-devtools",
         }
+    }
+
+    /// The active file this process writes in this build, for a message that
+    /// has to tell a person where to look.
+    pub fn file_name(self) -> String {
+        format!("{}.log", self.stem())
     }
 }
 
@@ -719,7 +737,7 @@ mod tests {
 
         let dir = temp_dir("global");
         let path = init(&dir, Process::Ui).expect("a fresh temp dir is writable");
-        assert_eq!(path, dir.join("ui.log"), "the UI process writes ui.log");
+        assert_eq!(path, dir.join(Process::Ui.file_name()), "the UI process writes its own file");
 
         write(Level::Error, "state_machine", "failed to stop recording");
         // Filtered out: `Debug` is off unless something asks for it.
@@ -866,6 +884,20 @@ mod tests {
         assert!(line_matches(&line, &[], &[], "live-poll"));
         assert!(line_matches(&line, &[], &[], "warn"));
         assert!(!line_matches(&line, &[], &[], "champion"));
+    }
+
+    /// #202. The names are pinned rather than derived, because the smoke
+    /// scripts and the verification sheet spell them out: a release build
+    /// keeps the files every shipped version wrote, and a devtools build
+    /// never writes one of them.
+    #[test]
+    fn each_build_and_process_writes_a_file_of_its_own() {
+        let expected = if cfg!(feature = "devtools") {
+            ["ui-devtools.log", "daemon-devtools.log"]
+        } else {
+            ["ui.log", "daemon.log"]
+        };
+        assert_eq!([Process::Ui.file_name(), Process::Daemon.file_name()], expected);
     }
 
     #[cfg(feature = "devtools")]
