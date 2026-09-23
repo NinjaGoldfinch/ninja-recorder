@@ -893,6 +893,7 @@ mod tests {
             game_mode: Some("CLASSIC".into()),
             win,
             role: Some("Middle".into()),
+            viego: false,
         }
     }
 

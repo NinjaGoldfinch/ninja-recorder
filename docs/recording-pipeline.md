@@ -185,7 +185,7 @@ flowchart TB
     ID --> SS["self_summary<br/><small>champion, KDA, mode</small>"]
     EV --> GE["GameEnd → Result<br/><small>Win / Lose, else unknown</small>"]
     GE --> SS
-    SS --> ABS["LiveSummary::absorb<br/><small>newer wins, but a known<br/>value is never given back</small>"]
+    SS --> ABS["LiveSummary::absorb<br/><small>newer wins, but a known<br/>value is never given back,<br/>and a Viego stays a Viego</small>"]
     ABS --> ROW["recordings row @ finalize"]
 ```
 
@@ -199,6 +199,18 @@ one lands, so the poll that carries the outcome is often the last that ever
 succeeds. Reading metadata off the final snapshot alone would lose the
 result of most games. A value once known is therefore never overwritten
 with `None`.
+
+**`champion` has one more exception: a Viego stays a Viego** (#203). Viego's
+passive takes over a champion he helped kill, and while it lasts Live Client
+Data reports him under that champion's name, so a game that ended
+mid-possession used to land the possessed champion on the row. No other
+champion changes mid-game, so `settle_champion` believes any poll that says
+Viego and, once one has, ignores every other name. Viego is recognised by
+`rawChampionName` (`game_character_displayname_Viego`, independent of the
+client's language) or by name, and stored as `Viego`. A recording that starts
+mid-possession, as one does after a daemon restart, is corrected when the
+possession ends; one that sees only the possession cannot be, and relies on the
+deferred patch's `correct_champion` (see [data-model.md](data-model.md)).
 
 **Marker kinds** (`MarkerKind::as_str`, matching `markers.kind` in SQLite):
 `kill`, `death`, `assist`, `dragon`, `baron`, `herald`, `voidgrubs`,

@@ -256,6 +256,13 @@ table can catch that, because the name it wrote is a genuine champion. An id
 cannot be possessed, so the deferred patch corrects the column from the id the
 client answers with, through `Db::correct_champion`.
 
+That correction runs only where the patch runs and establishes an id, which a
+custom game did not reliably do (#203), so the live path no longer depends on
+it: `LiveSummary::absorb` keeps a Viego a Viego however the last poll names
+him ([recording-pipeline.md](recording-pipeline.md)). The correction remains
+for the one case the live data cannot tell apart, a recording that saw only
+the possession.
+
 That correction is a separate method precisely so the shared patch stays
 incapable of it. The backfill goes through `update_match_metadata` and matches
 games *on the clock*; letting it rename a row would let a mismatched game
