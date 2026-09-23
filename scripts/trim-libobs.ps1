@@ -8,21 +8,28 @@
     if they pass (WS1.7). Either way its size is the thing being measured:
     libobs is a large share of a 248 MB install.
 
-    Two modes, and the order matters.
+    Every staged file lands in one of three groups. KEPT matches a plain line
+    of the keep-list. EXPECTED REMOVAL matches a `!` line. UNRECOGNISED matches
+    neither, and the script refuses to go on while there is one: a libobs bump
+    that adds a DLL something imports would otherwise be trimmed away without
+    anyone having looked at it.
 
     -Inventory prints what is actually staged, grouped, with sizes, and marks
-    each entry against the keep-list. Run this FIRST. The keep-list shipped
-    with this script was written from what the recorder demonstrably uses
-    rather than from a real directory listing, because no staged directory
-    exists off Windows, and a keep-list that has never been compared to reality
-    is a guess.
+    each entry against the keep-list. It changes nothing.
 
-    Without -Apply the script is a dry run: it prints what it would remove and
-    the size that would be saved, and touches nothing. That is the default
-    because the failure mode here is not a broken build. A plugin removed
-    wrongly still compiles, still packages, still installs, and then does not
-    capture, which is why the exit criterion for this task is a clean
+    Without -Apply the script is a dry run: it prints the size before and
+    after, and every file it would remove, and touches nothing. That is the
+    default because the failure mode here is not a broken build. A plugin
+    removed wrongly still compiles, still packages, still installs, and then
+    does not capture, which is why the exit criterion for this task is a clean
     plugin-load log and a recording that plays rather than a green build.
+
+    -Apply also requires the environment variable LIBOBS_TRIM to be 1, which the
+    CI step sets for a trimmed devtools build and nothing else sets.
+
+    The sizes it prints are the staged directory's, for the P0a notes. The
+    install size that counts is measured on the installed build with
+    measure.ps1 (docs/windows-verification.md section 8).
 
 .NOTES
     Deliberately ASCII-only, like measure.ps1. Windows PowerShell 5.1 reads a
@@ -46,7 +53,8 @@
     Print what is staged and how it matches the keep-list, and change nothing.
 
 .PARAMETER Apply
-    Actually delete. Without it the script reports and exits.
+    Actually delete. Without it the script reports and exits. Refused unless
+    LIBOBS_TRIM is 1 and nothing staged is unrecognised.
 
 .EXAMPLE
     ./scripts/trim-libobs.ps1 -Inventory
@@ -56,13 +64,13 @@
 .EXAMPLE
     ./scripts/trim-libobs.ps1
 
-    A dry run: what would go, and how many bytes that is.
+    A dry run: the size before and after, and every file that would go.
 
 .EXAMPLE
     $env:LIBOBS_TRIM = '1'; ./scripts/trim-libobs.ps1 -Apply
 
-    The real thing. Record the before and after sizes in DEVELOPMENT.md
-    section 16's measurement table, then package and play a game.
+    The real thing. Then package, install, play a game, and fill in
+    docs/windows-verification.md section 8.
 #>
 
 [CmdletBinding()]
@@ -105,41 +113,70 @@ if (-not (Test-Path -LiteralPath $KeepList)) {
     exit 1
 }
 
-$patterns = Get-Content -LiteralPath $KeepList |
+$lines = @(Get-Content -LiteralPath $KeepList |
     ForEach-Object { $_.Trim() } |
-    Where-Object { $_ -and -not $_.StartsWith('#') }
+    Where-Object { $_ -and -not $_.StartsWith('#') })
+
+# A plain line keeps; a `!` line names an expected removal.
+$patterns = @($lines | Where-Object { -not $_.StartsWith('!') })
+$dropPatterns = @($lines | Where-Object { $_.StartsWith('!') } | ForEach-Object { $_.Substring(1).Trim() })
 
 if (-not $patterns) {
-    Write-Error "The keep-list at $KeepList has no patterns. That would remove everything; refusing."
+    Write-Error "The keep-list at $KeepList has no keep patterns. That would remove everything; refusing."
     exit 1
 }
 
 # `**` means "any depth", which -like does not know about, so it becomes `*`.
 # Everything else is a plain wildcard match on a forward-slashed relative path.
-$matchers = $patterns | ForEach-Object { $_.Replace('**', '*') }
+$matchers = @($patterns | ForEach-Object { $_.Replace('**', '*') })
+$dropMatchers = @($dropPatterns | ForEach-Object { $_.Replace('**', '*') })
 
-$files = Get-ChildItem -LiteralPath $root -Recurse -File
+function Test-AnyMatch {
+    param([string] $Relative, [string[]] $Globs)
+    foreach ($glob in $Globs) {
+        if ($Relative -like $glob) { return $true }
+    }
+    return $false
+}
+
+function Get-Bytes {
+    param($Entries)
+    $list = @($Entries)
+    if ($list.Count) { return [long](($list | Measure-Object -Property Bytes -Sum).Sum) }
+    return [long]0
+}
+
+$files = @(Get-ChildItem -LiteralPath $root -Recurse -File)
 
 $kept = New-Object System.Collections.Generic.List[object]
-$doomed = New-Object System.Collections.Generic.List[object]
+$expected = New-Object System.Collections.Generic.List[object]
+$unknown = New-Object System.Collections.Generic.List[object]
 
 foreach ($file in $files) {
-    $relative = $file.FullName.Substring($root.Length).TrimStart('\', '/').Replace('\', '/')
-    $isKept = $false
-    foreach ($matcher in $matchers) {
-        if ($relative -like $matcher) { $isKept = $true; break }
-    }
+    # `-replace` rather than `.TrimStart('\', '/')`: PowerShell 7.5 runs on
+    # .NET 9, whose params ReadOnlySpan<char> overload makes that call fail
+    # to bind with "Argument types do not match".
+    $relative = ($file.FullName.Substring($root.Length) -replace '^[\\/]+', '').Replace('\', '/')
     $entry = [pscustomobject]@{
         Relative = $relative
         Bytes    = $file.Length
         Full     = $file.FullName
     }
-    if ($isKept) { $kept.Add($entry) } else { $doomed.Add($entry) }
+    # Keep wins over a removal, so an overlap errs toward a bigger bundle
+    # rather than a broken one.
+    if (Test-AnyMatch $relative $matchers) { $kept.Add($entry) }
+    elseif ($dropMatchers.Count -and (Test-AnyMatch $relative $dropMatchers)) { $expected.Add($entry) }
+    else { $unknown.Add($entry) }
 }
 
-$total = ($files | Measure-Object -Property Length -Sum).Sum
-$keptBytes = if ($kept.Count) { ($kept | Measure-Object -Property Bytes -Sum).Sum } else { 0 }
-$doomedBytes = if ($doomed.Count) { ($doomed | Measure-Object -Property Bytes -Sum).Sum } else { 0 }
+# Everything not kept is what a trim would remove; whether it is allowed to
+# is the split between expected and unrecognised.
+$doomed = @($expected) + @($unknown)
+
+$total = if ($files.Count) { [long](($files | Measure-Object -Property Length -Sum).Sum) } else { [long]0 }
+$keptBytes = Get-Bytes $kept
+$doomedBytes = Get-Bytes $doomed
+$unknownBytes = Get-Bytes $unknown
 
 Write-Host ''
 Write-Host "Staged libobs: $root"
@@ -152,7 +189,7 @@ if ($Inventory) {
     # "which plugins are even here", not "which 400 files are here".
     Write-Host 'By directory:'
     $files |
-        Group-Object { $d = Split-Path $_.FullName -Parent; $d.Substring($root.Length).TrimStart('\', '/').Replace('\', '/') } |
+        Group-Object { $d = Split-Path $_.FullName -Parent; ($d.Substring($root.Length) -replace '^[\\/]+', '').Replace('\', '/') } |
         Sort-Object { ($_.Group | Measure-Object -Property Length -Sum).Sum } -Descending |
         ForEach-Object {
             $where = if ($_.Name) { $_.Name } else { '(root)' }
@@ -161,12 +198,22 @@ if ($Inventory) {
         }
 
     Write-Host ''
-    Write-Host 'Not matched by the keep-list, largest first:'
-    $doomed | Sort-Object Bytes -Descending | Select-Object -First 40 | ForEach-Object {
+    Write-Host 'Unrecognised, on neither side of the keep-list, largest first:'
+    if ($unknown.Count) {
+        $unknown | Sort-Object Bytes -Descending | ForEach-Object {
+            Write-Host ("  {0,10}  {1}" -f (Format-Size $_.Bytes), $_.Relative)
+        }
+    } else {
+        Write-Host '  (none)'
+    }
+
+    Write-Host ''
+    Write-Host 'Expected removals, largest first:'
+    $expected | Sort-Object Bytes -Descending | Select-Object -First 40 | ForEach-Object {
         Write-Host ("  {0,10}  {1}" -f (Format-Size $_.Bytes), $_.Relative)
     }
-    if ($doomed.Count -gt 40) {
-        Write-Host ("  ... and {0} more" -f ($doomed.Count - 40))
+    if ($expected.Count -gt 40) {
+        Write-Host ("  ... and {0} more" -f ($expected.Count - 40))
     }
 
     Write-Host ''
@@ -186,22 +233,46 @@ if ($Inventory) {
     }
 
     Write-Host ''
-    Write-Host 'Nothing was changed. Compare the two lists above against the keep-list before running without -Inventory.'
+    Write-Host 'Nothing was changed.'
     exit 0
 }
 
-Write-Host ("Keep:   {0,4} file(s)  {1}" -f $kept.Count, (Format-Size $keptBytes))
-Write-Host ("Remove: {0,4} file(s)  {1}" -f $doomed.Count, (Format-Size $doomedBytes))
-Write-Host ("After:  {0}" -f (Format-Size $keptBytes))
+# Exact bytes beside the rounded figure, so a note quoting it carries the
+# number rather than one re-derived from a rounding.
+Write-Host ("Before: {0,4} file(s)  {1}  ({2} bytes)" -f $files.Count, (Format-Size $total), $total)
+Write-Host ("After:  {0,4} file(s)  {1}  ({2} bytes)" -f $kept.Count, (Format-Size $keptBytes), $keptBytes)
+Write-Host ("Remove: {0,4} file(s)  {1}  ({2} bytes)" -f $doomed.Count, (Format-Size $doomedBytes), $doomedBytes)
 if ($total -gt 0) {
     Write-Host ("Saving: {0:N1}%" -f (100.0 * $doomedBytes / $total))
 }
 Write-Host ''
 
+Write-Host 'Files to remove:'
+if ($doomed.Count) {
+    $doomed | Sort-Object Relative | ForEach-Object {
+        $mark = if ($unknown.Contains($_)) { '  UNRECOGNISED' } else { '' }
+        Write-Host ("  {0,10}  {1}{2}" -f (Format-Size $_.Bytes), $_.Relative, $mark)
+    }
+} else {
+    Write-Host '  (none)'
+}
+Write-Host ''
+
+if ($unknown.Count) {
+    # Refused in a dry run too, as a non-zero exit, so CI stops before building
+    # an installer nobody should install.
+    Write-Error ("{0} staged file(s), {1}, are on neither side of the keep-list (marked UNRECOGNISED above). Add each to the keep-list or to its expected removals, with a reason, before trimming." -f $unknown.Count, (Format-Size $unknownBytes))
+    exit 1
+}
+
 if (-not $Apply) {
     Write-Host 'Dry run. Nothing was changed.'
-    Write-Host 'Run -Inventory first if this keep-list has not been compared against a real staged directory, then re-run with -Apply.'
     exit 0
+}
+
+if ($env:LIBOBS_TRIM -ne '1') {
+    Write-Error 'LIBOBS_TRIM is not 1, so -Apply is refused. The trim is opt-in (#5); set it in this shell to mean it.'
+    exit 1
 }
 
 foreach ($entry in $doomed) {
@@ -219,10 +290,14 @@ Get-ChildItem -LiteralPath $root -Recurse -Directory |
         }
     }
 
+$remaining = @(Get-ChildItem -LiteralPath $root -Recurse -File)
+$remainingBytes = if ($remaining.Count) { [long](($remaining | Measure-Object -Property Length -Sum).Sum) } else { [long]0 }
+
 Write-Host ("Removed {0} file(s), {1}." -f $doomed.Count, (Format-Size $doomedBytes))
+Write-Host ("Staged libobs is now {0} file(s), {1} ({2} bytes)." -f $remaining.Count, (Format-Size $remainingBytes), $remainingBytes)
 Write-Host ''
-Write-Host 'Now the part this script cannot do:'
-Write-Host '  1. Package, install, and play a game.'
-Write-Host '  2. Check the plugin-load log is clean (no failed module loads).'
-Write-Host '  3. Record the before and after sizes in DEVELOPMENT.md section 16.'
+Write-Host 'Now the part this script cannot do (docs/windows-verification.md section 8):'
+Write-Host '  1. Install this build, record a real game, and play it back.'
+Write-Host '  2. Check libobs.log for failed module loads.'
+Write-Host '  3. Measure the installed size with measure.ps1.'
 Write-Host 'A wrongly removed plugin still builds, still packages, and then does not capture.'

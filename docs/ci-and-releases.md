@@ -19,7 +19,7 @@ flowchart TB
     subgraph MAIN["Push to main / manual dispatch"]
         T["<b>Test</b> (windows-latest)"]
         V["<b>Version</b> (ubuntu)<br/>commit distance from<br/>the newest real tag"]
-        B["<b>Build</b> (windows ×2)<br/>native bundles:<br/>NSIS · devtools NSIS"]
+        B["<b>Build</b> (windows ×2)<br/>native bundles:<br/>NSIS · devtools NSIS<br/><small>devtools libobs trim: manual, opt-in</small>"]
         R["<b>Release</b> (ubuntu)<br/>publishes from the bundles<br/>the run just produced"]
         V --> B
         V --> R
@@ -52,31 +52,48 @@ other end: it needs everything already compiled.
 | 10 | `scripts/smoke-daemon.ps1` | the daemon actually runs | WS3.3 |
 | 11 | `scripts/smoke-ui.ps1` | the UI starts and finds it | WS3.3 |
 
-### Trimming libobs is opt-in, and the cache key knows about it
+### Trimming libobs is opt-in, and only ever reaches the devtools installer
 
 `scripts/trim-libobs.ps1` removes everything from the staged capture backend
-that `scripts/libobs-keep.txt` does not name. It is WS1.1's P0a arm (#5): the
+that `scripts/libobs-keep.txt` does not keep. It is WS1.1's P0a arm (#5): the
 trimmed backend is the fallback if the P0c spikes fail and a selectable second
 backend for one release if they pass, and either way its size is what is being
 measured.
 
-It runs only when the repository variable `LIBOBS_TRIM` is `1`, and the run
-does an inventory pass before the applying pass.
+**How to build one.** Actions → CI → Run workflow, on the branch you want, with
+`libobs_trim` ticked. The run builds both entries as usual; the **devtools**
+entry trims before it packages, and its artifact is named
+`ninja-recorder-devtools-libobs-trim-windows-latest-<sha>` so it cannot be
+mistaken for the untrimmed one. The production entry of the same run is
+untouched, and so is every push to `main`: the job-level `LIBOBS_TRIM` is `1`
+only when `matrix.devtools` and `inputs.libobs_trim` are both true, and
+`inputs` is empty on a push. Ticking `publish_release` as well publishes the
+untrimmed production bundle, because the devtools bundle is never published.
+The procedure after installing is
+[windows-verification.md §8](windows-verification.md#8-the-trimmed-libobs-backend-ws11-5).
 
-**Two things about it are load-bearing.**
+It used to be switched by a repository variable, which reached both matrix
+entries, so setting it would have trimmed the next release. A variable set
+under that name is now ignored.
 
-The keep-list has never been compared against a real staged directory, because
-none exists off Windows. `-Inventory` is what turns it from a guess into a
-keep-list: it prints what is there and, more usefully, which keep-list patterns
-matched nothing. A pattern matching nothing is either a file that moved or a
-file that was never there, and both are worth knowing before deleting the rest.
+**The keep-list has three kinds of line.** A plain glob keeps, a `!` glob is an
+expected removal, and a staged file that matches neither is *unrecognised*: the
+script lists it and exits non-zero rather than deleting it. The fork bumping
+its libobs version changes the staged directory, and a new DLL that something
+imports is exactly the file a keep-list would otherwise remove silently. The
+list's own header records where each entry came from.
 
-**The trim flag is part of the cache key.** `actions/cache` saves at post-job,
-so a run with `LIBOBS_TRIM` on would otherwise write a trimmed directory under
-the untrimmed key, and every later build would restore it and ship a trimmed
-backend that nobody asked for. That failure would look exactly like the
-capture backend spontaneously breaking, weeks later, on a commit that touched
-none of it.
+**The cache only ever holds the untrimmed directory.** Restore and save are two
+steps, and the save runs straight after staging, before the trim. So a trimmed
+run cannot write a trimmed directory under the key the release builds restore
+from, and a trimmed run that restores from the cache still trims the full set,
+which is what makes the "before" size it prints true.
+
+**It prints the sizes and records none.** Before, after and removed, in bytes
+and rounded, and every removed file by name, in the step log. Those are the
+staged directory's figures. The P0a size that counts is the installed build's,
+taken with `scripts/measure.ps1` on the box, and an empty cell stays empty
+until then.
 
 A wrongly removed plugin still builds, still packages, still installs, and then
 does not capture. The exit criterion is a clean plugin-load log and a recording
@@ -361,8 +378,12 @@ flowchart TB
     W1 --> W2{"cache hit?"}
     W2 -->|"no"| W3["Stage libobs capture backend<br/><small>build extprocess_recorder from the fork,<br/>copy it + libobs_&lt;ver&gt;/ DLLs into<br/>src-tauri/target/libobs/</small>"]
     W3 --> W4["Stage ffmpeg for faststart remux<br/><small>static build from BtbN/FFmpeg-Builds</small>"]
-    W2 -->|"yes"| W5
-    W4 --> W5["tauri build → NSIS installer"]
+    W4 --> WS["Save the untrimmed directory to the cache"]
+    W2 -->|"yes"| TR
+    WS --> TR{"LIBOBS_TRIM?<br/><small>devtools entry of a dispatch<br/>with libobs_trim ticked</small>"}
+    TR -->|"yes"| TT["trim-libobs.ps1 -Inventory, then -Apply<br/><small>scripts/libobs-keep.txt</small>"]
+    TR -->|"no"| W5
+    TT --> W5["tauri build → NSIS installer"]
     W5 --> C["Assert the installer's shortcut starts the app<br/><small>MAINBINARYNAME in the generated installer.nsi</small>"]
     C --> U["Upload artifact (7-day retention)"]
     W5 -.->|"push / manual only"| W6["Second bundle: --features devtools"]
