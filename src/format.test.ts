@@ -127,6 +127,10 @@ describe("queue and mode labels", () => {
     expect(queueLabel(450)).toBe("ARAM");
   });
 
+  it("names ARAM Mayhem, which a recording on real hardware reported as 2400", () => {
+    expect(queueLabel(2400)).toBe("ARAM Mayhem");
+  });
+
   it("shows an unknown queue id rather than guessing a name", () => {
     expect(queueLabel(9999)).toBe("Queue 9999");
   });
