@@ -2304,13 +2304,16 @@ day this package grows a second binary that genuinely has to ship.
 
 ## 16. The capture gate, and what it is allowed to decide
 
-**WS1.5's section, and most of it is deliberately empty.** The gate is three
-spikes whose whole purpose is to produce measurements, and an empty cell here
-is a true statement where a plausible number is not.
+**WS1.5's section. The gate has run, and both P0c stages passed:** Option B
+is viable and WS1.6 builds it. The numbers are in
+[The measurements](#the-measurements) and the decision under
+[The outcome](#the-outcome). The gate is three spikes whose whole purpose is
+to produce measurements, and a cell still empty there is a true statement
+where a plausible number is not.
 
-What is written below is the half that does not need hardware: what each arm
-is for, what its result is allowed to decide, and one premise that turned out
-to be wrong.
+What is written before the measurements is the half that did not need
+hardware, written before the box ran: what each arm is for, what its result
+is allowed to decide, and one premise that turned out to be wrong.
 
 ### The three arms
 
@@ -2456,30 +2459,57 @@ staging step for everything is WS1.7's, after the box has said it records.
 
 ### The measurements
 
-Empty until the box produces them. Filling a cell here is WS1.5's actual
-deliverable; everything above is the frame it goes in.
+Measured on the box on 2026-09-24: Windows 11 build 26200, unelevated, an
+RTX 4080 (driver 616.56) at 2560×1440, League patch 26.19. The raw reports
+are on the issues: #7 for P0c-1, #8 for P0c-2, #5 for P0a. Two cells are
+still empty, and each names the issue that fills it.
 
 | Measurement | Arm | Result |
 |---|---|---|
-| Trimmed libobs: recording plays, plugin-load log clean | P0a | |
-| Trimmed libobs: bundle size | P0a | |
-| `LibObsRecorder` under `--daemon`: recording finalizes | P0b | |
-| Daemon-only RAM while recording | P0b | |
-| Process loopback isolates game audio from Discord | P0c-1 | |
-| Root PID the capture was attached to | P0c-1 | |
-| Control: Discord audible in the exclude-mode capture | P0c-1 | |
-| WGC frames reach a fragmented MP4 | P0c-2 | |
-| Worst drift over ten minutes, in frames | P0c-2 | |
-| A file killed at minute five is playable | P0c-2 | |
-| Encoder selected, and what was offered | P0c-2 | |
-| Software-only encode (#68's second arm): initialises, and holds 60 fps | P0c-2 | |
+| Trimmed libobs: recording plays, plugin-load log clean | P0a | **Plays**: a full game (ARAM Mayhem, 19:59) plays, seeks, has its markers and every audio stem. **The log is not yet readable**, because libobs's info and warning lines never reach it (#221). What stood in: the trimmed worker loads 23 libobs DLLs to the untrimmed one's 24, and the only one missing is `coreaudio-encoder.dll`, which the keep-list removes on purpose. Re-run the log search once #221 lands |
+| Trimmed libobs: bundle size | P0a | **195.4 MB as a release install**, under the plan's 200 MB: 235.5 (release install) − (219.5 − 179.4) (untrimmed and trimmed `libobs\`). CI's trim step: 118 files, 219.4 MB before; 60 files, 179.4 MB after |
+| `LibObsRecorder` under `--daemon`: recording finalizes | P0b | Yes. The daemon is the only process that builds the backend (#6), and #130 §3 recorded straight through a UI kill with no restart |
+| Daemon-only RAM while recording | P0b | Not measured yet; #6 carries it (`scripts/measure.ps1` during a recording) |
+| Process loopback isolates game audio from Discord | P0c-1 | Yes. Include mode: 2,880,000 of 2,880,000 frames over 60 s, 0 discontinuities, peak −16.4 / rms −35.5 dBFS; listened: the game and nothing else |
+| Root PID the capture was attached to | P0c-1 | `League of Legends.exe`, found both by name and as the owner of the game window. Its ancestors are `LeagueClient.exe` → `RiotClientServices.exe` → `explorer.exe`, which include mode does not capture; every Discord process is outside the tree |
+| Control: Discord audible in the exclude-mode capture | P0c-1 | Yes. Exclude mode: 2,879,040 frames, 0 discontinuities, peak −0.4 / rms −29.0 dBFS; listened: Discord and Spotify, no game |
+| WGC frames reach a fragmented MP4 | P0c-2 | Yes: 36,000 frames decoded from 2,000 complete fragments over ten minutes; 59.78 fps delivered, 2.0% of ticks repeated the previous frame |
+| Worst drift over ten minutes, in frames | P0c-2 | **0.016 frames written** (QPC clock). Raw device drift −0.2 ppm, and the file's audio ends +0.00 frames from its video |
+| A file killed at minute five is playable | P0c-2 | Yes: `TerminateProcess` at 300 s, 999 of 999 fragments complete, 0 decoder errors, 19 frames (0.32 s) lost from the tail, faststart remux ok. Before the remux it has no `mfra`, so a player treats it as live and offers no scrub bar |
+| Encoder selected, and what was offered | P0c-2 | NVIDIA H.264 Encoder MFT [VEN_10DE], hardware, vendor matching the adapter. Offered: that one and the Microsoft `H264 Encoder MFT` |
+| Software-only encode (#68's second arm): initialises, and holds 60 fps | P0c-2 | Yes: 120 s, 7,200 ticks on the 60 fps grid, worst tick 0.21 frames late, 3.1% repeated, 0 decoder errors. The software MFT reports no friendly name |
 
 **The vendor half of #8's exit criterion cannot be met.** It asks for encoder
 detection on two GPU vendors; #68 settled that only NVIDIA and software-only
 are available here, so the AMF and oneVPL orderings stay unverified. That is a
 recorded gap rather than a pending measurement, and the rows above say what was
 offered and whether the software path works, rather than pretending to cover
-it.
+it. #224 carries the second vendor, for whoever has the hardware.
+
+### The outcome
+
+**Both stages passed, so this is the "Stage 1 passes" and "Stage 2 passes"
+row pair of the table above:** per-application audio survives into Option B,
+and WS1.6 (#10) builds `recorder/own/` as the default backend. The relicense
+at v2.1 stays on course, and the licence itself was settled separately as MIT
+(#66); nothing in the gate traded against it.
+
+What the run leaves for WS1.6, none of which reopens the gate:
+
+- **The activation `PROPVARIANT` must not be dropped.** windows-rs 0.62 gives
+  it a `Drop` that calls `PropVariantClear`, which frees a `VT_BLOB` pointing
+  at the stack. The spike crashed with 0xC0000374 until #218 wrapped it in
+  `ManuallyDrop`, and WS1.6's port of that code needs the same.
+- **WGC's yellow border has to be turned off**, as libobs turns it off; the
+  spike asked for it, and #219 tracks the change.
+- **A crashed recording needs the remux before it can be scrubbed.** The killed
+  file plays, but with no `mfra` it has no scrub bar until faststart has run.
+  Startup recovery (`db::reconcile::recover_unfinished`) only probes the
+  duration today and does not remux, so a recovered Option B file would reach
+  the library unscrubbable unless recovery learns to remux it.
+- **The resampler has little to correct.** Raw drift was −0.2 ppm, at worst
+  −0.27 ms over ten minutes, and the spike's single-sample slips held the
+  written figure at 0.016 frames.
 
 ### The switch, and when it applies
 

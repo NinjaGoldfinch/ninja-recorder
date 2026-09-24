@@ -1282,16 +1282,16 @@ beside the result rather than as one number.
 
 | What | Result | Notes |
 |---|---|---|
-| CI trim step: `Before:` / `After:` / `Remove:` (staged directory) | | |
-| 8.1: the installed `libobs\` is the trimmed one | | |
-| 8.2: Practice Tool game recorded, encoder named | | |
-| 8.2: full game recorded, plays, seeks, stems present | | |
-| 8.3: `libobs-devtools.log` free of failed module loads | | |
-| 8.3: module list matches the untrimmed log less coreaudio-encoder | | |
-| 8.4: trimmed devtools install (`measure.ps1` row) | | |
-| 8.4: trimmed `libobs\` folder (`measure.ps1` row) | | |
-| 8.4: untrimmed devtools install and `libobs\` folder, same commit | | |
-| Under 200 MB as a release install, and the sum that says so | | |
+| CI trim step: `Before:` / `After:` / `Remove:` (staged directory) | 118 files, 219.4 MB / 60 files, 179.4 MB / 58 files, 40.0 MB | Run 35829801809, tree `798986e` |
+| 8.1: the installed `libobs\` is the trimmed one | Pass: 8 PASS, 0 FAIL | 63 files installed: CI's 60, plus 3 win-capture JSON files written at first run |
+| 8.2: Practice Tool game recorded, encoder named | Pass, but not from the log | NVENC confirmed with `nvidia-smi` (2 sessions at 57 fps) and `nvEncodeAPI64.dll` loaded in the worker. `daemon-devtools.log` never names the encoder (#221) |
+| 8.2: full game recorded, plays, seeks, stems present | Pass | ARAM Mayhem (queue 2400), 19:59. Track switching works; mic track (a2) mean −35.9 dB |
+| 8.3: `libobs-devtools.log` free of failed module loads | **Not checkable** | libobs's info and warning lines never reach the log (#221). Re-run once it lands |
+| 8.3: module list matches the untrimmed log less coreaudio-encoder | Pass, from the worker's loaded modules | `(Get-Process extprocess_recorder).Modules` under `libobs\`: untrimmed 24 DLLs, trimmed 23; only `coreaudio-encoder.dll` differs |
+| 8.4: trimmed devtools install (`measure.ps1` row) | 196.5 MB | `libobs\` 179.4 MB |
+| 8.4: trimmed `libobs\` folder (`measure.ps1` row) | 179.4 MB | |
+| 8.4: untrimmed devtools install and `libobs\` folder, same commit | 236.5 MB / 219.5 MB | Run 35830656950; CI staged 219.4 MB |
+| Under 200 MB as a release install, and the sum that says so | **Pass: 195.4 MB** | 235.5 (release 2.0.0-alpha.103 install) − (219.5 − 179.4) |
 
 ## 9. The capture backend switch (WS1.7, #11)
 
