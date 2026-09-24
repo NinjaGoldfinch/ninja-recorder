@@ -384,7 +384,7 @@ flowchart TB
     TR -->|"yes"| TT["trim-libobs.ps1 -Inventory, then -Apply<br/><small>scripts/libobs-keep.txt</small>"]
     TR -->|"no"| W5
     TT --> W5["tauri build → NSIS installer"]
-    W5 --> C["Assert the installer's shortcut starts the app<br/><small>MAINBINARYNAME in the generated installer.nsi</small>"]
+    W5 --> C["Assert the installer's shortcut starts the app,<br/>and that it carries the worker-stopping hooks<br/><small>MAINBINARYNAME and the installer-hooks.nsh include<br/>in the generated installer.nsi</small>"]
     C --> U["Upload artifact (7-day retention)"]
     W5 -.->|"push / manual only"| W6["Second bundle: --features devtools"]
     W6 --> C
@@ -427,6 +427,24 @@ step 7 and the devtools clippy run name that feature. The two halves are
 deliberate. Not building it keeps it out of the installer; naming the main
 binary decides the shortcut, and would still be needed the day this package
 grows a second binary that does have to ship.
+
+### The installer stops the libobs worker, and CI checks it is asked to
+
+`tauri.windows.conf.json` names `src-tauri/nsis/installer-hooks.nsh` as
+`bundle.windows.nsis.installerHooks`, and Tauri's template `!include`s it.
+Its pre-install and pre-uninstall hooks stop this install's
+`libobs\extprocess_recorder.exe`, found by path, before the template touches a
+file: Windows will not let an installer replace a DLL a running process has
+loaded (#220). Why by path, and why the app goes first, is
+[DEVELOPMENT.md §14](../DEVELOPMENT.md#the-capture-backend-has-to-be-shut-down-first).
+
+The same build step reads the generated `installer.nsi` back and fails if it
+does not include the hooks. Both bundles are checked, because the devtools one
+is `tauri.devtools.conf.json` merged over the rest and the question is whether
+the merge kept the Windows file's `nsis` block. A Rust test in `daemon`
+(`the_installer_hooks_stop_the_worker_the_daemon_starts`) pins the config key
+and the worker path against the one the daemon starts, which is as far as a
+Linux gate can see: nothing here runs makensis before the Windows leg does.
 
 > Working on the capture backend locally on the Windows box means running the
 > same clone-build-copy sequence by hand before `cargo run`. It is not

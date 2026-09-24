@@ -2,6 +2,11 @@
   "bundle": {
     "resources": {
       "target/libobs": "libobs"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis/installer-hooks.nsh"
+      }
     }
   }
 }

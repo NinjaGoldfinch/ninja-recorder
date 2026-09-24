@@ -1349,6 +1349,62 @@ recording the same game, needs WS1.6 and is not here yet.
 | 9: refused mid-game; the recording in flight is unaffected | | |
 | 9: an unbuildable saved backend records nothing and says why | | |
 
+## 10. Installing over a running app (#220)
+
+The installer stops this install's libobs worker before it touches a file
+(`src-tauri/nsis/installer-hooks.nsh`), and the in-app updater shuts the
+worker down before it hands over. Neither has run on Windows yet: makensis
+never runs on the dev box, so the hook has been read, not compiled, until CI
+builds a bundle with it. Why it works this way is
+[DEVELOPMENT.md §14, "The capture backend has to be shut down first"](../DEVELOPMENT.md#the-capture-backend-has-to-be-shut-down-first).
+
+Each box needs `extprocess_recorder.exe` **running** when the installer starts:
+open the League client (the worker comes up with it), then check Task Manager's
+Details tab, with the *Image path name* column on, before going on.
+
+- [ ] **The bundle compiles.** CI's build job gets past `tauri build` for both
+      bundles, and its "The installer ships the app" step prints "the installer
+      includes the hooks that stop the libobs worker".
+- [ ] **Interactive install over a running app.** Run the new installer by
+      hand and choose the option that does *not* uninstall first (on the
+      same version that is "Add/Reinstall"). One prompt, the template's own
+      "ninja-recorder is running! Click OK to kill it". **Cancel** aborts the
+      install, and the app and its worker are both still running and still
+      record. Run it again and press **OK**: the app and the worker are gone
+      before the progress bar moves, there is no "Error opening file for
+      writing" box, and the Details tab shows neither afterwards. The
+      installer's *Show details* list has a
+      `Stopped process <pid> (…\libobs\extprocess_recorder.exe)` line.
+- [ ] **The other build's worker survives.** Install the release and devtools
+      builds side by side, open the client so both workers run, and install
+      the **devtools** build over itself. The release build's worker (its
+      image path is under `%LOCALAPPDATA%\ninja-recorder\libobs\`) is still
+      running afterwards, and that build still records.
+- [ ] **The in-app update.** On the alpha channel with the client open, press
+      Install. `daemon.log` has `[update] handing over to …` and, before it,
+      no `could not release the capture backend` line. The update completes
+      silently with no dialog, the app comes back, and Settings → About reads
+      the new version. Then compare `libobs\` against the new build's artifact:
+      every file there should have the new build's timestamps.
+- [ ] **Uninstall with the app running.** Apps & Features → Uninstall: one
+      prompt, and afterwards `%LOCALAPPDATA%\ninja-recorder\libobs\` holds
+      none of the DLLs the worker had loaded.
+
+What this does **not** fix, so do not expect it: an *interactive upgrade* that
+chooses "Uninstall before installing" runs the **previously installed**
+uninstaller before any of this installer's code, and one installed before this
+change has no hook. Its worker survives that step, and a DLL it had loaded is
+left behind. The next upgrade after this ships is covered, because the
+uninstaller it runs is this one.
+
+| What | Result | Notes |
+|---|---|---|
+| 10: the bundle compiles, and includes the hooks | | |
+| 10: interactive install: Cancel leaves both running, OK stops both, no locked-file error | | |
+| 10: the other build's worker survives | | |
+| 10: in-app update replaces every `libobs\` file | | |
+| 10: uninstall with the app running leaves no loaded DLL behind | | |
+
 ## Outcome
 
 - [ ] All boxes above checked

@@ -238,8 +238,28 @@ pub async fn install(ctx: &Arc<Ctx>, events: &Stream) {
     // The recording, if there is one, gets finalized first. The gate in
     // `core::install_update` refuses while one is in flight, so this is the
     // narrow case where a game started between the click and here.
+    //
+    // Then the capture backend goes down, because **the installer cannot
+    // replace a DLL another process has loaded, and the libobs worker is
+    // another process** (#220, DEVELOPMENT.md §14). Exiting is not enough on
+    // its own: `process::exit` runs no destructors, so the worker would only
+    // notice when its pipe closed, some time after the installer had started
+    // copying. `release` shuts it down over IPC and waits for it to exit,
+    // killing it after three seconds if it has not. It is a no-op while
+    // recording, which is why it comes after the finalize. If the installer
+    // then fails to start, nothing is lost: `start` brings the backend back up
+    // on its own. The installer's pre-install hook stops the worker too; this
+    // is the orderly half, and the hook is the backstop for whatever it misses.
     let supervisor = Arc::clone(&ctx.supervisor);
-    let _ = tokio::task::spawn_blocking(move || supervisor.finalize_for_shutdown()).await;
+    let recorder = Arc::clone(&ctx.recorder);
+    let _ = tokio::task::spawn_blocking(move || {
+        supervisor.finalize_for_shutdown();
+        match recorder.lock() {
+            Ok(mut backend) => backend.release(),
+            Err(e) => warn!("update", "could not release the capture backend: {e}"),
+        }
+    })
+    .await;
 
     info!("update", "handing over to {}", installer.display());
     match launch_installer(&installer) {
