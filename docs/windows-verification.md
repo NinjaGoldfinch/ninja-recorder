@@ -209,6 +209,10 @@ matters: the inherited-markers half of the bug only shows on the recording
 - [x] The UI starts another daemon and the strip clears by itself.
 - [x] The **recording file is playable**. A fragmented MP4 is valid up to the
       point it was cut off, which is the guarantee that survives a crash.
+- [ ] After the restart, the recovered recording **scrubs** in the review
+      player: drag the playhead to the middle and to near the end. Startup
+      recovery remuxes it since #233, and `daemon.log` should hold a
+      `remuxed recovered ... in N ms` line for it, with no `WARN [db]`.
 
 **2026-09-21, WS3 session: 18 of 28 rows on the #130 sheet pass.** The tray is
 fully exercised and the daemon's headless half holds: a game recorded with no

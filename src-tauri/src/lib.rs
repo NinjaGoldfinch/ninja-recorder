@@ -23,6 +23,7 @@ mod lcu;
 mod live_client;
 mod log;
 mod match_summary;
+mod mp4;
 mod probe;
 mod recorder;
 mod retention;
