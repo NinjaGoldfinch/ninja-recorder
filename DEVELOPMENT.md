@@ -236,6 +236,44 @@ separate, nullable column (`recordings.audio_tracks_json`), because NULL is the
 honest answer for the VODs that predate this and for anything a rescan
 imported.
 
+#### Decision: the own backend writes its own MP4
+
+Everything above is how the **libobs** backend gets its tracks. The own
+backend (§16, Option B) cannot take the obvious route. Plan §4.5 has it
+encode with Media Foundation and write through the sink writer, "per-track
+AAC", and that cannot be built: both of Media Foundation's MP4 sinks,
+`MFCreateMPEG4MediaSink` and `MFCreateFMPEG4MediaSink`, take one video stream
+and **one audio stream**, and do not support `AddStreamSink`
+([MS Learn, "MPEG-4 File Sink"](https://learn.microsoft.com/en-us/windows/win32/medfound/mpeg-4-file-sink)).
+Every preset in the table above except Game has two to four tracks.
+
+So the own backend encodes with Media Foundation and **muxes with our own
+code**: `src-tauri/src/mp4/write.rs`, a fragmented-MP4 writer for one H.264
+track and any number of AAC tracks (#235). It is pure Rust with no Windows
+calls, so it is built and tested on Linux, where the tests write files with
+one, two and four audio tracks and check each with ffprobe and a full ffmpeg
+decode. What it costs on Windows is doing without the sink writer's plumbing:
+the encoders are driven directly (#239).
+
+- **The file is fragmented, as libobs's is**: a `moof` + `mdat` per keyframe
+  interval, so a killed process loses at most one GOP, and an `mfra` at the
+  end. `repair` truncates a killed file to its last complete fragment and
+  appends the `mfra`, which is recovery with no ffmpeg in it.
+- **Stem sidecar files were considered and rejected.** Writing track 0
+  through the sink and each stem to its own file, merged by ffmpeg at stop,
+  would have kept the sink. It makes ffmpeg mandatory rather than optional,
+  leaves a recording as a group of files until the merge has run, and gives
+  recovery and retention a group to reason about instead of a file. A killed
+  merge is a new way to lose a recording.
+- **An existing crate was looked for first** (September 2026). None met the
+  bar of fragmented output with any number of audio tracks under a licence
+  `deny.toml` allows: `muxide` and `mp4e` (MIT/Apache, MIT) have APIs for
+  one audio track; `mp4` (MIT, last released 2023) writes non-fragmented
+  files; `mse_fmp4` (MIT) was last released in 2020 and targets a single
+  MSE stream; `mp4-atom` (MIT/Apache) and `shiguredo_mp4`
+  (Apache-2.0) encode boxes or segments but leave the muxer, the `mfra` and
+  repair to the caller, which is most of the work.
+
 ---
 
 ## 3. League integration

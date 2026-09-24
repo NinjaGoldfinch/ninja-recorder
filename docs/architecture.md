@@ -80,6 +80,7 @@ flowchart TB
 | `recorder/libobs/` | Windows capture backend (WGC + hardware encode) | `LibObsRecorder` |
 | `recorder/own/` | Option B, the target backend (WGC → D3D11 → Media Foundation). Empty until WS1.6 | — |
 | `recorder/stub.rs` | Non-Windows dev backend that copies a fixture MP4 | `StubRecorder` |
+| `mp4/write.rs` | The own backend's fragmented-MP4 muxer: one H.264 track and any number of AAC tracks, a `moof`+`mdat` per flush, an `mfra` at the end, and `repair` for a killed file. Pure Rust, no ffmpeg; nothing calls it until #239 ([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#25-multi-track-audio)) | `Writer`, `Track`, `repair` |
 | `ddragon.rs` | Champion art from Data Dragon, fetched on first use and cached on disk | `champion_icon` |
 | `db/mod.rs` | Schema, migrations, every query | `Db` |
 | `db/reconcile.rs` | Reconciling DB rows against files on disk | `reconcile` |
@@ -215,6 +216,41 @@ flowchart LR
 
 The reasoning is
 [DEVELOPMENT.md §16, "The switch, and when it applies"](../DEVELOPMENT.md#the-switch-and-when-it-applies).
+
+### The own backend's file writer
+
+Media Foundation's MP4 sinks hold one audio stream, so the own backend writes
+its files with `mp4::write` ([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#decision-the-own-backend-writes-its-own-mp4)).
+It has no caller until #239. The caller buffers samples and flushes one
+fragment per keyframe interval; each flush leaves a playable file on disk.
+
+```mermaid
+flowchart LR
+    ENC["H.264 MFT<br/><small>Annex B access units</small>"] -->|"write_sample(0, …)"| W["Writer<br/><small>buffers every track's<br/>samples for one fragment</small>"]
+    AAC["AAC MFT per track<br/><small>raw access units</small>"] -->|"write_sample(1..n, …)"| W
+    W -->|"flush_fragment()<br/><small>before each keyframe</small>"| F["moof + mdat<br/><small>one write_all</small>"]
+    W -->|"finish()"| M["mfra, mehd,<br/>sync_all"]
+    K["killed file"] -->|"repair()"| M
+```
+
+| On disk | When | Plays? |
+|---|---|---|
+| `ftyp` `moov` | after `Writer::create` | yes, empty |
+| … `moof` `mdat` × n | after each `flush_fragment` | yes; seeks by scanning |
+| … `mfra` | after `finish` or `repair` | yes; seeks by index |
+
+- **Timescales**: video 90 kHz; audio its sample rate, so an AAC frame is
+  exactly 1024 ticks; the movie (`mehd`) 1 kHz.
+- **Track flags**: video and the first audio track are enabled, the stems are
+  not, and all audio shares one alternate group, so a plain player picks
+  track 0, the combined mix. This matches the default disposition the libobs
+  remux sets.
+- **B-frames** are written with signed composition offsets (`trun` version 1).
+  Media Foundation's low-latency encoder emits none. The module header covers
+  a one-frame presentation shift ffmpeg applies to such streams.
+- **Durability**: a fragment reaches the OS before `flush_fragment` returns,
+  so it survives the process being killed. There is no `fsync` per fragment;
+  `finish` does one.
 
 ## Frontend
 
