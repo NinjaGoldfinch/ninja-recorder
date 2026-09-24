@@ -567,8 +567,9 @@ jobs:
       # a still-running app is enough to cause. mainBinaryName splits the
       # process name too, so neither installer's "close the running app"
       # check can reach across at the other. The two now install side by
-      # side. The identifier is deliberately *not* overridden, so the
-      # portal still opens the library the real app writes to.
+      # side. It also overrides the identifier (#222), so the devtools
+      # build keeps its own data folder, library and recordings, and the
+      # two cannot record one game into one file.
       #
       # It also turns NSIS compression off. Compressing the ~200MB payload
       # (ffmpeg + the libobs DLLs) with solid LZMA is ~2min of makensis,

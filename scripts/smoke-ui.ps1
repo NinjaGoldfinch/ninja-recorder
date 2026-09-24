@@ -25,9 +25,11 @@
 
 .PARAMETER Build
     Which build `Exe` is: `devtools` (the default, because that is what CI
-    compiles) or `release`. The log files carry the build: a devtools build
-    writes `ui-devtools.log` and `daemon-devtools.log`, a release build
-    `ui.log` and `daemon.log`.
+    compiles) or `release`. Each build has its own data folder, and its log
+    files carry the build too: a devtools build writes `ui-devtools.log` and
+    `daemon-devtools.log` under `%APPDATA%\com.ninjarecorder.app.devtools\logs`,
+    a release build `ui.log` and `daemon.log` under
+    `%APPDATA%\com.ninjarecorder.app\logs`.
 
 .NOTES
     A headless runner is not a desktop. What this can assert is that the
@@ -48,8 +50,10 @@ $failures = @()
 function Note($m) { Write-Host "  $m" }
 function Fail($m) { $script:failures += $m; Write-Host "  FAIL: $m" }
 
-$logDir = Join-Path $env:APPDATA "com.ninjarecorder.app\logs"
-# Per build since #202, because both builds share this directory.
+# Each build has its own data folder since #222 (daemon::IDENTIFIER), and
+# the log names still carry the build too (#202).
+$dataDir = if ($Build -eq 'devtools') { "com.ninjarecorder.app.devtools" } else { "com.ninjarecorder.app" }
+$logDir = Join-Path $env:APPDATA "$dataDir\logs"
 $suffix = if ($Build -eq 'devtools') { "-devtools" } else { "" }
 $uiLogName = "ui$suffix.log"
 $daemonLogName = "daemon$suffix.log"

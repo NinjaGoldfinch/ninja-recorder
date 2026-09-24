@@ -801,9 +801,12 @@ needs a window.
 - [x] `app_data_dir()/logs/` now holds both `ui.log` and `daemon.log`, and
       neither rotates the other.
 - [ ] **#202.** With the release and devtools builds both installed and both
-      running, `logs/` holds `daemon.log` and `daemon-devtools.log` (and
-      `ui.log` beside `ui-devtools.log`), and no line from one build appears in
-      the other's file. Start capture in both: `libobs.log` and
+      running, the release build's `logs/` holds `daemon.log` and `ui.log`, the
+      devtools build's holds `daemon-devtools.log` and `ui-devtools.log`, and no
+      line from one build appears in the other's file. Since #222 those are two
+      folders, `%APPDATA%\com.ninjarecorder.app\logs` and
+      `%APPDATA%\com.ninjarecorder.app.devtools\logs`; recording with both
+      running is §7.8. Start capture in both: `libobs.log` and
       `libobs-devtools.log` both have content, and starting the second
       worker leaves the first build's file where it was rather than moving
       it to `.1.log`. Each daemon session's first lines name its version,
@@ -1171,6 +1174,49 @@ console said anything. A component that throws takes its subtree with it and
 leaves a gap rather than an error, so **an empty area is a finding**, not a
 layout preference.
 
+### 7.8 Release and devtools side by side (#222)
+
+Each build has its own data folder since #222: `%APPDATA%\com.ninjarecorder.app`
+for release, `%APPDATA%\com.ninjarecorder.app.devtools` for devtools. Before it,
+both daemons recorded every game into **one file** in a shared folder and
+corrupted it, so this section asks for two recordings of one game, one in each
+build's library, and both clean. A devtools install that upgraded from a build
+before #222 starts with an **empty library**; that is expected.
+
+Install both builds from the same commit and start both, so both daemons run.
+
+- [ ] The portal's Overview shows `app_data_dir`, `db_path` and
+      `recordings_dir` under `com.ninjarecorder.app.devtools`, and the release
+      build's library is **not** in the portal's Library panel.
+- [ ] Play one game (a Practice Tool game is enough) with both running. Both
+      daemon logs say `game identified` for it.
+- [ ] **Two recordings, one per build.** One new `.mp4` in
+      `%APPDATA%\com.ninjarecorder.app\recordings` and one in
+      `%APPDATA%\com.ninjarecorder.app.devtools\recordings`. Each build's
+      library shows its own card for the game, and neither shows the other's.
+- [ ] Neither daemon log has `faststart remux failed` for the game, and
+      neither says `os error 32` or `os error 2`.
+- [ ] **Both files decode cleanly.** A full decode, not a probe, with nothing
+      printed for either file:
+
+      ```powershell
+      $ffmpeg = "$env:LOCALAPPDATA\ninja-recorder\libobs\ffmpeg.exe"
+      foreach ($dir in "com.ninjarecorder.app", "com.ninjarecorder.app.devtools") {
+          $f = Get-ChildItem "$env:APPDATA\$dir\recordings\*.mp4" |
+               Sort-Object LastWriteTime | Select-Object -Last 1
+          Write-Host "== $($f.FullName)"
+          & $ffmpeg -v error -i $f.FullName -map 0 -f null - 2>&1
+      }
+      ```
+
+      Any output under either `==` line is a failure: paste it into #222.
+      (Before #222 this printed `Invalid NAL unit size` and `channel element
+      ... is not allocated` thousands of times.)
+- [ ] Both recordings play in their own build's review player, with markers.
+- [ ] Restart both daemons (tray → Quit, then relaunch). Neither resume sweep
+      touches the other build's rows: each library still has exactly its one
+      card for the game, and no row is lost.
+
 ## 8. The trimmed libobs backend (WS1.1, #5)
 
 The P0a arm: does the capture backend still record with everything off the
@@ -1198,12 +1244,13 @@ no file at all (the muxer). None of it reaches CI.
       `Before:`, `After:` and `Remove:` lines into the table below. They are
       the staged directory before packaging, not the install.
 - [ ] **Quit the release build first** (tray → Quit) and leave it quit for the
-      whole section, because two daemons would both try to record the game.
-      (Their logs no longer collide: since #212 a devtools build writes
-      `libobs-devtools.log`, a release build `libobs.log`.)
+      whole section, because two daemons would both record the game and share
+      the GPU's encoder sessions, which muddies what this section measures.
+      (They no longer write the same files: since #222 each build has its own
+      data folder, see §7.8.)
 - [ ] Before installing the trimmed build, install the **untrimmed** devtools
       build of the same commit, record a session, and copy
-      `%APPDATA%\com.ninjarecorder.app\logs\libobs-devtools.log` aside as
+      `%APPDATA%\com.ninjarecorder.app.devtools\logs\libobs-devtools.log` aside as
       `libobs.untrimmed.log`. It is the baseline the trimmed log is compared
       against in 8.3: the same build and the same source tree, so the only
       difference is the trim.
@@ -1231,13 +1278,13 @@ no file at all (the muxer). None of it reaches CI.
 ### 8.3 The plugin-load log
 
 The worker's stderr (#69) is `libobs-devtools.log` in a devtools build, at
-`%APPDATA%\com.ninjarecorder.app\logs\libobs-devtools.log`, with one session
+`%APPDATA%\com.ninjarecorder.app.devtools\logs\libobs-devtools.log`, with one session
 kept as `libobs-devtools.1.log` (#212; a release build's is `libobs.log`).
 
 - [ ] **No failed module loads.**
 
       ```powershell
-      Select-String -Path "$env:APPDATA\com.ninjarecorder.app\logs\libobs-devtools.log" `
+      Select-String -Path "$env:APPDATA\com.ninjarecorder.app.devtools\logs\libobs-devtools.log" `
           -Pattern 'os_dlopen', 'Failed to', 'failed to load', 'not loaded', 'could not'
       ```
 

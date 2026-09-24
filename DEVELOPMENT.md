@@ -1250,7 +1250,7 @@ Why it exists, concretely. Each of these was untestable before:
 
 Two changes leaked usefully out of the portal into the app proper. `Supervisor` now emits a **`library-changed`** event after a finalize (and `set_retention_policy` after a deletion), which `src/main.ts` listens for. It is the first backend-to-frontend push in the codebase, and it fixes the standing bug where a recording that just finished stayed invisible until the user pressed Refresh. And `fixtures::enabled()` is now an `AtomicBool` seeded from `NINJA_RECORDER_RECORD_FIXTURES` rather than a per-call env read, so capture can be toggled at runtime instead of only at launch.
 
-`tauri.devtools.conf.json` renames the product and binary to `ninja-recorder-dev` so it is a separate application to Windows. NSIS keys the uninstall entry, the default install directory and the shortcut off `productName`, so while the two shared one, this installer treated the real install as an older version of *itself* and uninstalled it first, a step that aborts the whole install with "Unable to uninstall!" if the old uninstaller returns non-zero or leaves the binary behind (a still-running app is enough). `mainBinaryName` splits the process name too, so neither build's "close the running app" check reaches across at the other; they install side by side. The `identifier` is deliberately *not* overridden, so the portal still opens the library the real app writes to.
+`tauri.devtools.conf.json` renames the product and binary to `ninja-recorder-dev` so it is a separate application to Windows. NSIS keys the uninstall entry, the default install directory and the shortcut off `productName`, so while the two shared one, this installer treated the real install as an older version of *itself* and uninstalled it first, a step that aborts the whole install with "Unable to uninstall!" if the old uninstaller returns non-zero or leaves the binary behind (a still-running app is enough). `mainBinaryName` splits the process name too, so neither build's "close the running app" check reaches across at the other; they install side by side. Since #222 it also overrides `identifier`, so the devtools build has its own data folder and the portal no longer opens the release build's library (§17, "Each build has its own data folder").
 
 **Panels, how to get a build with it, and its known limits**, including why the TS command registry is hand-maintained and why seeded placeholder files won't decode, are in [docs/dev-portal.md](docs/dev-portal.md).
 
@@ -2715,13 +2715,16 @@ outcome, not a failure to report.
 
 ### The name is scoped by build identity
 
-`\\.\pipe\ninja-recorder.<identifier>.<build>`, where the build is `release` or
-`devtools`. `tauri.devtools.conf.json` overrides `productName` but **not**
-`identifier`, so a devtools build and an installed release already share
-`app_data_dir()`, the database and the recordings folder. One process can
-survive that. Two daemons cannot: they would bind the same name, and whichever
-started first would silently own the other's clients, which means a dev portal
-driving the release daemon's recorder, or the reverse.
+`\\.\pipe\ninja-recorder.com.ninjarecorder.app.<build>`, where the build is
+`release` or `devtools`. Two daemons, one from each build, must not bind the
+same name: whichever started first would silently own the other's clients,
+which means a dev portal driving the release daemon's recorder, or the reverse.
+
+The name carries the *release* identifier in both builds, even though the
+devtools build has had its own identifier since #222. The name is the
+single-instance lock, and moving it would let a devtools daemon of the old
+name and one of the new run side by side across an upgrade, which is the
+two-daemons-one-game failure again.
 
 ### The pipe's ACL is explicit, not inherited
 
@@ -2768,8 +2771,12 @@ the same function producing the same answer rather than a second implementation
 of one rule.
 
 The identifier is the one string both processes have to spell identically, and
-it is now written in two places: `tauri.conf.json`, which Tauri reads, and
-`daemon::IDENTIFIER`, which the daemon reads. A test parses the first and
+it is now written in two places: `tauri.conf.json` (and, for the devtools
+build, `tauri.devtools.conf.json`), which Tauri reads, and `daemon::IDENTIFIER`,
+which the daemon reads. The UI resolves its data paths through the same
+`Paths::resolve`, so within one build the two processes cannot disagree; the
+configs still matter for what only Tauri decides, the asset-protocol scope
+first. A test parses the first and
 asserts the second, because getting this wrong would not crash anything. The
 daemon would open a different database in a different folder and record
 flawlessly into a library the UI has never heard of, which is the kind of bug
@@ -2785,8 +2792,8 @@ process can be told about. So the stem names the role: `ui.log` and
 table said all along. The dev portal lists its own files and picks the daemon's
 up through the same directory scan that already finds `libobs.log`.
 
-**And one per build** (#202). The devtools build keeps the release identifier so
-its portal reads the real library, which puts both builds' logs in the same
+**And one per build** (#202). The devtools build then kept the release identifier
+so its portal read the real library, which put both builds' logs in the same
 directory, and with both installed that is the same problem again one level up:
 two daemons appending to one `daemon.log`, lines interleaved with nothing to say
 whose they are, each rotating the other's file away. It cost a verification
@@ -2796,8 +2803,10 @@ the `listening on` lines. So a devtools build writes `daemon-devtools.log` and
 and a release build keeps the names every shipped version has used. Each
 process's first lines also name its version, build and pid, because a file name
 separates builds but not a reinstall, an update or a restart of the same one.
-The build suffix is the whole change: the data directory, the database and the
-recordings folder stay shared on purpose.
+The build suffix was the whole of that change: the data directory, the database
+and the recordings folder stayed shared on purpose, until #222 showed what that
+cost (below). With the folders split the suffix is redundant, and it stays:
+a file copied out of its folder still says which build wrote it.
 
 The libobs worker's file follows the same rule, one fix later. Nothing in
 `log.rs` writes it, but each daemon rotates it by hand when its capture worker
@@ -2806,6 +2815,60 @@ daemon's live `libobs.log` to `libobs.1.log` and deleted the one before it, and
 the other way round. A devtools build now writes `libobs-devtools.log`; the
 names come from `log::libobs_file_names`, which sits outside the Windows-only
 recorder so the test pinning them runs everywhere.
+
+### Each build has its own data folder
+
+The devtools build's identifier is `com.ninjarecorder.app.devtools` (#222), set
+in `tauri.devtools.conf.json` and mirrored by `daemon::IDENTIFIER` under
+`--features devtools`. Everything under the app data folder is per build: the
+library, the recordings, fixtures, the Data Dragon cache and the logs.
+
+**Why.** Until then both builds used `com.ninjarecorder.app`, so the dev portal
+would read the real library. Logs and the pipe had already been split per
+build, but with both running the two daemons still shared everything else, and
+a verification pass (#202, #212) found what that costs. Both daemons saw the
+same game start from the same client, derived the same file name from its
+start time, and recorded into one path. One remux failed on a locked file and
+the other on a file that had just been replaced; a full decode found 23 H.264
+errors in one game and 5,024 AAC errors in the other. One `recordings` row was
+missing, and both daemons ran the resume sweep over the same rows. Each build
+recorded one corrupt file per game where two good ones were expected.
+
+**Alternatives rejected.**
+
+- *Put the build in the file name* (`recording-<ms>-devtools.mp4`) and scope the
+  resume sweep to rows its own build created. That separates the files and
+  nothing else: one database would still take two writers from two processes
+  that each believe they own it (§3.1's ownership table), both would run the
+  startup reconcile over one folder and import each other's files, retention
+  would delete from a list the other was still recording into, and every new
+  per-recording writer would have to remember the build. The folder split
+  separates all of it in one place, and matches how logs and the pipe already
+  split.
+- *Refuse to record when the other build's daemon is running.* It would keep
+  the files apart, but side-by-side testing is exactly what the devtools build
+  is for, and it would make recording depend on another process's state.
+
+**The cost, accepted.** The portal no longer sees the release build's library.
+A devtools install starts empty, including one upgraded from a build that
+shared the folder; its data comes from the Seed panel, games it records itself,
+or recordings copied into its own folder and picked up by the startup
+reconcile ([docs/dev-portal.md](docs/dev-portal.md#it-has-its-own-library)).
+Inspecting a release library now means copying it, which is also the safer way
+to point a tool with raw SQL and a DB wipe at it.
+
+**What moves with the identifier.** Tauri keys more than `app_data_dir()` off
+it: the WebView2 profile (`%LOCALAPPDATA%\<identifier>`), the AppUserModelID the
+installer gives the shortcut and `daemon::notify` attributes toasts to, and the
+uninstaller's "delete application data" option. All of those are better split:
+uninstalling the devtools build with that box ticked used to delete the release
+build's library. The install directory, uninstall entry and Run value were
+already keyed off `productName` and do not move. Updates do not apply, since a
+devtools build never updates itself (§14).
+
+**The recordings folder is not a setting**, so the two builds cannot be pointed
+at one folder by configuration. If it ever becomes one, a folder shared between
+builds is the #222 failure again, and the setting needs to refuse it or say so.
 
 ### Startup and shutdown order
 
