@@ -78,12 +78,18 @@ flowchart TB
 | `recorder/mod.rs` | The `Recorder` trait and its config/error types | `Recorder`, `RecordConfig` |
 | `recorder/backend.rs` | The `capture_backend` setting, and the pure choice of which backend to build from it | `CaptureBackend`, `choose`, `construct`, `Backends` |
 | `recorder/libobs/` | Windows capture backend (WGC + hardware encode) | `LibObsRecorder` |
-| `recorder/own/` | Option B, the target backend (WGC → D3D11 → Media Foundation). Empty until WS1.6 | — |
+| `recorder/own/` | Option B, the target backend (WGC → D3D11 → Media Foundation), being built through WS1.6. Not constructible yet: nothing in `recorder/backend.rs` reaches it | — |
+| `recorder/own/clock.rs` | The video tick grid on QPC, and placing audio packets on it: drift measured, corrected by slipping frames, or trusted from the device count when a source has no QPC stamps | `tick_time`, `ticks_due`, `Aligner` |
+| `recorder/own/pcm.rs` | Endpoint sample formats to stereo i16 for an encoder, or f32 for the mixer | `to_stereo_i16`, `to_stereo_f32`, `f32_to_i16` |
+| `recorder/own/select.rs` | Which H.264 encoder: hardware by adapter vendor (NVIDIA → AMD → Intel), the software MFT only as a marked fallback; and the Windows build floor (20348) | `rank`, `Choice`, `availability` |
+| `recorder/own/win/` | Everything that calls Windows, and the only part of `own/` gated to it. Empty until #236 | — |
 | `recorder/stub.rs` | Non-Windows dev backend that copies a fixture MP4 | `StubRecorder` |
+| `recorder/remux.rs` | The faststart remux, a `-c copy` through `ffmpeg_command` that moves the index to the front so a fragmented file scrubs. Shared by the libobs backend's `stop` and startup recovery; the argument list is pure | `faststart_args`, `remux_faststart` |
+| `mp4/read.rs` | Reading an MP4's top-level boxes directly, no ffmpeg: fragmented or not, how many whole fragments, how many audio tracks, and what a kill cut short | `summarize`, `Summary` |
 | `mp4/write.rs` | The own backend's fragmented-MP4 muxer: one H.264 track and any number of AAC tracks, a `moof`+`mdat` per flush, an `mfra` at the end, and `repair` for a killed file. Pure Rust, no ffmpeg; nothing calls it until #239 ([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#25-multi-track-audio)) | `Writer`, `Track`, `repair` |
 | `ddragon.rs` | Champion art from Data Dragon, fetched on first use and cached on disk | `champion_icon` |
 | `db/mod.rs` | Schema, migrations, every query | `Db` |
-| `db/reconcile.rs` | Reconciling DB rows against files on disk | `reconcile` |
+| `db/reconcile.rs` | Reconciling DB rows against files on disk, and finishing and remuxing the recordings a dead daemon left open | `reconcile`, `recover_unfinished`, `recovery_action` |
 | `probe.rs` | Reading a container's duration back out with ffmpeg, for files `reconcile` imported | `duration_s` |
 | `match_summary.rs` | Waiting out the LCU after a finalize, then patching the row with what it eventually says | `patch`, `next_delay` |
 | `retention.rs` | Deletion policy and free-space preflight | `select_for_deletion`, `enforce_now`, `has_room_to_record` |
@@ -146,7 +152,7 @@ behind a three-method trait and nothing above it knows libobs exists.
 flowchart TB
     SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release · collect_output"}
     T -->|"libobs, #[cfg(windows)]"| L["LibObsRecorder<br/><small>WGC window capture,<br/>NVENC/AMF/QSV H.264,<br/>one AAC track per audio source,<br/>fragmented MP4 + faststart remux</small>"]
-    T -.->|"own, WS1.6"| O["recorder/own/<br/><small>Option B: WGC → D3D11 →<br/>Media Foundation. Empty</small>"]
+    T -.->|"own, WS1.6"| O["recorder/own/<br/><small>Option B: WGC → D3D11 →<br/>Media Foundation. Pure core only,<br/>not constructible</small>"]
     T -->|"libobs, everything else"| S["StubRecorder<br/><small>copies fixtures/sample.mp4</small>"]
     T -->|"chosen but not buildable"| F["FailedRecorder<br/><small>refuses every start,<br/>with the reason</small>"]
     style T fill:#ede7f6,stroke:#5e35b1

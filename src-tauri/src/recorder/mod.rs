@@ -8,11 +8,13 @@ pub mod backend;
 pub mod devices;
 #[cfg(target_os = "windows")]
 pub mod libobs;
-// The target backend (Option B). Empty until WS1 task 1.6; gated to Windows
-// for the same reason `libobs` is, so the Linux and macOS dev loops keep
-// compiling exactly what they compile today.
-#[cfg(target_os = "windows")]
+// The target backend (Option B), being built through WS1.6. Compiled on every
+// platform so its pure core is tested everywhere; only `own::win` is gated to
+// Windows.
 pub mod own;
+// The faststart remux. Not behind a backend's `cfg`: startup recovery
+// remuxes a killed recording whichever backend wrote it.
+pub mod remux;
 // Also compiled on Windows under `cfg(test)`: `state_machine::supervisor`'s
 // unit tests use `StubRecorder` as a platform-agnostic dummy `Recorder`
 // regardless of which real backend the current platform ships.

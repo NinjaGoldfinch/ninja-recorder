@@ -74,7 +74,7 @@ trait Recorder {
 Backends:
 - `LibObsRecorder`: Windows, the real one.
 - `StubRecorder`: every non-Windows build. It sleeps, then copies a fixture MP4 into place. Keeps the entire app layer developable and testable without Windows. Nothing ships it; since the macOS bundle was dropped it exists purely for the dev loop and `cargo test` (§9).
-- The own backend (Option B, `recorder/own/`): empty until WS1.6. Which of it and libobs the daemon builds is the `capture_backend` setting, and what happens when the chosen one cannot be built is §16's "The switch, and when it applies".
+- The own backend (Option B, `recorder/own/`): being built through WS1.6, and not constructible until it is; its pure core (the tick grid, the audio aligner, encoder ranking) is compiled and tested on every platform. Which of it and libobs the daemon builds is the `capture_backend` setting, and what happens when the chosen one cannot be built is §16's "The switch, and when it applies".
 
 **Decision: the backend is warm only while the League client is.** Bringing
 `LibObs` up spawns the out-of-process worker *and* sends it `Init`, which runs
@@ -141,7 +141,34 @@ Implemented in `src-tauri/src/recorder/`: `Recorder`, `RecordConfig`, `RecorderE
 
 ### 2.4 Encoding defaults
 
-- Detect encoder: NVENC → AMF → QSV → refuse-with-warning (no silent x264 fallback on the gameplay machine).
+- Detect encoder: NVENC → AMF → QSV. **The two backends differ on what
+  happens with none of them:**
+  - **libobs refuses**, with a warning (no silent x264 fallback on the
+    gameplay machine). Unchanged.
+  - **The own backend falls back to Microsoft's software H.264 MFT, visibly.**
+    Hardware is chosen first, by adapter vendor (NVIDIA → AMD → Intel, so a
+    hybrid laptop that lists its iGPU first still encodes on the discrete
+    GPU), and the software MFT only when no hardware encoder matches a
+    hardware adapter. It is **never silent**: `recorder::own::select::rank`
+    returns it as a `SoftwareFallback` carrying the reason, and every caller
+    has to put that reason in `daemon.log` and the recording's
+    `diagnostics_json` and show the UI a notice about the extra CPU (the
+    callers arrive from #236). The reason for the change is that refusing
+    turns a wrong vendor match (#224) or an unusual GPU into no recording at
+    all, where a fallback turns it into a recording that costs CPU and says
+    so. The software path's CPU cost on the gameplay machine is **measured
+    before own becomes the default (#243)**; the fallback does not ship as
+    the default path until that number exists.
+- The own backend needs **Windows build 20348 or newer**
+  (`recorder::own::select::MIN_BUILD`, pinned by a test). That is the
+  documented floor for process loopback,
+  [`AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`](https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ne-audioclientactivationparams-audioclient_activation_type),
+  and it is stricter than WGC window capture's 18362
+  ([`CreateForWindow`](https://learn.microsoft.com/en-us/windows/win32/api/windows.graphics.capture.interop/nf-windows-graphics-capture-interop-igraphicscaptureiteminterop-createforwindow)).
+  In practice it excludes every Windows 10 client (the last is 19045) and
+  admits Windows 11. OBS enables its process-output source from 19041 on the
+  grounds that it "seems to work earlier"; that is unverified here, and
+  lowering the floor is a measurement on a Windows 10 box, not an edit.
 - 1080p60, H.264, ~8 Mbps CBR as defaults; resolution follows the game window.
 - H.264 + AAC specifically: WebView2's `<video>` decodes it natively, which is what makes the review player trivial (§5).
 - Audio is one AAC track per captured source at 160 kbps, track 0 being the combined mix (§2.5). MP4 rather than MKV even though OBS recommends MKV for multi-track: §2.2's crash-safety rule is already satisfied by fragmented MP4, and MKV would cost the review player its native `<video>` playback for no gain.
@@ -2613,9 +2640,13 @@ What the run leaves for WS1.6, none of which reopens the gate:
   spike asked for it, and #219 tracks the change.
 - **A crashed recording needs the remux before it can be scrubbed.** The killed
   file plays, but with no `mfra` it has no scrub bar until faststart has run.
-  Startup recovery (`db::reconcile::recover_unfinished`) only probes the
-  duration today and does not remux, so a recovered Option B file would reach
-  the library unscrubbable unless recovery learns to remux it.
+  **Addressed by #233**, for both backends: startup recovery
+  (`db::reconcile::recover_unfinished`) now reads the file's boxes and runs
+  the shared `recorder::remux` before the duration probe. One thing the
+  spike's files did not show: a kill that lands inside a `moof` leaves a file
+  ffmpeg refuses to open at all, so recovery cuts that half box off first.
+  Whether the recovered file scrubs in the review player is still a Windows
+  check ([windows-verification.md](docs/windows-verification.md) §4.1).
 - **The resampler has little to correct.** Raw drift was −0.2 ppm, at worst
   −0.27 ms over ten minutes, and the spike's single-sample slips held the
   written figure at 0.016 frames.

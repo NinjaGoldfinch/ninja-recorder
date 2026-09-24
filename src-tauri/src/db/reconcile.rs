@@ -12,10 +12,19 @@
 //! finishes those rows from the file, a killed recording would be
 //! *invisible* rather than merely stripped of its metadata, which is worse
 //! than the bug #150 set out to fix.
+//!
+//! Recovery also remuxes what it finds (#233). A killed recording is a
+//! fragmented MP4 that never reached the faststart remux a clean stop runs,
+//! so without this it came back into the library playable but not
+//! scrubbable. What to do with each file is `recovery_action`'s decision,
+//! made from the file's own boxes (`mp4::read`) and nothing else.
 
 use super::{Db, DbError, NewRecording};
+use crate::mp4::Summary;
+use crate::{info, warn};
 use serde::Serialize;
 use std::path::Path;
+use std::time::Instant;
 
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv"];
 
@@ -66,21 +75,168 @@ pub fn recover_unfinished(db: &Db, ffmpeg: Option<&Path>) -> Result<RecoveryRepo
             report.abandoned_removed += 1;
             continue;
         };
+        // The file's mtime, not now, and read before the remux rewrites the
+        // file: the recording ended when the daemon died, which may have
+        // been days ago, and `finished_at` ordering a recovered recording
+        // above everything since would be a lie the library sorts on.
+        let finished_at = file_modified_millis(&metadata);
+
+        // A remux the dead daemon had running leaves its half-written output
+        // here. Nothing will ever finish it, and the remux below would only
+        // overwrite it.
+        remove_stale_remux_tmp(path);
+
+        // Before the duration probe, so the probe reads the file the library
+        // will play. Never fatal: the worst outcome is the file as the kill
+        // left it, which is what recovery finished every row with before.
+        repair(path, ffmpeg, &metadata);
 
         // The session's clock is gone, so the file is the only source of a
         // duration. `None` stays NULL, exactly as it does for an import that
         // could not be probed.
         let duration_s = ffmpeg.and_then(|ffmpeg| crate::probe::duration_s(ffmpeg, path));
-        // The file's mtime, not now: the recording ended when the daemon
-        // died, which may have been days ago, and `finished_at` ordering a
-        // recovered recording above everything since would be a lie the
-        // library sorts on.
-        let finished_at = file_modified_millis(&metadata);
-        db.recover_recording(row.id, duration_s, metadata.len() as i64, finished_at)?;
+        // Re-read: the remux and the tail cut both change it.
+        let size_bytes = path.metadata().map_or(metadata.len(), |m| m.len());
+        db.recover_recording(row.id, duration_s, size_bytes as i64, finished_at)?;
         report.recovered += 1;
     }
 
     Ok(report)
+}
+
+fn remove_stale_remux_tmp(path: &Path) {
+    let tmp = crate::recorder::remux::tmp_path(path);
+    match std::fs::remove_file(&tmp) {
+        Ok(()) => info!("db", "removed a stale remux temp file {}", tmp.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => warn!("db", "could not remove stale {}: {e}", tmp.display()),
+    }
+}
+
+/// What recovery does with a file a dead daemon left behind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecoveryAction {
+    /// A fragmented file with at least one whole fragment: remux it to
+    /// faststart, as a clean stop would have.
+    Remux {
+        /// From the file's `moov`, because an unfinished row's
+        /// `audio_tracks_json` is NULL: the layout is written at finalize.
+        audio_tracks: usize,
+        /// Cut the file to this length first. Set when the box the kill
+        /// interrupted is anything but an `mdat`: a half-written `moof` stops
+        /// ffmpeg opening the file at all, and carries no media, since its
+        /// `mdat` never started. A half-written `mdat` is kept, because
+        /// ffmpeg salvages the samples in it.
+        truncate_to: Option<u64>,
+    },
+    /// Already a complete, unfragmented MP4, so there is no index to move:
+    /// the faststart remux ran, and the daemon died after it.
+    Leave,
+    /// Nothing a remux can fix: no header, a header with no whole fragment
+    /// after it, or not an MP4 at all. The row is still finished, for its
+    /// markers.
+    Unplayable,
+}
+
+/// The pure half of the repair: what the file's boxes say should happen.
+pub fn recovery_action(summary: &Summary) -> RecoveryAction {
+    if summary.structurally_playable() {
+        let truncate_to = summary
+            .truncated
+            .as_ref()
+            .filter(|cut| cut.kind != "mdat")
+            .map(|cut| cut.offset);
+        return RecoveryAction::Remux {
+            audio_tracks: summary.audio_tracks as usize,
+            truncate_to,
+        };
+    }
+    if summary.ftyp && summary.moov_complete && !summary.mvex {
+        return RecoveryAction::Leave;
+    }
+    RecoveryAction::Unplayable
+}
+
+/// The I/O half: reads the boxes, acts on `recovery_action`, and logs what
+/// it did. Every failure is logged and swallowed, leaving the file as it is.
+fn repair(path: &Path, ffmpeg: Option<&Path>, metadata: &std::fs::Metadata) {
+    let summary = match std::fs::File::open(path).and_then(|mut f| crate::mp4::summarize(&mut f)) {
+        Ok(summary) => summary,
+        Err(e) => {
+            warn!("db", "recovery could not read {}: {e}", path.display());
+            return;
+        }
+    };
+    let (audio_tracks, truncate_to) = match recovery_action(&summary) {
+        RecoveryAction::Remux { audio_tracks, truncate_to } => (audio_tracks, truncate_to),
+        RecoveryAction::Leave => return,
+        RecoveryAction::Unplayable => {
+            warn!(
+                "db",
+                "recovered {} cannot be repaired (boxes: {}); keeping it as it is",
+                path.display(),
+                summary.layout
+            );
+            return;
+        }
+    };
+
+    // Whether or not there is an ffmpeg: the half box is what stops a player
+    // opening the file, so cutting it helps even without the remux.
+    if let Some(len) = truncate_to {
+        let cut = std::fs::OpenOptions::new().write(true).open(path).and_then(|f| f.set_len(len));
+        match cut {
+            Ok(()) => info!(
+                "db",
+                "dropped a half-written tail from {} ({} bytes)",
+                path.display(),
+                summary.file_len - len
+            ),
+            Err(e) => warn!("db", "could not drop the tail from {}: {e}", path.display()),
+        }
+    }
+
+    let Some(ffmpeg) = ffmpeg else {
+        warn!(
+            "db",
+            "no ffmpeg, so recovered {} stays fragmented and will not scrub",
+            path.display()
+        );
+        return;
+    };
+    // Inline at startup, so the time is worth knowing: a long recording is
+    // a gigabyte or more of copying before the daemon is up.
+    let started = Instant::now();
+    match crate::recorder::remux::remux_faststart(ffmpeg, path, audio_tracks) {
+        Ok(()) => {
+            info!(
+                "db",
+                "remuxed recovered {} ({}, {} audio track(s)) in {} ms",
+                path.display(),
+                summary.layout,
+                audio_tracks,
+                started.elapsed().as_millis()
+            );
+            // The remux wrote a new file, so its mtime is now. Put back the
+            // one the kill left, so that a recovery interrupted before the
+            // row is written still dates the recording correctly next time.
+            if let Ok(modified) = metadata.modified() {
+                let restored = std::fs::File::options()
+                    .write(true)
+                    .open(path)
+                    .and_then(|f| f.set_modified(modified));
+                if let Err(e) = restored {
+                    warn!("db", "could not restore the mtime of {}: {e}", path.display());
+                }
+            }
+        }
+        Err(e) => warn!(
+            "db",
+            "faststart remux of recovered {} failed after {} ms, keeping it fragmented: {e}",
+            path.display(),
+            started.elapsed().as_millis()
+        ),
+    }
 }
 
 /// `ffmpeg` is the bundled (or locally installed) binary, if this build has
@@ -158,7 +314,19 @@ pub fn reconcile(
     Ok(report)
 }
 
+/// Builds before #233 named the remux's temp file `<stem>.faststart.tmp.mp4`,
+/// so one a crash left behind would pass the extension check below. The name
+/// is ours and never a recording, so it is refused by name.
+const LEGACY_REMUX_TMP_SUFFIX: &str = ".faststart.tmp.mp4";
+
 fn is_video_file(path: &Path) -> bool {
+    let legacy_tmp = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.to_lowercase().ends_with(LEGACY_REMUX_TMP_SUFFIX));
+    if legacy_tmp {
+        return false;
+    }
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| VIDEO_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
@@ -403,6 +571,259 @@ mod tests {
         assert_eq!(report.orphans_removed, 0);
         assert_eq!(db.unfinished_recordings().unwrap().len(), 1, "still in flight");
         assert!(db.list_recordings().unwrap().is_empty(), "and still not in the library");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- Repairing what recovery finds (#233) ------------------------------
+
+    use crate::mp4::read::tests::{bx, fragmented_with, trak};
+    use crate::recorder::remux::fixtures;
+
+    fn action_for(bytes: Vec<u8>) -> RecoveryAction {
+        recovery_action(&crate::mp4::summarize(&mut std::io::Cursor::new(bytes)).unwrap())
+    }
+
+    /// A clean libobs stop that died before its remux: the fragments are all
+    /// there, the index is not up front.
+    #[test]
+    fn a_finished_fragmented_file_is_remuxed() {
+        let mut file = fragmented_with(2, 3);
+        file.extend(bx("mfra", &[0; 16]));
+        assert_eq!(
+            action_for(file),
+            RecoveryAction::Remux { audio_tracks: 2, truncate_to: None }
+        );
+    }
+
+    /// The case this exists for. The half `mdat` stays: ffmpeg keeps what
+    /// samples it can from it.
+    #[test]
+    fn a_file_killed_mid_mdat_is_remuxed_as_it_is() {
+        let mut file = fragmented_with(4, 3);
+        file.truncate(file.len() - 400);
+        assert_eq!(
+            action_for(file),
+            RecoveryAction::Remux { audio_tracks: 4, truncate_to: None }
+        );
+    }
+
+    /// A half `moof` stops ffmpeg opening the file, and has no media behind
+    /// it, so it is cut off first.
+    #[test]
+    fn a_file_killed_mid_moof_loses_the_half_box_first() {
+        let mut file = fragmented_with(1, 2);
+        let whole = file.len() as u64;
+        file.extend(bx("moof", &[0; 64]));
+        file.truncate(whole as usize + 20);
+        assert_eq!(
+            action_for(file),
+            RecoveryAction::Remux { audio_tracks: 1, truncate_to: Some(whole) }
+        );
+    }
+
+    #[test]
+    fn an_already_faststarted_file_is_left() {
+        let mut file = bx("ftyp", b"isom\0\0\0\0");
+        let mut moov = bx("mvhd", &[0; 100]);
+        moov.extend(trak(b"vide"));
+        moov.extend(trak(b"soun"));
+        file.extend(bx("moov", &moov));
+        file.extend(bx("mdat", &[0; 500]));
+        assert_eq!(action_for(file), RecoveryAction::Leave);
+    }
+
+    /// Killed before the first fragment was whole: a header and nothing a
+    /// player can show.
+    #[test]
+    fn a_header_only_file_is_unplayable() {
+        assert_eq!(action_for(fragmented_with(1, 0)), RecoveryAction::Unplayable);
+        let mut file = fragmented_with(1, 1);
+        file.truncate(file.len() - 10);
+        assert_eq!(action_for(file), RecoveryAction::Unplayable);
+    }
+
+    #[test]
+    fn a_file_killed_mid_moov_or_not_an_mp4_is_unplayable() {
+        let mut file = fragmented_with(1, 0);
+        file.truncate(file.len() - 10);
+        assert_eq!(action_for(file), RecoveryAction::Unplayable);
+        assert_eq!(action_for(b"partial but playable".to_vec()), RecoveryAction::Unplayable);
+    }
+
+    /// The same four decisions against files a real ffmpeg wrote.
+    #[test]
+    fn recovery_action_on_real_files() {
+        let Some(ffmpeg) = fixtures::ffmpeg() else {
+            eprintln!("skipping: no ffmpeg on PATH");
+            return;
+        };
+        let dir = fixtures::dir("recovery-action");
+        let finished = dir.join("finished.mp4");
+        if fixtures::fragmented(&ffmpeg, &finished, 2).is_none() {
+            return;
+        }
+        let boxes = fixtures::boxes(&finished);
+        let summary = fixtures::summary(&finished);
+        assert!(summary.mfra, "ffmpeg writes a fragment index on a clean finish");
+        assert_eq!(
+            recovery_action(&summary),
+            RecoveryAction::Remux { audio_tracks: 2, truncate_to: None }
+        );
+
+        let (_, offset, size) = boxes.iter().filter(|b| b.0 == "mdat").nth(2).unwrap().clone();
+        let killed = dir.join("killed.mp4");
+        fixtures::truncated_copy(&finished, &killed, offset + size / 2);
+        assert_eq!(
+            recovery_action(&fixtures::summary(&killed)),
+            RecoveryAction::Remux { audio_tracks: 2, truncate_to: None }
+        );
+
+        let header_only = dir.join("header-only.mp4");
+        fixtures::truncated_copy(&finished, &header_only, summary.first_moof_offset.unwrap());
+        assert_eq!(recovery_action(&fixtures::summary(&header_only)), RecoveryAction::Unplayable);
+
+        let faststarted = dir.join("faststarted.mp4");
+        std::fs::copy(&finished, &faststarted).unwrap();
+        crate::recorder::remux::remux_faststart(&ffmpeg, &faststarted, 2).unwrap();
+        assert_eq!(recovery_action(&fixtures::summary(&faststarted)), RecoveryAction::Leave);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// End to end: a daemon killed mid-game, then a restart. The row comes
+    /// back finished, the file comes back moov-first with every track, and
+    /// the markers are untouched.
+    #[test]
+    fn recovery_remuxes_a_killed_recording() {
+        let Some(ffmpeg) = fixtures::ffmpeg() else {
+            eprintln!("skipping: no ffmpeg on PATH");
+            return;
+        };
+        let dir = fixtures::dir("recover-remux");
+        let whole = dir.join("whole.mp4");
+        if fixtures::fragmented(&ffmpeg, &whole, 2).is_none() {
+            return;
+        }
+        let (_, offset, size) =
+            fixtures::boxes(&whole).into_iter().filter(|b| b.0 == "mdat").nth(3).unwrap();
+        let file = dir.join("recording-1.mp4");
+        fixtures::truncated_copy(&whole, &file, offset + size / 2);
+        // An old mtime, as a file left by a daemon that died last week has.
+        let killed_at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        std::fs::File::options().write(true).open(&file).unwrap().set_modified(killed_at).unwrap();
+
+        let db = Db::open_temporary().unwrap();
+        let id = db.begin_recording(&file.to_string_lossy(), 1_000).unwrap();
+        db.insert_markers(
+            id,
+            &[crate::db::NewMarker {
+                game_time_s: 1.0,
+                video_time_s: 1.0,
+                kind: "kill".into(),
+                payload_json: "{}".into(),
+            }],
+        )
+        .unwrap();
+
+        let report = recover_unfinished(&db, Some(&ffmpeg)).unwrap();
+        assert_eq!(report.recovered, 1);
+
+        let after = fixtures::summary(&file);
+        assert!(!after.mvex, "remuxed out of fragments");
+        assert!(after.moov_offset < after.first_mdat_offset, "the index is up front");
+        assert_eq!(after.audio_tracks, 2, "every stem survived");
+        assert!(!crate::recorder::remux::tmp_path(&file).exists());
+        assert_eq!(std::fs::metadata(&file).unwrap().modified().unwrap(), killed_at);
+
+        let rows = db.list_recordings().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].size_bytes, after.file_len as i64, "the size of the remuxed file");
+        let duration = rows[0].duration_s.expect("probed after the remux");
+        assert!(duration > 1.0 && duration < 3.0, "a partial recording: {duration}");
+        assert_eq!(db.get_markers(id).unwrap().len(), 1);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The kill that lands in a `moof`. ffmpeg will not open that file at
+    /// all, so without the cut the remux fails and the file stays unplayable.
+    #[test]
+    fn recovery_cuts_a_half_moof_and_remuxes() {
+        let Some(ffmpeg) = fixtures::ffmpeg() else {
+            eprintln!("skipping: no ffmpeg on PATH");
+            return;
+        };
+        let dir = fixtures::dir("recover-moof");
+        let whole = dir.join("whole.mp4");
+        if fixtures::fragmented(&ffmpeg, &whole, 1).is_none() {
+            return;
+        }
+        let (_, offset, size) =
+            fixtures::boxes(&whole).into_iter().filter(|b| b.0 == "moof").nth(3).unwrap();
+        let file = dir.join("recording-2.mp4");
+        fixtures::truncated_copy(&whole, &file, offset + size * 2 / 3);
+
+        let db = Db::open_temporary().unwrap();
+        db.begin_recording(&file.to_string_lossy(), 1_000).unwrap();
+        assert_eq!(recover_unfinished(&db, Some(&ffmpeg)).unwrap().recovered, 1);
+
+        let after = fixtures::summary(&file);
+        assert!(!after.mvex && after.truncated.is_none(), "remuxed: {}", after.layout);
+        assert!(db.list_recordings().unwrap()[0].duration_s.is_some());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// No ffmpeg: nothing to remux with, and the row is finished anyway.
+    #[test]
+    fn recovery_without_an_ffmpeg_still_finishes_the_row() {
+        let db = Db::open_temporary().unwrap();
+        let dir = temp_dir("recover-no-ffmpeg");
+        let file = dir.join("recording-3.mp4");
+        let mut bytes = fragmented_with(1, 2);
+        bytes.truncate(bytes.len() - 100);
+        std::fs::write(&file, &bytes).unwrap();
+        db.begin_recording(&file.to_string_lossy(), 1_000).unwrap();
+
+        assert_eq!(recover_unfinished(&db, None).unwrap().recovered, 1);
+        assert_eq!(std::fs::read(&file).unwrap(), bytes, "left as the kill left it");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A crash mid-remux leaves the temp file beside the recording. It is a
+    /// half-written copy, never a recording, and must not be imported as one,
+    /// in the current name or the `.mp4` one builds before #233 used.
+    #[test]
+    fn a_leftover_remux_temp_file_is_not_imported() {
+        let db = Db::open_temporary().unwrap();
+        let dir = temp_dir("remux-tmp");
+        let recording = dir.join("game.mp4");
+        std::fs::write(crate::recorder::remux::tmp_path(&recording), b"half a remux").unwrap();
+        std::fs::write(dir.join("older.faststart.tmp.mp4"), b"half a remux").unwrap();
+        std::fs::write(dir.join("OLDER2.FASTSTART.TMP.MP4"), b"half a remux").unwrap();
+
+        let report = reconcile(&db, &dir, None).unwrap();
+        assert_eq!(report.imported, 0);
+        assert!(db.list_recordings().unwrap().is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn recovery_removes_a_stale_remux_temp_file() {
+        let db = Db::open_temporary().unwrap();
+        let dir = temp_dir("recover-stale-tmp");
+        let file = dir.join("recording-4.mp4");
+        std::fs::write(&file, b"partial").unwrap();
+        let tmp = crate::recorder::remux::tmp_path(&file);
+        std::fs::write(&tmp, b"half a remux").unwrap();
+        db.begin_recording(&file.to_string_lossy(), 1_000).unwrap();
+
+        assert_eq!(recover_unfinished(&db, None).unwrap().recovered, 1);
+        assert!(!tmp.exists());
+        assert!(file.exists(), "the recording itself is kept");
 
         std::fs::remove_dir_all(&dir).ok();
     }

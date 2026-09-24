@@ -2280,6 +2280,32 @@ mod tests {
 
     /// ffmpeg and ffprobe from `PATH`, or `None` so the test can skip: CI's
     /// Linux runner has neither.
+    /// What this module writes, `read` and startup recovery must understand:
+    /// a finished file and a killed one both summarise as fragmented, with
+    /// every track and fragment counted, and recovery would remux the killed
+    /// one with all three audio tracks.
+    #[test]
+    fn the_reader_and_recovery_understand_what_the_writer_wrote() {
+        use crate::db::reconcile::{RecoveryAction, recovery_action};
+        let dir = temp_dir("read-back");
+        for finish in [true, false] {
+            let path = dir.join(format!("f-{finish}.mp4"));
+            synthetic_file(&path, 3, finish);
+            let summary = super::super::summarize(&mut std::fs::File::open(&path).unwrap()).unwrap();
+            assert!(summary.ftyp && summary.moov_complete && summary.mvex, "{summary:?}");
+            assert_eq!((summary.tracks, summary.audio_tracks), (4, 3));
+            assert_eq!(summary.complete_fragments, 3);
+            assert_eq!(summary.mfra, finish);
+            assert!(summary.truncated.is_none(), "{summary:?}");
+            assert!(
+                matches!(recovery_action(&summary), RecoveryAction::Remux { audio_tracks: 3, truncate_to: None }),
+                "{:?}",
+                recovery_action(&summary)
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     fn tools() -> Option<(PathBuf, PathBuf)> {
         let find = |name: &str| {
             let exe = if cfg!(windows) {
