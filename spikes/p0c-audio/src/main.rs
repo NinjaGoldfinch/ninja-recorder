@@ -76,6 +76,7 @@ fn main() -> std::process::ExitCode {
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use std::fs::File;
+    use std::mem::ManuallyDrop;
     use std::io::{BufWriter, Seek, SeekFrom, Write};
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
@@ -780,11 +781,17 @@ mod windows_impl {
             },
         };
 
-        // The activation parameters travel inside a PROPVARIANT as a raw blob.
-        // Built by hand because there is no constructor for VT_BLOB. This
-        // PROPVARIANT is the plain Win32 struct, with no Drop, so nothing
-        // tries to free the stack blob it points at.
-        let mut variant = PROPVARIANT::default();
+        // The activation parameters travel inside a PROPVARIANT as a raw blob,
+        // built by hand because there is no constructor for VT_BLOB.
+        //
+        // **ManuallyDrop, because this PROPVARIANT does have a Drop.** windows-rs
+        // adds one in `extensions/Win32/System/StructuredStorage.rs` that calls
+        // `PropVariantClear`, which hands `pBlobData` to `CoTaskMemFree`. The
+        // blob here points at `params` on the stack, so letting it drop freed a
+        // stack address on the way out of `activate` and the process died with
+        // 0xC0000374 (STATUS_HEAP_CORRUPTION) before capture began (#7).
+        // Nothing here was allocated, so there is nothing to clear.
+        let mut variant = ManuallyDrop::new(PROPVARIANT::default());
         // SAFETY: writing the active arm of a zeroed union, which is what the
         // callee reads given `vt = VT_BLOB`. `params` outlives the call.
         unsafe {
@@ -806,7 +813,7 @@ mod windows_impl {
             ActivateAudioInterfaceAsync(
                 VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
                 &IAudioClient::IID,
-                Some(&raw const variant),
+                Some(&raw const *variant),
                 &handler,
             )
         }
