@@ -16,8 +16,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
 use std::time::{Duration, Instant};
 
+use windows::Foundation::Metadata::ApiInformation;
 use windows::Foundation::TypedEventHandler;
-use windows::Graphics::Capture::{Direct3D11CaptureFramePool, GraphicsCaptureItem};
+use windows::Graphics::Capture::{
+    Direct3D11CaptureFramePool, GraphicsCaptureAccess, GraphicsCaptureAccessKind,
+    GraphicsCaptureItem, GraphicsCaptureSession,
+};
 use windows::Graphics::DirectX::DirectXPixelFormat;
 use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
@@ -27,8 +31,9 @@ use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninit
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
 use windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+use windows::Security::Authorization::AppCapabilityAccess::AppCapabilityAccessStatus;
 use windows::Win32::System::WinRT::Direct3D11::IDirect3DDxgiInterfaceAccess;
-use windows::core::{IInspectable, Interface};
+use windows::core::{HSTRING, IInspectable, Interface};
 
 use crate::clock::{self, Aligner, HNS_PER_SECOND};
 use crate::verify::{self, Fed};
@@ -395,6 +400,53 @@ impl Progress {
     }
 }
 
+/// Turns WGC's yellow border off where this Windows supports it, and says
+/// what happened, for the header.
+///
+/// The same three steps as libobs' `winrt-capture.cpp`: the property only
+/// exists from Windows 10 build 20348 / Windows 11, so ask `ApiInformation`
+/// first; request `Borderless` access, which some builds require before the
+/// setter takes effect; then clear the flag. libobs ignores the access status
+/// and sets the flag anyway, and so does this. The line reports the flag as
+/// read back, so a setter that silently did nothing shows as `on`.
+fn hide_border(session: &GraphicsCaptureSession) -> String {
+    let supported = ApiInformation::IsPropertyPresent(
+        &HSTRING::from("Windows.Graphics.Capture.GraphicsCaptureSession"),
+        &HSTRING::from("IsBorderRequired"),
+    )
+    .unwrap_or(false);
+    if !supported {
+        return "on (this Windows cannot turn it off: IsBorderRequired needs build 20348+)"
+            .to_string();
+    }
+    let access =
+        match GraphicsCaptureAccess::RequestAccessAsync(GraphicsCaptureAccessKind::Borderless)
+            .and_then(|op| op.join())
+        {
+            Ok(status) => access_status_name(status).to_string(),
+            Err(e) => format!("request failed: {e}"),
+        };
+    if let Err(e) = session.SetIsBorderRequired(false) {
+        return format!("on (SetIsBorderRequired(false) failed: {e}; borderless access {access})");
+    }
+    match session.IsBorderRequired() {
+        Ok(false) => format!("off (borderless access {access})"),
+        Ok(true) => format!("on (the setter did not take; borderless access {access})"),
+        Err(e) => format!("unknown (IsBorderRequired failed: {e}; borderless access {access})"),
+    }
+}
+
+fn access_status_name(status: AppCapabilityAccessStatus) -> &'static str {
+    match status {
+        AppCapabilityAccessStatus::Allowed => "Allowed",
+        AppCapabilityAccessStatus::DeniedBySystem => "DeniedBySystem",
+        AppCapabilityAccessStatus::DeniedByUser => "DeniedByUser",
+        AppCapabilityAccessStatus::NotDeclaredByApp => "NotDeclaredByApp",
+        AppCapabilityAccessStatus::UserPromptRequired => "UserPromptRequired",
+        _ => "unknown",
+    }
+}
+
 fn record(args: &Args) -> Result<(), String> {
     println!("== p0c-video (WS1.4, #8) ==");
     println!("windows       {}", windows_build());
@@ -550,7 +602,6 @@ fn record(args: &Args) -> Result<(), String> {
             ""
         }
     );
-    println!();
 
     let slots = video::create_slots(&device.device, width, height, SLOTS)?;
     let staging = video::create_texture(&device.device, &video::texture_desc(width, height, true))?;
@@ -577,10 +628,12 @@ fn record(args: &Args) -> Result<(), String> {
     let session = pool
         .CreateCaptureSession(&resolved.item)
         .map_err(|e| format!("could not create the capture session: {e}"))?;
-    // The yellow border is the system's own "something is capturing this"
-    // affordance. Leave it on: a capture that hides itself is what the
-    // no-injection rule exists to avoid resembling.
-    let _ = session.SetIsBorderRequired(true);
+    // The yellow border is drawn on screen only and never reaches the file,
+    // and the current release shows none, because libobs turns it off where
+    // Windows allows. Do the same, so Option B is not a visible regression
+    // (#219). The last header line says which way it went.
+    println!("border        {}", hide_border(&session));
+    println!();
     let _ = session.SetIsCursorCaptureEnabled(false);
     session
         .StartCapture()

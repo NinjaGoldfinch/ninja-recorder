@@ -123,7 +123,11 @@ disk.
 what was loaded (`loaded`) and the transform chain the sink writer built. A
 `WARNING` that the loaded encoder carries no hardware id means either a silent
 software fallback or an MFT that does not report its attributes; compare the
-name with `--list`.
+name with `--list`. The last line, `border`, says whether WGC's yellow border
+was turned off (#219): `off` where Windows supports it (build 20348 and later),
+`on` with the reason where it does not, and the answer to the `Borderless`
+access request either way. The border is drawn on screen only and never
+reaches the file.
 
 **The `== result ==` block** (clean runs only):
 
