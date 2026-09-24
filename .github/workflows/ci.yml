@@ -672,6 +672,15 @@ jobs:
           }
           Write-Host "the installer ships the app alone, and its shortcut starts $named.exe"
 
+          # The hooks that stop the libobs worker before any file is touched
+          # (#220). Named in tauri.windows.conf.json, and the devtools config
+          # is merged over that file, so this is where "both bundles carry
+          # them" is a fact rather than a reading of the merge rules.
+          if (-not (Select-String -Path $nsi.FullName -Pattern '^\s*!include\s+".*installer-hooks\.nsh"' -Quiet)) {
+            throw "installer.nsi does not include installer-hooks.nsh; the installer would not stop the libobs worker"
+          }
+          Write-Host "the installer includes the hooks that stop the libobs worker"
+
       # A trimmed build says so in its name, so it cannot be mistaken for the
       # devtools build of the same commit when the two sit side by side.
       - name: Upload build artifact

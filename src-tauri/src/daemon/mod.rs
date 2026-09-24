@@ -937,6 +937,37 @@ mod tests {
         }
     }
 
+    /// The installer stops the libobs worker before it touches a file (#220),
+    /// and it finds the worker by path. That path is spelled twice, once in
+    /// `libobs_worker` and once in the NSIS hook, and nothing on Linux runs
+    /// makensis, so a hook the config stopped naming, or one that looked for
+    /// the worker somewhere the daemon never starts it, would pass every
+    /// other gate and show up as an update that fails on a locked DLL.
+    #[test]
+    fn the_installer_hooks_stop_the_worker_the_daemon_starts() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../../tauri.windows.conf.json")).unwrap();
+        assert_eq!(
+            conf["bundle"]["windows"]["nsis"]["installerHooks"].as_str(),
+            Some("nsis/installer-hooks.nsh"),
+            "tauri.windows.conf.json must hand the hooks to the NSIS bundler"
+        );
+        assert_eq!(
+            conf["bundle"]["resources"]["target/libobs"].as_str(),
+            Some("libobs"),
+            "the hook looks for the worker under $INSTDIR\\libobs"
+        );
+
+        let hooks = include_str!("../../nsis/installer-hooks.nsh");
+        for needle in [
+            "!macro NSIS_HOOK_PREINSTALL",
+            "!macro NSIS_HOOK_PREUNINSTALL",
+            r#"!define NR_WORKER "libobs\extprocess_recorder.exe""#,
+        ] {
+            assert!(hooks.contains(needle), "installer-hooks.nsh lost {needle:?}");
+        }
+    }
+
     /// Every path the daemon uses hangs off the data directory, which is what
     /// makes "the UI and the daemon agree" a single question rather than six.
     #[test]

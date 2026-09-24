@@ -2066,11 +2066,52 @@ NSIS's own "close the running app" check cannot help. It keys off
 of. The same property that lets the production and devtools bundles coexist
 (§10) is what makes the worker invisible to it here.
 
-So `run_update_install` calls `Recorder::release` after the finalize and
-before handing over. `release` is a no-op while recording, which is fine
-because the gate has already established that nothing is. Then it waits two
-seconds: the IPC link's `Drop` *asks* the child to exit, and the handles are
-released when it actually does, not when we stop waiting.
+So `daemon::update::install` calls `Recorder::release` after the finalize
+and before handing over. `release` is a no-op while recording, which is fine
+because the gate has already established that nothing is, and it shuts the
+worker down over IPC and waits for it to exit, killing it after three seconds
+if it has not. **This was lost once** (#220): the UI's `run_update_install`
+did it, and when WS3.6 moved the install into the daemon the release did not
+come along. The daemon then left with `process::exit`, which runs no
+destructors, so the worker only learned it was orphaned when its pipe closed,
+some time after the installer had started copying.
+
+**The installer stops it too**, because an update is not the only way an
+installer meets a running worker: someone can run one by hand. Tauri's
+`installerHooks` include `src-tauri/nsis/installer-hooks.nsh`, whose
+pre-install and pre-uninstall hooks run before the template's own check. They
+find the worker **by path**, `$INSTDIR\libobs\extprocess_recorder.exe`, through
+the Restart Manager, and terminate what it names. By path because the release
+and devtools builds install side by side (§10) and both ship a worker with the
+same file name, so stopping by name would end the other build's recording.
+The Restart Manager rather than a plugin or a PowerShell one-liner because it
+is in Windows, reachable from NSIS's own System plug-in, and answers exactly
+"who is running this file"; a quoted PowerShell filter would break on an
+install directory with an apostrophe in it, which a per-user install under
+`%LOCALAPPDATA%` of an O'Brien has.
+
+When the worker and the app are both running, the hook stops the **app first**
+and asks the template's own "close the app?" question to do it. Stopping only
+the worker would leave an app that looks up and cannot record, and would
+leave it that way if the person then pressed Cancel on the template's prompt.
+Asking once, up front, means Cancel stops nothing and OK stops both, and the
+template's check that follows finds nothing to ask about.
+
+Two things it does not do:
+
+- **An interactive upgrade that uninstalls first is only covered one release
+  later.** Tauri's reinstall page runs the *previously installed* uninstaller
+  before the new installer's Install section, so before any hook of the new
+  one. An uninstaller from before #220 has no hook, its worker survives, and a
+  DLL it had loaded is left behind. The uninstaller this build installs does
+  have one, so the next upgrade is covered.
+- **Nothing removes a file the new version no longer ships.** Installing over
+  an install copies files and never deletes, whether they were locked or not.
+  The only way to clear `libobs\` without a generated list of what the new
+  build ships would be to delete it before copying, and any abort after that
+  point (a Cancel on the template's prompt, a write that fails) leaves the
+  installed app with no capture backend. Not done. Today only the devtools
+  bundle is ever trimmed, and it never updates itself.
 
 ### The devtools bundle must never update itself
 
