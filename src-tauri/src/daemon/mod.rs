@@ -56,16 +56,40 @@ use crate::recorder::backend::{self as capture, CaptureBackend, CaptureBackendOp
 use crate::{core, db, fixtures, log, match_summary, retention, state_machine, trim};
 use crate::{error, info, warn};
 
-/// The application identifier, and the one string the daemon and the UI must
+/// The release build's identifier: `identifier` in `tauri.conf.json`.
+///
+/// Also the app's name in the pipe (`rpc::endpoint`), which carries the build
+/// separately. That name is each build's single-instance lock and predates
+/// the data folders splitting, so it stays what it was.
+pub const RELEASE_IDENTIFIER: &str = "com.ninjarecorder.app";
+
+/// The devtools build's identifier: `identifier` in `tauri.devtools.conf.json`.
+///
+/// Its own since #222. The two builds used to share the release identifier so
+/// the portal would read the real library, and with it they shared the
+/// recordings folder, `library.sqlite3` and the resume sweep: running both at
+/// once recorded every game twice into one file and corrupted it
+/// (DEVELOPMENT.md §17, "Each build has its own data folder").
+pub const DEVTOOLS_IDENTIFIER: &str = "com.ninjarecorder.app.devtools";
+
+/// This build's identifier, and the one string the daemon and the UI must
 /// resolve identically.
 ///
-/// Tauri derives `app_data_dir()` from `identifier` in `tauri.conf.json`, and
-/// the daemon has no Tauri to ask — so it is repeated here, and
-/// `the_identifier_matches_tauri_conf` reads the config back and fails if the
-/// two ever differ. Getting this wrong would not crash anything: the daemon
+/// Tauri derives `app_data_dir()` from `identifier` in the config the CLI
+/// merged, and the daemon has no Tauri to ask, so it is repeated here and
+/// `the_identifier_matches_tauri_conf` reads both configs back and fails if
+/// either differs. Getting this wrong would not crash anything: the daemon
 /// would open a *different* database in a *different* folder and record
 /// perfectly into a library the UI cannot see.
-pub const IDENTIFIER: &str = "com.ninjarecorder.app";
+///
+/// The UI resolves its data paths through [`Paths::resolve`] as well, not
+/// through `app.path()`, so the two processes of one build agree even when the
+/// binary was built without the devtools config overlay (a plain
+/// `cargo build --features devtools`, which is what the smoke tests run).
+/// Tauri's own copy still decides what only Tauri decides: the asset-protocol
+/// scope, the WebView2 profile and the id the installer registers for toasts.
+pub const IDENTIFIER: &str =
+    if cfg!(feature = "devtools") { DEVTOOLS_IDENTIFIER } else { RELEASE_IDENTIFIER };
 
 /// Why the daemon could not start.
 #[derive(Debug, thiserror::Error)]
@@ -109,6 +133,11 @@ const GOODBYE_GRACE: std::time::Duration = std::time::Duration::from_millis(100)
 /// Resolved once, at startup, and then owned — the same shape `Ctx` already
 /// uses, and for the same reason: a path re-derived per call is a path that
 /// can change answer halfway through a session.
+///
+/// **Both processes use it**, the UI included, so one build's daemon and UI
+/// cannot resolve different folders, and each build gets its own: under
+/// `com.ninjarecorder.app` for release, `com.ninjarecorder.app.devtools` for
+/// devtools (#222).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paths {
     /// `app_data_dir()`: the database, the logs, the recordings, the caches.
@@ -852,7 +881,9 @@ mod tests {
     use super::*;
 
     /// The one value the daemon and the UI must resolve identically, pinned
-    /// against the file Tauri reads.
+    /// against the files Tauri reads: each build's constant against its own
+    /// config, and this build's `IDENTIFIER` against what the CLI would merge
+    /// (`tauri.devtools.conf.json` layered over `tauri.conf.json` for devtools).
     ///
     /// A mismatch is not a crash but something worse: two processes, two data
     /// directories, two databases, and a daemon recording flawlessly into a
@@ -861,25 +892,86 @@ mod tests {
     fn the_identifier_matches_tauri_conf() {
         let conf: serde_json::Value =
             serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
+        let devtools: serde_json::Value =
+            serde_json::from_str(include_str!("../../tauri.devtools.conf.json")).unwrap();
         assert_eq!(
             conf["identifier"].as_str(),
+            Some(RELEASE_IDENTIFIER),
+            "RELEASE_IDENTIFIER and tauri.conf.json's identifier decide the same directory"
+        );
+        assert_eq!(
+            devtools["identifier"].as_str(),
+            Some(DEVTOOLS_IDENTIFIER),
+            "DEVTOOLS_IDENTIFIER and tauri.devtools.conf.json's identifier decide the same directory"
+        );
+
+        let merged = if cfg!(feature = "devtools") { &devtools } else { &conf };
+        assert_eq!(
+            merged["identifier"].as_str(),
             Some(IDENTIFIER),
-            "daemon::IDENTIFIER and tauri.conf.json's identifier decide the same directory"
+            "daemon::IDENTIFIER must be the identifier this build's bundle is made with"
         );
     }
 
-    /// `tauri.devtools.conf.json` overrides `productName` and must never
-    /// override `identifier`: the endpoint is scoped by build identity
-    /// separately, and a devtools build that moved its data directory would
-    /// stop sharing the library the portal exists to inspect.
+    /// The two builds keep their data apart (#222). While they shared one
+    /// folder, running both recorded every game twice into one file, wrote one
+    /// `recordings` table and ran one resume sweep from two daemons.
     #[test]
-    fn the_devtools_config_does_not_move_the_data_directory() {
-        let conf: serde_json::Value =
-            serde_json::from_str(include_str!("../../tauri.devtools.conf.json")).unwrap();
-        assert!(
-            conf.get("identifier").is_none(),
-            "a devtools identifier would split the data directory in two"
+    fn the_two_builds_have_separate_data_directories() {
+        assert_eq!(RELEASE_IDENTIFIER, "com.ninjarecorder.app");
+        assert_eq!(DEVTOOLS_IDENTIFIER, "com.ninjarecorder.app.devtools");
+        assert_eq!(
+            IDENTIFIER,
+            if cfg!(feature = "devtools") { DEVTOOLS_IDENTIFIER } else { RELEASE_IDENTIFIER }
         );
+
+        let Ok(paths) = Paths::resolve() else {
+            // No `dirs::data_dir()` on this machine; nothing to check.
+            return;
+        };
+        let other = if cfg!(feature = "devtools") { RELEASE_IDENTIFIER } else { DEVTOOLS_IDENTIFIER };
+        let other_data = paths.data.parent().expect("the data dir has a parent").join(other);
+        assert_ne!(paths.data, other_data);
+        // Component-wise, so `com.ninjarecorder.app.devtools` is not "inside"
+        // `com.ninjarecorder.app`, which a string prefix would claim it was.
+        for path in [&paths.data, &paths.logs, &paths.recordings, &paths.db, &paths.assets, &paths.fixtures] {
+            assert!(
+                !path.starts_with(&other_data),
+                "{} is inside the other build's data directory",
+                path.display()
+            );
+        }
+    }
+
+    /// The installer stops the libobs worker before it touches a file (#220),
+    /// and it finds the worker by path. That path is spelled twice, once in
+    /// `libobs_worker` and once in the NSIS hook, and nothing on Linux runs
+    /// makensis, so a hook the config stopped naming, or one that looked for
+    /// the worker somewhere the daemon never starts it, would pass every
+    /// other gate and show up as an update that fails on a locked DLL.
+    #[test]
+    fn the_installer_hooks_stop_the_worker_the_daemon_starts() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../../tauri.windows.conf.json")).unwrap();
+        assert_eq!(
+            conf["bundle"]["windows"]["nsis"]["installerHooks"].as_str(),
+            Some("nsis/installer-hooks.nsh"),
+            "tauri.windows.conf.json must hand the hooks to the NSIS bundler"
+        );
+        assert_eq!(
+            conf["bundle"]["resources"]["target/libobs"].as_str(),
+            Some("libobs"),
+            "the hook looks for the worker under $INSTDIR\\libobs"
+        );
+
+        let hooks = include_str!("../../nsis/installer-hooks.nsh");
+        for needle in [
+            "!macro NSIS_HOOK_PREINSTALL",
+            "!macro NSIS_HOOK_PREUNINSTALL",
+            r#"!define NR_WORKER "libobs\extprocess_recorder.exe""#,
+        ] {
+            assert!(hooks.contains(needle), "installer-hooks.nsh lost {needle:?}");
+        }
     }
 
     /// Every path the daemon uses hangs off the data directory, which is what
@@ -890,7 +982,7 @@ mod tests {
             // No `dirs::data_dir()` on this machine; nothing to check.
             return;
         };
-        assert!(paths.data.ends_with(IDENTIFIER));
+        assert_eq!(paths.data.file_name().and_then(|n| n.to_str()), Some(IDENTIFIER));
         for path in [&paths.logs, &paths.recordings, &paths.db, &paths.assets, &paths.fixtures] {
             assert!(
                 path.starts_with(&paths.data),

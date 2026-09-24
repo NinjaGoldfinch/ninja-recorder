@@ -62,14 +62,18 @@ const KEEP_ROTATED: usize = 2;
 /// other process can be told about. So the stem names the role
 /// (implementation plan §3.1's ownership table).
 ///
-/// **And the build, for the same reason** (#202). A devtools build keeps the
-/// release identifier so the portal reads the real library, which puts both
-/// builds' logs in the same directory. Two daemons, one from each, are two
-/// sinks on one file: their lines interleave with nothing saying whose they
-/// are, and each rotates the other's file away. So a devtools build writes
-/// `daemon-devtools.log` and `ui-devtools.log`, the way its pipe name and its
-/// Run value already carry the build, and a release build keeps the names
-/// every shipped version has used.
+/// **And the build** (#202). A devtools build used to keep the release
+/// identifier, which put both builds' logs in the same directory: two daemons,
+/// one from each, were two sinks on one file, their lines interleaved with
+/// nothing saying whose they were, and each rotated the other's file away. So
+/// a devtools build writes `daemon-devtools.log` and `ui-devtools.log`, the
+/// way its pipe name and its Run value already carry the build, and a release
+/// build keeps the names every shipped version has used.
+///
+/// Since #222 each build has its own data folder, so the suffix no longer
+/// separates anything on its own. It stays: it costs nothing, a log file
+/// copied out of its folder still says which build wrote it, and the scripts
+/// and verification steps that name these files keep working.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Process {
     /// `ui.log`, or `ui-devtools.log`. The Tauri process: windows, the

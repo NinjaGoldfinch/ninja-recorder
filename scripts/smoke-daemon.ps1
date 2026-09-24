@@ -26,8 +26,9 @@
 
 .PARAMETER Build
     Which build `Exe` is: `devtools` (the default, because that is what CI
-    compiles here) or `release`. It decides the pipe name and the log file,
-    both of which carry the build: `daemon-devtools.log` or `daemon.log`.
+    compiles here) or `release`. It decides the pipe name, the data folder
+    (`com.ninjarecorder.app.devtools` or `com.ninjarecorder.app`) and the log
+    file: `daemon-devtools.log` or `daemon.log`.
 
 .PARAMETER PipeName
     The endpoint to expect, without the `\\.\pipe\` prefix. Defaults to the
@@ -54,8 +55,10 @@ $failures = @()
 function Note($message) { Write-Host "  $message" }
 function Fail($message) { $script:failures += $message; Write-Host "  FAIL: $message" }
 
-$logDir = Join-Path $env:APPDATA "com.ninjarecorder.app\logs"
-# Per build since #202, because both builds share this directory.
+# Each build has its own data folder since #222 (daemon::IDENTIFIER), and
+# the log names still carry the build too (#202).
+$dataDir = if ($Build -eq 'devtools') { "com.ninjarecorder.app.devtools" } else { "com.ninjarecorder.app" }
+$logDir = Join-Path $env:APPDATA "$dataDir\logs"
 $logName = if ($Build -eq 'devtools') { "daemon-devtools.log" } else { "daemon.log" }
 $logFile = Join-Path $logDir $logName
 $stdout = Join-Path $env:TEMP "daemon-stdout.txt"

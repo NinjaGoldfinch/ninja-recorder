@@ -801,9 +801,12 @@ needs a window.
 - [x] `app_data_dir()/logs/` now holds both `ui.log` and `daemon.log`, and
       neither rotates the other.
 - [ ] **#202.** With the release and devtools builds both installed and both
-      running, `logs/` holds `daemon.log` and `daemon-devtools.log` (and
-      `ui.log` beside `ui-devtools.log`), and no line from one build appears in
-      the other's file. Start capture in both: `libobs.log` and
+      running, the release build's `logs/` holds `daemon.log` and `ui.log`, the
+      devtools build's holds `daemon-devtools.log` and `ui-devtools.log`, and no
+      line from one build appears in the other's file. Since #222 those are two
+      folders, `%APPDATA%\com.ninjarecorder.app\logs` and
+      `%APPDATA%\com.ninjarecorder.app.devtools\logs`; recording with both
+      running is §7.8. Start capture in both: `libobs.log` and
       `libobs-devtools.log` both have content, and starting the second
       worker leaves the first build's file where it was rather than moving
       it to `.1.log`. Each daemon session's first lines name its version,
@@ -1181,6 +1184,49 @@ console said anything. A component that throws takes its subtree with it and
 leaves a gap rather than an error, so **an empty area is a finding**, not a
 layout preference.
 
+### 7.8 Release and devtools side by side (#222)
+
+Each build has its own data folder since #222: `%APPDATA%\com.ninjarecorder.app`
+for release, `%APPDATA%\com.ninjarecorder.app.devtools` for devtools. Before it,
+both daemons recorded every game into **one file** in a shared folder and
+corrupted it, so this section asks for two recordings of one game, one in each
+build's library, and both clean. A devtools install that upgraded from a build
+before #222 starts with an **empty library**; that is expected.
+
+Install both builds from the same commit and start both, so both daemons run.
+
+- [ ] The portal's Overview shows `app_data_dir`, `db_path` and
+      `recordings_dir` under `com.ninjarecorder.app.devtools`, and the release
+      build's library is **not** in the portal's Library panel.
+- [ ] Play one game (a Practice Tool game is enough) with both running. Both
+      daemon logs say `game identified` for it.
+- [ ] **Two recordings, one per build.** One new `.mp4` in
+      `%APPDATA%\com.ninjarecorder.app\recordings` and one in
+      `%APPDATA%\com.ninjarecorder.app.devtools\recordings`. Each build's
+      library shows its own card for the game, and neither shows the other's.
+- [ ] Neither daemon log has `faststart remux failed` for the game, and
+      neither says `os error 32` or `os error 2`.
+- [ ] **Both files decode cleanly.** A full decode, not a probe, with nothing
+      printed for either file:
+
+      ```powershell
+      $ffmpeg = "$env:LOCALAPPDATA\ninja-recorder\libobs\ffmpeg.exe"
+      foreach ($dir in "com.ninjarecorder.app", "com.ninjarecorder.app.devtools") {
+          $f = Get-ChildItem "$env:APPDATA\$dir\recordings\*.mp4" |
+               Sort-Object LastWriteTime | Select-Object -Last 1
+          Write-Host "== $($f.FullName)"
+          & $ffmpeg -v error -i $f.FullName -map 0 -f null - 2>&1
+      }
+      ```
+
+      Any output under either `==` line is a failure: paste it into #222.
+      (Before #222 this printed `Invalid NAL unit size` and `channel element
+      ... is not allocated` thousands of times.)
+- [ ] Both recordings play in their own build's review player, with markers.
+- [ ] Restart both daemons (tray → Quit, then relaunch). Neither resume sweep
+      touches the other build's rows: each library still has exactly its one
+      card for the game, and no row is lost.
+
 ## 8. The trimmed libobs backend (WS1.1, #5)
 
 The P0a arm: does the capture backend still record with everything off the
@@ -1208,12 +1254,13 @@ no file at all (the muxer). None of it reaches CI.
       `Before:`, `After:` and `Remove:` lines into the table below. They are
       the staged directory before packaging, not the install.
 - [ ] **Quit the release build first** (tray → Quit) and leave it quit for the
-      whole section, because two daemons would both try to record the game.
-      (Their logs no longer collide: since #212 a devtools build writes
-      `libobs-devtools.log`, a release build `libobs.log`.)
+      whole section, because two daemons would both record the game and share
+      the GPU's encoder sessions, which muddies what this section measures.
+      (They no longer write the same files: since #222 each build has its own
+      data folder, see §7.8.)
 - [ ] Before installing the trimmed build, install the **untrimmed** devtools
       build of the same commit, record a session, and copy
-      `%APPDATA%\com.ninjarecorder.app\logs\libobs-devtools.log` aside as
+      `%APPDATA%\com.ninjarecorder.app.devtools\logs\libobs-devtools.log` aside as
       `libobs.untrimmed.log`. It is the baseline the trimmed log is compared
       against in 8.3: the same build and the same source tree, so the only
       difference is the trim.
@@ -1246,7 +1293,7 @@ no file at all (the muxer). None of it reaches CI.
 ### 8.3 The plugin-load log
 
 The worker's log is `libobs-devtools.log` in a devtools build, at
-`%APPDATA%\com.ninjarecorder.app\logs\libobs-devtools.log`, with one session
+`%APPDATA%\com.ninjarecorder.app.devtools\logs\libobs-devtools.log`, with one session
 kept as `libobs-devtools.1.log` (#212; a release build's is `libobs.log`). It
 holds the worker's stderr (#69), which is libobs's errors and ffmpeg's output,
 and since #221 its stdout lines too, which is where libobs writes info and
@@ -1261,7 +1308,7 @@ working, and that is a finding for #221, not a clean result.** A baseline
 - [ ] **No failed module loads.**
 
       ```powershell
-      Select-String -Path "$env:APPDATA\com.ninjarecorder.app\logs\libobs-devtools.log" `
+      Select-String -Path "$env:APPDATA\com.ninjarecorder.app.devtools\logs\libobs-devtools.log" `
           -Pattern 'os_dlopen', 'Failed to', 'failed to load', 'not loaded', 'could not'
       ```
 
@@ -1306,16 +1353,16 @@ beside the result rather than as one number.
 
 | What | Result | Notes |
 |---|---|---|
-| CI trim step: `Before:` / `After:` / `Remove:` (staged directory) | | |
-| 8.1: the installed `libobs\` is the trimmed one | | |
-| 8.2: Practice Tool game recorded, encoder named | | |
-| 8.2: full game recorded, plays, seeks, stems present | | |
-| 8.3: `libobs-devtools.log` free of failed module loads | | |
-| 8.3: module list matches the untrimmed log less coreaudio-encoder | | |
-| 8.4: trimmed devtools install (`measure.ps1` row) | | |
-| 8.4: trimmed `libobs\` folder (`measure.ps1` row) | | |
-| 8.4: untrimmed devtools install and `libobs\` folder, same commit | | |
-| Under 200 MB as a release install, and the sum that says so | | |
+| CI trim step: `Before:` / `After:` / `Remove:` (staged directory) | 118 files, 219.4 MB / 60 files, 179.4 MB / 58 files, 40.0 MB | Run 35829801809, tree `798986e` |
+| 8.1: the installed `libobs\` is the trimmed one | Pass: 8 PASS, 0 FAIL | 63 files installed: CI's 60, plus 3 win-capture JSON files written at first run |
+| 8.2: Practice Tool game recorded, encoder named | Pass, but not from the log | NVENC confirmed with `nvidia-smi` (2 sessions at 57 fps) and `nvEncodeAPI64.dll` loaded in the worker. `daemon-devtools.log` never names the encoder (#221) |
+| 8.2: full game recorded, plays, seeks, stems present | Pass | ARAM Mayhem (queue 2400), 19:59. Track switching works; mic track (a2) mean −35.9 dB |
+| 8.3: `libobs-devtools.log` free of failed module loads | **Not checkable** | libobs's info and warning lines never reach the log (#221). Re-run once it lands |
+| 8.3: module list matches the untrimmed log less coreaudio-encoder | Pass, from the worker's loaded modules | `(Get-Process extprocess_recorder).Modules` under `libobs\`: untrimmed 24 DLLs, trimmed 23; only `coreaudio-encoder.dll` differs |
+| 8.4: trimmed devtools install (`measure.ps1` row) | 196.5 MB | `libobs\` 179.4 MB |
+| 8.4: trimmed `libobs\` folder (`measure.ps1` row) | 179.4 MB | |
+| 8.4: untrimmed devtools install and `libobs\` folder, same commit | 236.5 MB / 219.5 MB | Run 35830656950; CI staged 219.4 MB |
+| Under 200 MB as a release install, and the sum that says so | **Pass: 195.4 MB** | 235.5 (release 2.0.0-alpha.103 install) − (219.5 − 179.4) |
 
 ## 9. The capture backend switch (WS1.7, #11)
 
@@ -1372,6 +1419,62 @@ recording the same game, needs WS1.6 and is not here yet.
 | 9: switch the setting, and the next recording uses the chosen backend | | |
 | 9: refused mid-game; the recording in flight is unaffected | | |
 | 9: an unbuildable saved backend records nothing and says why | | |
+
+## 10. Installing over a running app (#220)
+
+The installer stops this install's libobs worker before it touches a file
+(`src-tauri/nsis/installer-hooks.nsh`), and the in-app updater shuts the
+worker down before it hands over. Neither has run on Windows yet: makensis
+never runs on the dev box, so the hook has been read, not compiled, until CI
+builds a bundle with it. Why it works this way is
+[DEVELOPMENT.md §14, "The capture backend has to be shut down first"](../DEVELOPMENT.md#the-capture-backend-has-to-be-shut-down-first).
+
+Each box needs `extprocess_recorder.exe` **running** when the installer starts:
+open the League client (the worker comes up with it), then check Task Manager's
+Details tab, with the *Image path name* column on, before going on.
+
+- [ ] **The bundle compiles.** CI's build job gets past `tauri build` for both
+      bundles, and its "The installer ships the app" step prints "the installer
+      includes the hooks that stop the libobs worker".
+- [ ] **Interactive install over a running app.** Run the new installer by
+      hand and choose the option that does *not* uninstall first (on the
+      same version that is "Add/Reinstall"). One prompt, the template's own
+      "ninja-recorder is running! Click OK to kill it". **Cancel** aborts the
+      install, and the app and its worker are both still running and still
+      record. Run it again and press **OK**: the app and the worker are gone
+      before the progress bar moves, there is no "Error opening file for
+      writing" box, and the Details tab shows neither afterwards. The
+      installer's *Show details* list has a
+      `Stopped process <pid> (…\libobs\extprocess_recorder.exe)` line.
+- [ ] **The other build's worker survives.** Install the release and devtools
+      builds side by side, open the client so both workers run, and install
+      the **devtools** build over itself. The release build's worker (its
+      image path is under `%LOCALAPPDATA%\ninja-recorder\libobs\`) is still
+      running afterwards, and that build still records.
+- [ ] **The in-app update.** On the alpha channel with the client open, press
+      Install. `daemon.log` has `[update] handing over to …` and, before it,
+      no `could not release the capture backend` line. The update completes
+      silently with no dialog, the app comes back, and Settings → About reads
+      the new version. Then compare `libobs\` against the new build's artifact:
+      every file there should have the new build's timestamps.
+- [ ] **Uninstall with the app running.** Apps & Features → Uninstall: one
+      prompt, and afterwards `%LOCALAPPDATA%\ninja-recorder\libobs\` holds
+      none of the DLLs the worker had loaded.
+
+What this does **not** fix, so do not expect it: an *interactive upgrade* that
+chooses "Uninstall before installing" runs the **previously installed**
+uninstaller before any of this installer's code, and one installed before this
+change has no hook. Its worker survives that step, and a DLL it had loaded is
+left behind. The next upgrade after this ships is covered, because the
+uninstaller it runs is this one.
+
+| What | Result | Notes |
+|---|---|---|
+| 10: the bundle compiles, and includes the hooks | | |
+| 10: interactive install: Cancel leaves both running, OK stops both, no locked-file error | | |
+| 10: the other build's worker survives | | |
+| 10: in-app update replaces every `libobs\` file | | |
+| 10: uninstall with the app running leaves no loaded DLL behind | | |
 
 ## Outcome
 

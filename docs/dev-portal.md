@@ -11,9 +11,11 @@ supervisor, the DB, retention or the review player, this is your loop.
 npm run tauri:dev   # note the colon; plain `tauri dev` omits the feature
 ```
 
-`tauri:dev` passes `--features devtools`. Without it the portal's window and
-every `dev_*` command are absent, and the main window hides its own "Dev
-portal" button accordingly.
+`tauri:dev` passes `--features devtools` and layers `tauri.devtools.conf.json`
+over the config, exactly as the CI bundle does. Without the feature the
+portal's window and every `dev_*` command are absent, and the main window hides
+its own "Dev portal" button accordingly. Without the config the library still
+opens in the right folder, but the player cannot load a recording (see below).
 
 ---
 
@@ -154,9 +156,46 @@ older version of *itself* and tried to uninstall it first: a step that aborts
 the whole install with "Unable to uninstall!" if the old uninstaller returns
 non-zero or leaves the binary behind (a still-running app is enough).
 `mainBinaryName` splits the process name too, so neither build's "close the
-running app" check reaches across at the other. The `identifier` is
-deliberately *not* overridden, so the portal still opens the library the real
-app writes to.
+running app" check reaches across at the other.
+
+## It has its own library
+
+**The devtools build does not see the release build's recordings** (#222).
+`tauri.devtools.conf.json` sets `identifier` to `com.ninjarecorder.app.devtools`,
+and `daemon::IDENTIFIER` follows it under `--features devtools`, so everything
+under the app data folder is the devtools build's own:
+
+| | Release | Devtools |
+|---|---|---|
+| Data folder | `%APPDATA%\com.ninjarecorder.app` | `%APPDATA%\com.ninjarecorder.app.devtools` |
+| Library, recordings, fixtures, Data Dragon cache, logs | under it | under it |
+| Pipe | `ninja-recorder.com.ninjarecorder.app.release` | `ninja-recorder.com.ninjarecorder.app.devtools` |
+
+Until then both builds used `com.ninjarecorder.app` on purpose, so the portal
+would inspect the real library. The cost of that turned out to be two daemons
+recording every game into **one file**, one `recordings` table and one resume
+sweep, which corrupted both builds' copy of each game. Why the folder split
+rather than a per-build file name is in
+[DEVELOPMENT.md §17](../DEVELOPMENT.md), "Each build has its own data folder".
+
+A devtools install therefore starts with an **empty library**, including one
+upgraded from a build that shared the release folder. To get data into it:
+
+- **Seed** writes rows, markers and samples; its Review-ready preset copies
+  `fixtures/sample.mp4` so the player has a file that decodes.
+- **Play a game** with the devtools build running. It records into its own
+  folder whether or not the release build is running too.
+- **Copy recordings in.** Drop `.mp4` files into the devtools build's
+  `recordings\` folder (Overview has a button for it) and restart its daemon:
+  the startup reconcile imports untracked files, as it does for the release
+  build. Only the file comes across; markers, samples and match summaries stay
+  in the release build's database.
+- **Fixtures** captured by the release build are in its own `fixtures\`
+  folder; copy them across to replay them here.
+
+The portal's Overview shows `app_data_dir`, `db_path` and `recordings_dir` as
+the running build resolved them, which is the quickest way to confirm which
+library you are looking at.
 
 ## Cutting the loading screen off a file
 

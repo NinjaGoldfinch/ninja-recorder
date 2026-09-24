@@ -50,6 +50,11 @@ windows = { version = "0.62", features = [
     "Graphics_DirectX",
     "Graphics_DirectX_Direct3D11",
     "Foundation",
+    # `ApiInformation`, to ask whether the border can be turned off (#219).
+    "Foundation_Metadata",
+    # The status `GraphicsCaptureAccess::RequestAccessAsync` returns: the
+    # method is gated on it.
+    "Security_Authorization_AppCapabilityAccess",
 ] }
 
 # `#[implement]` expands to `windows_core::` paths, so the crate it names has

@@ -158,8 +158,8 @@ mod tests {
         );
     }
 
-    /// The two builds install side by side and share a data directory. They
-    /// must not share a login entry, or whichever was toggled last decides
+    /// The two builds install side by side, each with its own data directory.
+    /// They must not share a login entry, or whichever was toggled last decides
     /// what login starts.
     #[test]
     fn the_two_builds_do_not_share_one_entry() {
