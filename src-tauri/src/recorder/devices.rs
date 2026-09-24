@@ -178,8 +178,11 @@ mod imp {
 
     /// Reads a string out of a `PROPVARIANT` and releases it.
     ///
-    /// The windows-rs `PROPVARIANT` is the raw FFI struct with no `Drop`, so
-    /// it needs an explicit `PropVariantClear`. Going through
+    /// windows-rs 0.62 gives `PROPVARIANT` a `Drop` that calls
+    /// `PropVariantClear`, so the explicit clear below is belt and braces:
+    /// it leaves the value `VT_EMPTY`, and the clear on drop then has nothing
+    /// to free. (The p0c-audio spike is the case where that `Drop` bites: a
+    /// `VT_BLOB` pointing at the stack, #7.) Going through
     /// `PropVariantToStringAlloc` rather than reading the union directly
     /// means a device whose name isn't stored as `VT_LPWSTR` still converts
     /// instead of coming back empty.
@@ -195,8 +198,9 @@ mod imp {
         let out = unsafe { PropVariantToStringAlloc(&value) }
             .ok()
             .and_then(|p| unsafe { take_pwstr(p) });
-        // SAFETY: `value` is initialized and owned by us, and this is its
-        // only clear — the string above was copied out, not aliased.
+        // SAFETY: `value` is initialized and owned by us, and the string
+        // above was copied out, not aliased. The clear on drop that follows
+        // sees `VT_EMPTY` and frees nothing.
         let _ = unsafe { PropVariantClear(&mut value) };
         out
     }
