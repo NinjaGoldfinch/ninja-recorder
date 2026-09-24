@@ -10,6 +10,14 @@ Cargo.lock.orig
 # own line, and `spikes/` is the one place new packages appear.
 spikes/*/target/
 
+# What a spike run on the box writes next to the package: its reports, and
+# the captures they describe. The reports carry window titles and process
+# lists, and a loopback WAV can carry other people's voices.
+spikes/*/*.txt
+spikes/*/*.wav
+spikes/*/*.mp4
+spikes/*/*.progress
+
 # Tauri
 /src-tauri/target/
 /src-tauri/gen/
