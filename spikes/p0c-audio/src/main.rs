@@ -73,6 +73,65 @@ fn main() -> std::process::ExitCode {
     }
 }
 
+/// Linear amplitude to dBFS, and the fixed-width column both the per-second
+/// table and the summary print. Host-neutral so it is tested off Windows.
+mod level {
+    // Only the Windows capture calls these; elsewhere only the tests do.
+    #![cfg_attr(not(target_os = "windows"), allow(dead_code))]
+
+    /// 20·log10 of a linear amplitude, where 1.0 is full scale. Silence is
+    /// `-inf`, not a floor, so a second with nothing in it cannot be mistaken
+    /// for a very quiet one.
+    pub fn dbfs(amplitude: f64) -> f64 {
+        if amplitude <= 0.0 {
+            f64::NEG_INFINITY
+        } else {
+            20.0 * amplitude.log10()
+        }
+    }
+
+    /// A linear amplitude printed as dBFS, eight columns wide.
+    pub fn db_column(amplitude: f64) -> String {
+        let value = dbfs(amplitude);
+        if value.is_finite() {
+            format!("{value:>8.1}")
+        } else {
+            "    -inf".to_string()
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn full_scale_is_zero_dbfs() {
+            assert_eq!(db_column(1.0), "     0.0");
+        }
+
+        #[test]
+        fn the_amplitudes_the_table_used_to_print_are_converted() {
+            // #7's run printed these raw in the "peak dBFS" column.
+            assert_eq!(db_column(0.1), "   -20.0");
+            assert_eq!(db_column(0.4), "    -8.0");
+            assert_eq!(db_column(0.001), "   -60.0");
+        }
+
+        #[test]
+        fn silence_is_minus_infinity() {
+            assert_eq!(dbfs(0.0), f64::NEG_INFINITY);
+            assert_eq!(db_column(0.0), "    -inf");
+        }
+
+        #[test]
+        fn every_value_fills_the_column() {
+            for amplitude in [0.0, 1e-9, 0.001, 0.5, 1.0, 4.0] {
+                assert_eq!(db_column(amplitude).len(), 8, "{amplitude}");
+            }
+        }
+    }
+}
+
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use std::fs::File;
@@ -114,6 +173,8 @@ mod windows_impl {
     use windows::Win32::System::Variant::VT_BLOB;
     use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowThreadProcessId};
     use windows::core::{Interface, PCWSTR, Ref, Result as WinResult, implement, w};
+
+    use super::level::{db_column, dbfs};
 
     /// `WAVE_FORMAT_IEEE_FLOAT`, spelled out rather than imported: windows-rs
     /// puts it behind `Win32_Media_KernelStreaming`, and pulling in a whole
@@ -964,22 +1025,6 @@ mod windows_impl {
         discontinuities: u64,
     }
 
-    fn dbfs(amplitude: f64) -> f64 {
-        if amplitude <= 0.0 {
-            f64::NEG_INFINITY
-        } else {
-            20.0 * amplitude.log10()
-        }
-    }
-
-    fn fmt_db(value: f64) -> String {
-        if value.is_finite() {
-            format!("{value:>8.1}")
-        } else {
-            "    -inf".to_string()
-        }
-    }
-
     fn print_second(index: usize, s: &Second) {
         println!(
             "  {:>4}  {:>7}  {:>7}  {:>11}    {}    {}{}",
@@ -987,8 +1032,8 @@ mod windows_impl {
             s.packets,
             s.frames,
             s.silent_packets,
-            fmt_db(f64::from(s.peak)),
-            fmt_db(s.rms()),
+            db_column(f64::from(s.peak)),
+            db_column(s.rms()),
             if s.packets == 0 {
                 "   (no packets)"
             } else {
@@ -1128,8 +1173,8 @@ mod windows_impl {
         );
         println!(
             "peak / rms     {} / {} dBFS",
-            fmt_db(dbfs(f64::from(peak))).trim(),
-            fmt_db(dbfs(rms)).trim()
+            db_column(f64::from(peak)).trim(),
+            db_column(rms).trim()
         );
         println!(
             "seconds        {with_signal} of {seconds} above {SIGNAL_FLOOR_DBFS} dBFS, \
