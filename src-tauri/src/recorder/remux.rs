@@ -18,8 +18,14 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 /// Where the remux writes before it replaces the original.
+///
+/// **Deliberately not `.mp4`.** A crash mid-remux leaves this file beside the
+/// recording, and `db::reconcile` imports any `.mp4` it finds in the folder,
+/// so a name ending in `.mp4` would put a half-written copy in the library as
+/// an "unknown recording". Without the extension ffmpeg cannot infer the
+/// output format, which is why `faststart_args` passes `-f mp4`.
 pub fn tmp_path(video_path: &Path) -> PathBuf {
-    video_path.with_extension("faststart.tmp.mp4")
+    video_path.with_extension("faststart.tmp")
 }
 
 /// ffmpeg's arguments for remuxing `input` into `tmp`, for a file with
@@ -48,6 +54,9 @@ pub fn faststart_args(input: &Path, tmp: &Path, audio_tracks: usize) -> Vec<OsSt
         args.push(format!("-disposition:a:{track}").into());
         args.push(if track == 0 { "default" } else { "0" }.into());
     }
+    // The tmp name has no `.mp4` to infer the format from; see `tmp_path`.
+    args.push("-f".into());
+    args.push("mp4".into());
     args.push(tmp.into());
     args
 }
@@ -178,7 +187,8 @@ mod tests {
             strings(&args),
             [
                 "-y", "-i", "in.mp4", "-map", "0:v?", "-map", "0:a?", "-c", "copy",
-                "-movflags", "+faststart", "-disposition:a:0", "default", "out.tmp.mp4",
+                "-movflags", "+faststart", "-disposition:a:0", "default", "-f", "mp4",
+                "out.tmp.mp4",
             ]
         );
     }
@@ -195,7 +205,7 @@ mod tests {
                 "-disposition:a:1", "0",
                 "-disposition:a:2", "0",
                 "-disposition:a:3", "0",
-                "t.mp4",
+                "-f", "mp4", "t.mp4",
             ]
         );
         assert!(args.windows(2).any(|w| w == ["-map", "0:a?"]));
@@ -206,7 +216,7 @@ mod tests {
     fn the_tmp_file_sits_beside_the_recording() {
         assert_eq!(
             tmp_path(Path::new("/r/game.mp4")),
-            PathBuf::from("/r/game.faststart.tmp.mp4")
+            PathBuf::from("/r/game.faststart.tmp")
         );
     }
 

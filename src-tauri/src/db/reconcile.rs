@@ -81,6 +81,11 @@ pub fn recover_unfinished(db: &Db, ffmpeg: Option<&Path>) -> Result<RecoveryRepo
         // above everything since would be a lie the library sorts on.
         let finished_at = file_modified_millis(&metadata);
 
+        // A remux the dead daemon had running leaves its half-written output
+        // here. Nothing will ever finish it, and the remux below would only
+        // overwrite it.
+        remove_stale_remux_tmp(path);
+
         // Before the duration probe, so the probe reads the file the library
         // will play. Never fatal: the worst outcome is the file as the kill
         // left it, which is what recovery finished every row with before.
@@ -97,6 +102,15 @@ pub fn recover_unfinished(db: &Db, ffmpeg: Option<&Path>) -> Result<RecoveryRepo
     }
 
     Ok(report)
+}
+
+fn remove_stale_remux_tmp(path: &Path) {
+    let tmp = crate::recorder::remux::tmp_path(path);
+    match std::fs::remove_file(&tmp) {
+        Ok(()) => info!("db", "removed a stale remux temp file {}", tmp.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => warn!("db", "could not remove stale {}: {e}", tmp.display()),
+    }
 }
 
 /// What recovery does with a file a dead daemon left behind.
@@ -300,7 +314,19 @@ pub fn reconcile(
     Ok(report)
 }
 
+/// Builds before #233 named the remux's temp file `<stem>.faststart.tmp.mp4`,
+/// so one a crash left behind would pass the extension check below. The name
+/// is ours and never a recording, so it is refused by name.
+const LEGACY_REMUX_TMP_SUFFIX: &str = ".faststart.tmp.mp4";
+
 fn is_video_file(path: &Path) -> bool {
+    let legacy_tmp = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.to_lowercase().ends_with(LEGACY_REMUX_TMP_SUFFIX));
+    if legacy_tmp {
+        return false;
+    }
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| VIDEO_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
@@ -762,6 +788,42 @@ mod tests {
 
         assert_eq!(recover_unfinished(&db, None).unwrap().recovered, 1);
         assert_eq!(std::fs::read(&file).unwrap(), bytes, "left as the kill left it");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A crash mid-remux leaves the temp file beside the recording. It is a
+    /// half-written copy, never a recording, and must not be imported as one,
+    /// in the current name or the `.mp4` one builds before #233 used.
+    #[test]
+    fn a_leftover_remux_temp_file_is_not_imported() {
+        let db = Db::open_temporary().unwrap();
+        let dir = temp_dir("remux-tmp");
+        let recording = dir.join("game.mp4");
+        std::fs::write(crate::recorder::remux::tmp_path(&recording), b"half a remux").unwrap();
+        std::fs::write(dir.join("older.faststart.tmp.mp4"), b"half a remux").unwrap();
+        std::fs::write(dir.join("OLDER2.FASTSTART.TMP.MP4"), b"half a remux").unwrap();
+
+        let report = reconcile(&db, &dir, None).unwrap();
+        assert_eq!(report.imported, 0);
+        assert!(db.list_recordings().unwrap().is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn recovery_removes_a_stale_remux_temp_file() {
+        let db = Db::open_temporary().unwrap();
+        let dir = temp_dir("recover-stale-tmp");
+        let file = dir.join("recording-4.mp4");
+        std::fs::write(&file, b"partial").unwrap();
+        let tmp = crate::recorder::remux::tmp_path(&file);
+        std::fs::write(&tmp, b"half a remux").unwrap();
+        db.begin_recording(&file.to_string_lossy(), 1_000).unwrap();
+
+        assert_eq!(recover_unfinished(&db, None).unwrap().recovered, 1);
+        assert!(!tmp.exists());
+        assert!(file.exists(), "the recording itself is kept");
 
         std::fs::remove_dir_all(&dir).ok();
     }

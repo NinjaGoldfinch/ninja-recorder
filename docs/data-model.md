@@ -524,7 +524,8 @@ flowchart TB
     OPEN --> C0{"File still<br/>on disk?"}
     C0 -->|"no"| DROP0["Delete the row<br/><small>nothing to show, nothing to keep</small>"]
     C0 -->|"yes"| MTIME["Read the mtime<br/><small>before anything rewrites the file</small>"]
-    MTIME --> READ["mp4::summarize<br/><small>top-level boxes only, no ffmpeg</small>"]
+    MTIME --> STALE["Delete a stale *.faststart.tmp beside it<br/><small>a remux the dead daemon never finished</small>"]
+    STALE --> READ["mp4::summarize<br/><small>top-level boxes only, no ffmpeg</small>"]
     READ --> ACT{"recovery_action"}
     ACT -->|"Remux<br/><small>fragmented, at least<br/>one whole fragment</small>"| CUT{"Kill landed in<br/>a box other<br/>than mdat?"}
     CUT -->|"yes"| TRUNC["Cut the file at that box<br/><small>a half moof stops ffmpeg opening it</small>"]
@@ -544,7 +545,7 @@ flowchart TB
 ```mermaid
 flowchart TB
     START["reconcile(db, recordings_dir, ffmpeg)"] --> ROWS["list_recordings()<br/><small>finished rows only; unfinished ones<br/>are recover_unfinished's business</small>"]
-    START --> FILES["List *.mp4 / *.mkv in the recordings dir"]
+    START --> FILES["List *.mp4 / *.mkv in the recordings dir<br/><small>never a remux temp file: *.faststart.tmp,<br/>or *.faststart.tmp.mp4 from older builds</small>"]
     ROWS --> C1{"Row's file<br/>still exists?"}
     C1 -->|"no"| DROP["Delete the row<br/><small>user deleted the MP4</small>"]
     C1 -->|"yes"| KEEP["Leave the row alone"]
