@@ -99,6 +99,8 @@ const QUEUE_NAMES: Record<number, string> = {
   1700: "Arena",
   1710: "Arena",
   1900: "URF",
+  // Seen on real hardware in the 2026-09-24 verification.
+  2400: "ARAM Mayhem",
 };
 
 export function queueLabel(queue: number | null): string | null {
