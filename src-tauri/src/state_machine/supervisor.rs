@@ -1053,6 +1053,7 @@ impl Supervisor {
             (session.last_live_written.as_ref() != Some(&row)).then_some(row)
         };
         let recording_id = session.recording_id;
+        let polls = session.polls;
         // The session lock is dropped before publishing: `publish` runs the
         // sink inline, and holding this across it would put a `lib.rs` closure
         // inside the lock that every poll and the whole finalize contend for.
@@ -1143,6 +1144,20 @@ impl Supervisor {
             }
         }
 
+        // The capture worker's own output only moves when the recorder talks
+        // to it, and in the middle of a game nothing else does (#221). Asked
+        // every few polls rather than every one, since a quiet worker has
+        // nothing to hand over.
+        //
+        // `try_lock`, not `lock`: a recorder that is busy is being stopped or
+        // started, and either one reads the pipe itself. Waiting here would
+        // park this task for the length of a stop's remux.
+        if collect_output_due(polls)
+            && let Ok(mut recorder) = self.recorder.try_lock()
+        {
+            recorder.collect_output();
+        }
+
         for marker in added {
             // `None` even though a row now exists. The row is deliberately not
             // a library entry until it is finished, so handing out its id
@@ -1198,8 +1213,21 @@ impl Supervisor {
         // backend will write, which is enough for the row below: the finalize
         // corrects it by id from what `stop` actually reports.
         let expected_path = config.expected_output_path();
-        match self.recorder.lock().unwrap().start(config) {
-            Ok(()) => {
+        // The backend's name is read under the same lock as the start, so the
+        // line below names the one that started this recording rather than
+        // whatever is in the box a moment later. The guard is dropped before
+        // the `match`, which asks nothing more of the recorder.
+        let started = {
+            let mut recorder = self.recorder.lock().unwrap();
+            recorder.start(config).map(|()| recorder.backend_name())
+        };
+        match started {
+            Ok(backend) => {
+                // Said here as well as by the backend, so the log names what
+                // recorded this game without depending on libobs's own output
+                // reaching a file (#221).
+                info!("state_machine", "recording started: backend {backend}, file {}",
+                    expected_path.display());
                 // The row goes in now, unfinished, so that markers have
                 // somewhere to go for the rest of the game (#150). Before
                 // this, every marker lived in the `markers` vec below until
@@ -1679,6 +1707,19 @@ fn timestamp_millis() -> i64 {
         .unwrap_or(0)
 }
 
+/// How many polls apart `Recorder::collect_output` is called while recording:
+/// about every five seconds at the Live Client's 1 Hz. Often enough that a
+/// worker logging steadily (an audio device dropping and retrying, say) never
+/// comes near filling its pipe, and seldom enough to cost nothing.
+const COLLECT_OUTPUT_EVERY_POLLS: usize = 5;
+
+/// Whether this poll, the `polls`th of the recording, should collect the
+/// backend's output. The first poll does, so a worker that had a lot to say
+/// while starting hands it over straight away.
+fn collect_output_due(polls: usize) -> bool {
+    polls % COLLECT_OUTPUT_EVERY_POLLS == 1
+}
+
 #[cfg(test)]
 mod tests {
     //! `start_recording`/`stop_recording` are the one piece of this
@@ -1709,6 +1750,7 @@ mod tests {
     struct Counts {
         prepared: Arc<AtomicUsize>,
         released: Arc<AtomicUsize>,
+        collected: Arc<AtomicUsize>,
     }
 
     impl Counts {
@@ -1746,6 +1788,10 @@ mod tests {
 
         fn release(&mut self) {
             self.0.released.fetch_add(1, Ordering::Relaxed);
+        }
+
+        fn collect_output(&mut self) {
+            self.0.collected.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -1965,6 +2011,35 @@ mod tests {
         sup.sync_capture_backend(&GameState::ClientRunning);
         sup.sync_capture_backend(&GameState::ClientRunning);
         assert_eq!(counts.get().1, 0, "no release across a restart");
+    }
+
+    // --- The capture worker's output keeps moving (#221) -------------------
+
+    #[test]
+    fn output_is_collected_on_the_first_poll_and_every_fifth_after() {
+        let due: Vec<usize> = (1..=16).filter(|&p| collect_output_due(p)).collect();
+        assert_eq!(due, vec![1, 6, 11, 16]);
+    }
+
+    #[test]
+    fn a_recording_collects_the_backends_output_as_it_polls() {
+        let (sup, counts) = counting_supervisor();
+        sup.start_recording();
+        for second in 0..11 {
+            sup.on_snapshot(snapshot(60.0 + f64::from(second), &[]));
+        }
+        assert_eq!(counts.collected.load(Ordering::Relaxed), 3, "polls 1, 6 and 11");
+    }
+
+    #[test]
+    fn polls_before_capture_begins_collect_nothing() {
+        // Nothing is recording, so there is no session and no worker output
+        // this path is responsible for.
+        let (sup, counts) = counting_supervisor();
+        for second in 0..6 {
+            sup.on_snapshot(snapshot(f64::from(second), &[]));
+        }
+        assert_eq!(counts.collected.load(Ordering::Relaxed), 0);
     }
 
     fn test_supervisor() -> (Arc<Supervisor>, PathBuf) {

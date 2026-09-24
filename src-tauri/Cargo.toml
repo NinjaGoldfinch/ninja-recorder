@@ -113,6 +113,13 @@ minisign-verify = "0.2"
 # implementations of one rule (`daemon::Paths::resolve`). Already in the tree
 # through tauri; naming it here adds no crate.
 dirs = "6"
+# The facade the capture crates log through: `ipc-link` hands every line libobs
+# writes to the worker's stdout to `log::info!` (#221). This app does not log
+# through it (`log.rs`); `daemon::log_bridge` only installs a receiver so those
+# lines land in a file instead of being dropped. `std` is what provides
+# `set_boxed_logger`. Already in the tree through tauri and the fork, so naming
+# it adds no crate and no licence.
+log = { version = "0.4", features = ["std"] }
 # "net" and "io-util" are WS3.1's: the daemon's RPC server is a byte stream
 # (a named pipe on Windows, a Unix socket in its tests) framed with
 # `AsyncBufReadExt::lines`. "rt-multi-thread" is what gives `spawn_blocking`

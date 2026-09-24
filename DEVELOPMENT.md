@@ -1895,16 +1895,18 @@ instance we never initialize: it would compile, run, and capture nothing.
 The symbol being present in `libobs-sys` is what makes that look like a
 local change; it is not one.
 
-What the worker does do is write to stderr, via libobs's default handler.
-The fork's `ipc-link` spawns it with stdin and stdout piped, since those carry
-the JSON IPC protocol, and **stderr inherited**. So the messages already
-arrive at our stderr, which in a release build has no console behind it.
+What the worker does do is write through libobs's default handler, which
+splits by level: **errors to stderr, info and warnings to stdout.** The fork's
+`ipc-link` spawns it with stdin and stdout piped, since those carry the JSON
+IPC protocol, and **stderr inherited**. So the two halves arrive in different
+places.
 
-So `recorder::libobs::worker_log` points this process's stderr at
+The errors arrive at our stderr, which in a release build has no console
+behind it. So `recorder::libobs::worker_log` points this process's stderr at
 `logs/libobs.log` before the worker is spawned, and the child inherits it.
 No change to the fork, no IPC change, and, being a file rather than a pipe, no
-way to block the worker by failing to drain it, which the piped version
-would risk. One previous session is kept as `libobs.1.log`: appending
+way to block the worker by failing to drain it. One previous session is
+kept as `libobs.1.log`: appending
 forever grows unbounded, and truncating outright loses the session that
 crashed, which is the one anybody is looking for. A devtools build writes
 `libobs-devtools.log` and `libobs-devtools.1.log` instead, for the reason in
@@ -1914,6 +1916,34 @@ Only in builds with no console (`debug_assertions` is exactly the condition
 `main.rs` gates `windows_subsystem` on), because taking stderr away from a
 `tauri:dev` terminal would be a downgrade. `NINJA_RECORDER_LIBOBS_LOG=1`
 forces it on so the path is exercisable from a dev build.
+
+The info and warnings took longer to find, because the first version of this
+assumed the default handler wrote everything to stderr, and a log holding
+errors and ffmpeg output looked plausible (#221). They come up the IPC pipe
+mixed in with the replies. `ipc-link` reads each line while a command waits
+for its reply and hands any line that is not JSON to `log::info!("[rec]: ...")`
+in the daemon, which had installed no `log` logger, so every one was dropped:
+module loads, "not loaded" warnings, the encoder libobs settled on.
+`daemon::log_bridge` is that logger. It writes `[rec]:` lines into the libobs
+log through `worker_log`, beside the errors, so libobs's output still reads as
+one file. It sends the capture crates' other records to `daemon.log`, and
+lets other crates through only at warn and above, so an HTTP or TLS stack's
+info lines cannot rotate the session's real errors out. This does not make
+`log` the app's logging API: nothing in this crate logs through it, and "Why
+not `tracing`" below still holds. The facade is only a way in for crates that
+already use it.
+
+Being a pipe, stdout brings back the risk the file avoided. The lines move
+only when a command is in flight, and mid-game nothing sends one, so a worker
+that logs steadily would fill the pipe and block on its next write, on
+whichever libobs thread made it. `IpcLinkMaster::drain_logs` is not the answer: it is not
+reachable through `libobs_recorder::Recorder`, and it reads to end of file, so
+on a live worker it never returns. Instead `Recorder::collect_output` sends
+`IsRecording` every fifth Live Client poll while recording, which reads
+whatever is queued on the way to the reply. The answer is used too: a worker
+that says it is not recording mid-game gets one warning. The daemon also logs
+the encoder it chose and the backend that started each recording itself, so
+neither depends on libobs's output arriving.
 
 The costs, stated: the lines land in their own file rather than interleaved
 with ours, and they carry no level to filter on, because the formatting is

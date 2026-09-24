@@ -2516,6 +2516,7 @@ dependencies = [
  "fs2",
  "futures-util",
  "libobs-recorder",
+ "log",
  "minisign-verify",
  "muda",
  "native-tls",

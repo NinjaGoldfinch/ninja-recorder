@@ -17,7 +17,9 @@
 //! we expect on real NVENC/AMF/QSV hardware, does Vanguard tolerate it.
 
 mod window;
-mod worker_log;
+// `pub(crate)` for `daemon::log_bridge`, which writes the worker's stdout
+// lines into the file this module points its stderr at (#221).
+pub(crate) mod worker_log;
 
 use crate::{info, warn};
 use super::audio::{AudioLayout, AudioSourceKind};
@@ -78,6 +80,10 @@ pub struct LibObsRecorder {
     /// must never fail just because this optional finishing step is
     /// unavailable.
     ffmpeg_path: Option<PathBuf>,
+    /// Whether `collect_output` has already warned about this recording, so
+    /// a worker that has gone wrong costs one line rather than one every few
+    /// seconds for the rest of the game. Cleared by `start`.
+    collect_warned: bool,
 }
 
 impl LibObsRecorder {
@@ -99,6 +105,7 @@ impl LibObsRecorder {
             active_path: None,
             active_audio: None,
             ffmpeg_path,
+            collect_warned: false,
         }
     }
 
@@ -196,18 +203,24 @@ impl Recorder for LibObsRecorder {
         settings.set_audio_tracks(to_obs_tracks(&audio));
 
         let obs = self.ensure_up()?;
-        let encoder = obs
+        let available = obs
             .available_encoders()
-            .map_err(|e| RecorderError::Backend(e.to_string()))?
-            .into_iter()
-            .find(is_acceptable_encoder)
-            .ok_or_else(|| {
-                RecorderError::Backend(
-                    "no hardware H.264 encoder available (NVENC/AMD AMF/Intel QSV) — refusing to fall \
-                     back to software x264 on the gameplay machine, see DEVELOPMENT.md §2.4"
-                        .into(),
-                )
-            })?;
+            .map_err(|e| RecorderError::Backend(e.to_string()))?;
+        let Some(encoder) = available.iter().copied().find(is_acceptable_encoder) else {
+            // The list goes in the log with the refusal: "no encoder" on a
+            // machine with an NVIDIA card is a failed plugin load, and this
+            // is the line that says which encoders libobs did find.
+            warn!("recorder", "no acceptable encoder among {available:?}");
+            return Err(RecorderError::Backend(
+                "no hardware H.264 encoder available (NVENC/AMD AMF/Intel QSV) — refusing to fall \
+                 back to software x264 on the gameplay machine, see DEVELOPMENT.md §2.4"
+                    .into(),
+            ));
+        };
+        // Ours, not libobs's: the choice is made here from the list, so it is
+        // visible whether or not the worker's own output reaches a file
+        // (#221).
+        info!("recorder", "encoder: {encoder:?} (available: {available:?})");
         settings.set_encoder(encoder);
 
         obs.configure(&settings)
@@ -217,6 +230,7 @@ impl Recorder for LibObsRecorder {
 
         self.active_path = Some(output_path);
         self.active_audio = Some(audio);
+        self.collect_warned = false;
         Ok(())
     }
 
@@ -281,6 +295,39 @@ impl Recorder for LibObsRecorder {
             return;
         }
         self.tear_down();
+    }
+
+    /// Asks the worker whether it is recording, for the side effect (#221).
+    ///
+    /// `ipc-link` only reads the worker's stdout inside a command, while it
+    /// waits for the reply, and every non-JSON line it passes over on the way
+    /// is libobs output that `daemon::log_bridge` writes to the libobs log.
+    /// `IsRecording` is the cheapest command there is, so it is the one sent.
+    ///
+    /// Not `IpcLinkMaster::drain_logs`, which is the fork's name for this: it
+    /// is not reachable through `libobs_recorder::Recorder`, and it reads
+    /// until end of file, so on a live worker it would never return. The fork
+    /// only calls it after `Exit`.
+    ///
+    /// The answer is worth having too: a worker that says it is not recording
+    /// mid-game has lost the output, and nothing else would notice until the
+    /// file came up short.
+    fn collect_output(&mut self) {
+        if self.active_path.is_none() {
+            return;
+        }
+        let Some(obs) = self.inner.as_mut() else {
+            return;
+        };
+        let problem = match obs.is_recording() {
+            Ok(true) => return,
+            Ok(false) => "the capture worker says it is not recording".to_string(),
+            Err(e) => format!("could not reach the capture worker: {e}"),
+        };
+        if !self.collect_warned {
+            self.collect_warned = true;
+            warn!("recorder", "{problem}");
+        }
     }
 }
 

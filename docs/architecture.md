@@ -98,6 +98,7 @@ flowchart TB
 | `daemon/spawn.rs` | Connecting to the daemon, and starting one when nothing answers; and the reverse, the daemon starting a UI | `connect_or_start`, `start_ui` |
 | `daemon/pump.rs` | The tray and the Win32 message loop it needs | `run`, `should_confirm_quit` |
 | `daemon/notify.rs` | Desktop notifications, from the process that noticed | `notify`, `on_supervisor_event` |
+| `daemon/log_bridge.rs` | The receiver for the `log` facade the capture crates write through: libobs's info and warnings, which arrive as `ipc-link`'s `[rec]:` lines, go to the libobs log file, the capture crates' other records to `daemon.log`, and anything else only at warn or above | `install`, `route` |
 | `daemon/update.rs` | The update check, and the download-verify-install path | `spawn_checks`, `install` |
 | `ui/client.rs` | The UI's side of the pipe: reply routing, reconnect, version-skew refusal | `spawn`, `Client` |
 | `ui/link.rs` | That client hung off a Tauri app: the `rpc_call` proxy, and the daemon's pushes re-emitted to the webview | `attach`, `rpc_call`, `rpc_subscribe` |
@@ -142,7 +143,7 @@ behind a three-method trait and nothing above it knows libobs exists.
 
 ```mermaid
 flowchart TB
-    SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release"}
+    SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release · collect_output"}
     T -->|"libobs, #[cfg(windows)]"| L["LibObsRecorder<br/><small>WGC window capture,<br/>NVENC/AMF/QSV H.264,<br/>one AAC track per audio source,<br/>fragmented MP4 + faststart remux</small>"]
     T -.->|"own, WS1.6"| O["recorder/own/<br/><small>Option B: WGC → D3D11 →<br/>Media Foundation. Empty</small>"]
     T -->|"libobs, everything else"| S["StubRecorder<br/><small>copies fixtures/sample.mp4</small>"]
@@ -163,6 +164,14 @@ supervisor warms it when the League client appears and drops it when the client
 goes away, off the resulting state rather than off individual actions
 ([DEVELOPMENT.md §2.2](../DEVELOPMENT.md#22-the-recorder-trait)). Both default
 to no-ops, so `StubRecorder` ignores them entirely.
+
+`collect_output` is the third default no-op, and the supervisor calls it every
+fifth Live Client poll while a recording runs. The libobs worker's info and
+warnings come up its IPC pipe and are only read while a command waits for a
+reply, so the libobs backend answers it with an `IsRecording` round trip: that
+moves them into the libobs log mid-game, and a worker that says it has stopped
+gets one warning. `try_lock`, so a recorder busy starting or stopping is
+skipped rather than waited for (#221).
 
 `start` takes the user's audio preset and `stop` reports the track layout it
 actually wrote: reported, not assumed, because a microphone can be unplugged
