@@ -104,13 +104,6 @@ impl AppState {
     }
 }
 
-fn recordings_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
-    app.path()
-        .app_data_dir()
-        .map(|dir| dir.join("recordings"))
-        .map_err(|e| e.to_string())
-}
-
 /// The bundled ffmpeg, if it was staged into this build.
 ///
 /// Optional by design and in two places at once: `LibObsRecorder::stop` uses
@@ -610,9 +603,40 @@ pub fn run() {
         .setup(move |app| {
             // The log is already open — `run` does it above, before the
             // builder, so that everything between there and here is recorded
-            // too. `app_data_dir()` below resolves to the same directory it
-            // was opened under, which `Paths::resolve` is written to
-            // guarantee and `daemon`'s identifier test pins.
+            // too.
+            //
+            // **Every data path here comes from `Paths::resolve`, not from
+            // `app.path().app_data_dir()`.** It is the function the daemon
+            // uses, so this process reads the library its own build's daemon
+            // writes. Tauri's `app_data_dir()` follows the identifier in the
+            // config the binary was *compiled* with, and a plain
+            // `cargo build --features devtools` (the smoke tests) never layers
+            // `tauri.devtools.conf.json` on, so asking Tauri would put a
+            // devtools UI in the release build's folder (#222).
+            let paths = match daemon::Paths::resolve() {
+                Ok(paths) => paths,
+                // Nothing works without it: no library, no log, and no pipe
+                // to find the daemon on. Leave with a reason rather than
+                // returning `Err` into the setup hook, which aborts with a
+                // backtrace (see the database case below).
+                Err(e) => {
+                    error!("ui", "cannot resolve the app data directory: {e}");
+                    std::process::exit(1);
+                }
+            };
+            // Tauri's identifier still decides the asset-protocol scope, so a
+            // mismatch means the player cannot load a recording. Said once,
+            // here, rather than as a blank video later.
+            if app.config().identifier != daemon::IDENTIFIER {
+                warn!(
+                    "paths",
+                    "this binary was built with identifier {} but its data lives under {}; \
+                     build it with the matching Tauri config (tauri.devtools.conf.json for \
+                     --features devtools) or the player cannot load recordings",
+                    app.config().identifier,
+                    paths.data.display()
+                );
+            }
 
             // **The UI links no capture backend.** It used to build the real
             // one here, which is what made killing the window kill the
@@ -635,11 +659,11 @@ pub fn run() {
             ));
 
             let recorder: Arc<Mutex<Box<dyn Recorder>>> = Arc::new(Mutex::new(backend));
-            let dir = recordings_dir(app.handle())?;
+            let dir = paths.recordings.clone();
 
             // Must happen before the supervisor starts polling — see
             // fixtures::set_base_dir's doc comment.
-            fixtures::set_base_dir(app.path().app_data_dir()?.join("fixtures"));
+            fixtures::set_base_dir(paths.fixtures.clone());
             fixtures::init_from_env();
             // Worth a line: capture is on by default until v1.0 and writes
             // a file per response, so a user should be able to find out
@@ -649,11 +673,11 @@ pub fn run() {
                 info!(
                     "fixtures",
                     "capturing API responses to {}",
-                    app.path().app_data_dir()?.join("fixtures").display()
+                    paths.fixtures.display()
                 );
             }
 
-            let db_path = app.path().app_data_dir()?.join("library.sqlite3");
+            let db_path = paths.db.clone();
             std::fs::create_dir_all(db_path.parent().expect("db path always has a parent"))?;
             // **Read-only, and SQLite is what enforces it** (§4.4). Every
             // command that could write is forwarded to the daemon, and the
@@ -731,7 +755,7 @@ pub fn run() {
                 supervisor,
                 db,
                 dir,
-                app.path().app_data_dir()?.join("ddragon"),
+                paths.assets.clone(),
                 ffmpeg_path(app.handle()),
             );
             wire_updates(app.handle(), &mut ctx);
@@ -748,13 +772,7 @@ pub fn run() {
             // The link to the daemon, and with it everything this process used
             // to do for itself. Starts connecting immediately and starts a
             // daemon if none answers; `rpc` below is a forward across it.
-            match daemon::Paths::resolve() {
-                Ok(paths) => ui::link::attach(app.handle(), daemon::rpc::endpoint(&paths.data)),
-                // Nothing works without it: every command the frontend makes
-                // goes over this. Said once, loudly, rather than as a failure
-                // per call.
-                Err(e) => error!("ui", "cannot work out where the daemon listens: {e}"),
-            }
+            ui::link::attach(app.handle(), daemon::rpc::endpoint(&paths.data));
 
             // **No tray here.** The daemon owns it (§3.1, WS3.3), and this
             // process building a second one meant two identical icons in the

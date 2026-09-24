@@ -310,15 +310,37 @@ than a fast exit.
 on Windows, and on Unix a failed `bind` followed by a probe distinguishes a live
 daemon from a socket file its owner left behind. The address itself is
 `rpc::endpoint`, scoped by build identity, because a devtools build and a
-release build share `app_data_dir()` and must not also share a pipe.
+release build must not share a pipe. It is `ninja-recorder.com.ninjarecorder.app.release`
+or `...devtools`, the same names every shipped build has bound.
 
 **No Tauri in the daemon.** It builds no `App`, so `daemon::Paths::resolve`
-answers what the UI asks an `AppHandle`: `dirs::data_dir()` joined with the
+answers what the UI would ask an `AppHandle`: `dirs::data_dir()` joined with the
 identifier, which is what Tauri's own `app_data_dir()` does, and the executable's
-directory for bundled resources. `daemon::IDENTIFIER` is checked against
-`tauri.conf.json` by a test, because a mismatch would not crash. It would give
-the daemon a different database in a different folder and have it record
-perfectly into a library the UI cannot see.
+directory for bundled resources. **The UI resolves its data paths through the
+same function**, not through `app.path()`, so one build's two processes cannot
+disagree about where the library is.
+
+**Each build has its own data folder** (#222). `daemon::IDENTIFIER` is
+`com.ninjarecorder.app` in a release build and `com.ninjarecorder.app.devtools`
+under `--features devtools`, matching `identifier` in `tauri.conf.json` and in
+the `tauri.devtools.conf.json` overlay. A test pins both, because a mismatch
+would not crash: the asset-protocol scope (`$APPDATA/recordings/*`) would name
+a folder the library is not in, and the player could load nothing. Everything
+under the folder is per build:
+
+| Path, under `%APPDATA%\<identifier>\` | What |
+|---|---|
+| `library.sqlite3` | the database, and with it the resume sweep's rows |
+| `recordings/` | every recording, and `recordings/audio-tracks/` |
+| `fixtures/` | captured LCU / Live Client responses |
+| `ddragon/` | the Data Dragon art cache |
+| `logs/` | `daemon.log` / `ui.log` (release), `daemon-devtools.log` / `ui-devtools.log` (devtools), and the libobs worker's log |
+| `daemon.<build>.sock` | the endpoint, on Unix only |
+
+The recordings folder is not configurable, so the two builds cannot be pointed
+at one folder by a setting. Tauri also keys the WebView2 profile
+(`%LOCALAPPDATA%\<identifier>`), the id toasts are attributed to and the
+uninstaller's "delete app data" option off the identifier, so those split too.
 
 | Frame | Direction | Carries |
 |---|---|---|

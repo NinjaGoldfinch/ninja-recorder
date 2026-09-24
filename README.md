@@ -129,7 +129,10 @@ it, so there is nothing to choose.
 **`tauri:dev`, not `tauri dev`.** The colon passes `--features devtools`,
 which compiles in the dev portal: a second window that seeds the library,
 drives the state machine without League running, dry-runs retention and runs
-raw SQL. Most of the backend can only be exercised through it.
+raw SQL. Most of the backend can only be exercised through it. It is a
+devtools build, so it keeps its own library under
+`%APPDATA%\com.ninjarecorder.app.devtools`, apart from an installed release
+([docs/dev-portal.md](docs/dev-portal.md#it-has-its-own-library)).
 
 ### The gates, as CI runs them
 

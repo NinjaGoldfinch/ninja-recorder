@@ -325,13 +325,16 @@ where
 
 /// Which build this is, as it appears in the endpoint name.
 ///
-/// `tauri.devtools.conf.json` overrides `productName` but **not**
-/// `identifier`, so a devtools build and a release build already share
-/// `app_data_dir()`, the database and the recordings folder. One process can
-/// survive that. Two daemons cannot: they would bind the same pipe, and
-/// whichever started first would silently own the other's clients — a dev
-/// portal driving the release daemon's recorder, or the reverse. Scoping the
-/// name by build identity is what keeps them apart (implementation plan §4.2).
+/// Two daemons, one from each build, must not bind the same pipe: whichever
+/// started first would silently own the other's clients — a dev portal
+/// driving the release daemon's recorder, or the reverse. Scoping the name by
+/// build identity is what keeps them apart (implementation plan §4.2).
+///
+/// The builds have had separate data folders since #222, but the pipe name
+/// still carries the release identifier and this suffix rather than each
+/// build's own identifier: it is the single-instance lock, and renaming it
+/// would let an already-running daemon of the same build go unnoticed by the
+/// next one.
 pub(crate) const BUILD: &str = if cfg!(feature = "devtools") { "devtools" } else { "release" };
 
 /// The address the daemon binds and a client connects to.
@@ -345,10 +348,10 @@ pub fn endpoint(data_dir: &std::path::Path) -> std::path::PathBuf {
         let _ = data_dir;
         // `\\.\pipe\` is the only namespace named pipes live in, and the name
         // after it is flat: no directories, and it may not contain a
-        // backslash. `IDENTIFIER` carries dots, which are fine.
+        // backslash. The identifier carries dots, which are fine.
         std::path::PathBuf::from(format!(
             r"\\.\pipe\ninja-recorder.{}.{BUILD}",
-            crate::daemon::IDENTIFIER
+            crate::daemon::RELEASE_IDENTIFIER
         ))
     }
     #[cfg(unix)]
@@ -892,9 +895,11 @@ mod tests {
         }
     }
 
-    /// The name carries the identifier *and* the build, because a devtools
-    /// build and a release build share `app_data_dir()` and would otherwise
-    /// share this too — a dev portal driving the release daemon's recorder.
+    /// The name carries the app *and* the build, because a devtools build and
+    /// a release build must not share a pipe — a dev portal driving the
+    /// release daemon's recorder. On Windows the name is exactly the one every
+    /// shipped build has bound, so the single-instance check still sees a
+    /// running daemon of the same build across an upgrade.
     #[test]
     fn the_endpoint_is_scoped_by_build_identity() {
         let endpoint = endpoint(std::path::Path::new("/tmp/data"));
@@ -910,7 +915,11 @@ mod tests {
         #[cfg(windows)]
         {
             assert!(name.starts_with(r"\\.\pipe\"), "a named pipe lives in the pipe namespace: {name}");
-            assert!(name.contains(crate::daemon::IDENTIFIER), "the endpoint must name the app: {name}");
+            assert_eq!(
+                name,
+                format!(r"\\.\pipe\ninja-recorder.com.ninjarecorder.app.{BUILD}"),
+                "the pipe name is the single-instance lock and must not move"
+            );
         }
         #[cfg(unix)]
         {

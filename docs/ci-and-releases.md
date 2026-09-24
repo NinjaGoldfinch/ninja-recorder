@@ -292,8 +292,9 @@ startup, starts a daemon when none is listening, and completes a handshake over
 the pipe. `ui::link` logs the connection's health, so "daemon connection:
 Connected" in the UI's log is WS3.4's whole path proving itself: window
 process, spawn, pipe, hello. CI builds with `devtools`, so that file is
-`ui-devtools.log`; both scripts take `-Build release` for a release binary,
-which writes `ui.log` and `daemon.log` instead (#202).
+`ui-devtools.log` under `%APPDATA%\com.ninjarecorder.app.devtools\logs`; both
+scripts take `-Build release` for a release binary, which writes `ui.log` and
+`daemon.log` under `%APPDATA%\com.ninjarecorder.app\logs` instead (#202, #222).
 
 It was added because of the failure it is shaped around. A UI that dies before
 `log::init` leaves no log, and a windowed build throws away the stderr that

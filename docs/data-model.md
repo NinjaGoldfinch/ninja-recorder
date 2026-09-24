@@ -4,8 +4,12 @@ SQLite for metadata, MP4 files on disk for video. The files are the source of
 truth: a row without its file is dropped on scan, and a file without a row is
 imported. The library must survive the user rearranging their own folder.
 
-One database, in the Tauri app data directory, opened via `rusqlite` with the
-`bundled` feature so no system SQLite is required. Schema changes go through
+One database per build, `library.sqlite3` in the app data directory
+(`%APPDATA%\com.ninjarecorder.app`, or `com.ninjarecorder.app.devtools` for a
+devtools build, #222), opened via `rusqlite` with the
+`bundled` feature so no system SQLite is required. The recordings folder sits
+beside it, so the files-as-truth rules below apply per build: the devtools
+build's reconcile never sees the release build's files, and the reverse. Schema changes go through
 `rusqlite_migration`: **append a migration, never edit an existing one**.
 
 ---

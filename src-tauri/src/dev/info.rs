@@ -2,7 +2,6 @@
 
 use crate::{db, retention, state_machine, AppState};
 use serde::Serialize;
-use tauri::Manager;
 
 #[derive(Serialize)]
 pub struct DevEnvInfo {
@@ -28,7 +27,9 @@ pub struct DevEnvInfo {
 
 #[tauri::command]
 pub fn dev_env_info(state: tauri::State<AppState>, app: tauri::AppHandle) -> Result<DevEnvInfo, String> {
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    // `Paths::resolve`, the function both processes use, so this shows the
+    // folder the library is really in rather than what Tauri's config says.
+    let paths = crate::daemon::Paths::resolve().map_err(|e| e.to_string())?;
     let repo_fixtures = repo_fixtures_dir();
 
     Ok(DevEnvInfo {
@@ -44,13 +45,13 @@ pub fn dev_env_info(state: tauri::State<AppState>, app: tauri::AppHandle) -> Res
             .map_err(|e| e.to_string())?
             .backend_name(),
         recordings_dir: state.recordings_dir.display().to_string(),
-        db_path: app_data_dir.join("library.sqlite3").display().to_string(),
+        db_path: paths.db.display().to_string(),
         fixtures_dir: crate::fixtures::base_dir().map(|d| d.display().to_string()),
         sample_mp4_present: repo_fixtures
             .as_ref()
             .is_some_and(|d| d.join("sample.mp4").exists()),
         repo_fixtures_dir: repo_fixtures.map(|d| d.display().to_string()),
-        app_data_dir: app_data_dir.display().to_string(),
+        app_data_dir: paths.data.display().to_string(),
         lockfile_override: std::env::var("NINJA_RECORDER_LOCKFILE_PATH").ok(),
         fixture_recording: crate::fixtures::enabled(),
     })
@@ -151,7 +152,7 @@ pub fn dev_open_data_dir(
 
     let path = match which.as_str() {
         "recordings" => state.recordings_dir.clone(),
-        "app_data" => app.path().app_data_dir().map_err(|e| e.to_string())?,
+        "app_data" => crate::daemon::Paths::resolve().map_err(|e| e.to_string())?.data,
         "fixtures" => crate::fixtures::base_dir()
             .ok_or_else(|| "fixtures dir not initialized".to_string())?,
         "repo_fixtures" => {
