@@ -78,7 +78,11 @@ flowchart TB
 | `recorder/mod.rs` | The `Recorder` trait and its config/error types | `Recorder`, `RecordConfig` |
 | `recorder/backend.rs` | The `capture_backend` setting, and the pure choice of which backend to build from it | `CaptureBackend`, `choose`, `construct`, `Backends` |
 | `recorder/libobs/` | Windows capture backend (WGC + hardware encode) | `LibObsRecorder` |
-| `recorder/own/` | Option B, the target backend (WGC → D3D11 → Media Foundation). Empty until WS1.6 | — |
+| `recorder/own/` | Option B, the target backend (WGC → D3D11 → Media Foundation), being built through WS1.6. Not constructible yet: nothing in `recorder/backend.rs` reaches it | — |
+| `recorder/own/clock.rs` | The video tick grid on QPC, and placing audio packets on it: drift measured, corrected by slipping frames, or trusted from the device count when a source has no QPC stamps | `tick_time`, `ticks_due`, `Aligner` |
+| `recorder/own/pcm.rs` | Endpoint sample formats to stereo i16 for an encoder, or f32 for the mixer | `to_stereo_i16`, `to_stereo_f32`, `f32_to_i16` |
+| `recorder/own/select.rs` | Which H.264 encoder: hardware by adapter vendor (NVIDIA → AMD → Intel), the software MFT only as a marked fallback; and the Windows build floor (20348) | `rank`, `Choice`, `availability` |
+| `recorder/own/win/` | Everything that calls Windows, and the only part of `own/` gated to it. Empty until #236 | — |
 | `recorder/stub.rs` | Non-Windows dev backend that copies a fixture MP4 | `StubRecorder` |
 | `ddragon.rs` | Champion art from Data Dragon, fetched on first use and cached on disk | `champion_icon` |
 | `db/mod.rs` | Schema, migrations, every query | `Db` |
@@ -145,7 +149,7 @@ behind a three-method trait and nothing above it knows libobs exists.
 flowchart TB
     SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release · collect_output"}
     T -->|"libobs, #[cfg(windows)]"| L["LibObsRecorder<br/><small>WGC window capture,<br/>NVENC/AMF/QSV H.264,<br/>one AAC track per audio source,<br/>fragmented MP4 + faststart remux</small>"]
-    T -.->|"own, WS1.6"| O["recorder/own/<br/><small>Option B: WGC → D3D11 →<br/>Media Foundation. Empty</small>"]
+    T -.->|"own, WS1.6"| O["recorder/own/<br/><small>Option B: WGC → D3D11 →<br/>Media Foundation. Pure core only,<br/>not constructible</small>"]
     T -->|"libobs, everything else"| S["StubRecorder<br/><small>copies fixtures/sample.mp4</small>"]
     T -->|"chosen but not buildable"| F["FailedRecorder<br/><small>refuses every start,<br/>with the reason</small>"]
     style T fill:#ede7f6,stroke:#5e35b1
