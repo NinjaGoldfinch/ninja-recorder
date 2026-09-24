@@ -12,6 +12,9 @@ pub mod libobs;
 // platform so its pure core is tested everywhere; only `own::win` is gated to
 // Windows.
 pub mod own;
+// The faststart remux. Not behind a backend's `cfg`: startup recovery
+// remuxes a killed recording whichever backend wrote it.
+pub mod remux;
 // Also compiled on Windows under `cfg(test)`: `state_machine::supervisor`'s
 // unit tests use `StubRecorder` as a platform-agnostic dummy `Recorder`
 // regardless of which real backend the current platform ships.

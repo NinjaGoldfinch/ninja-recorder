@@ -2602,9 +2602,13 @@ What the run leaves for WS1.6, none of which reopens the gate:
   spike asked for it, and #219 tracks the change.
 - **A crashed recording needs the remux before it can be scrubbed.** The killed
   file plays, but with no `mfra` it has no scrub bar until faststart has run.
-  Startup recovery (`db::reconcile::recover_unfinished`) only probes the
-  duration today and does not remux, so a recovered Option B file would reach
-  the library unscrubbable unless recovery learns to remux it.
+  **Addressed by #233**, for both backends: startup recovery
+  (`db::reconcile::recover_unfinished`) now reads the file's boxes and runs
+  the shared `recorder::remux` before the duration probe. One thing the
+  spike's files did not show: a kill that lands inside a `moof` leaves a file
+  ffmpeg refuses to open at all, so recovery cuts that half box off first.
+  Whether the recovered file scrubs in the review player is still a Windows
+  check ([windows-verification.md](docs/windows-verification.md) §4.1).
 - **The resampler has little to correct.** Raw drift was −0.2 ppm, at worst
   −0.27 ms over ten minutes, and the spike's single-sample slips held the
   written figure at 0.016 frames.

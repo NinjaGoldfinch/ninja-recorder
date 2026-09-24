@@ -29,7 +29,7 @@ use libobs_recorder::settings::{
     RecorderSettings, Resolution, Window,
 };
 use libobs_recorder::Recorder as LibObs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 use window::{WINDOW_CLASS, WINDOW_PROCESS, WINDOW_TITLE};
 
@@ -257,11 +257,12 @@ impl Recorder for LibObsRecorder {
         // deliberately crash-safe (no finalize step needed, so a libobs
         // crash mid-game doesn't corrupt the file) but with no upfront
         // seek index, which makes most players — including the review
-        // UI's own WebView2 `<video>` — unable to scrub it reliably. Only
-        // worth fixing up now, on a clean stop; a stream-copy remux is
-        // fast and lossless, just rewriting the container's index.
+        // UI's own WebView2 `<video>` — unable to scrub it reliably. A clean
+        // stop fixes it up here; a killed recording is fixed up by startup
+        // recovery instead (`db::reconcile::recover_unfinished`), through the
+        // same `recorder::remux`.
         if let Some(ffmpeg_path) = &self.ffmpeg_path
-            && let Err(e) = remux_faststart(ffmpeg_path, &path, audio.tracks.len())
+            && let Err(e) = super::remux::remux_faststart(ffmpeg_path, &path, audio.tracks.len())
         {
             warn!(
                 "recorder",
@@ -363,59 +364,6 @@ fn to_obs_tracks(layout: &AudioLayout) -> Vec<ObsAudioTrack> {
             sources: track.sources.iter().filter_map(|&i| sources.get(i).cloned()).collect(),
         })
         .collect()
-}
-
-/// Stream-copies `video_path` through ffmpeg with `-movflags +faststart`
-/// so the `moov` (seek index) ends up at the front of the file instead of
-/// wherever the fragmented writer left it, then atomically replaces the
-/// original. `-c copy` means no re-encode — this only rewrites container
-/// metadata, so it's a fraction of a second even for a long recording.
-fn remux_faststart(
-    ffmpeg_path: &Path,
-    video_path: &Path,
-    audio_track_count: usize,
-) -> Result<(), String> {
-    let tmp_path = video_path.with_extension("faststart.tmp.mp4");
-
-    let mut command = crate::ffmpeg_command(ffmpeg_path);
-    command
-        .arg("-y") // overwrite tmp_path without prompting if it's left over from a previous crash
-        .arg("-i")
-        .arg(video_path)
-        // Without these, ffmpeg's *default* stream selection applies: one
-        // video and one audio stream, the "best" of each. On a multi-track
-        // recording that silently drops every stem, and the rename below
-        // makes it permanent. `0:a?` rather than `0` also skips any
-        // data/unknown stream without needing `-ignore_unknown`, and the
-        // `?` keeps an audio-less file from failing outright.
-        .args(["-map", "0:v?", "-map", "0:a?"])
-        .args(["-c", "copy", "-movflags", "+faststart"]);
-
-    // obs-ffmpeg-mux never sets AV_DISPOSITION_DEFAULT, so without this it
-    // is ambiguous which track a player picks. Track 0 is the combined mix
-    // and must be the one that plays by default.
-    for track in 0..audio_track_count.max(1) {
-        command
-            .arg(format!("-disposition:a:{track}"))
-            .arg(if track == 0 { "default" } else { "0" });
-    }
-
-    let output = command
-        .arg(&tmp_path)
-        .output()
-        .map_err(|e| format!("failed to launch ffmpeg at {}: {e}", ffmpeg_path.display()))?;
-
-    if !output.status.success() {
-        let _ = std::fs::remove_file(&tmp_path);
-        return Err(format!(
-            "ffmpeg exited with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-
-    std::fs::rename(&tmp_path, video_path)
-        .map_err(|e| format!("failed to replace original file with remuxed one: {e}"))
 }
 
 fn wait_for_window_size(max_attempts: u32, interval: Duration) -> Option<Resolution> {
