@@ -1002,10 +1002,20 @@ modes here are silent, and the app's own UI will not show you most of them.
       within a few seconds.
 - [ ] **`logs/libobs.log` exists and has content after a capture.** The
       worker's stderr is redirected into it before the process spawns
-      (#69); confirm libobs's own startup lines, the encoder it chose and
-      the adapter it picked are all in there, and that the dev portal's Log
-      panel can select and read the file. (A devtools build's worker writes
-      `libobs-devtools.log` instead; see the #202 row.)
+      (#69), and its stdout lines are added by the daemon's `log` bridge
+      (#221): libobs writes errors to stderr but info and warnings to
+      stdout. Confirm libobs's own startup lines (`info: ...`), the encoder
+      it chose and the adapter it picked are all in there, as well as the
+      `error: ...` lines, and that the dev portal's Log panel can select and
+      read the file. Before #221 only errors and ffmpeg output reached it.
+      (A devtools build's worker writes `libobs-devtools.log` instead; see
+      the #202 row.)
+- [ ] **Worker lines keep arriving mid-game** (#221). During a long
+      recording, `libobs.log` should grow every few seconds when libobs has
+      something to say (unplugging the microphone is a reliable way to make
+      it), rather than all at once when the game ends. `daemon.log` should
+      have no `could not reach the capture worker` or `says it is not
+      recording` warning for a recording that played back fine.
 - [ ] Does gameflow report a distinct phase while spectating? If it reports
       `InProgress`, spectated games are currently recorded, which the design
       says they should not be.
@@ -1220,7 +1230,12 @@ no file at all (the muxer). None of it reaches CI.
       the dev portal's health panel reads `libobs (ready)`, not
       `libobs (unavailable: ...)`.
 - [ ] **A Practice Tool game records**, and `daemon-devtools.log` names a
-      hardware encoder rather than the "no hardware H.264 encoder" refusal.
+      hardware encoder rather than the "no hardware H.264 encoder" refusal:
+      a `[recorder] encoder: JIM_NVENC (available: [...])` line (or the AMF
+      or QSV equivalent) and a `[state_machine] recording started: backend
+      libobs (ready)` line. The daemon writes both itself since #221, so
+      they do not depend on libobs's output. A refusal logs the list it
+      refused from instead.
 - [ ] **A full game records** start to finish. That is the exit criterion's
       "real game", and Practice Tool is the cheap rehearsal for it.
 - [ ] It plays in the review player, seeks (the faststart remux ran against
@@ -1230,9 +1245,18 @@ no file at all (the muxer). None of it reaches CI.
 
 ### 8.3 The plugin-load log
 
-The worker's stderr (#69) is `libobs-devtools.log` in a devtools build, at
+The worker's log is `libobs-devtools.log` in a devtools build, at
 `%APPDATA%\com.ninjarecorder.app\logs\libobs-devtools.log`, with one session
-kept as `libobs-devtools.1.log` (#212; a release build's is `libobs.log`).
+kept as `libobs-devtools.1.log` (#212; a release build's is `libobs.log`). It
+holds the worker's stderr (#69), which is libobs's errors and ffmpeg's output,
+and since #221 its stdout lines too, which is where libobs writes info and
+warnings: module loads, "not loaded" warnings and the encoders it registers.
+Before #221 those never reached the file, which is why #5's first pass had to
+compare modules from `(Get-Process extprocess_recorder).Modules` instead. That
+still works as a cross-check, but the log should now answer the three checks
+below on its own. **If the file holds only `error:` lines, the bridge is not
+working, and that is a finding for #221, not a clean result.** A baseline
+`libobs.untrimmed.log` taken before #221 has the same gap, so take it again.
 
 - [ ] **No failed module loads.**
 

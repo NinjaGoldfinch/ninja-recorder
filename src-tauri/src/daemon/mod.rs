@@ -45,6 +45,7 @@ pub mod rpc;
 pub mod snapshot;
 pub mod update;
 pub mod spawn;
+mod log_bridge;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -457,6 +458,11 @@ async fn start(paths: Paths) -> Result<Option<Started>, DaemonError> {
     if let Some(path) = log_file {
         info!("daemon", "logging to {}", path.display());
     }
+    // What the capture crates log through the `log` facade, libobs's own info
+    // and warnings among it, into our files rather than nowhere (#221). After
+    // the bind, like the line above: a second daemon that is about to leave
+    // quietly has nothing to receive.
+    log_bridge::install();
     // Which binary this session is, on the first line it writes. The file
     // name already separates the builds (#202), but a reinstall, an update or
     // a second daemon of the same build only shows up as a new pid or version.

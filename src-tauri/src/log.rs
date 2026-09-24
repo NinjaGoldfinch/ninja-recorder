@@ -25,6 +25,10 @@
 //! value is spans and structured fields, and nothing in this app has asked
 //! for either. Revisit when something does.
 //!
+//! The `log` facade is a dependency all the same, in one direction only: the
+//! capture crates log through it, and `daemon::log_bridge` receives what they
+//! say and writes it here (#221). Nothing in this crate logs through `log`.
+//!
 //! ## Nothing here may fail the app
 //!
 //! A read-only data dir, a locked file, a full disk: every one of those
@@ -494,7 +498,8 @@ pub fn dir() -> Option<PathBuf> {
 /// `dir`.
 ///
 /// Not a `Process`, because nothing here writes it: the worker inherits a
-/// stderr pointed at it (`recorder::libobs::worker_log`), and that module
+/// stderr pointed at it (`recorder::libobs::worker_log`), `daemon::log_bridge`
+/// adds the worker's stdout lines through that same module, and that module
 /// rotates it by hand when the worker first starts. That rotation is the
 /// reason it carries the build as well (#202's rule, one file later): both
 /// builds' daemons share `logs/`, and a daemon starting its worker would

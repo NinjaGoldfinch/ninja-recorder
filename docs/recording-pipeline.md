@@ -137,6 +137,13 @@ idle-RAM budget ([DEVELOPMENT.md §2.2](../DEVELOPMENT.md#22-the-recorder-trait)
 to, so a client that goes straight into a game is safe, and `release` is a no-op
 while a recording is in flight.
 
+While recording, every fifth Live Client poll (the first, the sixth, and so on;
+about every five seconds) also calls `Recorder::collect_output`. It drives no
+transition either. It exists because the libobs worker's info and warnings only
+leave its IPC pipe while a command is waiting for a reply, and mid-game nothing
+else sends one (#221). The call uses `try_lock`, so a recorder that is busy
+starting or stopping is skipped rather than waited for.
+
 ### Edge cases the pure tests cover
 
 | Case | Behaviour |

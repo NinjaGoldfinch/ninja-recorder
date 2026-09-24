@@ -129,6 +129,19 @@ pub trait Recorder: Send {
     /// Must be a no-op while a recording is in flight, and infallible: it
     /// runs on a path where there is nothing useful to do with an error.
     fn release(&mut self) {}
+
+    /// Collect whatever diagnostic output the backend has queued since it was
+    /// last asked — the supervisor calls this every few Live Client polls
+    /// while a recording runs.
+    ///
+    /// For the libobs backend this is the whole of how the worker's output
+    /// moves mid-game: its info and warnings come up the IPC pipe and are
+    /// only read while a command waits for its reply, so a long recording
+    /// with no commands leaves them sitting in the pipe (#221).
+    ///
+    /// Infallible and best-effort, like `release`: it must never be the
+    /// reason a recording stops. Default no-op.
+    fn collect_output(&mut self) {}
 }
 
 /// A backend that refuses, and says why.
