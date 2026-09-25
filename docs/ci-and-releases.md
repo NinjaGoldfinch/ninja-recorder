@@ -14,7 +14,7 @@ below them is skipped until a commit reaches `main`.
 ```mermaid
 flowchart TB
     subgraph PR["Pull request"]
-        T1["<b>Test</b> (windows-latest)<br/>biome ci · typecheck · check:svelte · vitest<br/>cargo deny check · gen-contract --check<br/>cargo test ×2<br/>cargo clippy ×2<br/>smoke-daemon.ps1<br/><small>±devtools, no --all-targets</small>"]
+        T1["<b>Test</b> (windows-latest)<br/>biome ci · typecheck · check:svelte · vitest<br/>cargo deny check · gen-contract --check<br/>cargo test ×2<br/>cargo clippy ×2<br/>smoke-daemon.ps1 · smoke-ui.ps1<br/>measure.ps1 -SelfTest (PS 5.1)<br/><small>±devtools, no --all-targets</small>"]
         N1["<b>Notices</b> (ubuntu)<br/>notices.mjs --check<br/><small>cargo-about + the Vite bundle</small>"]
     end
     subgraph MAIN["Push to main / manual dispatch"]
@@ -38,10 +38,12 @@ flowchart TB
 
 ### What `test` runs
 
-Eleven steps, and the order is part of the design: the cheap gates run first, so
+Twelve steps, and the order is part of the design: the cheap gates run first, so
 a formatting mistake fails in seconds rather than after a four-minute compile.
-The last one is the odd one out and runs last for the same reason, from the
-other end: it needs everything already compiled.
+Steps 10 and 11 are the odd ones out and run late for the same reason, from the
+other end: they need everything already compiled. Step 12 needs nothing built
+and takes seconds; it is last only because it was added last, and appending it
+kept the numbers above it.
 
 | # | Step | Gate | Added by |
 |---|---|---|---|
@@ -56,6 +58,7 @@ other end: it needs everything already compiled.
 | 9 | `cargo clippy -- -D warnings`, and again with `--features devtools` | Rust lints, both feature sets | v1 |
 | 10 | `scripts/smoke-daemon.ps1` | the daemon actually runs | WS3.3 |
 | 11 | `scripts/smoke-ui.ps1` | the UI starts and finds it | WS3.3 |
+| 12 | `scripts/measure.ps1 -SelfTest`, then a short `-Cpu -Role` run | the measurement script parses and computes right in Windows PowerShell 5.1 | #243 |
 
 ### Trimming libobs is opt-in, and only ever reaches the devtools installer
 
@@ -349,6 +352,19 @@ The step runs under `powershell` rather than the default `pwsh`, because
 `PipeStream.GetAccessControl` is an instance method in Windows PowerShell and
 moved to a static helper in .NET Core. The script handles both; the shell that
 needs no fallback is the one to use.
+
+### Step 12 runs the measurement script in the shell the box has
+
+[`scripts/measure.ps1`](../scripts/measure.ps1) is run by hand on the
+verification machine, in Windows PowerShell 5.1, and until this step nothing
+parsed it there: a `pwsh`-only construct would have surfaced on the box, in the
+middle of the run it was needed for. The step runs `-SelfTest`, which checks the
+CPU arithmetic and the role matching against fixed samples
+([measurement.md §4](measurement.md#4-cpu)), then starts a child PowerShell in
+a busy loop with `--capture-worker` on its command line and takes a five-second
+`-Cpu -Role worker,daemon` run against it: one row, for the worker, reading at
+least a quarter of a core. It checks the method end to end on a real process;
+it measures nothing about the recorder.
 
 Windows is now the only platform in the whole workflow, which has one
 consequence worth stating for the gates above: **the Windows-only Rust code is
