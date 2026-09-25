@@ -123,3 +123,99 @@ public.
 The two P0c-1 rows in DEVELOPMENT.md §16's measurement table, plus the control
 row, are where the result is written down; that is WS1.5 (#9). Leave them
 empty until a run has produced them.
+
+## Windows 10 floor test (#237)
+
+**The question:** does process loopback work on Windows 10 22H2, build 19045?
+The own backend refuses anything below build 20348
+(`recorder::own::select::MIN_BUILD`), the floor Microsoft documents for process
+loopback, and no Windows 10 release reaches it. OBS registers the same capture
+from 19041 ("process filtering seems to work earlier"). The decision on #237 is
+to lower the floor to 19041 **if** this run passes, and to keep 20348 and
+record the result if it does not. [DEVELOPMENT.md §2.4](../../DEVELOPMENT.md#24-encoding-defaults)
+has the floor.
+
+**This spike has no build gate of its own.** It reads the build and prints it,
+warns below 19041, and tries the capture anyway, so it runs unchanged on
+Windows 10. That is the point: a refusal has to come from Windows, not from us.
+
+### What you need
+
+- A **Windows 10 22H2** machine: `winver` says *Version 22H2 (OS Build
+  19045.xxxx)*. Not Windows 11, and not an older Windows 10.
+- Everything in [What you need](#what-you-need) above: rustup and the MSVC
+  build tools, League **in a Practice Tool game** with sound on, **Discord open
+  and audible** for the whole run, nothing else making noise, **not elevated**.
+
+### The runs
+
+The same three runs as #7, saved under their own names:
+
+```powershell
+cd spikes\p0c-audio
+cargo build --release
+$spike = ".\target\release\p0c-audio.exe"
+
+& $spike --list 2>&1 | Tee-Object list-19045.txt             # the report
+& $spike 2>&1 | Tee-Object include-19045.txt                 # the game's tree only, 60 s
+& $spike --mode exclude 2>&1 | Tee-Object exclude-19045.txt  # everything but the game, 60 s
+```
+
+Check the first line of `list-19045.txt` reads `windows 10.0 build 19045`,
+and that `root` is `League of Legends.exe` owned by the game window, as
+[Reading the output](#reading-the-output) describes. Then listen to both WAVs.
+
+### What passing means
+
+**Exactly the #7 result, on 19045:**
+
+- **include**: `AUDIO CAPTURED`, and listening, **the game and nothing else**;
+- **exclude**: `AUDIO CAPTURED`, and listening, **Discord and no game**.
+
+Anything else fails the floor test, and the output says which way:
+
+| What you see | Means |
+|---|---|
+| `ActivateAudioInterfaceAsync failed`, `activation was refused`, or `the activation never completed` | This Windows does not offer process loopback to this process. The floor stays. |
+| `IAudioClient::Initialize failed` | The activation exists but the stream cannot be set up. The floor stays. |
+| include has Discord in it | No isolation on this build (check the report did not put Discord inside the tree). |
+| include is `SILENCE CAPTURED` with the right root | The stream exists and the game's audio does not reach it. |
+| exclude has no Discord | Inconclusive: Discord was not audible. Fix that and run again. |
+
+### What to paste into #237
+
+1. `list-19045.txt`, `include-19045.txt` and `exclude-19045.txt` in full.
+2. The listening verdict for each WAV: game yes/no, Discord yes/no.
+3. `winver`'s full build (19045.xxxx), the League patch, and what Discord was
+   playing.
+
+As for #7, **do not attach the WAVs**.
+
+A pass is what lets a follow-up change move `MIN_BUILD` to 19041, together
+with `the_os_floor_is_build_20348` and the §2.4 bullet, citing the run. This
+procedure changes neither.
+
+### Optional: the own backend itself, below the floor
+
+The spike proves the API. To try the own backend on the same machine before
+the floor moves, a **devtools** build can be told to ignore the floor:
+`NINJA_OWN_IGNORE_OS_FLOOR=1` in the daemon's environment. A release build
+never reads it, and a devtools build logs a warning every time it lifts the
+refusal and again at every recording start.
+
+```powershell
+# Quit the app from the tray first, so no daemon is left running. The daemon
+# is the process that reads the variable, and one started at login or by the
+# window does not have it.
+$env:NINJA_OWN_IGNORE_OS_FLOOR = "1"
+& "$env:LOCALAPPDATA\ninja-recorder-dev\ninja-recorder-dev.exe" --daemon
+```
+
+Then open the app from the Start Menu as usual (it connects to that daemon),
+set Settings → Advanced → Capture backend to **Own** and the audio preset to
+**Game**, and follow
+[windows-verification.md §11.2](../../docs/windows-verification.md#112-game-audio-by-process-loopback-237).
+`daemon.log` shows `NINJA_OWN_IGNORE_OS_FLOOR=1: offering the own backend
+BELOW ITS OS FLOOR` when the row is offered, and `RECORDING BELOW THE OS FLOOR`
+at each start. Paste those with the §11.2 lines into #237. Unset the variable
+(close that PowerShell) and restart the app when you are done.

@@ -237,11 +237,30 @@ impl DaemonBackends {
     /// encoder is `prepare`'s question, and its answer is the backend's name
     /// rather than this list: a refusal here is for what cannot change
     /// without a new Windows.
+    ///
+    /// **A devtools build can be told to ignore the floor**, with
+    /// `NINJA_OWN_IGNORE_OS_FLOOR=1` (`select::floor_ignored`), so the own
+    /// backend can be tried on Windows 10 before #237's floor test has
+    /// decided whether the floor moves. A release build never reads it. It
+    /// is logged every time it lifts a refusal, and again at every start.
     #[cfg(target_os = "windows")]
     fn own_unavailable() -> Option<String> {
-        match crate::recorder::own::windows_build() {
-            Some(build) => crate::recorder::own::select::availability(build),
+        use crate::recorder::own::select;
+        let refused = match crate::recorder::own::windows_build() {
+            Some(build) => select::availability(build),
             None => Some("could not read the Windows build number".to_string()),
+        };
+        let value = std::env::var(select::IGNORE_FLOOR_ENV).ok();
+        match refused {
+            Some(floor) if select::floor_ignored(cfg!(feature = "devtools"), value.as_deref()) => {
+                warn!(
+                    "recorder",
+                    "{}=1: offering the own backend BELOW ITS OS FLOOR, for testing only: {floor}",
+                    select::IGNORE_FLOOR_ENV
+                );
+                None
+            }
+            refused => refused,
         }
     }
 
