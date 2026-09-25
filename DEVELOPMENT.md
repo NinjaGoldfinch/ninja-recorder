@@ -3183,13 +3183,38 @@ a test so that it cannot happen again by accident. It moved only the users
 who never chose. Someone who picked libobs explicitly has a stored row and
 keeps it, with no migration; `a_stored_libobs_row_stays_on_libobs` pins that.
 
-**What the flip means below the OS floor.** A missing key is `own` on every
-machine, including one below build 20348, where `own` cannot be built. There
-it is refused with its reason like any other unbuildable choice, not
-substituted: the daemon records nothing, and Settings → Advanced shows the
-"Nothing will be recorded" warning with libobs selectable beside it. Whether
-an unset key should instead resolve to libobs on such a machine is a separate
-decision from the flip, and the floor itself may move (§2.4).
+**With nothing saved, the default is own where own can be built, and
+libobs where it cannot.** The own backend's floor is Windows build 20348
+(§2.4), which leaves out every Windows 10 machine, and no release build
+before the flip had the Settings row, so no release user has a saved row.
+Resolving a missing key to `own` everywhere would have stopped every
+Windows 10 user recording on the day the flip shipped. So
+`recorder::backend::resolve` takes the saved value as an `Option` beside
+what the build offers, and decides:
+
+| Saved | Own buildable | Libobs buildable | Builds |
+|---|---|---|---|
+| nothing | yes | either | own |
+| nothing | no | yes | libobs, logged once at startup as `capture_backend unset; own unavailable (<reason>), using libobs` |
+| nothing | no | no | nothing: refused with both reasons |
+| `own` or `libobs` | | | exactly that, or refused with its reason |
+
+This does not weaken "refused, never substituted", because that rule protects
+a choice the *user* made: a saved `own` below the floor is still refused,
+with the warning, and never quietly recorded on libobs. A missing key is not
+a choice anyone made. The default is ours to pick, and picking one that
+cannot record would be refusing on the user's behalf. The pick is still
+attributable: the startup log says it, `diagnostics_json.backend` names the
+backend that wrote each file, and Settings → Advanced says "Automatic:
+libobs, because <own's reason>". Only a click writes the row, so the app's
+pick never becomes the user's by itself. An unrecognised stored value, such
+as one written by a newer build, is treated as unset.
+
+**WS8 (#51) has to settle Windows 10 before libobs is deleted.** Once libobs
+is gone, there is nothing for an unset key to fall back to below the floor.
+#237's floor test decides which of two answers WS8 ships: Windows 10 22H2
+(19045) passes, and the floor comes down so own records there, or it does not,
+and Windows 10 is dropped as a supported platform, said in the release notes.
 
 **The Settings row was devtools-only until the flip, which un-hid it.** Until
 #236 the row could offer one backend, with the other disabled beside it, and
@@ -3219,9 +3244,10 @@ disabled with that reason, and `set_capture_backend` refuses it again for any
 caller that got past the control. What remains is a row written some other
 way: a downgrade from a build that had the own backend, or a raw
 `set_ui_pref`, or a machine that was upgraded from and then back to a
-Windows below build 20348, and since #243 a machine below that build with no
-row at all. The daemon then records nothing, and the settings row says so in a
-warning rather than only through a disabled button.
+Windows below build 20348 with `own` saved. With nothing saved, a machine
+below that build records on libobs instead (above). The daemon then records
+nothing, and the settings row says so in a warning rather than only through
+a disabled button.
 
 **A change applies to the next recording, and never to the current one.**
 Two answers were available. "At the next daemon start" is simplest, but the

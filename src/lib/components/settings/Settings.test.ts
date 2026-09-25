@@ -54,6 +54,7 @@ const OWN_UNBUILT = [
 function backendStatus(over: Record<string, unknown> = {}) {
   return {
     configured: "libobs",
+    automatic: false,
     active: "libobs (idle)",
     software_encoding: false,
     options: BOTH_BUILT,
@@ -315,7 +316,35 @@ describe("the capture backend", () => {
     expect(notice?.textContent).toContain("more CPU");
   });
 
-  // The default on Windows 10 with nothing saved: own, below its OS floor.
+  // Windows 10 with nothing saved: libobs records, and the row says why.
+  it("says which backend is automatic, and why, when nothing is saved", async () => {
+    stubBackend({
+      get_capture_backend: backendStatus({
+        automatic: true,
+        active: "libobs (idle)",
+        options: OWN_UNBUILT,
+      }),
+    });
+    const el = render();
+    await settle();
+    expect(el.textContent).toContain(`Automatic: libobs, because ${NOT_BUILT}.`);
+    expect(el.querySelector(".callout-warn")).toBeNull();
+  });
+
+  // Only a click writes the row, and clicking the automatic pick is one.
+  it("saves the automatic pick when it is clicked", async () => {
+    stubBackend({
+      get_capture_backend: backendStatus({ configured: "own", automatic: true }),
+    });
+    const el = render();
+    await settle();
+    expect(call).not.toHaveBeenCalledWith("set_capture_backend", expect.anything());
+    choice(el, "Own")?.click();
+    await settle();
+    expect(call).toHaveBeenCalledWith("set_capture_backend", { backend: "own" });
+  });
+
+  // A saved own on Windows 10: refused, never moved to libobs.
   it("warns that nothing will be recorded when the saved backend cannot be built", async () => {
     stubBackend({
       get_capture_backend: backendStatus({

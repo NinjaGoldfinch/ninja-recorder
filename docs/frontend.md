@@ -897,6 +897,14 @@ key, but it is not read through `prefs.ts` and not written with
 check the backend can be built here, refuse while a game is in progress, and
 swap the live recorder
 ([DEVELOPMENT.md §16](../DEVELOPMENT.md#the-switch-and-when-it-applies)).
+**Automatic, when nothing is saved.** `CaptureBackendStatus` carries
+`automatic: true` when no `capture_backend` row exists, and `configured` is
+then the daemon's pick: Own where it can be built, else libobs. The row says
+so in plain text (`settings/capture.ts`'s `automaticNote`): "Automatic: Own,
+the default." or "Automatic: libobs, because <Own's reason>.". Only a click
+writes the row, and clicking the automatic pick does write it:
+`saveCaptureBackend` skips a click only on a backend that is already saved.
+
 `Advanced.svelte` renders what `get_capture_backend` reports: every backend
 the daemon knows about, each with a one-line explanation
 (`settings/capture.ts`'s `BACKEND_EXPLAINED`: Own is the default, libobs the

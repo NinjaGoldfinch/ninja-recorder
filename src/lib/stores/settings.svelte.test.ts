@@ -251,6 +251,7 @@ describe("retention", () => {
 describe("the capture backend", () => {
   const status = (software_encoding: boolean) => ({
     configured: "own",
+    automatic: false,
     active: "own (idle)",
     software_encoding,
     options: [

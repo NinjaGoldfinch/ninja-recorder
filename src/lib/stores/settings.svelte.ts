@@ -297,7 +297,9 @@ export async function refreshCaptureBackend(): Promise<void> {
 }
 
 export async function saveCaptureBackend(backend: CaptureBackend): Promise<void> {
-  if (captureBackend?.configured === backend) return;
+  // Clicking the backend already saved changes nothing. Clicking the one an
+  // unset key resolved to does: it saves the choice.
+  if (captureBackend?.configured === backend && !captureBackend.automatic) return;
   captureBackendBusy = true;
   try {
     captureBackend = await call<CaptureBackendStatus>("set_capture_backend", { backend });

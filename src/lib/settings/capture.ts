@@ -59,15 +59,38 @@ export function softwareNote(status: CaptureBackendStatus): string | null {
 }
 
 /**
- * The warning for a saved choice this build cannot construct, or `null`.
+ * What the row says when nothing is saved, or `null` once something is.
+ *
+ * With no saved choice the daemon picks: Own where it can be built, libobs
+ * where it cannot (DEVELOPMENT.md §16). The row says which it picked and, for
+ * libobs, why, using the daemon's own reason for Own being unavailable. Only
+ * a click saves a choice; this line is what tells the user they have not
+ * made one.
+ */
+export function automaticNote(status: CaptureBackendStatus): string | null {
+  if (!status.automatic) return null;
+  const chosen = status.options.find((option) => option.backend === status.configured);
+  if (chosen?.unavailable != null) return null; // refusalNote says it instead
+  if (status.configured === "own") return "Automatic: Own, the default.";
+  const own = status.options.find((option) => option.backend === "own");
+  const why = own?.unavailable ? `, because ${own.unavailable}` : "";
+  return `Automatic: ${BACKEND_LABELS[status.configured]}${why}.`;
+}
+
+/**
+ * The warning for a choice this build cannot construct, or `null`.
  *
  * The control cannot save one, but a downgrade or a missing libobs worker can
  * leave the daemon holding one, and then nothing is being recorded at all.
- * That is worth more than a disabled button to say.
+ * That is worth more than a disabled button to say. With nothing saved it
+ * only happens when neither backend can be built.
  */
 export function refusalNote(status: CaptureBackendStatus): string | null {
   const saved = status.options.find((option) => option.backend === status.configured);
   if (saved?.unavailable == null) return null;
+  if (status.automatic) {
+    return "Nothing will be recorded: neither capture backend is available here.";
+  }
   return (
     `Nothing will be recorded: ${BACKEND_LABELS[status.configured]} is selected ` +
     `and isn't available here (${saved.unavailable}). Choose one that is.`

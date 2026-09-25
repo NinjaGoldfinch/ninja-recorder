@@ -476,7 +476,7 @@ agree**, because either can be the one reading a key the other never wrote.
 | `theme` | `system` / `light` / `dark` | `system` | `src/prefs.ts`, plus the pre-paint boot script |
 | `defaultSort` | `newest` / `oldest` / `longest` / `champion` | `newest` | `src/prefs.ts` |
 | `audio_preset` | JSON `AudioPreset` | `Game` | `db::get_audio_preset` |
-| `capture_backend` | `libobs` / `own` | `own` since #243 (`libobs` before it); a stored `libobs` row is kept | `db::get_capture_backend`, once at daemon startup; written only by `set_capture_backend`, which also swaps the live backend ([DEVELOPMENT.md §16](../DEVELOPMENT.md#the-switch-and-when-it-applies)) |
+| `capture_backend` | `libobs` / `own` | unset; since #243 that builds own where own can be built, else libobs (`libobs` before it). A stored row is kept, and only a click in Settings writes one | `db::get_capture_backend`, once at daemon startup; written only by `set_capture_backend`, which also swaps the live backend ([DEVELOPMENT.md §16](../DEVELOPMENT.md#the-switch-and-when-it-applies)) |
 | `closeAction` | `close-window` / `hide` / `quit` | `close-window` | `core::CloseAction` |
 | `notifications` | `on` / `off` | `on` | `core::NotificationPrefs` |
 | `notifyRecordingStarted` | `on` / `off` | `off` | `core::NotificationPrefs` |

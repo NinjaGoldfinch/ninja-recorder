@@ -22,9 +22,10 @@ backend): that last one being what eventually lets the licence change.
 > and the capture backend no longer injects into the game.
 >
 > **The own capture backend is the default.** Recordings are made by Option B
-> (WGC, Media Foundation and our own MP4 writer) on Windows 11; libobs stays
-> selectable in Settings → Advanced for one release as the fallback, and a
-> saved choice of libobs is kept.
+> (WGC, Media Foundation and our own MP4 writer) on Windows 11. Windows 10,
+> below its floor, records on libobs unless something else is saved, and
+> libobs stays selectable in Settings → Advanced for one release as the
+> fallback.
 >
 > As of `v2.0.0-alpha.40` the whole loop has run on a live ranked game on
 > Windows: the client detected, the game captured, markers placed, the row in

@@ -825,11 +825,20 @@ pub fn get_capture_backend(ctx: &Ctx) -> Result<CaptureBackendStatus, String> {
         let recorder = ctx.recorder.lock().map_err(|e| e.to_string())?;
         (recorder.backend_name(), recorder.software_encoding())
     };
+    let saved = ctx.db.get_capture_backend().map_err(|e| e.to_string())?;
+    let options = backends.options();
+    // Unset and nothing buildable is refused; the row then shows the default,
+    // own, with the warning, since that is the one a click would try first.
+    let configured = match backend::resolve(saved, &options) {
+        Ok(selection) => selection.backend,
+        Err(_) => saved.unwrap_or_default(),
+    };
     Ok(CaptureBackendStatus {
-        configured: ctx.db.get_capture_backend().map_err(|e| e.to_string())?,
+        configured,
+        automatic: saved.is_none(),
         active,
         software_encoding,
-        options: backends.options(),
+        options,
     })
 }
 
@@ -854,8 +863,11 @@ pub fn get_capture_backend(ctx: &Ctx) -> Result<CaptureBackendStatus, String> {
 /// supervisor takes its own locks and then the recorder's, and the reverse
 /// order here could deadlock against it.
 ///
-/// Choosing what is already configured changes nothing, so a second click
-/// does not tear down a warm backend to build the same one again.
+/// Choosing what is already saved changes nothing, so a second click does
+/// not tear down a warm backend to build the same one again. Choosing the
+/// backend an unset key already resolved to saves the row and changes
+/// nothing else: it turns the app's pick into the user's, and the live
+/// backend is already the right one.
 pub fn set_capture_backend(
     ctx: &Ctx,
     backend: CaptureBackend,
@@ -864,7 +876,11 @@ pub fn set_capture_backend(
     backend::choose(backend, &backends.options())
         .map_err(|why| format!("The {} capture backend can't be used: {why}", backend.as_pref()))?;
 
-    if ctx.db.get_capture_backend().map_err(|e| e.to_string())? != backend {
+    let saved = ctx.db.get_capture_backend().map_err(|e| e.to_string())?;
+    let live = backend::resolve(saved, &backends.options()).ok().map(|s| s.backend);
+    if saved.is_none() && live == Some(backend) {
+        ctx.db.set_capture_backend(backend).map_err(|e| e.to_string())?;
+    } else if saved != Some(backend) {
         let state = ctx.supervisor.status().state;
         let mut recorder = ctx.recorder.lock().map_err(|e| e.to_string())?;
         update::installable(&state, recorder.is_recording())
@@ -876,7 +892,7 @@ pub fn set_capture_backend(
         // worker, and dropping the box without it would leave the old worker
         // to its `Drop`.
         recorder.release();
-        let mut next = backend::construct(backend, backends);
+        let (mut next, _) = backend::construct(Some(backend), backends);
         // Keep §2.2's pre-warm: if the client is already open, the old backend
         // was warm and a game is plausible, so the new one should be too.
         // Only a pre-warm: `start` brings it up itself if this fails.

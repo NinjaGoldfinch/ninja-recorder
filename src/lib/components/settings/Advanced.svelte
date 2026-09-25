@@ -14,6 +14,7 @@
 <script lang="ts">
 import {
   APPLIES_WHEN,
+  automaticNote,
   BACKEND_EXPLAINED,
   BACKEND_LABELS,
   refusalNote,
@@ -27,6 +28,7 @@ const status = $derived(settings.captureBackend);
 const notes = $derived(status ? unavailableNotes(status) : []);
 const refusal = $derived(status ? refusalNote(status) : null);
 const software = $derived(status ? softwareNote(status) : null);
+const automatic = $derived(status ? automaticNote(status) : null);
 </script>
 
 <section class="settings-group">
@@ -43,6 +45,9 @@ const software = $derived(status ? softwareNote(status) : null);
       {#if settings.captureBackendError}
         <p class="setting-hint">{settings.captureBackendError}</p>
       {:else}
+        {#if automatic}
+          <p class="setting-hint">{automatic}</p>
+        {/if}
         <p class="setting-hint">{APPLIES_WHEN}</p>
         {#each notes as note (note)}
           <p class="setting-hint">{note}</p>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CaptureBackendStatus } from "../contract/types";
-import { refusalNote, softwareNote, unavailableNotes } from "./capture";
+import { automaticNote, refusalNote, softwareNote, unavailableNotes } from "./capture";
 
 const NOT_BUILT = "the own capture backend is not in this build yet";
 
@@ -8,6 +8,7 @@ const NOT_BUILT = "the own capture backend is not in this build yet";
 function today(over: Partial<CaptureBackendStatus> = {}): CaptureBackendStatus {
   return {
     configured: "libobs",
+    automatic: false,
     active: "libobs (idle)",
     software_encoding: false,
     options: [
@@ -65,5 +66,44 @@ describe("softwareNote", () => {
     );
     expect(note).toContain("encoding video in software");
     expect(note).toContain("more CPU");
+  });
+});
+
+describe("automaticNote", () => {
+  it("is quiet once a choice is saved", () => {
+    expect(automaticNote(today())).toBeNull();
+  });
+
+  it("says Own is the automatic pick where it can be built", () => {
+    const status = today({
+      configured: "own",
+      automatic: true,
+      options: [
+        { backend: "libobs", unavailable: null },
+        { backend: "own", unavailable: null },
+      ],
+    });
+    expect(automaticNote(status)).toBe("Automatic: Own, the default.");
+  });
+
+  // Windows 10 with nothing saved: the daemon records on libobs, and the row
+  // says so with the daemon's reason for Own.
+  it("says libobs is the automatic pick, and why, where Own cannot be built", () => {
+    expect(automaticNote(today({ automatic: true }))).toBe(
+      `Automatic: libobs, because ${NOT_BUILT}.`,
+    );
+  });
+
+  it("leaves it to the refusal when nothing can be built", () => {
+    const status = today({
+      configured: "own",
+      automatic: true,
+      options: [
+        { backend: "libobs", unavailable: "the libobs worker is not beside the executable" },
+        { backend: "own", unavailable: NOT_BUILT },
+      ],
+    });
+    expect(automaticNote(status)).toBeNull();
+    expect(refusalNote(status)).toContain("neither capture backend is available");
   });
 });

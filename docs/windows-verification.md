@@ -1388,13 +1388,12 @@ recording the same game, is part of the exit run, §11.8.
 - [ ] **A release build shows the Advanced group**, with a line explaining
       each backend: Own the default, libobs the fallback for one release.
 - [ ] **The row renders.** On a fresh install (no saved row) **Own** is
-      selected and enabled on Windows 11 (build 20348 or newer). On a Windows
-      10 box Own is disabled instead, and the row says "Own isn't available:
-      the own capture backend needs Windows build 20348 or newer …", naming
-      the box's build. "In use now" reads `own (idle)` with no client open.
+      selected and enabled on Windows 11 (build 20348 or newer), and the row
+      says "Automatic: Own, the default." "In use now" reads `own (idle)` with
+      no client open.
 - [ ] **The daemon log names the setting.** `daemon.log`'s
       `[recorder] backend:` line reads
-      `own (idle) (capture_backend = own)` on a fresh install.
+      `own (idle) (capture_backend = unset)` on a fresh install.
 - [ ] **Refused mid-game.** Start a Practice Tool game on Own, and in the
       game click **libobs** in the row (or call `set_capture_backend` with
       `libobs` from the dev portal's Commands panel). It is refused with "can't be
@@ -1422,12 +1421,26 @@ recording the same game, is part of the exit run, §11.8.
       game produces **no** recording rather than one made on Own, and
       choosing **Own** in the row puts recording back without a restart. Put
       the file's name back afterwards (a repair install does the same).
-- [ ] **Below the floor with nothing saved.** Needs a Windows 10 box. A fresh
-      install there has no saved row, so the default, Own, is refused: the
-      log line reads `unavailable (the own capture backend needs Windows build
-      20348 or newer …) (capture_backend = own)`, and the row shows the
-      warning with libobs selectable. Choosing libobs records. On a Windows 11
-      box this row cannot be reached; leave it empty and say so.
+- [ ] **Windows 10, nothing saved: it records on libobs, and says why.**
+      Needs a Windows 10 box and a fresh install (no saved row). `daemon.log`
+      has `capture_backend unset; own unavailable (the own capture backend
+      needs Windows build 20348 or newer …), using libobs` once, then a
+      backend line ending `(capture_backend = unset)` naming libobs. The row
+      has libobs selected, Own disabled with its reason, and "Automatic:
+      libobs, because the own capture backend needs Windows build 20348 or
+      newer …", with no warning. A game records, and its
+      `diagnostics_json.backend` names libobs. Nothing has written the row:
+      `settings_kv` has no `capture_backend` key until a click.
+- [ ] **Windows 10, `own` saved: refused, with the warning.** On the same box,
+      save `own` with the `sqlite3` line from §11.8 and restart the app. The
+      log's backend line reads `unavailable (the own capture backend needs
+      Windows build 20348 or newer …) (capture_backend = own)`, the row shows
+      the "Nothing will be recorded" warning, a game produces **no**
+      recording rather than one made on libobs, and choosing libobs in the row
+      puts recording back without a restart.
+
+On a Windows 11 box the last two rows cannot be reached; leave them empty and
+say so.
 
 | What | Result | Notes |
 |---|---|---|
@@ -1437,7 +1450,8 @@ recording the same game, is part of the exit run, §11.8.
 | 9: refused mid-game; the recording in flight is unaffected | | |
 | 9: an unbuildable saved libobs records nothing and says why | | |
 | 9: switch to own, and the next recording is made by it | | |
-| 9: Windows 10, nothing saved: Own refused, the warning, libobs records | | |
+| 9: Windows 10, nothing saved: records on libobs, the log line, "Automatic: libobs, because …" | | |
+| 9: Windows 10, `own` saved: refused, the warning, no recording | | |
 
 ## 10. Installing over a running app (#220)
 
@@ -2091,8 +2105,14 @@ state sampled for 60 s:
 - [ ] **A fresh install records on own.** On a machine with no
       `%APPDATA%\com.ninjarecorder.app` folder (or with its `capture_backend`
       row deleted), install and record a game: the row shows
-      Own selected, `daemon.log` has `(capture_backend = own)`, and
-      `diagnostics_json.backend` starts with `own (`.
+      Own selected and "Automatic: Own, the default.", `daemon.log` has
+      `(capture_backend = unset)`, and `diagnostics_json.backend` starts with
+      `own (`.
+- [ ] **Windows 10, nothing saved: records on libobs.** A fresh install of the
+      flip's build on a Windows 10 box: §9's row of the same name. A game
+      records on libobs, and the row says "Automatic: libobs, because …".
+- [ ] **Windows 10, `own` saved: refused.** The same box with `own` saved:
+      §9's row. No recording, and the warning.
 - [ ] **A stored `libobs` row stays on libobs.** On the pre-flip build, save
       libobs with the `sqlite3` line above (`'libobs'` for `'own'`), then
       install the flip's build over it: Settings shows libobs, the log line
@@ -2123,6 +2143,8 @@ state sampled for 60 s:
 | 11.8: the capture worker only while League runs | | |
 | 11.8: switching own ↔ libobs in the lobby, both ways (the flip's installer) | | |
 | 11.8: fresh install records on own (the flip's installer) | | |
+| 11.8: Windows 10, nothing saved: records on libobs, the row says why (the flip's installer) | | |
+| 11.8: Windows 10, `own` saved: refused with the warning (the flip's installer) | | |
 | 11.8: a stored `libobs` row stays on libobs (the flip's installer) | | |
 
 ## Outcome

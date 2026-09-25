@@ -641,7 +641,35 @@ mod tests {
         fn an_unset_key_reports_own() {
             let mut ctx = ctx();
             ctx.set_backends(Box::new(Fake { own_built: true, builds: Arc::default() }));
-            assert_eq!(get_capture_backend(&ctx).unwrap().configured, CaptureBackend::Own);
+            let status = get_capture_backend(&ctx).unwrap();
+            assert_eq!(status.configured, CaptureBackend::Own);
+            assert!(status.automatic);
+        }
+
+        /// Below own's floor with nothing saved, the row reports libobs as
+        /// the automatic pick; the reason is own's `unavailable`.
+        #[test]
+        fn an_unset_key_reports_libobs_where_own_cannot_be_built() {
+            let mut ctx = ctx();
+            ctx.set_backends(Box::new(Fake { own_built: false, builds: Arc::default() }));
+            let status = get_capture_backend(&ctx).unwrap();
+            assert_eq!(status.configured, CaptureBackend::Libobs);
+            assert!(status.automatic);
+            assert_eq!(status.options[1].unavailable.as_deref(), Some(OWN_UNAVAILABLE));
+        }
+
+        /// Picking what an unset key already resolved to saves the choice,
+        /// and does not tear down the live backend to build the same one.
+        #[test]
+        fn picking_the_automatic_backend_saves_it_without_a_rebuild() {
+            let builds = Arc::new(AtomicUsize::new(0));
+            let mut ctx = ctx();
+            ctx.set_backends(Box::new(Fake { own_built: true, builds: Arc::clone(&builds) }));
+            let status = set_capture_backend(&ctx, CaptureBackend::Own).unwrap();
+            assert_eq!(ctx.db.get_capture_backend().unwrap(), Some(CaptureBackend::Own));
+            assert!(!status.automatic);
+            assert_eq!(builds.load(Ordering::SeqCst), 0);
+            assert_eq!(ctx.recorder.lock().unwrap().backend_name(), "stub");
         }
 
         /// The UI forwards both commands to the daemon, so this only runs where
@@ -676,7 +704,7 @@ mod tests {
             let (ctx, builds) = ctx_with(false);
             let err = set_capture_backend(&ctx, CaptureBackend::Own).expect_err("unbuilt");
             assert!(err.contains(OWN_UNAVAILABLE), "{err}");
-            assert_eq!(ctx.db.get_capture_backend().unwrap(), CaptureBackend::Libobs);
+            assert_eq!(ctx.db.get_capture_backend().unwrap(), Some(CaptureBackend::Libobs));
             assert_eq!(builds.load(Ordering::SeqCst), 0);
             assert_eq!(ctx.recorder.lock().unwrap().backend_name(), "stub");
         }
@@ -688,7 +716,7 @@ mod tests {
 
             assert_eq!(status.configured, CaptureBackend::Own);
             assert_eq!(status.active, "own");
-            assert_eq!(ctx.db.get_capture_backend().unwrap(), CaptureBackend::Own);
+            assert_eq!(ctx.db.get_capture_backend().unwrap(), Some(CaptureBackend::Own));
             assert_eq!(builds.load(Ordering::SeqCst), 1);
             // The same `Arc` the supervisor was built with, so the next game
             // it starts is on the new backend.
@@ -712,7 +740,7 @@ mod tests {
 
             let err = set_capture_backend(&ctx, CaptureBackend::Own).expect_err("recording");
             assert!(err.contains("recording is in progress"), "{err}");
-            assert_eq!(ctx.db.get_capture_backend().unwrap(), CaptureBackend::Libobs);
+            assert_eq!(ctx.db.get_capture_backend().unwrap(), Some(CaptureBackend::Libobs));
             assert_eq!(builds.load(Ordering::SeqCst), 0);
             assert_eq!(ctx.recorder.lock().unwrap().backend_name(), "busy");
         }

@@ -1841,11 +1841,12 @@ impl Db {
         self.set_ui_pref(AUDIO_PRESET_KEY, &json)
     }
 
-    /// Which capture backend the daemon builds. A missing or unrecognised
-    /// value is the default (`CaptureBackend::from_pref`), which on a
-    /// downgrade is the right answer: the older build cannot construct
-    /// whatever the newer one wrote.
-    pub fn get_capture_backend(&self) -> Result<CaptureBackend, DbError> {
+    /// The saved capture backend, or `None` when nothing is saved. An
+    /// unrecognised value is `None` too (`CaptureBackend::from_pref`), which
+    /// on a downgrade is the right answer: the older build cannot construct
+    /// whatever the newer one wrote. What `None` builds is
+    /// `recorder::backend::resolve`'s decision, not this one's.
+    pub fn get_capture_backend(&self) -> Result<Option<CaptureBackend>, DbError> {
         let conn = self.pool.read();
         let raw: Option<String> = conn
             .query_row(
@@ -2505,13 +2506,13 @@ mod tests {
         assert_eq!(db.get_audio_preset().unwrap(), AudioPreset::Game);
     }
 
-    /// Pinned beside `CaptureBackend`'s own test, because this is the path the
-    /// daemon actually reads at startup: a fresh library builds the own
-    /// backend.
+    /// The path the daemon actually reads at startup: a fresh library has
+    /// nothing saved, which `backend::resolve` turns into own where own can
+    /// be built.
     #[test]
-    fn capture_backend_defaults_to_own_when_unset() {
+    fn capture_backend_is_unset_in_a_fresh_library() {
         let db = Db::open_temporary().unwrap();
-        assert_eq!(db.get_capture_backend().unwrap(), CaptureBackend::Own);
+        assert_eq!(db.get_capture_backend().unwrap(), None);
     }
 
     /// The other half of the flip: a `libobs` row saved by an earlier build
@@ -2520,7 +2521,7 @@ mod tests {
     fn a_stored_libobs_capture_backend_stays_libobs() {
         let db = Db::open_temporary().unwrap();
         db.set_ui_pref(CAPTURE_BACKEND_KEY, "libobs").unwrap();
-        assert_eq!(db.get_capture_backend().unwrap(), CaptureBackend::Libobs);
+        assert_eq!(db.get_capture_backend().unwrap(), Some(CaptureBackend::Libobs));
     }
 
     #[test]
@@ -2528,7 +2529,7 @@ mod tests {
         let db = Db::open_temporary().unwrap();
         for backend in [CaptureBackend::Own, CaptureBackend::Libobs] {
             db.set_capture_backend(backend).unwrap();
-            assert_eq!(db.get_capture_backend().unwrap(), backend);
+            assert_eq!(db.get_capture_backend().unwrap(), Some(backend));
         }
         // Stored as the plain string, so `get_ui_prefs` and the dev portal's
         // SQL panel show what the plan calls it.
@@ -2538,13 +2539,13 @@ mod tests {
         );
     }
 
-    /// A value written by a newer build, or by hand, is the default rather
-    /// than an error that would leave the daemon with no backend to choose.
+    /// A value written by a newer build, or by hand, reads as unset rather
+    /// than as an error that would leave the daemon with no backend to choose.
     #[test]
-    fn an_unrecognised_capture_backend_falls_back_to_the_default() {
+    fn an_unrecognised_capture_backend_reads_as_unset() {
         let db = Db::open_temporary().unwrap();
         db.set_ui_pref(CAPTURE_BACKEND_KEY, "mediafoundation").unwrap();
-        assert_eq!(db.get_capture_backend().unwrap(), CaptureBackend::default());
+        assert_eq!(db.get_capture_backend().unwrap(), None);
     }
 
     #[test]

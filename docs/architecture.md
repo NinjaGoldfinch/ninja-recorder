@@ -333,7 +333,7 @@ is that it does not record.
 ```mermaid
 flowchart LR
     KV[("settings_kv<br/>capture_backend")] -->|"libobs or own,<br/>as saved"| C{"backend::choose<br/><small>pure</small>"}
-    KV -->|"no row, or unrecognised:<br/>the default, own"| C
+    KV -->|"no row, or unrecognised:<br/>own if buildable, else libobs"| C
     OPT["DaemonBackends::options<br/><small>libobs: worker staged?<br/>own: Windows build 20348+?<br/>(devtools: floor override)</small>"] --> C
     C -->|"buildable"| B["DaemonBackends::build"]
     C -->|"not buildable: the reason"| F["FailedRecorder(reason)"]
@@ -349,18 +349,19 @@ flowchart LR
   refused while a game is loading, recording or finalizing, by the same rule
   the updater uses, and the swap happens under the recorder lock that `start`
   takes, so a recording is never switched under.
-- **The default is `own`, since #243**, WS1.6's last piece. It moved only
-  the users with no saved row: a stored `libobs` stays libobs, with no
-  migration. `DaemonBackends` offers `own` wherever `select::availability`
-  passes (Windows build 20348 or newer) and builds an `OwnRecorder` for it;
-  below that build, and off Windows, it is listed as unavailable with the
-  reason, so a machine there with no saved row is refused like any other
-  unbuildable choice, and Settings says so. Whether the machine has an encoder is the backend's own answer, in
+- **The default is `own`, since #243**, WS1.6's last piece, wherever own
+  can be built. It moved only the users with no saved row: a stored `libobs`
+  stays libobs, with no migration. `DaemonBackends` offers `own` wherever
+  `select::availability` passes (Windows build 20348 or newer) and builds an
+  `OwnRecorder` for it; below that build, and off Windows, it is listed as
+  unavailable with the reason. There, an unset key resolves to libobs
+  (`backend::resolve`), logged once at startup, and Settings shows
+  "Automatic: libobs" with the reason. A *saved* `own` there is refused. Whether the machine has an encoder is the backend's own answer, in
   its name, once `prepare` has run. A **devtools** build started with
   `NINJA_OWN_IGNORE_OS_FLOOR=1` offers `own` below the floor too, with a
   warning in `daemon.log`, for #237's Windows 10 test; a release build never
   reads the variable.
-- **A chosen backend that cannot be built is refused, never replaced by the
+- **A saved backend that cannot be built is refused, never replaced by the
   other one.** The UI shows it disabled with the daemon's reason, so in
   practice this is only reached by a row written some other way.
 - **The Settings row is in every build since #243**, which un-hid it along

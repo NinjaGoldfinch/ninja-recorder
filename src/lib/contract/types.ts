@@ -443,9 +443,15 @@ unavailable: string | null, };
 
 export type CaptureBackendStatus = { 
 /**
- * The saved choice, or the default if none was ever saved.
+ * The saved choice, or, when nothing is saved, the backend [`resolve`]
+ * picked for this machine (own where it can be built, else libobs).
  */
 configured: CaptureBackend, 
+/**
+ * Nothing is saved: `configured` is the app's pick, not the user's. The
+ * row says "Automatic" and why, and only a click writes the setting.
+ */
+automatic: boolean, 
 /**
  * What the live backend says it is (`Recorder::backend_name`), e.g.
  * `libobs (ready)` or `unavailable (…)`. The two differ when the
