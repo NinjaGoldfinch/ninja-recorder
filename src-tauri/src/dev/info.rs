@@ -3,6 +3,10 @@
 use crate::{db, retention, state_machine, AppState};
 use serde::Serialize;
 
+/// Build and paths, as **this** process resolved them. It runs in the UI, so
+/// it carries nothing about the recorder: the UI's is a `FailedRecorder`, and
+/// reporting its name here is how the portal once described a process that
+/// does not record (#282). The daemon's is in `DevHealth::recorder`.
 #[derive(Serialize)]
 pub struct DevEnvInfo {
     pub app_version: &'static str,
@@ -11,7 +15,6 @@ pub struct DevEnvInfo {
     pub arch: &'static str,
     pub build_profile: &'static str,
     pub tauri_version: &'static str,
-    pub recorder_backend: String,
     pub app_data_dir: String,
     pub recordings_dir: String,
     pub db_path: String,
@@ -39,11 +42,6 @@ pub fn dev_env_info(state: tauri::State<AppState>, app: tauri::AppHandle) -> Res
         arch: std::env::consts::ARCH,
         build_profile: if cfg!(debug_assertions) { "debug" } else { "release" },
         tauri_version: tauri::VERSION,
-        recorder_backend: state
-            .recorder
-            .lock()
-            .map_err(|e| e.to_string())?
-            .backend_name(),
         recordings_dir: state.recordings_dir.display().to_string(),
         db_path: paths.db.display().to_string(),
         fixtures_dir: crate::fixtures::base_dir().map(|d| d.display().to_string()),
@@ -73,11 +71,34 @@ pub struct RowCounts {
     pub samples: i64,
 }
 
+/// The daemon's recorder, as the portal's Overview and Recorder panels show
+/// it (#282). Read in the process that owns the `Recorder`, which is the
+/// whole point: `dev_env_info` answers from the UI process, whose recorder is
+/// a `FailedRecorder` that refuses everything.
+#[derive(Serialize)]
+pub struct DevRecorderView {
+    /// `Recorder::backend_name` of the backend actually live, e.g.
+    /// `own (ready: NVIDIA ...)` or `libobs (idle)`.
+    pub backend: String,
+    /// The `capture_backend` setting, `libobs` or `own`. It can differ from
+    /// the live backend only when the build cannot construct the chosen one,
+    /// and then `backend` says why.
+    pub configured: String,
+    /// The file the recording in flight is written to.
+    pub current_file: Option<String>,
+    /// Whether the backend's capture worker process is up; `None` for a
+    /// backend that has none.
+    pub worker_running: Option<bool>,
+}
+
 #[derive(Serialize)]
 pub struct DevHealth {
     pub supervisor: state_machine::SupervisorStatus,
     pub session: Option<state_machine::DevSessionView>,
+    /// Whether the daemon's recorder is capturing. Kept at the top level
+    /// rather than inside `recorder`, because the top bar's pill reads it.
     pub is_recording: bool,
+    pub recorder: DevRecorderView,
     pub total_bytes: i64,
     pub free_bytes: i64,
     pub counts: RowCounts,
@@ -106,14 +127,30 @@ pub fn dev_health(
         }
     };
 
+    let configured = ctx.db.get_capture_backend().map_err(|e| e.to_string())?.as_pref();
+    // One lock for every recorder field, so they describe the same moment.
+    // Taken after the supervisor's status is read, never around it: the
+    // supervisor takes its own locks and then this one.
+    let supervisor = ctx.supervisor.status();
+    let session = ctx.supervisor.dev_session_view();
+    let (is_recording, recorder) = {
+        let recorder = ctx.recorder.lock().map_err(|e| e.to_string())?;
+        (
+            recorder.is_recording(),
+            DevRecorderView {
+                backend: recorder.backend_name(),
+                configured: configured.to_string(),
+                current_file: recorder.current_file().map(|p| p.display().to_string()),
+                worker_running: recorder.worker_running(),
+            },
+        )
+    };
+
     Ok(DevHealth {
-        supervisor: ctx.supervisor.status(),
-        session: ctx.supervisor.dev_session_view(),
-        is_recording: ctx
-            .recorder
-            .lock()
-            .map_err(|e| e.to_string())?
-            .is_recording(),
+        supervisor,
+        session,
+        is_recording,
+        recorder,
         total_bytes: ctx.db.total_size_bytes().map_err(|e| e.to_string())?,
         free_bytes: retention::free_space_bytes(&ctx.recordings_dir).unwrap_or(0) as i64,
         counts,

@@ -149,18 +149,36 @@ export function queueOrModeLabel(row: RecordingRow): string | null {
 // The filename is user-controlled (`reconcile` imports whatever video
 // files it finds), so callers still have to escape the result.
 /**
- * `"15.3.412.9873"` → `"15.3"`.
+ * The first build major Riot renamed by year.
+ *
+ * From 2026 patches are numbered by year (26.x) while the game build still
+ * reports the old sequence (16.x), so a build major from here on displays
+ * ten higher. Seen in #280: a game played on patch 26.19 reported build
+ * 16.19. Majors below this predate the renumbering and display as they are.
+ */
+const YEAR_NUMBERED_FROM_MAJOR = 16;
+const YEAR_NUMBERED_OFFSET = 10;
+
+/**
+ * `"15.3.412.9873"` → `"15.3"`, and `"16.19.715.2204"` → `"26.19"`.
  *
  * The whole string is what the column stores, because the build number is
  * what distinguishes two recordings made either side of a hotfix. It is
  * not what anyone calls a patch, though, so a row shows the two-part form
- * and keeps the rest for the hover.
+ * with the major renamed to the patch players know (see
+ * `YEAR_NUMBERED_FROM_MAJOR`). The stored value is never rewritten.
  */
 export function patchLabel(patch: string | null): string | null {
   if (patch === null) return null;
   const parts = patch.split(".");
   if (parts.length < 2) return patch;
-  return `${parts[0]}.${parts[1]}`;
+  return `${patchMajor(parts[0] ?? "")}.${parts[1]}`;
+}
+
+function patchMajor(build: string): string {
+  if (!/^\d+$/.test(build)) return build;
+  const major = Number(build);
+  return major >= YEAR_NUMBERED_FROM_MAJOR ? String(major + YEAR_NUMBERED_OFFSET) : build;
 }
 
 export function vodTitle(row: RecordingRow): string {

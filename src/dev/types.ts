@@ -56,10 +56,26 @@ export interface RetentionPolicy {
   max_age_days: number | null;
 }
 
+/**
+ * The daemon's recorder (#282). `dev_health` reads it in the process that owns
+ * the `Recorder`; `dev_env_info` answers from the UI, which records nothing.
+ */
+export interface DevRecorderView {
+  /** `Recorder::backend_name`, e.g. `own (ready: NVIDIA ...)` or `libobs (idle)`. */
+  backend: string;
+  /** The `capture_backend` setting: `libobs` or `own`. */
+  configured: string;
+  current_file: string | null;
+  /** `null` for a backend with no capture worker, which is not "down". */
+  worker_running: boolean | null;
+}
+
 export interface DevHealth {
   supervisor: SupervisorStatus;
   session: DevSessionView | null;
+  /** Whether the daemon's recorder is capturing. The top bar's pill reads it. */
   is_recording: boolean;
+  recorder: DevRecorderView;
   total_bytes: number;
   free_bytes: number;
   counts: { recordings: number; markers: number; samples: number };
@@ -75,7 +91,6 @@ export interface DevEnvInfo {
   arch: string;
   build_profile: string;
   tauri_version: string;
-  recorder_backend: string;
   app_data_dir: string;
   recordings_dir: string;
   db_path: string;

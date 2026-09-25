@@ -153,17 +153,21 @@ fn no_hardware_reason(adapters: &[Adapter], encoders: &[Encoder]) -> String {
 ///
 /// - **Process loopback** (`AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`),
 ///   for game audio on its own track: "Minimum supported client: Windows 10
-///   Build 20348", per Microsoft Learn's `AUDIOCLIENT_ACTIVATION_TYPE` page,
+///   Build 20348", per Microsoft Learn's `AUDIOCLIENT_ACTIVATION_TYPE` page
+///   (<https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ne-audioclientactivationparams-audioclient_activation_type>),
 ///   and the ApplicationLoopback sample's README says the same.
 /// - **WGC window capture** (`IGraphicsCaptureItemInterop::CreateForWindow`):
 ///   Windows 10 1903, build 18362, per its Microsoft Learn page.
 ///
-/// OBS registers its process-output source from 19041 instead ("MS says
-/// 20348, but process filtering seems to work earlier", `win-wasapi`'s
-/// `plugin-main.cpp`), which would take in Windows 10 2004 through 22H2
-/// (19041–19045). That is unverified here, so the floor is the documented
-/// one; lowering it is a measurement on a Windows 10 box, for #237, and the
-/// test pinning this constant is what has to change with it.
+/// OBS enables its process audio capture from build 19041, earlier than
+/// Microsoft documents, which would take in Windows 10 2004 through 22H2
+/// (19041–19045). That is an observation about another program's behaviour
+/// and unverified here, so the floor is Microsoft's documented one. #237's
+/// decision
+/// (<https://github.com/NinjaGoldfinch/ninja-recorder/issues/237#issuecomment-5822380979>)
+/// is to lower it to 19041 only once a Windows 10 box shows process loopback
+/// working there, and the test pinning this constant is what has to change
+/// with it.
 pub const MIN_BUILD: u32 = 20_348;
 
 /// `None` if the own backend can run on Windows build `build`, or the reason

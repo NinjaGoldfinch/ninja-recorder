@@ -5,8 +5,26 @@
 //!
 //! **Nothing here touches the game process.** Process loopback is the audio
 //! engine handing over the mix of one process tree's streams; the target is
-//! named by PID and never opened. It is the same API the libobs fork's
-//! process-output source calls, and no injection is involved (§1.1).
+//! named by PID and never opened, and no injection is involved (§1.1).
+//!
+//! Written from Microsoft's documentation: `ActivateAudioInterfaceAsync` on
+//! `VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK` for `IAudioClient`, with an
+//! `AUDIOCLIENT_ACTIVATION_PARAMS` of type
+//! `AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK` passed as a `VT_BLOB`
+//! `PROPVARIANT`, whose `AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS` names the target
+//! process and includes its tree. The completion handler is called on an MTA
+//! worker thread, and must stay alive until it has been. Microsoft's
+//! Application Loopback sample shows the same sequence end to end.
+//!
+//! - <https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-activateaudiointerfaceasync>
+//! - <https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ns-audioclientactivationparams-audioclient_activation_params>
+//! - <https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ne-audioclientactivationparams-audioclient_activation_type>
+//! - <https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ns-audioclientactivationparams-audioclient_process_loopback_params>
+//! - <https://learn.microsoft.com/en-us/samples/microsoft/windows-classic-samples/applicationloopbackaudio-sample/>
+//!
+//! The `ManuallyDrop` around the `PROPVARIANT` is not from any of these: the
+//! blob points at a stack value this code owns, and the spike crashed when
+//! clearing it freed that (DEVELOPMENT.md §16).
 
 use std::mem::ManuallyDrop;
 

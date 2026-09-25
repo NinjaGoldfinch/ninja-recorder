@@ -71,6 +71,10 @@ impl Recorder for StubRecorder {
     fn backend_name(&self) -> String {
         "stub".to_string()
     }
+
+    fn current_file(&self) -> Option<PathBuf> {
+        self.active.as_ref().map(RecordConfig::expected_output_path)
+    }
 }
 
 fn fixture_path() -> Option<PathBuf> {
@@ -97,9 +101,11 @@ mod tests {
         })
         .unwrap();
         assert!(rec.is_recording());
+        assert_eq!(rec.current_file(), Some(dir.join("test.mp4")));
 
         let output = rec.stop().unwrap();
         assert!(!rec.is_recording());
+        assert_eq!(rec.current_file(), None);
         assert!(output.path.exists());
         assert_eq!(output.audio.tracks.len(), 1);
 

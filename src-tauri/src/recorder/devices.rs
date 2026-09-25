@@ -7,10 +7,17 @@
 //! see and change their settings rather than face an empty dropdown with no
 //! explanation.
 //!
-//! `IMMDevice::GetId` returns exactly the string OBS's `wasapi_input_capture`
-//! wants in its `device_id` setting — OBS builds its own device list the same
-//! way — so the ids handed to the frontend can be passed straight back down
-//! into the capture backend without translation.
+//! The id handed to the frontend is `IMMDevice::GetId`'s endpoint ID string.
+//! Microsoft documents it as the way to reopen the same endpoint "at a later
+//! time or in a different process" through `IMMDeviceEnumerator::GetDevice`,
+//! and as opaque, so nothing here parses it. That is exactly what the own
+//! backend does with the stored id (`own/win/audio/endpoint.rs`), in the
+//! capture worker, possibly days after the picker listed it. Both backends
+//! take the string as it is, without translation.
+//!
+//! - <https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdevice-getid>
+//! - <https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdeviceenumerator-getdevice>
+//! - <https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdeviceenumerator-enumaudioendpoints>
 
 use super::audio::AudioInputDevice;
 
@@ -94,10 +101,17 @@ mod imp {
             unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }
                 .map_err(|e| format!("could not create the device enumerator: {e}"))?;
 
-        // OBS resolves a `device_id` of "default" for *input* via
-        // eCommunications, not eConsole. Matching that here is what makes the
-        // picker's "Windows default" entry mean the same device the recorder
-        // will actually open.
+        // "Windows default" is the default capture endpoint for the
+        // communications role: `GetDefaultAudioEndpoint(eCapture,
+        // eCommunications)`. Microsoft's page says a user can assign the
+        // console, multimedia and communications roles to different devices,
+        // and that an application managing voice streams asks for the
+        // communications one; a microphone in a game VOD is voice. The own
+        // backend resolves a microphone with no configured id the same way
+        // (`own/win/audio/endpoint.rs`), and that match is what makes this
+        // entry name the device the recorder will actually open.
+        // <https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdeviceenumerator-getdefaultaudioendpoint>
+        // <https://learn.microsoft.com/en-us/windows/win32/coreaudio/device-roles>
         //
         // SAFETY, all three: `enumerator` is a live interface pointer on a
         // thread with COM initialized, so is the `device` it returns, and

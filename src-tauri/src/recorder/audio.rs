@@ -19,11 +19,17 @@ use serde::{Deserialize, Serialize};
 /// channel you're looking at — see `AudioSourceKind::Application`.
 pub const DISCORD_EXE: &str = "Discord.exe";
 
-/// The most audio tracks a recording may have, on either backend. It is
-/// libobs' `MAX_AUDIO_MIXES`, and the own backend checks the same bound
-/// (`own::select`), so a layout is valid or not whichever one records it. No
-/// preset comes close (the largest is four), but a `Custom` layout arrives
-/// from outside and has to be bounded somewhere.
+/// The most audio tracks a layout may ask for. This is a product limit, not
+/// a format one: a fragmented MP4 numbers its tracks with a 32-bit
+/// `track_ID` (ISO/IEC 14496-12, `tkhd`), and `mp4/write.rs`'s own ceiling
+/// is 255, from the one-byte traf number it writes in `tfra`. What this
+/// bounds is how many stems a preset offers. No built-in preset comes close
+/// (the largest is four: the mix and three stems), but a `Custom` layout
+/// arrives from a settings row and has to be bounded somewhere, since every
+/// track costs an encoder and a mix for the whole recording. Six leaves room
+/// for a custom layout with a stem per source kind and then some. The libobs
+/// backend, while it ships, cannot write more than six either, so raising
+/// this waits for #51 regardless.
 pub const MAX_TRACKS: usize = 6;
 
 /// One capturable audio source. Each maps to exactly one libobs source object
