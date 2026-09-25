@@ -188,7 +188,10 @@ becomes a tag pin, at which point WS1.7 flips it to `deny`. Leaving it at
 ### ffmpeg
 
 The bundled ffmpeg is the BtbN **lgpl** static build, staged by CI and
-invoked only through `lib.rs::ffmpeg_command`. It survives WS8, because it is a
+invoked only through `lib.rs::ffmpeg_command`. v1 imported a step that fetched
+BtbN's floating `latest` asset; it is now a release-branch build pinned by tag
+and SHA-256 in `scripts/ffmpeg-pin.json`, and it ships with its licence texts
+and a record of its source. It survives WS8, because it is a
 separate process doing stream copies. It is not a Cargo dependency and so does
 not appear in `cargo deny` output. Its record, including the licence version and
 what is still owed for shipping it, is

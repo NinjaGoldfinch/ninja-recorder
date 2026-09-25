@@ -445,12 +445,11 @@ jobs:
           fi
           echo "rev=$rev" >> "$GITHUB_OUTPUT"
 
-      # Both staging steps below write into src-tauri/target/libobs and
-      # neither output depends on this repo's own sources, so the whole
-      # directory caches as a unit. ffmpeg has no version to key on (see
-      # the download step), so bump FFMPEG_EPOCH in the key to pull a
-      # fresher build; GitHub also evicts caches untouched for 7 days,
-      # which refreshes it on its own.
+      # Both staging steps below write into src-tauri/target/libobs, so the
+      # whole directory caches as a unit, keyed on what decides its contents:
+      # the libobs-recorder revision, and ffmpeg's pin together with the
+      # script that stages it. Bumping scripts/ffmpeg-pin.json is therefore
+      # a cache miss on its own, with nothing else to remember.
       #
       # Restore and save are separate steps, and the save runs straight after
       # staging, before the opt-in trim below. So the cache only ever holds
@@ -463,7 +462,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: src-tauri/target/libobs
-          key: libobs-${{ runner.os }}-${{ steps.libobs-rev.outputs.rev }}-ffmpeg-epoch2
+          key: libobs-${{ runner.os }}-${{ steps.libobs-rev.outputs.rev }}-ffmpeg-${{ hashFiles('scripts/ffmpeg-pin.json', 'scripts/stage-ffmpeg.ps1') }}
 
       # Builds the out-of-process libobs worker from our capture-backend
       # fork (github.com/NinjaGoldfinch/libobs-recorder — see
@@ -494,31 +493,28 @@ jobs:
           Copy-Item ../libobs-recorder-build/target/release/extprocess_recorder.exe src-tauri/target/libobs/extprocess_recorder.exe -Force
 
       # The **lgpl** build, not gpl. Every ffmpeg invocation this app makes is
-      # `-c copy` — the faststart remux (`recorder/libobs/mod.rs`) and stem
-      # extraction (`audio_tracks.rs`) are both stream copies, and libobs does
-      # all the encoding — so not one GPL-only encoder is ever reachable.
-      # Dropping x264/x265 and friends takes ~13% off a bundle that is a large
-      # share of the 248 MB install (docs/windows-verification.md §5).
+      # `-c copy` or a header read (docs/licensing.md §3), so not one GPL-only
+      # encoder is ever reachable. Dropping x264/x265 and friends takes ~13%
+      # off a bundle that is a large share of the 248 MB install
+      # (docs/windows-verification.md §5).
       #
-      # ffmpeg.exe is bundled into the same `libobs` resource folder so
-      # `LibObsRecorder::stop` (src-tauri/src/recorder/libobs/mod.rs) can
-      # remux each recording to a seekable faststart MP4 after capture —
-      # the crash-safe fragmented format `start()` records with has no
-      # seek index (DEVELOPMENT.md §2.2). Optional at
-      # runtime (lib.rs resolves it with `.ok()`), so a failed/missing
-      # download here degrades to unseekable-but-playable recordings
-      # rather than breaking the build. BtbN's "latest" release is a
-      # continuously-updated static build, not a pinned version — same
-      # looseness as the fork clone above had before it was pinned.
-      - name: Stage ffmpeg for faststart remux
+      # **Pinned, and checked.** scripts/ffmpeg-pin.json names one dated BtbN
+      # release, one release-branch asset in it and that asset's SHA-256, and
+      # the script refuses to stage anything else. A bump is an edit to that
+      # file alone (docs/ci-and-releases.md, "Bumping ffmpeg"). The script also
+      # stages the LGPLv3 and GPLv3 texts beside the binary and writes
+      # FFMPEG-SOURCE.txt, naming the FFmpeg commit and the BtbN build scripts
+      # that are the corresponding source.
+      #
+      # ffmpeg.exe is bundled into the same `libobs` resource folder, where
+      # daemon::ffmpeg() and lib.rs::ffmpeg_path resolve it for the faststart
+      # remux, recovery, trim and stem extraction. It is optional at runtime
+      # but not here: a download that fails or does not match fails the build,
+      # because shipping an unidentified binary is worse than not shipping.
+      - name: Stage ffmpeg (pinned) and its licence texts
         if: matrix.platform == 'windows-latest' && steps.libobs-cache.outputs.cache-hit != 'true'
         shell: pwsh
-        run: |
-          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl.zip" -OutFile ffmpeg.zip
-          Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-extracted
-          $bin = Get-ChildItem ffmpeg-extracted -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
-          New-Item -ItemType Directory -Force -Path src-tauri/target/libobs | Out-Null
-          Copy-Item $bin.FullName src-tauri/target/libobs/ffmpeg.exe -Force
+        run: ./scripts/stage-ffmpeg.ps1
 
       - name: Save libobs backend + ffmpeg
         if: matrix.platform == 'windows-latest' && steps.libobs-cache.outputs.cache-hit != 'true'
@@ -526,6 +522,15 @@ jobs:
         with:
           path: src-tauri/target/libobs
           key: ${{ steps.libobs-cache.outputs.cache-primary-key }}
+
+      # On a cache hit the staging step did not run, so this is what says the
+      # restored folder is the pinned build: every licence text present,
+      # FFMPEG-SOURCE.txt matching both the pin and the binary, and
+      # `ffmpeg -version` naming the pinned version and an LGPLv3 configuration.
+      - name: Check the staged ffmpeg against its pin
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: ./scripts/stage-ffmpeg.ps1 -Verify
 
       # WS1.1, the P0a arm (#5): trim the staged backend to
       # scripts/libobs-keep.txt. Only in the devtools entry of a manual run
@@ -680,6 +685,16 @@ jobs:
             throw "installer.nsi does not include installer-hooks.nsh; the installer would not stop the libobs worker"
           }
           Write-Host "the installer includes the hooks that stop the libobs worker"
+
+          # ffmpeg's licence texts and source record (#53). The staging step put
+          # them in the resource folder; this reads back that the generated
+          # installer actually installs each one.
+          foreach ($f in 'ffmpeg.exe', 'FFMPEG-LICENSE.txt', 'FFMPEG-COPYING.GPLv3.txt', 'FFMPEG-LICENSE.md', 'FFMPEG-SOURCE.txt') {
+            if (-not (Select-String -Path $nsi.FullName -Pattern ('libobs[\\/]' + [regex]::Escape($f)) -Quiet)) {
+              throw "installer.nsi does not install libobs\$f"
+            }
+          }
+          Write-Host "the installer ships ffmpeg.exe beside its licence texts and FFMPEG-SOURCE.txt"
 
       # A trimmed build says so in its name, so it cannot be mistaken for the
       # devtools build of the same commit when the two sit side by side.

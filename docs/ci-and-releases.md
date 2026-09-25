@@ -387,14 +387,15 @@ flowchart TB
     S["Checkout + Node + Rust + cache"] --> W1["Resolve libobs backend revision"]
     W1 --> W2{"cache hit?"}
     W2 -->|"no"| W3["Stage libobs capture backend<br/><small>build extprocess_recorder from the fork,<br/>copy it + libobs_&lt;ver&gt;/ DLLs into<br/>src-tauri/target/libobs/</small>"]
-    W3 --> W4["Stage ffmpeg for faststart remux<br/><small>static build from BtbN/FFmpeg-Builds</small>"]
+    W3 --> W4["Stage ffmpeg (pinned) and its licence texts<br/><small>stage-ffmpeg.ps1: the BtbN asset in ffmpeg-pin.json,<br/>SHA-256 checked, plus FFMPEG-* texts</small>"]
     W4 --> WS["Save the untrimmed directory to the cache"]
-    W2 -->|"yes"| TR
-    WS --> TR{"LIBOBS_TRIM?<br/><small>devtools entry of a dispatch<br/>with libobs_trim ticked</small>"}
+    W2 -->|"yes"| FV
+    WS --> FV["Check the staged ffmpeg against its pin<br/><small>stage-ffmpeg.ps1 -Verify</small>"]
+    FV --> TR{"LIBOBS_TRIM?<br/><small>devtools entry of a dispatch<br/>with libobs_trim ticked</small>"}
     TR -->|"yes"| TT["trim-libobs.ps1 -Inventory, then -Apply<br/><small>scripts/libobs-keep.txt</small>"]
     TR -->|"no"| W5
     TT --> W5["tauri build → NSIS installer"]
-    W5 --> C["Assert the installer's shortcut starts the app,<br/>and that it carries the worker-stopping hooks<br/><small>MAINBINARYNAME and the installer-hooks.nsh include<br/>in the generated installer.nsi</small>"]
+    W5 --> C["Assert the installer's shortcut starts the app,<br/>that it carries the worker-stopping hooks,<br/>and that it installs ffmpeg's licence texts<br/><small>MAINBINARYNAME, the installer-hooks.nsh include<br/>and libobs\FFMPEG-* in the generated installer.nsi</small>"]
     C --> U["Upload artifact (7-day retention)"]
     W5 -.->|"push / manual only"| W6["Second bundle: --features devtools"]
     W6 --> C
@@ -412,8 +413,65 @@ throughout.
 
 `tauri.windows.conf.json` bundles `src-tauri/target/libobs/` as a resource;
 `LibObsRecorder::new` resolves it at runtime via Tauri's path resolver.
-ffmpeg is resolved with `.ok()`: optional, so a failed download degrades to
-unseekable-but-playable recordings rather than a broken build.
+ffmpeg is resolved with `.ok()`: optional at runtime, so a missing binary
+degrades to unseekable-but-playable recordings. At build time it is not
+optional: the staging step fails the job if the download fails or does not
+match its pin.
+
+### ffmpeg is pinned, and ships with its licence
+
+[`scripts/stage-ffmpeg.ps1`](../scripts/stage-ffmpeg.ps1) is the only thing
+that fetches ffmpeg, and [`scripts/ffmpeg-pin.json`](../scripts/ffmpeg-pin.json)
+is the only place its version is written. The script downloads the pinned
+asset from the pinned BtbN release, refuses it unless its SHA-256 is the
+pinned one, and stages five files into `src-tauri/target/libobs/`:
+
+| File | What it is |
+|---|---|
+| `ffmpeg.exe` | the binary, from the archive's `bin/` |
+| `FFMPEG-LICENSE.txt` | the archive's `LICENSE.txt`, checked byte for byte against FFmpeg's `COPYING.LGPLv3` at the pinned commit |
+| `FFMPEG-COPYING.GPLv3.txt` | the GPLv3, which the LGPLv3 incorporates; fetched from FFmpeg's source at the pinned commit and checked against a fixed hash |
+| `FFMPEG-LICENSE.md` | FFmpeg's own licensing statement, from the same commit |
+| `FFMPEG-SOURCE.txt` | the FFmpeg version and commit, the BtbN release and build-script commit, both SHA-256s, and where the corresponding source is |
+
+`-Verify` runs on every Windows build, after the cache restore, so a cache hit
+is checked too: the files are present, `FFMPEG-SOURCE.txt` matches the pin and
+the binary, and `ffmpeg -version` names the pinned version with
+`--enable-version3` and without `--enable-gpl` or `--enable-nonfree`. The
+installer check after `tauri build` then reads the generated `installer.nsi` and
+fails unless it installs all five. `scripts/libobs-keep.txt` keeps `FFMPEG-*`,
+so a trimmed build keeps them too.
+[licensing.md §3](licensing.md#3-ffmpeg-the-one-copyleft-component-that-stays-53)
+is why each of these is owed.
+
+#### Bumping ffmpeg
+
+1. Pick a **month-end** `autobuild-*` release on
+   [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases). BtbN
+   keeps those for two years and daily ones for 14 days, and an expired pin
+   fails the next build that misses the cache.
+2. In it, take the static **LGPL** win64 asset of a **release branch**
+   (`ffmpeg-nX.Y.Z-…-win64-lgpl-X.Y.zip`), not `master` (`ffmpeg-N-…`) and
+   never a `gpl` one. The script refuses an asset name that is not
+   `-win64-lgpl`.
+3. Edit `scripts/ffmpeg-pin.json`, and nothing else:
+
+   ```bash
+   tag=autobuild-YYYY-MM-DD-HH-MM
+   gh api repos/BtbN/FFmpeg-Builds/releases/tags/$tag \
+     --jq '.assets[] | select(.name | test("win64-lgpl-[0-9.]+\\.zip$")) | .name + " " + .digest'
+   gh api repos/BtbN/FFmpeg-Builds/git/ref/tags/$tag --jq .object.sha   # btbnCommit
+   gh api repos/FFmpeg/FFmpeg/commits/<short hash from the asset name> --jq .sha   # ffmpegCommit
+   ```
+
+   `sha256` is the digest without its `sha256:` prefix; cross-check it against
+   that release's `checksums.sha256`. `version` is the `nX.Y.Z-N-g<hash>` part
+   of the asset name, and `branch` is `release/X.Y`.
+4. The cache key hashes the pin file, so the next build re-stages on its own.
+   Run the build (`gh workflow run ci.yml --ref <branch>`) and check the
+   "Check the staged ffmpeg against its pin" step prints the new version.
+5. Update the version rows in
+   [licensing.md §3](licensing.md#3-ffmpeg-the-one-copyleft-component-that-stays-53).
 
 ### The installer's shortcut is checked against what was built
 

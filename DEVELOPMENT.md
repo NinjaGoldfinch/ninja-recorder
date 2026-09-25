@@ -187,7 +187,7 @@ Implemented in `src-tauri/src/recorder/`: `Recorder`, `RecordConfig`, `RecorderE
 
 **Runtime files: staged outside Cargo, not via artifact-dependencies.** league_record gets `extprocess_recorder.exe` + its libobs DLLs into the build via Cargo's artifact-dependency feature (`artifact = "bin:..."`), which needs nightly Rust + the unstable `bindeps` flag, since their whole project builds on nightly (CI: `dtolnay/rust-toolchain@nightly`). We can't do that: `-Z bindeps` syntax in `Cargo.toml` breaks manifest parsing *for every platform*, confirmed locally (`cargo check` on macOS failed until the artifact-dependency lines were removed). It would force the dev box's `cargo check`/`npm run tauri dev` onto nightly + an unstable flag just to support an optional Windows-only binary, which is a real regression against §9's dev loop. Instead, CI's "Stage libobs capture backend" step (`.github/workflows/ci.yml`'s `build` job, Windows leg only) builds the fork's `extprocess_recorder` binary as a fully separate `cargo build` invocation and copies it + the matching `libobs_<version>/` DLL folder into `src-tauri/target/libobs/` directly, with no Cargo dependency-graph involvement and ordinary stable Rust throughout. `tauri.windows.conf.json` then bundles that folder as a resource, and `LibObsRecorder::new` (lib.rs) resolves it at runtime via Tauri's path resolver. Anyone working on the capture backend locally on the Windows box needs to run the same clone-build-copy sequence by hand before `cargo run`/`npm run tauri dev` until that's scripted for local use too.
 
-**Faststart remux on stop, staged the same way.** The fork's `muxer_settings` (above) trade seekability for crash-safety: `frag_keyframe+empty_moov+default_base_moof` means no player, including the review UI's own WebView2 `<video>`, can reliably scrub the file, since there's no upfront seek index. `LibObsRecorder::stop` fixes this up after every *clean* stop with a stream-copy remux (`ffmpeg -c copy -movflags +faststart`, lossless, just rewrites the container index) before handing the path back. `ffmpeg.exe` is staged into the same `target/libobs/` resource folder by a sibling CI step ("Stage ffmpeg for faststart remux") that downloads a static build from BtbN's FFmpeg-Builds releases. It is optional at runtime (`lib.rs` resolves it with `.ok()`), so a failed download degrades to unseekable-but-still-playable recordings rather than breaking the build. **Not verified**, with the same caveat as the rest of this backend below: nothing has confirmed the remux actually runs against a real capture on a real Windows box yet, only that it type-checks.
+**Faststart remux on stop, staged the same way.** The fork's `muxer_settings` (above) trade seekability for crash-safety: `frag_keyframe+empty_moov+default_base_moof` means no player, including the review UI's own WebView2 `<video>`, can reliably scrub the file, since there's no upfront seek index. `LibObsRecorder::stop` fixes this up after every *clean* stop with a stream-copy remux (`ffmpeg -c copy -movflags +faststart`, lossless, just rewrites the container index) before handing the path back. `ffmpeg.exe` is staged into the same `target/libobs/` resource folder by a sibling CI step ("Stage ffmpeg (pinned) and its licence texts") that downloads a static build from BtbN's FFmpeg-Builds releases, pinned and checksummed in `scripts/ffmpeg-pin.json` (§18). It is optional at runtime (`lib.rs` resolves it with `.ok()`), so a missing binary degrades to unseekable-but-still-playable recordings; a download that fails or does not match its pin fails the build. **Not verified**, with the same caveat as the rest of this backend below: nothing has confirmed the remux actually runs against a real capture on a real Windows box yet, only that it type-checks.
 
 **Every ffmpeg spawn gets `CREATE_NO_WINDOW`.** ffmpeg ships as a console-subsystem binary, so a GUI process spawning one makes Windows allocate it a fresh console: an empty black terminal window sitting over the game for the length of every faststart remux, and again each time the review player extracts a stem (§2.5). Both call sites capture stdout and stderr, so that window never had anything to display; it is pure noise, and on the remux path it lands at exactly the moment the player is reading the post-game screen. `lib.rs`'s `ffmpeg_command` is now the only way the bundled ffmpeg is launched and it sets the flag there, so a third call site cannot reintroduce the window by forgetting. The libobs worker needs no equivalent: the fork builds `extprocess_recorder.exe` with `windows_subsystem = "windows"` for release, so it is only ever visible in Task Manager, which is where [windows-verification.md](docs/windows-verification.md) checks for it.
 
@@ -597,7 +597,7 @@ toward the "N unknown" sub-label on the Recorded tile.
 
 The obvious tool is `ffprobe -show_format`, which answers this in clean JSON.
 **We don't ship it.** CI stages exactly one binary into the bundle,
-`ffmpeg.exe` (`.github/workflows/ci.yml`, "Stage ffmpeg for faststart remux"),
+`ffmpeg.exe` (`.github/workflows/ci.yml`, "Stage ffmpeg (pinned) and its licence texts"),
 and adding ffprobe would roughly double that download to obtain one number.
 
 So the probe runs `ffmpeg -hide_banner -i <file>` with no output file. ffmpeg
@@ -3479,6 +3479,18 @@ only copies streams or reads headers. Its licence does not reach a program
 that runs it rather than linking it, and the copy-only rule is what makes the
 LGPL build sufficient. That is why every spawn goes through
 `lib.rs::ffmpeg_command`.
+
+**It is pinned to a release-branch build from a month-end release.** The
+LGPL's source obligation is about the exact binary shipped, so "BtbN's
+latest", a floating asset rebuilt daily from FFmpeg's `master`, identified no
+source at all. `scripts/ffmpeg-pin.json` names one `autobuild-*` release, a
+release-branch asset in it (a tagged FFmpeg version plus its backports rather
+than whatever `master` held that afternoon), and the asset's SHA-256, and CI
+stages nothing else. The release is a month-end one because BtbN keeps those
+for two years and the dailies for fourteen days: a pin that expires in a
+fortnight turns the next cache miss into a broken build. The source itself
+does not depend on that retention, because what ships beside the binary
+points at git commits, FFmpeg's and BtbN's, not at the release asset.
 
 **The change is not retroactive.** Every release before `v2.1.0` was
 distributed under GPL-2.0-only and stays so. Those releases stay published,
