@@ -100,6 +100,41 @@ t = 0 and the clock every marker is placed against agree to within a return,
 and the own backend needs no marker offset of its own. The doc comment on
 `start` pins it.
 
+**Decision: a resize scales; it does not crop** (#240). The own backend's
+output size is fixed at `start`, because the encoder is set up for one size
+and the file has one video track of that size. The game window can change size
+afterwards (a resolution change, windowed to borderless, a border dragged),
+and WGC follows it. The spike cropped a window that grew and left stale
+pixels round one that shrank. The own backend now scales the frame into the
+fixed output with the D3D11 video processor, keeping its aspect ratio,
+centred, with black bars (`own/fit.rs`, `own/win/scale.rs`). That is what
+libobs's window capture does into its fixed canvas, so a file from either
+backend looks the same after a resize. Two alternatives were rejected.
+Cropping is the spike's behaviour and the bug. Restarting the encoder at the
+new size would give one file two frame sizes, which fragmented MP4 can hold in
+principle, but which the review player's `<video>` and the faststart remux
+have never been asked to handle, and the restart would drop frames mid-game.
+The video processor is a separate `Processor` type because #239 needs it
+anyway, for BGRA → NV12. The common case, a window that never changes size,
+stays a plain GPU copy: a window of the recording's own size (give or take the
+odd pixel it was rounded down by) is never scaled.
+
+**Decision: the game window closing does not end the recording.** WGC raises
+`Closed` when the game ends or crashes, and the own backend used to finalize
+there. The supervisor stops the recorder about five seconds later, when the
+Live Client API goes away, so a recording that ended itself early left the
+file shorter than the recording the state machine thought it had made. The
+loop now keeps ticking, black, until `stop`, and logs the close once; the game
+audio carries on under it, held with silence once the game has gone, so both
+tracks end together. A lost GPU device
+(`DXGI_ERROR_DEVICE_REMOVED`, `_RESET`, `_HUNG`: a driver update, a TDR)
+*does* end it, because nothing made on that device works again: what was
+written is finalized, `stop` returns the file with a warning in `daemon.log`,
+and the next `start` warms up a new device. `stop` waits at most 20 s for the
+capture worker's answer, and a worker wedged in a driver past that is killed
+(§12, "The capture worker"): the file is kept, playable up to its last fragment
+and remuxed like any other, and the supervisor is never held.
+
 **Decision: Media Foundation is delay-loaded.** `build.rs` passes
 `/DELAYLOAD` for `mfplat.dll` and `mfreadwrite.dll`. An ordinary import would
 stop Windows starting the executable at all where they are missing, which is a
@@ -2104,7 +2139,7 @@ not.
 `windows-latest` (`tests/capture_worker.rs`): the handshake, a `prepare`, a
 clean exit on `Release` and on EOF. The rest, the worker appearing and going
 with the client, a killed worker mid-game, a killed daemon, is
-`windows-verification.md` §11.4.
+`windows-verification.md` §11.5.
 
 ---
 

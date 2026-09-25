@@ -272,6 +272,11 @@ struct RecordingSession {
     /// the finalize falls back to `insert_recording` and behaves exactly as
     /// it did before this existed.
     recording_id: Option<i64>,
+    /// The `games` row opened beside it (WS9): the game this recording is
+    /// of, placed in its block and snapshotted against the objectives active
+    /// as it started. `None` if that write failed, in which case finalize
+    /// makes the game from the recording instead and it has no snapshot.
+    game_id: Option<i64>,
     tracker: MarkerTracker,
     markers: Vec<PendingMarker>,
     samples: Vec<PendingSample>,
@@ -1254,8 +1259,24 @@ impl Supervisor {
                         None
                     }
                 };
+                // The game goes in beside the recording (WS9), so a review,
+                // its block and the objectives it is played against exist
+                // from the start. Logged and carried like the row above:
+                // nothing about reviewing is worth a recording.
+                let game_id = match self.db.start_game(recording_id, started_at_millis) {
+                    Ok(id) => Some(id),
+                    Err(e) => {
+                        warn!(
+                            "state_machine",
+                            "could not open a game for this recording ({e}); it will be made \
+                             at finalize, without an objective snapshot"
+                        );
+                        None
+                    }
+                };
                 *self.session.lock().unwrap() = Some(RecordingSession {
                     recording_id,
+                    game_id,
                     tracker: MarkerTracker::new(),
                     markers: Vec::new(),
                     samples: Vec::new(),
@@ -1302,6 +1323,21 @@ impl Supervisor {
     /// copy — `last_finalized` is still set either way, just with
     /// `recording_id: None`, so nothing already captured is thrown away
     /// even if the row never made it to disk.
+    /// Completes this recording's game (WS9), making it from the recording
+    /// first if the start-insert failed. Logged, never fatal: the recording
+    /// row is already written, and a game can be made for it later by
+    /// opening its review.
+    fn finish_game(&self, game_id: Option<i64>, facts: &db::review::GameFacts) {
+        let game_id = match (game_id, facts.recording_id) {
+            (Some(id), _) => Ok(id),
+            (None, Some(recording_id)) => self.db.ensure_game_for_recording(recording_id),
+            (None, None) => return,
+        };
+        if let Err(e) = game_id.and_then(|id| self.db.finish_game(id, facts)) {
+            warn!("state_machine", "could not complete the game for this recording: {e}");
+        }
+    }
+
     fn stop_recording(&self) {
         let session = self.session.lock().unwrap().take();
         // Read *before* the `match` below: that match holds the recorder
@@ -1488,6 +1524,23 @@ impl Supervisor {
                                 "failed to insert samples for recording {id}: {e}"
                             );
                         }
+
+                        let ended_at = duration_s
+                            .map(|d| started_at + (d * 1000.0) as i64)
+                            .unwrap_or_else(timestamp_millis);
+                        self.finish_game(
+                            session.as_ref().and_then(|s| s.game_id),
+                            &db::review::GameFacts {
+                                recording_id: Some(id),
+                                riot_game_id: game.game_id,
+                                champion: live.champion.clone(),
+                                matchup: scoreboard.as_ref().and_then(db::review::lane_opponent),
+                                result: live.win.map(|w| {
+                                    if w { db::review::GameResult::Win } else { db::review::GameResult::Loss }
+                                }),
+                                ended_at: Some(ended_at),
+                            },
+                        );
                         Some(id)
                     }
                     Err(e) => {
@@ -2089,6 +2142,7 @@ mod tests {
             // them: `None` is the "the start-insert did not happen" case, and
             // exercising it here keeps the fallback path honest.
             recording_id: None,
+            game_id: None,
             tracker: MarkerTracker::new(),
             markers: Vec::new(),
             samples: Vec::new(),
@@ -3274,6 +3328,47 @@ mod tests {
         let rows = sup.db.list_recordings().unwrap();
         assert!(rows[0].duration_s.is_some());
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// WS9: a recording opens its game as it starts, in a block and against
+    /// the objectives active then, and finalize completes it.
+    #[test]
+    fn a_recording_opens_its_game_and_finalize_completes_it() {
+        let (sup, dir) = test_supervisor();
+        let objective = sup
+            .db
+            .create_objective("ward at 2:45", db::review::ObjectiveCategory::Macro, 0)
+            .unwrap();
+        sup.start_recording();
+        let game_id = sup.session.lock().unwrap().as_ref().unwrap().game_id.expect("a game");
+        let review = sup.db.get_game_review(game_id).unwrap().unwrap();
+        assert!(review.game.block_id.is_some());
+        assert_eq!(review.objectives[0].objective_id, objective.id);
+        assert_eq!(review.game.ended_at, None, "in progress");
+
+        sup.stop_recording();
+
+        let recording_id = sup.status().last_finalized.unwrap().recording_id.unwrap();
+        let game = sup.db.get_game_review(game_id).unwrap().unwrap().game;
+        assert_eq!(game.recording_id, Some(recording_id));
+        assert!(game.ended_at.is_some());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A session that lost its game id finds the recording's game at
+    /// finalize rather than making a second one.
+    #[test]
+    fn a_session_without_a_game_id_completes_the_recordings_game_not_a_new_one() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+        let opened = sup.session.lock().unwrap().as_mut().unwrap().game_id.take().unwrap();
+
+        sup.stop_recording();
+
+        let recording_id = sup.status().last_finalized.unwrap().recording_id.unwrap();
+        assert_eq!(sup.db.ensure_game_for_recording(recording_id).unwrap(), opened);
+        assert!(sup.db.get_game_review(opened).unwrap().unwrap().game.ended_at.is_some());
         std::fs::remove_dir_all(&dir).ok();
     }
 

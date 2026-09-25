@@ -7,6 +7,8 @@
 //! - `device` — the Windows build, the adapters, the D3D11 device, QPC.
 //! - `capture` — the WGC capture of the game window, and the slots its
 //!   frames are copied into.
+//! - `scale` — frames into the fixed-size slots: a copy, or the D3D11 video
+//!   processor scaling a resized window into them, letterboxed.
 //! - `process` — the process table and the game window's owner, which
 //!   `root` chooses the audio's process tree from.
 //! - `audio` — the game's audio by process loopback, on its own thread.
@@ -29,6 +31,7 @@ mod device;
 mod encode;
 pub(crate) mod host;
 mod process;
+mod scale;
 mod session;
 
 use std::path::PathBuf;
@@ -54,8 +57,12 @@ const PREPARE_WAIT: Duration = Duration::from_secs(30);
 /// `prepare` never ran.
 const START_WAIT: Duration = Duration::from_secs(30);
 
-/// How long the worker has to finalize a recording.
-const STOP_WAIT: Duration = Duration::from_secs(60);
+/// How long the worker has to finalize a recording. A clean finalize drains a
+/// few frames and writes one fragment, well under a second; this is for one
+/// that never returns (a driver wedged by a lost GPU, say). The worker is then
+/// killed, so nothing is still writing the file, and it is kept and remuxed
+/// like any other the worker died on.
+const STOP_WAIT: Duration = Duration::from_secs(20);
 
 /// How long a released worker has to exit, finalizing anything in flight on
 /// the way, before it is killed.
