@@ -1,6 +1,7 @@
-//! The own backend's session summary: one line in `daemon.log` when a
-//! recording starts and one when it stops, so a run can be judged from the
-//! log alone and #11's backend comparison filled in from it (DEVELOPMENT.md
+//! The own backend's session summary: one line when a recording starts and
+//! one when it stops, logged by the capture worker in `worker.log` and copied
+//! into `daemon.log` from its replies, so a run can be judged from the log
+//! alone and #11's backend comparison filled in from it (DEVELOPMENT.md
 //! §13, "The own backend's summary lines").
 //!
 //! Everything here is plain data and rendering. `own/win/` fills the structs
@@ -216,8 +217,7 @@ pub fn render_stop(
 }
 
 /// The line after the stop, from the daemon's side: the faststart remux.
-/// `None` is a remux that was not attempted (no ffmpeg, or a session that
-/// never answered and may still be writing the file).
+/// `None` is a remux that was not attempted, because there is no ffmpeg.
 pub fn render_remux(path: &Path, remux: Option<&(Result<(), String>, Duration)>) -> String {
     let result = match remux {
         None => "skipped".to_string(),

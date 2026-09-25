@@ -59,6 +59,24 @@ pub struct Started {
     /// recording at all: the same trade the libobs fork makes ("lose per-app
     /// audio, not all recording").
     pub audio: AudioLayout,
+    /// The start line, as logged (`own::stats`).
+    pub summary: String,
+}
+
+/// What a stop answers with.
+pub struct Stopped {
+    /// `Ok(None)` for a clean stop, `Ok(Some(_))` for a recording that ended
+    /// early but was finalized, and `Err` when the finalize itself failed.
+    pub result: Result<Option<String>, String>,
+    /// The stop line, as logged (`own::stats`), when a recording was
+    /// finalized.
+    pub summary: Option<String>,
+}
+
+impl Stopped {
+    fn not_recording() -> Stopped {
+        Stopped { result: Err("not recording".to_string()), summary: None }
+    }
 }
 
 /// What `OwnRecorder` asks of the session thread. Every variant that expects
@@ -77,10 +95,8 @@ pub enum Command {
         reply: Sender<Result<Started, String>>,
         origin: Receiver<i64>,
     },
-    /// Stop and finalize. Answers `Ok(None)` for a clean stop, `Ok(Some(_))`
-    /// for a recording that ended early but was finalized, and `Err` when the
-    /// finalize itself failed.
-    Stop(Sender<Result<Option<String>, String>>),
+    /// Stop and finalize. Answers with how that went ([`Stopped`]).
+    Stop(Sender<Stopped>),
     /// Tear down and exit. A recording in flight is finalized first.
     Release,
 }
@@ -121,7 +137,7 @@ fn refuse_all(commands: &Receiver<Command>, why: &str) {
                 let _ = reply.send(Err(why.to_string()));
             }
             Command::Stop(reply) => {
-                let _ = reply.send(Err("not recording".to_string()));
+                let _ = reply.send(Stopped::not_recording());
             }
             Command::Release => return,
         }
@@ -143,13 +159,13 @@ struct Session {
     mf_started: bool,
     /// The answer for the next `Stop`, when the recording ended on its own
     /// (a write failed, or the GPU device was lost) and was finalized then.
-    ended: Option<Result<Option<String>, String>>,
+    ended: Option<Stopped>,
 }
 
 /// How a recording's loop ended.
 enum Ended {
     /// `stop` asked.
-    Stop(Sender<Result<Option<String>, String>>),
+    Stop(Sender<Stopped>),
     /// `release`, or `OwnRecorder` dropped: finalize and exit.
     Exit,
     /// The recording cannot go on (a write failed, or the GPU device was
@@ -171,9 +187,7 @@ impl Session {
                     }
                 }
                 Command::Stop(reply) => {
-                    let answer =
-                        self.ended.take().unwrap_or_else(|| Err("not recording".to_string()));
-                    let _ = reply.send(answer);
+                    let _ = reply.send(self.ended.take().unwrap_or_else(Stopped::not_recording));
                 }
                 Command::Release => return,
             }
@@ -249,8 +263,11 @@ impl Session {
                 return false;
             }
         };
-        let started =
-            Started { status: recording.status.clone(), audio: recording.layout.clone() };
+        let started = Started {
+            status: recording.status.clone(),
+            audio: recording.layout.clone(),
+            summary: recording.started.clone(),
+        };
         if reply.send(Ok(started)).is_err() {
             // `start`'s caller has gone. Nothing will ever stop this, so do
             // not begin.
@@ -276,7 +293,9 @@ impl Session {
 
         let (finalized, summary) = recording.finish();
         let bytes = std::fs::metadata(&path).ok().map(|m| m.len());
-        info!("recorder", "{}", stats::render_stop(&path, FPS, &summary, &finalized, bytes));
+        let line = stats::render_stop(&path, FPS, &summary, &finalized, bytes);
+        info!("recorder", "{line}");
+        let summary = Some(line);
         // A lost device stays lost, and everything warm was made on it: the
         // next `start` warms up again from scratch, on whatever GPU is there.
         if self.warm.as_ref().is_some_and(|warm| device::removed(&warm.device).is_some()) {
@@ -285,7 +304,7 @@ impl Session {
         }
         match ended {
             Ended::Stop(reply) => {
-                let _ = reply.send(finalized.map(|()| None));
+                let _ = reply.send(Stopped { result: finalized.map(|()| None), summary });
                 false
             }
             Ended::Exit => {
@@ -296,10 +315,11 @@ impl Session {
             }
             Ended::Problem(problem) => {
                 warn!("recorder", "own backend: the recording ended early: {problem}");
-                self.ended = Some(match finalized {
+                let result = match finalized {
                     Ok(()) => Ok(Some(problem)),
                     Err(e) => Err(format!("{problem}; then {e}")),
-                });
+                };
+                self.ended = Some(Stopped { result, summary });
                 false
             }
         }
@@ -367,6 +387,8 @@ struct Recording {
     ticks: u64,
     /// What the stop line sums up (`own::stats`).
     summary: stats::Stop,
+    /// The start line, for `Started`.
+    started: String,
 }
 
 impl Recording {
@@ -497,6 +519,7 @@ impl Recording {
             layout,
             ticks: 0,
             summary: stats::Stop::default(),
+            started,
         })
     }
 

@@ -256,7 +256,7 @@ impl Recorder for OwnRecorder {
             Reply::Started { result } => result,
             other => return Err(self.out_of_step(other)),
         };
-        let Started { status, audio } = match started {
+        let Started { status, audio, summary } = match started {
             Ok(started) => started,
             Err(e) => {
                 if self.status == Status::Idle {
@@ -265,6 +265,10 @@ impl Recorder for OwnRecorder {
                 return Err(RecorderError::Backend(e));
             }
         };
+        // The worker logged it to `worker.log`; this is the copy.
+        if let Some(summary) = summary {
+            info!("recorder", "{summary}");
+        }
         if let Status::Software { encoder, reason } = &status {
             warn!("recorder", "own backend: software H.264 encoding with {encoder}: {reason}");
         }
@@ -311,7 +315,13 @@ impl Recorder for OwnRecorder {
         self.release_pending = false;
         let answer = match action {
             Action::Send | Action::SendThenShutDown => match self.ask(Request::Stop, STOP_WAIT) {
-                Ok(Reply::Stopped { result }) => Some(result),
+                Ok(Reply::Stopped { result, summary }) => {
+                    // The worker logged it to `worker.log`; this is the copy.
+                    if let Some(summary) = summary {
+                        info!("recorder", "{summary}");
+                    }
+                    Some(result)
+                }
                 Ok(other) => {
                     let _ = self.out_of_step(other);
                     None

@@ -33,7 +33,9 @@ pub trait Host {
     fn start(&mut self, path: PathBuf, plan: AudioLayout) -> Result<Started, String>;
     /// The origin for the start that was just answered.
     fn origin(&mut self, qpc_hns: i64);
-    fn stop(&mut self) -> Result<Option<String>, String>;
+    /// How the stop went, and the stop summary line if a recording was
+    /// finalized (`Reply::Stopped`).
+    fn stop(&mut self) -> (Result<Option<String>, String>, Option<String>);
     /// Finalize anything in flight and tear down. Returns once every capture
     /// resource is released.
     fn release(&mut self);
@@ -132,7 +134,10 @@ fn run(reader: &mut impl BufRead, writer: &mut impl Write, host: &mut impl Host)
                 }
                 Reply::Refused { reason: "an origin with no start waiting for it".to_string() }
             }
-            Request::Stop => Reply::Stopped { result: host.stop() },
+            Request::Stop => {
+                let (result, summary) = host.stop();
+                Reply::Stopped { result, summary }
+            }
             Request::Release => return Exit::Released,
         };
         if protocol::write_line(writer, &reply).is_err() {
@@ -158,8 +163,8 @@ impl Host for Refusing {
 
     fn origin(&mut self, _qpc_hns: i64) {}
 
-    fn stop(&mut self) -> Result<Option<String>, String> {
-        Err("not recording".to_string())
+    fn stop(&mut self) -> (Result<Option<String>, String>, Option<String>) {
+        (Err("not recording".to_string()), None)
     }
 
     fn release(&mut self) {}
@@ -188,16 +193,21 @@ mod tests {
                 return Err("no window".into());
             }
             self.recording = true;
-            Ok(Started { status: Status::Ready { encoder: "fake".into() }, audio: plan })
+            let status = Status::Ready { encoder: "fake".into() };
+            Ok(Started { status, audio: plan, summary: None })
         }
 
         fn origin(&mut self, qpc_hns: i64) {
             self.calls.push(format!("origin {qpc_hns}"));
         }
 
-        fn stop(&mut self) -> Result<Option<String>, String> {
+        fn stop(&mut self) -> (Result<Option<String>, String>, Option<String>) {
             self.calls.push("stop".into());
-            if std::mem::take(&mut self.recording) { Ok(None) } else { Err("not recording".into()) }
+            if std::mem::take(&mut self.recording) {
+                (Ok(None), Some("own: stopped x.mp4".into()))
+            } else {
+                (Err("not recording".into()), None)
+            }
         }
 
         fn release(&mut self) {
@@ -257,7 +267,10 @@ mod tests {
         assert!(matches!(replies[0], Reply::Hello { protocol: PROTOCOL_VERSION, .. }));
         assert!(matches!(replies[1], Reply::Prepared { result: Ok(_) }));
         assert!(matches!(replies[2], Reply::Started { result: Ok(_) }));
-        assert_eq!(replies[3], Reply::Stopped { result: Ok(None) });
+        assert_eq!(
+            replies[3],
+            Reply::Stopped { result: Ok(None), summary: Some("own: stopped x.mp4".into()) }
+        );
         assert_eq!(replies.len(), 4, "the origin and the release are not answered");
     }
 

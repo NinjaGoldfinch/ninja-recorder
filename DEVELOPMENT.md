@@ -2303,8 +2303,19 @@ means reading a dozen lines, so the session also writes **one line at start
 and one at stop** that sum it up (#242), and a third for the remux. That is
 what #11's comparison of the two backends can be filled in from, one recording
 per row. The rendering is pure (`own::stats`), and the session only fills its
-structs with counters it already had, plus two it did not. The values below
-show the shape and are not a measurement:
+structs with counters it already had, plus two it did not.
+
+**Which log holds which line.** The session runs in the capture worker, so the
+start and stop lines are logged there, in `worker.log`, beside the detailed
+lines they sum up. The worker also sends each line back to the daemon, in the
+`Started` and `Stopped` replies (`summary`, an optional field, so no protocol
+version bump: each side reads the other's messages with or without it), and
+`OwnRecorder` logs a copy in `daemon.log`, which is where people look first.
+The remux line is the daemon's alone, because the daemon does the remux. A
+worker that dies before it answers `Stop` leaves its stop line nowhere;
+`daemon.log` then has the death, with the exit code, instead.
+
+The values below show the shape and are not a measurement:
 
 ```text
 [recorder] own: recording 2026-09-26_12-00-00.mp4: 1920x1080 from NVIDIA GeForce RTX 3070, encoder NVIDIA H.264 Encoder MFT [VEN_10DE] (hardware), sources: game=PID 4242 (the game window's owner, named League of Legends.exe), microphone=default, Discord.exe=failed (no Discord.exe process is running); tracks: Everything
@@ -2341,14 +2352,13 @@ them itself and does not say, and #239's own MP4 writer is what will be able
 to count them. An estimate from the GOP would be a plausible number, not a
 measured one.
 
-**The remux is its own line** because it happens in a different place. The
-session thread finalizes the file; `OwnRecorder::stop` remuxes it afterwards,
-on the other side of the session's channel (and, once #241 lands, of a process
-boundary). Carrying the counters back across that to print one line would
-change the stop reply on both sides for the sake of formatting. The remux line
-says `ok in <ms> ms`, `failed in <ms> ms, kept unseekable` (the existing
-warning beside it carries ffmpeg's error), or `skipped` when there is no
-ffmpeg or the session never answered.
+**The remux is its own line** because it happens in a different process. The
+worker finalizes the file and logs the stop line before it answers; the daemon
+remuxes afterwards, once the answer is in. Holding the stop line back until
+the remux was done would mean the worker's copy could not have it, and the
+two logs would disagree. The remux line says `ok in <ms> ms`,
+`failed in <ms> ms, kept unseekable` (the existing warning beside it carries
+ffmpeg's error), or `skipped` when there is no ffmpeg to run.
 
 ### Why not `tracing`
 

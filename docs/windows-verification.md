@@ -1501,8 +1501,9 @@ backend is shaped this way is
 recording on Own writes `own: recording <file>: …` when it starts,
 `own: stopped <file>: …` when it stops, and `own: remux <file>: …` after
 ([DEVELOPMENT.md §13](../DEVELOPMENT.md#the-own-backends-summary-lines) says
-what each field means). They sum up the detailed lines the rows below ask
-for, and do not replace them: paste both.
+what each field means). The first two are in `worker.log` with a copy in
+`daemon.log`; the remux line is in `daemon.log` only. They sum up the
+detailed lines the rows below ask for, and do not replace them: paste both.
 
 ### 11.1 WGC video into a fragmented MP4 (#236)
 
