@@ -324,6 +324,30 @@ jobs:
         shell: powershell
         run: ./scripts/smoke-ui.ps1
 
+      # `measure.ps1` is run by hand on the verification box, in Windows
+      # PowerShell 5.1, and nothing else here parses it in that shell. This
+      # does: the self-test checks the CPU arithmetic and the role matching,
+      # and a short `-Cpu -Role` run against a busy child PowerShell (found as
+      # the `worker` role by the flag on its command line) checks the sampling
+      # loop end to end and that a busy core reads as one. Seconds, and needs
+      # nothing built.
+      - name: Check measure.ps1 in Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          ./scripts/measure.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw 'measure.ps1 -SelfTest failed' }
+          $busy = Start-Process powershell -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command', '$end = (Get-Date).AddSeconds(30); while ((Get-Date) -lt $end) { } # --capture-worker'
+          try {
+            Start-Sleep -Seconds 2
+            $rows = @(./scripts/measure.ps1 -Cpu -ProcessName powershell -Role worker,daemon -Label 'CI' -Seconds 5 -IntervalMs 500)
+            $rows | ForEach-Object { Write-Host $_ }
+            if ($rows.Count -ne 1) { throw "expected one row (the worker; no daemon), got $($rows.Count)" }
+            $meanCore = [double]::Parse($rows[0].Split('|')[5].Trim().TrimEnd('%'), [Globalization.CultureInfo]::InvariantCulture)
+            if ($meanCore -lt 25) { throw "a busy loop read as $meanCore% of one core" }
+          } finally {
+            Stop-Process -Id $busy.Id -ErrorAction SilentlyContinue
+          }
+
   # The notices gate. THIRD_PARTY_NOTICES.txt ships in the installer, and
   # `scripts/notices.mjs --check` regenerates it from Cargo.lock (cargo-about)
   # and the production frontend bundle (Vite, in memory) and fails if the
