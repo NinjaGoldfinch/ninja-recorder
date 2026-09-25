@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { patchLabel } from "../../format";
 import type { RecordingRow } from "../../types";
 import { byLane, byName, byPatchDesc, LANE_ORDER, patchParts, sortRows } from "./sort";
 
@@ -74,6 +75,13 @@ describe("byPatchDesc", () => {
 
   it("orders across a major version", () => {
     expect(["14.24", "15.1"].sort(byPatchDesc)).toEqual(["15.1", "14.24"]);
+  });
+
+  it("orders labels across the year renumbering (#280)", () => {
+    // The patch facet sorts labels, not stored builds, and build 16.1 is
+    // labelled 26.1, which still has to sort newer than 15.24.
+    const labels = ["16.1.1.1", "15.24.1.1", "16.19.1.1"].map((p) => patchLabel(p) ?? "");
+    expect(labels.sort(byPatchDesc)).toEqual(["26.19", "26.1", "15.24"]);
   });
 
   it("treats a missing component as zero", () => {
