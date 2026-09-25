@@ -1,0 +1,9 @@
+{
+  "btbnTag": "autobuild-2026-08-31-13-27",
+  "btbnCommit": "8267213e26c1031621e6e1210fe3aa4867214f6a",
+  "asset": "ffmpeg-n9.0.1-11-ge47273f4d9-win64-lgpl-9.0.zip",
+  "sha256": "2484854ad6988d34560f4e6ea7a6ecb9dde0af7c229d2591815d056b04ec4f56",
+  "version": "n9.0.1-11-ge47273f4d9",
+  "branch": "release/9.0",
+  "ffmpegCommit": "e47273f4d9227152dcbf543cebaf9e2430ddbcc4"
+}

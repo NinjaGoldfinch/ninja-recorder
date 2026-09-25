@@ -414,13 +414,14 @@ a GPL source.
 
 | | |
 |---|---|
-| Build | [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), asset `ffmpeg-master-latest-win64-lgpl.zip` (`ci.yml`, step "Stage ffmpeg for faststart remux") |
+| Build | [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) release [`autobuild-2026-08-31-13-27`](https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-08-31-13-27), asset `ffmpeg-n9.0.1-11-ge47273f4d9-win64-lgpl-9.0.zip`, staged by [`scripts/stage-ffmpeg.ps1`](../scripts/stage-ffmpeg.ps1) from `ci.yml`'s step "Stage ffmpeg (pinned) and its licence texts" |
+| Pin | [`scripts/ffmpeg-pin.json`](../scripts/ffmpeg-pin.json): the release tag, the asset, its SHA-256 (`2484854ad6988d34560f4e6ea7a6ecb9dde0af7c229d2591815d056b04ec4f56`, from BtbN's `checksums.sha256` for that release, and the same digest GitHub's API reports for the asset), the FFmpeg commit and the BtbN commit. A mismatch fails the build |
 | Variant | `lgpl`: "lacking libraries that are GPL-only. Most prominently libx264 and libx265" (BtbN's README) |
 | Linking | static: the non-`shared` variants are "pure static executables", and CI copies `ffmpeg.exe` alone |
-| Licence | **LGPL-3.0-or-later**, not 2.1. BtbN's `variants/defaults-lgpl.sh` configures `--enable-version3` and names `COPYING.LGPLv3` as the licence file |
-| Version | not pinned. `latest` is a floating tag on FFmpeg's `master`, rebuilt daily. BtbN keeps the last 14 daily builds and the last build of each month for two years |
+| Licence | **LGPL-3.0-or-later**, not 2.1. BtbN's `variants/defaults-lgpl.sh` configures `--enable-version3` and names `COPYING.LGPLv3` as the licence file. CI checks both: the zip's `LICENSE.txt` must be byte-identical to FFmpeg's `COPYING.LGPLv3` at the pinned commit, and `ffmpeg -version` must show `--enable-version3` and neither `--enable-gpl` nor `--enable-nonfree` |
+| Version | **FFmpeg `n9.0.1-11-ge47273f4d9`**: the `release/9.0` branch, 11 commits past the `n9.0.1` tag, at commit [`e47273f4d9227152dcbf543cebaf9e2430ddbcc4`](https://github.com/FFmpeg/FFmpeg/commit/e47273f4d9227152dcbf543cebaf9e2430ddbcc4). Built by BtbN's scripts at [`8267213e26c1031621e6e1210fe3aa4867214f6a`](https://github.com/BtbN/FFmpeg-Builds/tree/8267213e26c1031621e6e1210fe3aa4867214f6a). A month-end release, which BtbN keeps for two years; the dailies go after 14 days |
 | Where it lands | `src-tauri/target/libobs/ffmpeg.exe`, bundled to `$INSTDIR\libobs\ffmpeg.exe` |
-| What ships beside it | nothing. The zip's `LICENSE.txt` is not copied into the bundle |
+| What ships beside it | `FFMPEG-LICENSE.txt` (the zip's `LICENSE.txt`: the LGPLv3), `FFMPEG-COPYING.GPLv3.txt` (the GPLv3 the LGPLv3 incorporates, from FFmpeg's source at the pinned commit, since the zip does not carry it), `FFMPEG-LICENSE.md` (FFmpeg's own licensing statement, same commit) and `FFMPEG-SOURCE.txt` (the version, both commits, the release, both checksums and where the corresponding source is). The build job asserts the generated `installer.nsi` installs all five |
 
 ### How it is run
 
@@ -463,17 +464,32 @@ calls are in its `#[cfg(test)]` module for the same reason.
 Distributing an LGPL-3.0 executable, even unmodified, still has conditions
 attached:
 
-- [ ] **The licence text beside the binary.** Ship `COPYING.LGPLv3` and the
-      GPLv3 text it incorporates next to `ffmpeg.exe`, from the same zip. Today
-      only `ffmpeg.exe` is copied.
-- [ ] **The source, for the exact build shipped.** The `latest` asset is
-      replaced daily, so "BtbN's latest" does not identify the source for any
-      given release. Pin a dated `autobuild-*` release in `ci.yml` and record
-      two things with each release: the FFmpeg commit (`ffmpeg -version`
-      prints it) and the BtbN commit that built it. BtbN's scripts are part
-      of the corresponding source. Then link both, or attach the source to the
-      release. BtbN's retention (monthly builds for two years) is not long
-      enough to be the only copy.
+- [x] **The licence text beside the binary.** `FFMPEG-LICENSE.txt` (the
+      zip's `LICENSE.txt`, which is `COPYING.LGPLv3`) and
+      `FFMPEG-COPYING.GPLv3.txt` ship next to `ffmpeg.exe`. The zip carries only
+      the first, so the GPLv3 comes from FFmpeg's source at the pinned commit
+      and is checked against a fixed SHA-256.
+- [x] **The source, for the exact build shipped.** Pinned to a dated
+      `autobuild-*` release and a release-branch asset, with its checksum, in
+      `scripts/ffmpeg-pin.json`. `FFMPEG-SOURCE.txt`, installed beside the
+      binary, records the FFmpeg commit and the BtbN commit that built it and
+      links both: FFmpeg's git (`git.ffmpeg.org` and the GitHub mirror) at the
+      commit, and BtbN's scripts at theirs, which pin every library linked into
+      the static build. Those are git commits, so they outlive BtbN's two-year
+      retention of the release asset.
+- [ ] **A copy of the source we hold ourselves.** Linking upstream's git is
+      how most redistributors meet the obligation, but it relies on two third
+      parties keeping those commits reachable. Attaching a source archive (the
+      FFmpeg tree at the commit, and BtbN's tree at theirs) to each GitHub
+      release would remove that dependency. It is an owner decision, and it
+      makes every release larger by the size of those two archives.
+- [ ] **The libraries inside the static build.** `ffmpeg -version`'s
+      configuration line enables third-party libraries (libxml2, freetype,
+      harfbuzz, fribidi, libvorbis and others), linked statically into
+      `ffmpeg.exe`, each under its own licence. BtbN's zip carries only
+      FFmpeg's `LICENSE.txt`. Their notices belong in the same place as the
+      Rust and npm ones (#85); which libraries a pin includes is in BtbN's
+      scripts at the pinned commit.
 - [ ] **Say it in the app or the release notes.** One line: the bundled ffmpeg
       is LGPL-3.0-or-later, with the source link above.
 - [ ] **Do not modify it**, and do not link to it. Both would change the
@@ -490,7 +506,7 @@ the release notes and the About panel are edited anyway.
 
 - [ ] `daemon/mod.rs::ffmpeg()` (the daemon: remux, recovery, trim, stems)
 - [ ] `lib.rs::ffmpeg_path` (the UI side's copy)
-- [ ] `ci.yml`'s "Stage ffmpeg for faststart remux" step, and the libobs cache
+- [ ] `ci.yml`'s "Stage ffmpeg (pinned) and its licence texts" step, and the libobs cache
       it shares
 
 Give it its own resource path, update all three together, and only then
@@ -502,8 +518,8 @@ p0c-video/src/probe.rs` also looks for the installed copy at
 
 | Component | Licence | Needs |
 |---|---|---|
-| Rust crates in the binary | allow list in `deny.toml` (MIT, Apache-2.0, BSD, ISC, Zlib, Unicode-3.0, MPL-2.0 and public-domain equivalents) | `deny.toml` covers *which* licences are allowed. Nothing yet collects the **notices** MIT, BSD and Apache-2.0 ask a binary distribution to carry. A generated third-party notices file (for example with `cargo about`) would close that. It is an owner decision, and it is owed under GPL as well |
-| JavaScript in the bundle | `svelte` (MIT), `@tauri-apps/api` (Apache-2.0 OR MIT), from `package-lock.json` | the same notices question. No CI gate checks npm licences; `cargo deny` sees Rust only |
+| Rust crates in the binary | allow list in `deny.toml` (MIT, Apache-2.0, BSD, ISC, Zlib, Unicode-3.0, MPL-2.0 and public-domain equivalents) | `deny.toml` covers *which* licences are allowed; `THIRD_PARTY_NOTICES.txt` carries the **notices** MIT, BSD and Apache-2.0 ask a binary distribution to carry, generated by `cargo about` and checked in CI. See [section 5](#5-third-party-notices-85) |
+| JavaScript in the bundle | `svelte` (MIT), `@tauri-apps/api` (Apache-2.0 OR MIT), from `package-lock.json` | in the same `THIRD_PARTY_NOTICES.txt`, read from the production bundle, and the same CI check fails on a licence `deny.toml` does not allow. See [section 5](#5-third-party-notices-85) |
 | libobs DLLs and `extprocess_recorder.exe` | GPL-2.0 | nothing after #51, which deletes them |
 | `src-tauri/icons/` | copied from v1's first commit (`aab1ef6`) | it is the Tauri logo, Tauri's default scaffold icon (not byte-identical to the current templates). A licence question is unlikely, but the Tauri name and logo are a trademark question. Replace it before any distribution that is not open source |
 | WebView2 | Microsoft's, installed by the NSIS bootstrapper, not bundled | nothing from this repository |
@@ -544,3 +560,80 @@ MIT at the first alpha built after #52, with no action needed.
       the README's licence section says which releases are GPL.
 - [ ] Leave every earlier tag and release in place. Deleting them would not
       relicense them and would break installs that update from them.
+
+---
+
+## 5. Third-party notices (#85)
+
+MIT, BSD and Apache-2.0 allow redistribution on one condition that is easy to
+miss in a binary: the copyright notice and the licence text travel with the
+copy. `deny.toml` decides which licences may be linked. It does not carry
+anyone's notice. [`THIRD_PARTY_NOTICES.txt`](../THIRD_PARTY_NOTICES.txt) does,
+and the installer puts it beside `ninja-recorder.exe`. The About panel in
+Settings names it. This is owed under GPL-2.0 as much as under MIT.
+
+### What generates it
+
+[`scripts/notices.mjs`](../scripts/notices.mjs) writes the whole file from two
+sources:
+
+| Half | Tool | What it covers |
+|---|---|---|
+| Rust | [`cargo-about`](https://github.com/EmbarkStudios/cargo-about) 0.9.2, with [`src-tauri/about.toml`](../src-tauri/about.toml) and the plain-text template [`about.hbs`](../src-tauri/about.hbs) | the crates linked into the shipped binary: `x86_64-pc-windows-msvc`, default features, with build and dev dependencies ignored. Grouped by licence text, each text printed once |
+| JavaScript | Vite's own module graph: the script builds the production bundle in memory and maps every module that rendered any code back to its package | each package's declared licence and every `LICENSE*`, `COPYING*` and `NOTICE*` file it publishes. Today that is `@tauri-apps/api` and `svelte` |
+
+**Why the bundle and not `package.json`.** Tools that read the manifest list
+`dependencies` and leave out `devDependencies`. Here that is wrong both ways.
+Svelte's runtime is compiled into the bundle, and Svelte is a devDependency, so
+it would be left out. A production dependency tree-shaken to nothing would be
+listed. The bundle is what ships, so the script reads the bundle.
+
+**Rust runs offline.** The script runs `cargo fetch --locked` and then
+`cargo about generate --locked --offline --fail`, so the output depends on
+`Cargo.lock` and the published packages and on nothing a network service could
+change between runs. `--fail` stops on a crate whose licence cannot be read.
+
+### What it checks
+
+- **`about.toml`'s `accepted` is the same set as `deny.toml`'s `allow`.** The
+  script compares them and stops if they differ, so the two lists cannot drift.
+  The GPL exceptions are mirrored as per-crate tables, for this crate and four
+  of the fork's five crates. `build-helper` is only a build dependency, so it
+  is not in the graph. Deleting those tables goes with #51 deleting
+  `deny.toml`'s exceptions.
+- **npm licences against the same list.** Each bundled package's SPDX
+  expression has to be satisfied by `deny.toml`'s allow list: every term of an
+  `AND`, or one side of an `OR`. Before this, nothing checked npm licences at
+  all. A package with no licence file also fails.
+- **The committed file is current.** `node scripts/notices.mjs --check`
+  regenerates it and fails on any difference, in the same way
+  `gen-contract --check` works for the contract. Adding, removing or bumping a
+  dependency without regenerating fails CI.
+
+### The gate
+
+The `notices` job in `ci.yml` runs on `ubuntu-latest`, on every pull request
+and push. Nothing in it needs Windows, because cargo-about reads
+`cargo metadata` filtered to the Windows target and compiles nothing. It
+installs cargo-about at a pinned version, since a new version that words a
+licence differently would otherwise fail the check on a commit that changed
+nothing. `release` needs it, alongside `test` and `build`.
+[ci-and-releases.md](ci-and-releases.md#third-party-notices) has its place in
+the job graph.
+
+To regenerate by hand:
+
+```bash
+cargo install --locked cargo-about@0.9.2   # once
+node scripts/notices.mjs                   # then commit THIRD_PARTY_NOTICES.txt
+```
+
+### What it does not cover
+
+- **`ffmpeg.exe`** and the libraries statically linked into it. It is a
+  separate program with its own licence texts ([section 3](#3-ffmpeg-the-one-copyleft-component-that-stays-53)).
+- **The libobs runtime** (the DLLs, plugins and `extprocess_recorder.exe` in
+  `libobs\`), GPL-2.0, which #51 deletes. The fork's Rust crates *are* listed,
+  because they are linked into the binary.
+- **WebView2**, which Microsoft's bootstrapper installs and this installer does
+  not carry.

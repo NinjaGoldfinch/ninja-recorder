@@ -1,11 +1,11 @@
 # CI and releases
 
-One workflow, [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), four
+One workflow, [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), five
 jobs. Installers are produced by CI, never built locally, and never
 cross-compiled.
 
-**Pull requests run `test` and nothing else.** Everything below the test job
-is skipped until a commit reaches `main`.
+**Pull requests run `test` and `notices` and nothing else.** Everything
+below them is skipped until a commit reaches `main`.
 
 ---
 
@@ -15,19 +15,24 @@ is skipped until a commit reaches `main`.
 flowchart TB
     subgraph PR["Pull request"]
         T1["<b>Test</b> (windows-latest)<br/>biome ci · typecheck · check:svelte · vitest<br/>cargo deny check · gen-contract --check<br/>cargo test ×2<br/>cargo clippy ×2<br/>smoke-daemon.ps1<br/><small>±devtools, no --all-targets</small>"]
+        N1["<b>Notices</b> (ubuntu)<br/>notices.mjs --check<br/><small>cargo-about + the Vite bundle</small>"]
     end
     subgraph MAIN["Push to main / manual dispatch"]
         T["<b>Test</b> (windows-latest)"]
+        N["<b>Notices</b> (ubuntu)"]
         V["<b>Version</b> (ubuntu)<br/>commit distance from<br/>the newest real tag"]
         B["<b>Build</b> (windows ×2)<br/>native bundles:<br/>NSIS · devtools NSIS<br/><small>devtools libobs trim: manual, opt-in</small>"]
         R["<b>Release</b> (ubuntu)<br/>publishes from the bundles<br/>the run just produced"]
         V --> B
         V --> R
         T --> R
+        N --> R
         B --> R
     end
     style T1 fill:#e8f5e9,stroke:#2e7d32
     style T fill:#e8f5e9,stroke:#2e7d32
+    style N1 fill:#e8f5e9,stroke:#2e7d32
+    style N fill:#e8f5e9,stroke:#2e7d32
     style R fill:#ede7f6,stroke:#5e35b1
 ```
 
@@ -224,6 +229,25 @@ Without that pin a developer on macOS and a CI run on Windows resolve different
 dependency graphs, and "cargo deny is green" would mean two different things
 depending on who said it.
 
+### Third-party notices
+
+The `notices` job runs `node scripts/notices.mjs --check` on `ubuntu-latest`.
+It regenerates `THIRD_PARTY_NOTICES.txt` from `Cargo.lock` (cargo-about 0.9.2,
+pinned, reading the Windows target) and from the production frontend bundle
+(Vite, built in memory), and fails if the committed file differs. It also
+fails when `about.toml`'s accepted licences are not the same set as
+`deny.toml`'s allow list, and when a bundled npm package's licence is not on
+that list. Adding a dependency therefore means regenerating and committing the
+file in the same change, the same rule `gen-contract --check` applies to the
+contract.
+
+It is a job of its own rather than a step in `test` because nothing in it needs
+Windows, and it finishes long before the Windows compile. `release` needs it.
+The build job checks that the generated `installer.nsi` installs the file,
+which `tauri.windows.conf.json` names as a resource.
+[licensing.md §5](licensing.md#5-third-party-notices-85) is what it covers
+and why the JavaScript half reads the bundle rather than `package.json`.
+
 See [docs/provenance.md](provenance.md) for the debt the exceptions record
 including that the fork is pinned to a *branch*, because it has no tags, which
 is why `[bans] wildcards` is `warn` rather than `deny` until WS1.7.
@@ -246,7 +270,7 @@ gh workflow run ci.yml --ref <branch>
 `build` deliberately does **not** `needs: test`. The two share no output, and
 gating cost the whole test job in latency on every push to main before the
 slow Windows bundle even started. Nothing unreviewed escapes, because
-`release` needs both.
+`release` needs both, and `notices` too.
 
 ## Test
 
@@ -279,6 +303,15 @@ can be asserted without a person at a desktop:
 - the pipe's ACL grants the user who created it, and does **not** grant
   `Everyone`, `Authenticated Users` or `BUILTIN\Users`
 - a second daemon exits 0 and writes nothing to the log
+- no capture worker (`--capture-worker`, #241) is running, since the runner has
+  no League client; found by command line, because by name it is the daemon
+
+`cargo test` starts the binary too, in one mode: `tests/capture_worker.rs`
+spawns `--capture-worker` (Windows only), completes the handshake, sends a
+`prepare`, and checks it exits 0 on `Release` and on EOF, 2 on a wrong protocol
+version, and that its stdout carries nothing but protocol lines. `smoke-ui.ps1`
+excludes a capture worker when it picks the daemon to kill, so a hand run on a
+machine with League open does not kill the worker in its place.
 
 It exists because of a specific failure. The first report from a real Windows
 box was "a console window appears and instantly closes", with no log to say why,
@@ -378,14 +411,15 @@ flowchart TB
     S["Checkout + Node + Rust + cache"] --> W1["Resolve libobs backend revision"]
     W1 --> W2{"cache hit?"}
     W2 -->|"no"| W3["Stage libobs capture backend<br/><small>build extprocess_recorder from the fork,<br/>copy it + libobs_&lt;ver&gt;/ DLLs into<br/>src-tauri/target/libobs/</small>"]
-    W3 --> W4["Stage ffmpeg for faststart remux<br/><small>static build from BtbN/FFmpeg-Builds</small>"]
+    W3 --> W4["Stage ffmpeg (pinned) and its licence texts<br/><small>stage-ffmpeg.ps1: the BtbN asset in ffmpeg-pin.json,<br/>SHA-256 checked, plus FFMPEG-* texts</small>"]
     W4 --> WS["Save the untrimmed directory to the cache"]
-    W2 -->|"yes"| TR
-    WS --> TR{"LIBOBS_TRIM?<br/><small>devtools entry of a dispatch<br/>with libobs_trim ticked</small>"}
+    W2 -->|"yes"| FV
+    WS --> FV["Check the staged ffmpeg against its pin<br/><small>stage-ffmpeg.ps1 -Verify</small>"]
+    FV --> TR{"LIBOBS_TRIM?<br/><small>devtools entry of a dispatch<br/>with libobs_trim ticked</small>"}
     TR -->|"yes"| TT["trim-libobs.ps1 -Inventory, then -Apply<br/><small>scripts/libobs-keep.txt</small>"]
     TR -->|"no"| W5
     TT --> W5["tauri build → NSIS installer"]
-    W5 --> C["Assert the installer's shortcut starts the app,<br/>and that it carries the worker-stopping hooks<br/><small>MAINBINARYNAME and the installer-hooks.nsh include<br/>in the generated installer.nsi</small>"]
+    W5 --> C["Assert the installer's shortcut starts the app,<br/>that it carries the worker-stopping hooks,<br/>and that it installs ffmpeg's licence texts<br/><small>MAINBINARYNAME, the installer-hooks.nsh include<br/>and libobs\FFMPEG-* in the generated installer.nsi</small>"]
     C --> U["Upload artifact (7-day retention)"]
     W5 -.->|"push / manual only"| W6["Second bundle: --features devtools"]
     W6 --> C
@@ -403,8 +437,65 @@ throughout.
 
 `tauri.windows.conf.json` bundles `src-tauri/target/libobs/` as a resource;
 `LibObsRecorder::new` resolves it at runtime via Tauri's path resolver.
-ffmpeg is resolved with `.ok()`: optional, so a failed download degrades to
-unseekable-but-playable recordings rather than a broken build.
+ffmpeg is resolved with `.ok()`: optional at runtime, so a missing binary
+degrades to unseekable-but-playable recordings. At build time it is not
+optional: the staging step fails the job if the download fails or does not
+match its pin.
+
+### ffmpeg is pinned, and ships with its licence
+
+[`scripts/stage-ffmpeg.ps1`](../scripts/stage-ffmpeg.ps1) is the only thing
+that fetches ffmpeg, and [`scripts/ffmpeg-pin.json`](../scripts/ffmpeg-pin.json)
+is the only place its version is written. The script downloads the pinned
+asset from the pinned BtbN release, refuses it unless its SHA-256 is the
+pinned one, and stages five files into `src-tauri/target/libobs/`:
+
+| File | What it is |
+|---|---|
+| `ffmpeg.exe` | the binary, from the archive's `bin/` |
+| `FFMPEG-LICENSE.txt` | the archive's `LICENSE.txt`, checked byte for byte against FFmpeg's `COPYING.LGPLv3` at the pinned commit |
+| `FFMPEG-COPYING.GPLv3.txt` | the GPLv3, which the LGPLv3 incorporates; fetched from FFmpeg's source at the pinned commit and checked against a fixed hash |
+| `FFMPEG-LICENSE.md` | FFmpeg's own licensing statement, from the same commit |
+| `FFMPEG-SOURCE.txt` | the FFmpeg version and commit, the BtbN release and build-script commit, both SHA-256s, and where the corresponding source is |
+
+`-Verify` runs on every Windows build, after the cache restore, so a cache hit
+is checked too: the files are present, `FFMPEG-SOURCE.txt` matches the pin and
+the binary, and `ffmpeg -version` names the pinned version with
+`--enable-version3` and without `--enable-gpl` or `--enable-nonfree`. The
+installer check after `tauri build` then reads the generated `installer.nsi` and
+fails unless it installs all five. `scripts/libobs-keep.txt` keeps `FFMPEG-*`,
+so a trimmed build keeps them too.
+[licensing.md §3](licensing.md#3-ffmpeg-the-one-copyleft-component-that-stays-53)
+is why each of these is owed.
+
+#### Bumping ffmpeg
+
+1. Pick a **month-end** `autobuild-*` release on
+   [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases). BtbN
+   keeps those for two years and daily ones for 14 days, and an expired pin
+   fails the next build that misses the cache.
+2. In it, take the static **LGPL** win64 asset of a **release branch**
+   (`ffmpeg-nX.Y.Z-…-win64-lgpl-X.Y.zip`), not `master` (`ffmpeg-N-…`) and
+   never a `gpl` one. The script refuses an asset name that is not
+   `-win64-lgpl`.
+3. Edit `scripts/ffmpeg-pin.json`, and nothing else:
+
+   ```bash
+   tag=autobuild-YYYY-MM-DD-HH-MM
+   gh api repos/BtbN/FFmpeg-Builds/releases/tags/$tag \
+     --jq '.assets[] | select(.name | test("win64-lgpl-[0-9.]+\\.zip$")) | .name + " " + .digest'
+   gh api repos/BtbN/FFmpeg-Builds/git/ref/tags/$tag --jq .object.sha   # btbnCommit
+   gh api repos/FFmpeg/FFmpeg/commits/<short hash from the asset name> --jq .sha   # ffmpegCommit
+   ```
+
+   `sha256` is the digest without its `sha256:` prefix; cross-check it against
+   that release's `checksums.sha256`. `version` is the `nX.Y.Z-N-g<hash>` part
+   of the asset name, and `branch` is `release/X.Y`.
+4. The cache key hashes the pin file, so the next build re-stages on its own.
+   Run the build (`gh workflow run ci.yml --ref <branch>`) and check the
+   "Check the staged ffmpeg against its pin" step prints the new version.
+5. Update the version rows in
+   [licensing.md §3](licensing.md#3-ffmpeg-the-one-copyleft-component-that-stays-53).
 
 ### The installer's shortcut is checked against what was built
 

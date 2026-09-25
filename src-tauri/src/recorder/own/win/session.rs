@@ -1,12 +1,12 @@
 //! The session thread: the one thread that holds the own backend's COM
 //! objects, and everything it does with them.
 //!
-//! `OwnRecorder` (in `mod.rs`) is `Send` and holds none of this; it sends
-//! [`Command`]s here over a channel and waits for the reply. That boundary
-//! is deliberate twice over. COM objects on an MTA thread are not something
-//! the supervisor's `Mutex<Box<dyn Recorder>>` should be moving between
-//! threads, and WS1.6.9 (#241) moves exactly this thread into a capture
-//! worker process, where the channel becomes a pipe.
+//! It runs in the capture worker process (`own::worker`, #241), not the
+//! daemon. `host.rs` sends [`Command`]s here over a channel and waits for the
+//! reply, translating each from a line on the worker's stdin; the daemon's
+//! `OwnRecorder` (in `mod.rs`) is the other end of that pipe and holds none of
+//! this. So a fault in anything this thread calls, an encoder MFT's driver
+//! above all, ends the worker and not the daemon.
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
@@ -86,7 +86,7 @@ pub enum Command {
 }
 
 /// Runs the session thread until [`Command::Release`] or until the sender
-/// is dropped. Spawned by `OwnRecorder`; everything it creates is dropped
+/// is dropped. Spawned by the worker's `host::SessionHost`; everything it creates is dropped
 /// here, on this thread, before COM is uninitialised.
 pub fn run(commands: Receiver<Command>) {
     // MTA for the thread's life: WGC's free-threaded pool and Media

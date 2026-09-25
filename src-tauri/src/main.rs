@@ -4,7 +4,7 @@
 use ninja_recorder_lib::daemon;
 use ninja_recorder_lib::launch::Launch;
 
-/// One binary, two modes. Which one is argv's decision, and it is made here —
+/// One binary, three modes. Which one is argv's decision, and it is made here —
 /// before either side is built — because the daemon must never construct a
 /// Tauri app and the UI must never construct a supervisor.
 ///
@@ -34,6 +34,15 @@ fn main() {
                 eprintln!("[launch] {why}");
                 std::process::exit(2);
             }
+        }
+        // The own backend's capture worker (#241), spawned by a daemon when
+        // League's client opens. Before anything else, and building nothing
+        // the other two modes build: no lock, no tray, no database, no pipe.
+        // Its stdout is the channel to the daemon, which is why nothing here
+        // prints. It exits with what `run` returns: 0 for every orderly end,
+        // the daemon going away included.
+        Launch::CaptureWorker => {
+            std::process::exit(ninja_recorder_lib::capture_worker::run());
         }
         // Everything that is not `--daemon`, which since #71 includes the
         // `--hidden` an old `Run` key still hands back: it is an unknown

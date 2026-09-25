@@ -143,6 +143,7 @@ npx biome ci .                                        # lint + format
 npx tsc --noEmit                                      # types
 npx vitest run                                        # frontend tests
 cd src-tauri && cargo deny check                      # licences + advisories
+node scripts/notices.mjs --check                      # THIRD_PARTY_NOTICES.txt is current (needs cargo-about)
 cd src-tauri && cargo test
 cd src-tauri && cargo test --features devtools
 cd src-tauri && cargo clippy --no-deps -- -D warnings
@@ -197,6 +198,11 @@ GPL is denied with exactly two named exceptions, this crate and the libobs
 fork, and deleting them is the proof. See
 [docs/provenance.md](docs/provenance.md) and
 [docs/licensing.md](docs/licensing.md).
+
+The licences and notices of the Rust crates and npm packages that ship are in
+[THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt), which the installer puts
+beside the app. It is generated, and CI fails if it is stale
+([docs/licensing.md §5](docs/licensing.md#5-third-party-notices-85)).
 
 **The change is not retroactive.** Every release before `v2.1.0`, here and in
 [`ninja-recorder-deprecated`](https://github.com/NinjaGoldfinch/ninja-recorder-deprecated/releases),

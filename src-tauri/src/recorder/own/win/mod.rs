@@ -17,52 +17,83 @@
 //! - `encode` — the H.264 encoders on offer, and the sink writer with its
 //!   AAC stream.
 //! - `session` — the thread that owns all of the above.
+//! - `host` — the session thread as the capture worker's [`Host`], driven
+//!   by the worker's pipe loop.
 //!
-//! [`OwnRecorder`] is the `Recorder` the daemon builds. It owns no COM object:
-//! it drives the session thread over a channel.
+//! [`OwnRecorder`] is the `Recorder` the daemon builds. It owns no COM object
+//! and no capture thread: it is a client of the capture worker
+//! (`ninja-recorder.exe --capture-worker`, `own::worker`), and the session
+//! thread runs in that process.
+//!
+//! [`Host`]: crate::recorder::own::worker::serve::Host
 
 mod audio;
 mod capture;
 mod device;
 mod encode;
+pub(crate) mod host;
 mod process;
 mod scale;
 mod session;
 
 use std::path::PathBuf;
-use std::sync::mpsc::{RecvTimeoutError, Sender, channel};
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use super::status::Status;
 use super::{plan, select, stats};
+use super::status::Status;
+use super::worker::client::Worker;
+use super::worker::lifetime::{Action, Call, Lifetime};
+use super::worker::protocol::{Reply, Request, Started};
 use crate::recorder::audio::AudioLayout;
 use crate::recorder::{RecordConfig, Recorder, RecorderError, RecordingOutput};
 use crate::{info, warn};
-use session::{Command, Started};
 
 pub use device::windows_build;
 
-/// How long `stop` waits for the session thread to finalize. A clean
-/// finalize drains a few frames and writes one fragment, well under a second;
-/// this is for one that never returns.
+/// How long the worker has to answer `Prepare`: COM, Media Foundation, the
+/// adapters and the encoder list, and a device. Seconds on a slow machine.
+const PREPARE_WAIT: Duration = Duration::from_secs(30);
+
+/// How long the worker has to answer `Start`: the session's own three-second
+/// wait for the window and its first frame, plus the whole pre-warm if
+/// `prepare` never ran.
+const START_WAIT: Duration = Duration::from_secs(30);
+
+/// How long the worker has to finalize a recording. A clean finalize drains a
+/// few frames and writes one fragment, well under a second; this is for one
+/// that never returns (a driver wedged by a lost GPU, say). The worker is then
+/// killed, so nothing is still writing the file, and it is kept and remuxed
+/// like any other the worker died on.
 const STOP_WAIT: Duration = Duration::from_secs(20);
 
-/// The own capture backend (Option B): WGC → D3D11 → Media Foundation.
+/// How long a released worker has to exit, finalizing anything in flight on
+/// the way, before it is killed.
+const SHUTDOWN_WAIT: Duration = Duration::from_secs(30);
+
+/// The own capture backend (Option B): WGC → D3D11 → Media Foundation, in
+/// the capture worker.
 ///
-/// **`Send`, and holding no COM object.** Every D3D, Media Foundation and
-/// WinRT object lives on the session thread (`session.rs`), which this
-/// drives over a channel and waits on for each answer. The supervisor keeps
-/// this in a `Mutex<Box<dyn Recorder>>` and calls it from whichever thread
-/// it is on, which is fine for a sender and a join handle and would not be
-/// for an apartment-bound COM pointer. The same boundary becomes the capture
-/// worker's pipe in WS1.6.9 (#241).
+/// **`Send`, and holding no COM object and no capture thread.** Every D3D,
+/// Media Foundation and WinRT object lives on the session thread
+/// (`session.rs`), in the worker process (`own::worker`), which this drives
+/// over the worker's stdin and stdout and waits on for each answer. So a
+/// driver fault inside an encoder takes down the worker, not the daemon.
+///
+/// The worker exists only while League does (`worker::lifetime`): `prepare`
+/// spawns it, `release` ends it once nothing is recording, and a worker that
+/// dies mid-recording leaves a file that `stop` hands over anyway.
 ///
 /// Every audio preset since #238, mixed into track 0; the stems arrive with
 /// #239. Reachable only from a devtools build that selects it
 /// (DEVELOPMENT.md §16, "The switch, and when it applies").
 pub struct OwnRecorder {
-    session: Option<SessionThread>,
+    /// `ninja-recorder.exe` itself, or `None` if the process cannot name its
+    /// own executable, in which case nothing can be recorded and `start`
+    /// says so.
+    exe: Option<PathBuf>,
+    worker: Option<Worker>,
+    /// The client closed during a recording: end the worker after the stop.
+    release_pending: bool,
     status: Status,
     /// The recording in flight.
     active: Option<Active>,
@@ -81,91 +112,107 @@ struct Active {
     audio: AudioLayout,
 }
 
-struct SessionThread {
-    commands: Sender<Command>,
-    thread: JoinHandle<()>,
-}
-
 impl OwnRecorder {
-    /// Cheap and infallible, like `LibObsRecorder::new`: nothing comes up
-    /// until `prepare` or `start`.
+    /// Cheap and infallible, like `LibObsRecorder::new`: nothing comes up,
+    /// and no worker is spawned, until `prepare` or `start`.
     pub fn new(ffmpeg_path: Option<PathBuf>) -> Self {
-        Self { session: None, status: Status::Idle, active: None, ffmpeg_path }
+        Self::with_worker(std::env::current_exe().ok(), ffmpeg_path)
     }
 
-    /// Sends `command` to the session thread, starting it if it is not
-    /// running, and waits for the answer on the channel `make` was given.
-    fn ask<T>(
-        &mut self,
-        make: impl FnOnce(Sender<T>) -> Command,
-    ) -> Result<T, RecorderError> {
-        self.ask_within(None, make)
+    /// With the worker executable named, for a test whose own executable is
+    /// the test harness rather than `ninja-recorder.exe`.
+    pub fn with_worker(exe: Option<PathBuf>, ffmpeg_path: Option<PathBuf>) -> Self {
+        Self {
+            exe,
+            worker: None,
+            release_pending: false,
+            status: Status::Idle,
+            active: None,
+            ffmpeg_path,
+        }
     }
 
-    /// [`OwnRecorder::ask`], giving up after `wait` if there is one. A thread
-    /// that has not answered by then is left behind, still running, and the
-    /// next command starts a new one.
-    fn ask_within<T>(
-        &mut self,
-        wait: Option<Duration>,
-        make: impl FnOnce(Sender<T>) -> Command,
-    ) -> Result<T, RecorderError> {
-        if self.session.is_none() {
-            let (commands, receiver) = channel();
-            let thread = std::thread::Builder::new()
-                .name("own-capture".to_string())
-                .spawn(move || session::run(receiver))
-                .map_err(|e| {
-                    RecorderError::Backend(format!("could not start the capture thread: {e}"))
-                })?;
-            self.session = Some(SessionThread { commands, thread });
+    /// Asks [`Lifetime::decide`] what `call` means for the worker, after
+    /// noticing a worker that has died since the last call.
+    fn decide(&mut self, call: Call) -> Action {
+        if let Some(why) = self.worker.as_mut().and_then(Worker::exited) {
+            warn!("recorder", "own backend: {why} since it was last asked anything");
+            self.worker = None;
         }
-        let (reply, answer) = channel();
-        let session = self.session.as_ref().expect("just started");
-        if session.commands.send(make(reply)).is_err() {
-            self.session = None;
-            return Err(RecorderError::Backend("the capture thread has exited".to_string()));
-        }
-        let answered = match wait {
-            None => answer.recv().map_err(|_| RecvTimeoutError::Disconnected),
-            Some(wait) => answer.recv_timeout(wait),
+        let mut lifetime = Lifetime {
+            worker: self.worker.is_some(),
+            recording: self.active.is_some(),
+            release_pending: self.release_pending,
         };
-        answered.map_err(|e| {
-            self.session = None;
-            RecorderError::Backend(match e {
-                RecvTimeoutError::Disconnected => {
-                    "the capture thread exited before answering".to_string()
-                }
-                RecvTimeoutError::Timeout => format!(
-                    "the capture thread did not answer within {} s, and was left behind",
-                    wait.unwrap_or_default().as_secs()
-                ),
-            })
+        let action = lifetime.decide(call);
+        self.release_pending = lifetime.release_pending;
+        action
+    }
+
+    /// Spawns a worker for `action` if it asks for one.
+    fn spawn_for(&mut self, action: Action) -> Result<(), RecorderError> {
+        if action != Action::SpawnAndSend {
+            return Ok(());
+        }
+        let exe = self.exe.as_deref().ok_or_else(|| {
+            RecorderError::Backend("cannot find this executable to start the capture worker".into())
+        })?;
+        match Worker::spawn(exe, crate::log::dir().as_deref()) {
+            Ok(worker) => {
+                info!("recorder", "own backend: capture worker up, pid {}", worker.pid());
+                self.worker = Some(worker);
+                Ok(())
+            }
+            Err(e) => {
+                warn!("recorder", "own backend: {e}");
+                self.status = Status::Unavailable { reason: e.clone() };
+                Err(RecorderError::Backend(e))
+            }
+        }
+    }
+
+    /// Sends `request` to the worker and waits for the answer. On any failure
+    /// the worker is gone: it is logged, with its exit code, and dropped, and
+    /// the next `prepare` or `start` spawns a fresh one.
+    fn ask(&mut self, request: Request, timeout: Duration) -> Result<Reply, RecorderError> {
+        let Some(worker) = self.worker.as_mut() else {
+            return Err(RecorderError::Backend("the capture worker is not running".into()));
+        };
+        worker.ask(&request, timeout).map_err(|e| {
+            warn!("recorder", "own backend: {e}");
+            self.worker = None;
+            RecorderError::Backend(e)
         })
     }
 
-    /// Ends the session thread, finalizing anything it is still recording,
-    /// and waits for it: every COM object is released by the time this
-    /// returns.
-    fn tear_down(&mut self) {
-        if let Some(session) = self.session.take() {
-            let _ = session.commands.send(Command::Release);
-            if session.thread.join().is_err() {
-                warn!("recorder", "own backend: the capture thread panicked");
-            }
+    /// A reply that does not answer the request: the worker is out of step,
+    /// so it is ended rather than trusted with the next one.
+    fn out_of_step(&mut self, reply: Reply) -> RecorderError {
+        let why = format!("the capture worker answered out of step: {reply:?}");
+        warn!("recorder", "own backend: {why}");
+        self.shut_down();
+        RecorderError::Backend(why)
+    }
+
+    /// Ends the worker, finalizing anything it is still recording, and waits
+    /// for it.
+    fn shut_down(&mut self) {
+        if let Some(worker) = self.worker.take() {
+            info!("recorder", "own backend: {}", worker.shut_down(SHUTDOWN_WAIT));
         }
-        self.status = Status::Idle;
     }
 }
 
 impl Recorder for OwnRecorder {
-    /// Starts recording the game window into `config`'s `.mp4`.
+    /// Starts recording the game window into `config`'s `.mp4`, spawning the
+    /// capture worker first if it is not up.
     ///
-    /// **Video time zero is the last thing this does.** The session thread
+    /// **Video time zero is the last thing this does.** The worker's session
     /// finds the window, waits (about 3 s at most) for a real size and WGC's
     /// first frame, and brings the encoder up; only then does this read the
-    /// performance counter and hand that instant over as the origin of the
-    /// tick grid. Tick 0 of the file is that instant, and it is taken
+    /// performance counter and send that instant over as the origin of the
+    /// tick grid. QPC is one clock for the whole machine, so the instant read
+    /// here is the instant the worker places tick 0 at. It is taken
     /// immediately before `start` returns, which is immediately before the
     /// supervisor stamps `record_started_at`. So the file's t = 0 and the
     /// supervisor's clock agree to within a return, and every marker the
@@ -200,13 +247,15 @@ impl Recorder for OwnRecorder {
         std::fs::create_dir_all(&config.output_dir)?;
         let path = config.expected_output_path();
 
-        let (origin_tx, origin_rx) = channel();
-        let started = self.ask(|reply| Command::Start {
-            path: path.clone(),
-            plan,
-            reply,
-            origin: origin_rx,
-        })?;
+        let action = self.decide(Call::Start);
+        self.spawn_for(action)?;
+        // The plan crosses the pipe as the layout it describes, which is
+        // `CapturePlan::layout`'s exact inverse.
+        let request = Request::Start { path: path.clone(), plan: plan.layout() };
+        let started = match self.ask(request, START_WAIT)? {
+            Reply::Started { result } => result,
+            other => return Err(self.out_of_step(other)),
+        };
         let Started { status, audio } = match started {
             Ok(started) => started,
             Err(e) => {
@@ -233,46 +282,84 @@ impl Recorder for OwnRecorder {
             }
         );
         self.status = status;
-        self.active = Some(Active { path, audio });
 
         // The origin, last: see the doc comment above.
-        if origin_tx.send(device::qpc_hns()).is_err() {
-            self.active = None;
-            return Err(RecorderError::Backend(
-                "the capture thread exited before recording began".to_string(),
-            ));
+        let origin = Request::Origin { qpc_hns: device::qpc_hns() };
+        let sent = self.worker.as_mut().map(|worker| worker.tell(&origin));
+        if let Some(Err(e)) = sent {
+            warn!("recorder", "own backend: {e}");
+            self.worker = None;
+            return Err(RecorderError::Backend(e));
         }
+        self.active = Some(Active { path, audio });
         Ok(())
     }
 
+    /// Finalizes the recording in the worker, and remuxes it.
+    ///
+    /// **A worker that has died still hands over its file.** It is
+    /// fragmented, so whatever reached the disk before the worker went is
+    /// playable up to the last complete fragment; the death is logged with
+    /// the worker's exit code, the file gets the same faststart remux as a
+    /// clean stop, and this returns it rather than an error. Only a worker
+    /// that died before writing anything at all is an error.
     fn stop(&mut self) -> Result<RecordingOutput, RecorderError> {
+        let action = self.decide(Call::Stop);
         let Active { path, audio } = self.active.take().ok_or(RecorderError::NotRecording)?;
-        // Bounded, so a finalize that never returns (a driver wedged by a
-        // lost GPU, say) cannot hold the supervisor with it.
-        let answer = self.ask_within(Some(STOP_WAIT), Command::Stop).and_then(|answer| {
-            answer.map_err(RecorderError::Backend)
-        });
+        // Carried out below if the worker is still there to end; a pending
+        // release means nothing once nothing is recording.
+        self.release_pending = false;
+        let answer = match action {
+            Action::Send | Action::SendThenShutDown => match self.ask(Request::Stop, STOP_WAIT) {
+                Ok(Reply::Stopped { result }) => Some(result),
+                Ok(other) => {
+                    let _ = self.out_of_step(other);
+                    None
+                }
+                // Logged, with the exit code, by `ask`.
+                Err(_) => None,
+            },
+            // Died since the last call; `decide` logged how.
+            _ => None,
+        };
+        if action == Action::SendThenShutDown {
+            // The client closed while this was recording (`release`).
+            self.shut_down();
+            self.status = Status::Idle;
+        }
+        let has_bytes = path.metadata().is_ok_and(|m| m.len() > 0);
         match answer {
-            Ok(None) => {}
-            Ok(Some(problem)) => {
+            Some(Ok(None)) => {}
+            Some(Ok(Some(problem))) => {
                 warn!("recorder", "own backend: the recording ended before stop: {problem}");
             }
             // The file is fragmented, so whatever reached the disk before a
             // failed finalize still plays. Hand it over if there is one.
-            Err(e) if path.metadata().is_ok_and(|m| m.len() > 0) => {
+            Some(Err(e)) if has_bytes => {
                 warn!("recorder", "own backend: finalize failed, keeping what was written: {e}");
             }
-            Err(e) => return Err(e),
+            Some(Err(e)) => return Err(RecorderError::Backend(e)),
+            None if has_bytes => {
+                warn!(
+                    "recorder",
+                    "own backend: the capture worker died mid-recording; keeping what reached \
+                     the disk, which plays up to its last fragment: {}",
+                    path.display()
+                );
+            }
+            None => {
+                return Err(RecorderError::Backend(
+                    "the capture worker died before writing anything".to_string(),
+                ));
+            }
         }
 
-        // The sink writer's fragmented file has no `mfra`, so the review
-        // player cannot scrub it until faststart has rewritten the index; the
-        // same step, and the same function, as the libobs backend's stop.
+        // The fragmented file has no `mfra`, so the review player cannot scrub
+        // it until faststart has rewritten the index; the same step, and the
+        // same function, as the libobs backend's stop and startup recovery.
         // `audio.tracks.len()` sets track 0's default disposition when there
-        // is one. Not while a session thread that never answered may still
-        // be writing the file: that one is kept fragmented, playable but not
-        // scrubbable, which is the price of not hanging.
-        let remux = self.ffmpeg_path.as_ref().filter(|_| self.session.is_some()).map(|ffmpeg| {
+        // is one.
+        let remux = self.ffmpeg_path.as_ref().map(|ffmpeg| {
             let began = Instant::now();
             let result = crate::recorder::remux::remux_faststart(ffmpeg, &path, audio.tracks.len());
             (result, began.elapsed())
@@ -292,19 +379,26 @@ impl Recorder for OwnRecorder {
     /// `own (idle)`, `own (ready: <encoder>)`, `own (software encoding: …)`
     /// or `own (unavailable: …)`. After a start it names the encoder Media
     /// Foundation actually loaded, which is what `RecordingDiagnostics`
-    /// records for the file.
+    /// records for the file. A worker dying mid-recording leaves it as it
+    /// was, because it still describes the file that was written.
     fn backend_name(&self) -> String {
         self.status.backend_name()
     }
 
-    /// The pre-warm (DEVELOPMENT.md §2.2): COM, Media Foundation, the
-    /// adapters and encoders, `select::rank`, and the device, all on the
-    /// session thread. `start` does the same itself if this never ran.
+    /// The pre-warm (DEVELOPMENT.md §2.2): spawns the capture worker, and in
+    /// it COM, Media Foundation, the adapters and encoders, `select::rank`,
+    /// and the device. `start` does the same itself if this never ran.
     fn prepare(&mut self) -> Result<(), RecorderError> {
-        if self.active.is_some() {
+        let action = self.decide(Call::Prepare);
+        if action == Action::Nothing {
             return Ok(());
         }
-        match self.ask(Command::Prepare)? {
+        self.spawn_for(action)?;
+        let prepared = match self.ask(Request::Prepare, PREPARE_WAIT)? {
+            Reply::Prepared { result } => result,
+            other => return Err(self.out_of_step(other)),
+        };
+        match prepared {
             Ok(status) => {
                 if let Status::Software { encoder, reason } = &status {
                     warn!(
@@ -322,20 +416,28 @@ impl Recorder for OwnRecorder {
         }
     }
 
+    /// Ends the worker: the League client has closed. While recording, the
+    /// worker is kept until `stop` has finalized, and ended then.
     fn release(&mut self) {
-        if self.active.is_some() {
-            return;
+        if self.decide(Call::Release) == Action::ShutDown {
+            self.shut_down();
         }
-        self.tear_down();
+        if self.active.is_none() {
+            self.status = Status::Idle;
+        }
     }
+
+    // `collect_output` stays the default no-op: the worker writes its own
+    // `worker.log` as it goes, and its stderr is drained into `daemon.log` by
+    // a thread (`worker::client`), so nothing waits in a pipe for a command.
 }
 
 impl Drop for OwnRecorder {
-    /// The daemon replacing the backend, or shutting down: the session
-    /// thread finalizes a recording in flight before it exits, so the file
-    /// is complete even though nobody will ask for it.
+    /// The daemon replacing the backend, or shutting down: the worker
+    /// finalizes a recording in flight before it exits, so the file is
+    /// complete even though nobody will ask for it.
     fn drop(&mut self) {
-        self.tear_down();
+        self.shut_down();
     }
 }
 

@@ -77,19 +77,20 @@ Backends:
 - `OwnRecorder` (Option B, `recorder/own/`): being built through WS1.6, and **constructible since #236** on Windows build 20348 or newer. It records the game window's video and every source the audio preset names, the game by process loopback since #237 and the microphone, the desktop and applications since #238, through Media Foundation's sink writer: every preset, as one mixed track until the stems arrive with #239. Only a devtools build can select it until the default flips (#243). Its pure core (the tick grid, the audio aligner and feed, the mixer, the capture plan, the process-tree root, encoder ranking, the loaded-encoder check) is compiled and tested on every platform. Which of it and libobs the daemon builds is the `capture_backend` setting, and what happens when the chosen one cannot be built is §16's "The switch, and when it applies".
 
 **Decision: the own backend holds no COM object; a session thread does.**
-`OwnRecorder` is a channel sender and a join handle. Every D3D11, Media
-Foundation and WinRT object lives on one thread it spawns (`own/win/session.rs`),
-initialised for the MTA, and every `Recorder` call is a command sent there and
-an answer waited on. The supervisor holds the recorder in a
-`Mutex<Box<dyn Recorder>>` and calls it from whatever thread it is on, which a
-`Send` handle survives and an apartment-bound COM pointer does not. It is also
-the boundary WS1.6.9 (#241) moves into the capture worker, where the channel
-becomes a pipe and nothing on this side changes. `prepare` is the same
+Every D3D11, Media Foundation and WinRT object lives on one thread
+(`own/win/session.rs`), initialised for the MTA, and every `Recorder` call is a
+command sent there and an answer waited on. The supervisor holds the recorder in
+a `Mutex<Box<dyn Recorder>>` and calls it from whatever thread it is on, which a
+`Send` handle survives and an apartment-bound COM pointer does not. Since #241
+that thread runs in the **capture worker**, a separate process spawned only
+while League runs, so a driver fault in an encoder ends the worker and not the
+daemon; `OwnRecorder` is the worker's client, and the channel's far end is the
+worker's pipe loop (§12, "The capture worker"). `prepare` is the same
 pre-warm libobs has: COM, `MFStartup`, the adapters and encoders,
 `select::rank`, the D3D11 device. `start` finds the game window by class, waits
 about three seconds at most for a real size and WGC's first frame, and brings
 the sink writer up; `stop` drains, finalizes and runs the shared faststart
-remux; `release` tears the thread down unless a recording is in flight.
+remux; `release` ends the worker, or, during a recording, does so after `stop`.
 
 **Video time zero is the last act of `start`.** The tick grid's origin is a
 QPC read `OwnRecorder::start` takes after the session thread has said
@@ -130,8 +131,9 @@ tracks end together. A lost GPU device
 *does* end it, because nothing made on that device works again: what was
 written is finalized, `stop` returns the file with a warning in `daemon.log`,
 and the next `start` warms up a new device. `stop` waits at most 20 s for the
-session thread, so a finalize wedged in a driver costs a file that is playable
-but not remuxed, and never holds the supervisor.
+capture worker's answer, and a worker wedged in a driver past that is killed
+(§12, "The capture worker"): the file is kept, playable up to its last fragment
+and remuxed like any other, and the supervisor is never held.
 
 **Decision: Media Foundation is delay-loaded.** `build.rs` passes
 `/DELAYLOAD` for `mfplat.dll` and `mfreadwrite.dll`. An ordinary import would
@@ -185,7 +187,7 @@ Implemented in `src-tauri/src/recorder/`: `Recorder`, `RecordConfig`, `RecorderE
 
 **Runtime files: staged outside Cargo, not via artifact-dependencies.** league_record gets `extprocess_recorder.exe` + its libobs DLLs into the build via Cargo's artifact-dependency feature (`artifact = "bin:..."`), which needs nightly Rust + the unstable `bindeps` flag, since their whole project builds on nightly (CI: `dtolnay/rust-toolchain@nightly`). We can't do that: `-Z bindeps` syntax in `Cargo.toml` breaks manifest parsing *for every platform*, confirmed locally (`cargo check` on macOS failed until the artifact-dependency lines were removed). It would force the dev box's `cargo check`/`npm run tauri dev` onto nightly + an unstable flag just to support an optional Windows-only binary, which is a real regression against §9's dev loop. Instead, CI's "Stage libobs capture backend" step (`.github/workflows/ci.yml`'s `build` job, Windows leg only) builds the fork's `extprocess_recorder` binary as a fully separate `cargo build` invocation and copies it + the matching `libobs_<version>/` DLL folder into `src-tauri/target/libobs/` directly, with no Cargo dependency-graph involvement and ordinary stable Rust throughout. `tauri.windows.conf.json` then bundles that folder as a resource, and `LibObsRecorder::new` (lib.rs) resolves it at runtime via Tauri's path resolver. Anyone working on the capture backend locally on the Windows box needs to run the same clone-build-copy sequence by hand before `cargo run`/`npm run tauri dev` until that's scripted for local use too.
 
-**Faststart remux on stop, staged the same way.** The fork's `muxer_settings` (above) trade seekability for crash-safety: `frag_keyframe+empty_moov+default_base_moof` means no player, including the review UI's own WebView2 `<video>`, can reliably scrub the file, since there's no upfront seek index. `LibObsRecorder::stop` fixes this up after every *clean* stop with a stream-copy remux (`ffmpeg -c copy -movflags +faststart`, lossless, just rewrites the container index) before handing the path back. `ffmpeg.exe` is staged into the same `target/libobs/` resource folder by a sibling CI step ("Stage ffmpeg for faststart remux") that downloads a static build from BtbN's FFmpeg-Builds releases. It is optional at runtime (`lib.rs` resolves it with `.ok()`), so a failed download degrades to unseekable-but-still-playable recordings rather than breaking the build. **Not verified**, with the same caveat as the rest of this backend below: nothing has confirmed the remux actually runs against a real capture on a real Windows box yet, only that it type-checks.
+**Faststart remux on stop, staged the same way.** The fork's `muxer_settings` (above) trade seekability for crash-safety: `frag_keyframe+empty_moov+default_base_moof` means no player, including the review UI's own WebView2 `<video>`, can reliably scrub the file, since there's no upfront seek index. `LibObsRecorder::stop` fixes this up after every *clean* stop with a stream-copy remux (`ffmpeg -c copy -movflags +faststart`, lossless, just rewrites the container index) before handing the path back. `ffmpeg.exe` is staged into the same `target/libobs/` resource folder by a sibling CI step ("Stage ffmpeg (pinned) and its licence texts") that downloads a static build from BtbN's FFmpeg-Builds releases, pinned and checksummed in `scripts/ffmpeg-pin.json` (§18). It is optional at runtime (`lib.rs` resolves it with `.ok()`), so a missing binary degrades to unseekable-but-still-playable recordings; a download that fails or does not match its pin fails the build. **Not verified**, with the same caveat as the rest of this backend below: nothing has confirmed the remux actually runs against a real capture on a real Windows box yet, only that it type-checks.
 
 **Every ffmpeg spawn gets `CREATE_NO_WINDOW`.** ffmpeg ships as a console-subsystem binary, so a GUI process spawning one makes Windows allocate it a fresh console: an empty black terminal window sitting over the game for the length of every faststart remux, and again each time the review player extracts a stem (§2.5). Both call sites capture stdout and stderr, so that window never had anything to display; it is pure noise, and on the remux path it lands at exactly the moment the player is reading the post-game screen. `lib.rs`'s `ffmpeg_command` is now the only way the bundled ffmpeg is launched and it sets the flag there, so a third call site cannot reintroduce the window by forgetting. The libobs worker needs no equivalent: the fork builds `extprocess_recorder.exe` with `windows_subsystem = "windows"` for release, so it is only ever visible in Task Manager, which is where [windows-verification.md](docs/windows-verification.md) checks for it.
 
@@ -595,7 +597,7 @@ toward the "N unknown" sub-label on the Recorded tile.
 
 The obvious tool is `ffprobe -show_format`, which answers this in clean JSON.
 **We don't ship it.** CI stages exactly one binary into the bundle,
-`ffmpeg.exe` (`.github/workflows/ci.yml`, "Stage ffmpeg for faststart remux"),
+`ffmpeg.exe` (`.github/workflows/ci.yml`, "Stage ffmpeg (pinned) and its licence texts"),
 and adding ffprobe would roughly double that download to obtain one number.
 
 So the probe runs `ffmpeg -hide_banner -i <file>` with no output file. ffmpeg
@@ -2103,6 +2105,104 @@ What stayed in `tray.rs` is what the window still needs: showing itself, and the
 close button's Quit. Those are still the tray's requests, they just arrive from
 another process now as an `Event::ShowUi` off the pipe.
 
+### The capture worker: a third mode, and only while League runs (#241)
+
+The own backend's capture does not run in the daemon. `ninja-recorder.exe
+--capture-worker` is a third mode of the same binary, and the session thread
+that holds every D3D11, Media Foundation and WinRT object (§2.2) runs in it.
+`OwnRecorder`, in the daemon, is a thin client: the child process, the job
+object it sits in, and its stdin and stdout.
+
+**Why a process.** Not responsiveness: capture was already on threads of its
+own, so it never blocked the daemon, and the owner's condition was that
+in-process capture was acceptable only if it never did. The reason is **crash
+isolation**. A driver fault inside an encoder MFT (the class of crash #218 fixed
+in the spike) takes down whatever process the MFT is loaded in, and that
+process should not be the one holding the supervisor, the library and a game's
+markers. In the worker it costs the worker. The recording it was writing is
+fragmented, so it plays up to its last complete fragment, and the daemon keeps
+it.
+
+**Why a flag and not a bin target.** Tauri's bundler installs every bin target
+the package builds, which is how `gen-contract.exe` once ended up behind the
+Start Menu shortcut (CLAUDE.md, "The emitter is not built by default"). A second
+binary would be a second executable in every install, with its own installer
+and updater story. A flag on the one binary has neither: `main.rs` dispatches
+`--capture-worker` before anything else is built, and the worker takes no
+single-instance lock, builds no tray, opens no database and binds no pipe. It
+writes `worker.log` (`worker-devtools.log` in a devtools build) beside the
+other two.
+
+**Only while League runs.** The owner's other condition was that a worker is
+fine only if it is spawned when needed and never permanently running. So it
+follows §2.2's pre-warm exactly (`recorder::own::worker::lifetime`, pure and
+unit-tested):
+
+- `prepare`, which the supervisor calls when the League client opens, spawns
+  it; `start` spawns it if it is not up.
+- `release`, which the supervisor calls when the client closes, ends it. During
+  a recording the release is remembered and carried out after `stop` has
+  finalized. A `prepare` or `start` in between (the client came back) forgets
+  it.
+- With no League client there is no worker, and idle RAM is what it was.
+
+**The protocol** is the session thread's own `Command`s and their answers, one
+JSON value per line on the worker's stdin and stdout, after a `Hello` that
+carries a protocol version (`own::worker::protocol`, shared by both sides). The
+session thread did not change: it still receives `Command`s on a channel, and
+the worker's loop (`own::worker::serve`) holds the other end. `Start` takes two
+lines from the daemon, the path and then the origin, because the file's t = 0
+is still the last thing the daemon's `start` reads: QPC is one clock for the
+whole machine, so the instant the daemon reads is the one the worker places
+tick 0 at.
+
+**Nothing else may write to the worker's stdout.** The worker takes the handle
+for itself before it does anything else and points the process's standard
+output at stderr, so a stray `println!` or a library that logs to stdout lands
+in stderr instead of in the channel. That is the bug #221 found in the libobs
+worker. The daemon drains the worker's stderr into `daemon.log` on a thread,
+which is where a panic's report ends up too. So `collect_output` has nothing to
+do for this backend: nothing waits in a pipe for a command to fetch it.
+
+**EOF is a shutdown, never a panic.** The worker's loop treats the end of stdin
+as `Release`: a recording in flight is finalized, and the worker exits 0. The
+lesson of libobs-recorder's PR #1, where an `unwrap` on a closed pipe took the
+worker down mid-file.
+
+**A dead daemon leaves no worker.** The daemon puts each worker in a job object
+with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and holds the only handle, so however
+the daemon ends (a crash, Task Manager, the installer), the handle closes and
+Windows ends the worker. There is a moment between the spawn and the assignment
+when the worker is not yet in the job; EOF covers it, because a dead daemon's
+end of the stdin pipe closes too. The worker is spawned with `CREATE_NO_WINDOW`.
+
+**A dead worker never takes the daemon with it.** Every call has a timeout
+(replies are read on a thread and handed over on a channel), and every failure
+ends the same way: the worker is killed if it is still there, reaped, and
+logged with its exit code. Then:
+
+- mid-recording, `stop` hands over the file on disk rather than an error, with
+  a warning, and runs the same faststart remux a clean stop does. Only a worker
+  that died before writing a byte is an error;
+- the next `prepare` or `start` spawns a fresh worker. A worker found dead
+  between calls is noticed at the next one and replaced, so a worker that died
+  idle does not cost the next game.
+
+**The installer and the updater.** The worker's image name is the main
+executable's, so Tauri's template, which kills `${MAINBINARYNAME}.exe` by name
+before it replaces anything, ends it with the app and the daemon; the devtools
+build's worker is `ninja-recorder-dev.exe`, so the kill cannot reach across
+builds. The updater's `Recorder::release` before install (§14) sends it
+`Release` and waits for it. The libobs worker needed the hook in
+`installer-hooks.nsh` because it is a different executable (§14); this one does
+not.
+
+**Not verified on hardware.** CI spawns the real binary in this mode on
+`windows-latest` (`tests/capture_worker.rs`): the handshake, a `prepare`, a
+clean exit on `Release` and on EOF. The rest, the worker appearing and going
+with the client, a killed worker mid-game, a killed daemon, is
+`windows-verification.md` §11.6.
+
 ---
 
 ## 13. Logging
@@ -2391,7 +2491,9 @@ that surfaces later as a capture failure with no obvious cause.
 NSIS's own "close the running app" check cannot help. It keys off
 `mainBinaryName`, and the worker is a different executable it has never heard
 of. The same property that lets the production and devtools bundles coexist
-(§10) is what makes the worker invisible to it here.
+(§10) is what makes the worker invisible to it here. The own backend's capture
+worker (§12, #241) is the opposite case: it *is* the main executable, run with a
+flag, so this check is exactly what ends it.
 
 So `daemon::update::install` calls `Recorder::release` after the finalize
 and before handing over. `release` is a no-op while recording, which is fine
@@ -3427,6 +3529,24 @@ cannot stay as its source. `recorder/window.rs` is the one place the audit
 found that fell on the wrong side of this line; docs/licensing.md has the
 evidence and the fix.
 
+### Notices are generated from what ships, and checked
+
+A permissive licence still has a condition: the notice travels with the binary.
+`THIRD_PARTY_NOTICES.txt` carries those notices, and it is generated rather
+than written, because a hand-kept list is stale by the next dependency bump.
+CI regenerates it and fails on a difference (docs/licensing.md §5).
+
+Two choices in it are deliberate. **The Rust half runs offline** after a
+`cargo fetch`, so the file is a function of `Cargo.lock` and nothing a network
+lookup could change between two runs of the same commit. **The npm half reads
+the production bundle, not `package.json`.** Svelte's runtime ships while Svelte
+is a devDependency, so "production dependencies only" would miss the largest
+JavaScript component in the app and list nothing in its place. The two
+off-the-shelf tools considered were rejected for reasons of their own.
+`license-checker-rseidelsohn` needs Node 24 and CI runs 22.
+`generate-license-file` prints a dual licence as its expression, with no text.
+Both read the manifest, which is the wrong source here anyway.
+
 ### What survives, and what does not change
 
 **ffmpeg survives** because it is a separate, unmodified LGPL executable that
@@ -3434,6 +3554,18 @@ only copies streams or reads headers. Its licence does not reach a program
 that runs it rather than linking it, and the copy-only rule is what makes the
 LGPL build sufficient. That is why every spawn goes through
 `lib.rs::ffmpeg_command`.
+
+**It is pinned to a release-branch build from a month-end release.** The
+LGPL's source obligation is about the exact binary shipped, so "BtbN's
+latest", a floating asset rebuilt daily from FFmpeg's `master`, identified no
+source at all. `scripts/ffmpeg-pin.json` names one `autobuild-*` release, a
+release-branch asset in it (a tagged FFmpeg version plus its backports rather
+than whatever `master` held that afternoon), and the asset's SHA-256, and CI
+stages nothing else. The release is a month-end one because BtbN keeps those
+for two years and the dailies for fourteen days: a pin that expires in a
+fortnight turns the next cache miss into a broken build. The source itself
+does not depend on that retention, because what ships beside the binary
+points at git commits, FFmpeg's and BtbN's, not at the release asset.
 
 **The change is not retroactive.** Every release before `v2.1.0` was
 distributed under GPL-2.0-only and stays so. Those releases stay published,
