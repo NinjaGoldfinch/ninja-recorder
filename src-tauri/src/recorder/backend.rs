@@ -1,11 +1,12 @@
 //! Which capture backend the daemon builds: the `capture_backend` setting
 //! (WS1.7, #11).
 //!
-//! Two backends sit behind `Recorder` for exactly one release: libobs, which
-//! is what ships today, and the own backend (Option B, `recorder/own/`), which
-//! is the target. The plan keeps libobs *selectable* for that release so a
-//! recording Option B gets wrong has somewhere to go, and this module is the
-//! switch between them. WS8 deletes it along with libobs.
+//! Two backends sit behind `Recorder` for exactly one release: the own backend
+//! (Option B, `recorder/own/`), which is the default since #243, and libobs,
+//! which every earlier release recorded with. The plan keeps libobs
+//! *selectable* for that release so a recording Option B gets wrong has
+//! somewhere to go, and this module is the switch between them. WS8 deletes
+//! it along with libobs.
 //!
 //! Three pieces, split the way `retention` and `state_machine` are:
 //!
@@ -29,29 +30,22 @@ use super::{FailedRecorder, Recorder};
 
 /// The two capture backends, as `settings_kv` stores them.
 ///
-/// **The default is libobs, and WS1.6's last piece (#243) flips it to
-/// `Own`.** `Own` is constructible since #236, records the Game audio
-/// preset since #237 and every preset's sources, mixed into one track, since
-/// #238; but until it writes every track through its own writer (#239) a
-/// default of `Own` would make worse recordings for everyone who never
-/// opened Settings. Flipping this `#[default]` is #243's change, not
-/// a separate decision: the plan has Option B as the default once it is whole
-/// (§4.5). A user who picked libobs explicitly keeps it across that flip,
-/// because the flip only changes what a *missing* key means. The same change
-/// un-hides the Settings row, which is devtools-only until then
-/// (`Settings.svelte`).
+/// **The default is `Own`, since #243.** The flip only changed what a
+/// *missing* key means: someone who picked libobs explicitly has a stored row
+/// and keeps it, with no migration (DEVELOPMENT.md §16, "The switch, and when
+/// it applies"). Pinned by a test, so moving it again is a deliberate change
+/// rather than an accident.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, ts_rs::TS,
 )]
 #[serde(rename_all = "lowercase")]
 pub enum CaptureBackend {
     /// libobs through the patched fork's out-of-process worker. The fallback,
-    /// and selectable for one release after Option B ships.
-    #[default]
+    /// selectable for one release after Option B ships.
     Libobs,
-    /// Option B: WGC → D3D11 → Media Foundation, in `recorder/own/`.
-    /// Constructible on Windows build 20348 or newer since #236; every audio
-    /// preset since #238, as one mixed track until the stems arrive (#239).
+    /// Option B: WGC → D3D11 → Media Foundation, in `recorder/own/`, on
+    /// Windows build 20348 or newer. The default.
+    #[default]
     Own,
 }
 
@@ -161,12 +155,19 @@ mod tests {
         vec![option(CaptureBackend::Libobs, None), option(CaptureBackend::Own, Some(TOO_OLD))]
     }
 
-    /// Pinned so that #243's flip is a deliberate one-line change that fails
-    /// this test, rather than something that happens by accident.
+    /// Pinned so that moving the default is a deliberate one-line change that
+    /// fails this test, rather than something that happens by accident.
     #[test]
-    fn the_default_is_libobs_until_243_flips_it() {
-        assert_eq!(CaptureBackend::default(), CaptureBackend::Libobs);
-        assert_eq!(CaptureBackend::from_pref(None), CaptureBackend::Libobs);
+    fn the_default_is_own() {
+        assert_eq!(CaptureBackend::default(), CaptureBackend::Own);
+        assert_eq!(CaptureBackend::from_pref(None), CaptureBackend::Own);
+    }
+
+    /// The flip moves only the users who never chose. A stored `libobs` row
+    /// is an explicit choice and keeps libobs, with no migration.
+    #[test]
+    fn a_stored_libobs_row_stays_on_libobs() {
+        assert_eq!(CaptureBackend::from_pref(Some("libobs")), CaptureBackend::Libobs);
     }
 
     #[test]

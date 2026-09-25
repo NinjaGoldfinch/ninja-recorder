@@ -8,7 +8,7 @@ pub mod backend;
 pub mod devices;
 #[cfg(target_os = "windows")]
 pub mod libobs;
-// The target backend (Option B), being built through WS1.6. Compiled on every
+// The own backend (Option B), the default since #243. Compiled on every
 // platform so its pure core is tested everywhere; only `own::win` is gated to
 // Windows.
 pub mod own;

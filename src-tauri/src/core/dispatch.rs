@@ -626,11 +626,22 @@ mod tests {
             }
         }
 
+        /// A user who saved libobs, which is the case every refusal below is
+        /// about: a switch *away* from the backend in use. The default is
+        /// `own` since #243, and `an_unset_key_reports_own` covers that.
         fn ctx_with(own_built: bool) -> (Ctx, Arc<AtomicUsize>) {
             let builds = Arc::new(AtomicUsize::new(0));
             let mut ctx = ctx();
+            ctx.db.set_capture_backend(CaptureBackend::Libobs).unwrap();
             ctx.set_backends(Box::new(Fake { own_built, builds: Arc::clone(&builds) }));
             (ctx, builds)
+        }
+
+        #[test]
+        fn an_unset_key_reports_own() {
+            let mut ctx = ctx();
+            ctx.set_backends(Box::new(Fake { own_built: true, builds: Arc::default() }));
+            assert_eq!(get_capture_backend(&ctx).unwrap().configured, CaptureBackend::Own);
         }
 
         /// The UI forwards both commands to the daemon, so this only runs where

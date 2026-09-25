@@ -3,17 +3,18 @@
 
   Every choice the daemon knows about is listed, and one this build cannot
   construct is shown disabled with the daemon's reason rather than left out:
-  the own backend exists as a choice before it exists as code, and a missing
-  option would say nothing about why. The reasons and the live backend's name
-  come from the daemon, and are interpolated, never rendered as markup.
+  the own backend needs Windows build 20348 or newer, and a missing option
+  would say nothing about why. The reasons and the live backend's name come
+  from the daemon, and are interpolated, never rendered as markup.
 
-  Rendered only in a devtools build until WS1.6 (`Settings.svelte` holds the
-  gate); WS1.6 un-hides it along with flipping the default.
+  Shown in every build since #243 made the own backend the default: libobs is
+  the fallback a user can pick without a reinstall, for one release.
 -->
 
 <script lang="ts">
 import {
   APPLIES_WHEN,
+  BACKEND_EXPLAINED,
   BACKEND_LABELS,
   refusalNote,
   unavailableNotes,
@@ -31,11 +32,12 @@ const refusal = $derived(status ? refusalNote(status) : null);
 
   <SettingRow label="Capture backend">
     {#snippet copy()}
-      <p class="setting-hint">
-        Which engine records your games. libobs is the one every recording so
-        far was made with; the own backend replaces it and is kept selectable
-        beside it for one release.
-      </p>
+      <p class="setting-hint">Which engine records your games.</p>
+      {#each status?.options ?? [] as option (option.backend)}
+        <p class="setting-hint">
+          <strong>{BACKEND_LABELS[option.backend]}</strong>: {BACKEND_EXPLAINED[option.backend]}
+        </p>
+      {/each}
       {#if settings.captureBackendError}
         <p class="setting-hint">{settings.captureBackendError}</p>
       {:else}

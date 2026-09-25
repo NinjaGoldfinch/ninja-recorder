@@ -63,8 +63,9 @@ const AUDIO_PRESET_KEY: &str = "audio_preset";
 
 /// `settings_kv` key holding the `CaptureBackend`, spelled as the plan spells
 /// it (§4.5). Unseeded like the rest: a missing key means the default, which
-/// is what lets WS1.6 move everyone who never chose onto the own backend by
-/// changing `CaptureBackend`'s `#[default]` alone.
+/// is how #243 moved everyone who never chose onto the own backend by
+/// changing `CaptureBackend`'s `#[default]` alone, and left a stored `libobs`
+/// row where it was.
 const CAPTURE_BACKEND_KEY: &str = "capture_backend";
 
 static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
@@ -2505,11 +2506,20 @@ mod tests {
     }
 
     /// Pinned beside `CaptureBackend`'s own test, because this is the path the
-    /// daemon actually reads at startup: a fresh library builds libobs until
-    /// WS1.6 flips the default.
+    /// daemon actually reads at startup: a fresh library builds the own
+    /// backend.
     #[test]
-    fn capture_backend_defaults_to_libobs_when_unset() {
+    fn capture_backend_defaults_to_own_when_unset() {
         let db = Db::open_temporary().unwrap();
+        assert_eq!(db.get_capture_backend().unwrap(), CaptureBackend::Own);
+    }
+
+    /// The other half of the flip: a `libobs` row saved by an earlier build
+    /// is someone's explicit choice, and there is no migration to move it.
+    #[test]
+    fn a_stored_libobs_capture_backend_stays_libobs() {
+        let db = Db::open_temporary().unwrap();
+        db.set_ui_pref(CAPTURE_BACKEND_KEY, "libobs").unwrap();
         assert_eq!(db.get_capture_backend().unwrap(), CaptureBackend::Libobs);
     }
 

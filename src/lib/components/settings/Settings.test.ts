@@ -11,8 +11,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  */
 
 const call = vi.hoisted(() => vi.fn());
-// Whether this is a devtools build. Hoisted so a test can say which; a
-// release build unless it does.
+// A release build: nothing in this view asks, and no test may depend on the
+// dev portal being there.
 const hasDevCommands = vi.hoisted(() => vi.fn());
 vi.mock("../../../bridge", () => ({
   call,
@@ -35,24 +35,30 @@ let svelte: Svelte;
 
 const NOT_BUILT = "the own capture backend is not in this build yet";
 
-/** What the daemon reports today: libobs chosen, the own backend unbuilt. */
-function backendStatus(over: Record<string, unknown> = {}) {
-  return {
-    configured: "libobs",
-    active: "libobs (idle)",
-    options: [
-      { backend: "libobs", unavailable: null },
-      { backend: "own", unavailable: NOT_BUILT },
-    ],
-    ...over,
-  };
-}
-
-/** Both backends buildable: the build WS1.6 produces. */
+/** Both backends buildable: a release build on Windows 11. */
 const BOTH_BUILT = [
   { backend: "libobs", unavailable: null },
   { backend: "own", unavailable: null },
 ];
+
+/** The own backend below its OS floor, as on Windows 10. */
+const OWN_UNBUILT = [
+  { backend: "libobs", unavailable: null },
+  { backend: "own", unavailable: NOT_BUILT },
+];
+
+/**
+ * What the daemon reports for someone who saved libobs, on a build where both
+ * backends can be built.
+ */
+function backendStatus(over: Record<string, unknown> = {}) {
+  return {
+    configured: "libobs",
+    active: "libobs (idle)",
+    options: BOTH_BUILT,
+    ...over,
+  };
+}
 
 /** Answers each RPC the view makes on mount with something plausible. */
 function stubBackend(over: Record<string, unknown> = {}) {
@@ -192,25 +198,21 @@ describe("the audio panel", () => {
 });
 
 describe("the capture backend", () => {
-  // The row is devtools-only until WS1.6, so everything below except the
-  // release-build case runs as a devtools build.
-  beforeEach(() => {
-    hasDevCommands.mockResolvedValue(true);
-  });
-
-  it("is not shown at all in a release build", async () => {
-    hasDevCommands.mockResolvedValue(false);
-    const el = render();
-    await settle();
-    expect(el.querySelector('[aria-label="Capture backend"]')).toBeNull();
-    expect(el.textContent).not.toContain("Advanced");
-  });
-
-  it("is shown in a devtools build", async () => {
+  // Every build since #243: a release build has no dev commands, and the row
+  // is there regardless.
+  it("always renders, in a release build too", async () => {
     const el = render();
     await settle();
     expect(el.querySelector('[aria-label="Capture backend"]')).not.toBeNull();
     expect(el.textContent).toContain("Advanced");
+    expect(hasDevCommands).not.toHaveBeenCalled();
+  });
+
+  it("explains each backend in a line", async () => {
+    const el = render();
+    await settle();
+    expect(el.textContent).toContain("Own: the default");
+    expect(el.textContent).toContain("libobs: the recorder earlier versions used");
   });
 
   const choice = (el: HTMLElement, label: string) =>
@@ -229,6 +231,7 @@ describe("the capture backend", () => {
 
   // Listed rather than left out, so the row can say why it cannot be picked.
   it("disables a backend this build cannot construct, and says why", async () => {
+    stubBackend({ get_capture_backend: backendStatus({ options: OWN_UNBUILT }) });
     const el = render();
     await settle();
     const own = choice(el, "Own");
@@ -239,7 +242,6 @@ describe("the capture backend", () => {
   });
 
   it("asks the daemon to switch, and shows what it reports back", async () => {
-    stubBackend({ get_capture_backend: backendStatus({ options: BOTH_BUILT }) });
     const answers = call.getMockImplementation() as (n: string, a?: unknown) => unknown;
     call.mockImplementation((name: string, args?: unknown) =>
       name === "set_capture_backend"
@@ -270,7 +272,6 @@ describe("the capture backend", () => {
   // Mid-game the daemon refuses, and the control must not claim a switch that
   // did not happen.
   it("keeps the saved backend when the daemon refuses", async () => {
-    stubBackend({ get_capture_backend: backendStatus({ options: BOTH_BUILT }) });
     const answers = call.getMockImplementation() as (n: string, a?: unknown) => unknown;
     call.mockImplementation((name: string, args?: unknown) =>
       name === "set_capture_backend"
@@ -290,11 +291,13 @@ describe("the capture backend", () => {
     expect(toasts.toastState.message).toContain("recording is in progress");
   });
 
+  // The default on Windows 10 with nothing saved: own, below its OS floor.
   it("warns that nothing will be recorded when the saved backend cannot be built", async () => {
     stubBackend({
       get_capture_backend: backendStatus({
         configured: "own",
         active: `unavailable (${NOT_BUILT})`,
+        options: OWN_UNBUILT,
       }),
     });
     const el = render();

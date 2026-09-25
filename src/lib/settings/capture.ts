@@ -3,7 +3,7 @@
  *
  * Pure, so the wording is tested without mounting anything. Every string the
  * daemon supplies (a reason, the live backend's name) is rendered by
- * interpolation in `CaptureBackend.svelte`, never as markup.
+ * interpolation in `Advanced.svelte`, never as markup.
  */
 
 import type { CaptureBackend, CaptureBackendStatus } from "../contract/types";
@@ -12,6 +12,17 @@ import type { CaptureBackend, CaptureBackendStatus } from "../contract/types";
 export const BACKEND_LABELS: Record<CaptureBackend, string> = {
   libobs: "libobs",
   own: "Own",
+};
+
+/**
+ * One plain-language line per backend, shown under the row's heading. The
+ * own backend is the default since #243; libobs stays selectable for one
+ * release as the fallback.
+ */
+export const BACKEND_EXPLAINED: Record<CaptureBackend, string> = {
+  own: "the default, the recorder built into this app.",
+  libobs:
+    "the recorder earlier versions used, kept as a fallback for one release. Switch to it if recordings made with Own have problems.",
 };
 
 /**

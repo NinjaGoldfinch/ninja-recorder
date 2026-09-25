@@ -1371,66 +1371,73 @@ beside the result rather than as one number.
 ## 9. The capture backend switch (WS1.7, #11)
 
 Settings → Advanced → **Capture backend** chooses what the daemon records
-with: `libobs`, or the own backend (Option B). Since #236 the own backend is
-in the build and constructible on Windows build 20348 or newer (Windows 11),
-recording video and, since #237, the Game preset's audio; §11 checks what it
-records. This section checks the
-switch: the row, the refusals, and that a switch reaches the *next* recording
-and never the current one.
+with: the own backend (Option B), which is the default since #243, or
+`libobs`, the fallback kept selectable for one release. The own backend is
+constructible on Windows build 20348 or newer (Windows 11); §11 checks what it
+records. This section checks the switch: the row, the refusals, and that a
+switch reaches the *next* recording and never the current one.
 
-**Use the devtools build.** The row is devtools-only until #243 un-hides it,
-and every step below also needs the dev portal. The release build is checked
-for one thing only, the first box. Why it works this way is
+**Use a release build for the row, and the devtools build for the dev-portal
+steps.** Since #243 the row is in every build; the steps that read
+`diagnostics_json` or write a raw row still need the dev portal. Why it works
+this way is
 [DEVELOPMENT.md §16, "The switch, and when it applies"](../DEVELOPMENT.md#the-switch-and-when-it-applies).
+The backend comparison WS1.7's exit criterion asks for, both backends
+recording the same game, is part of the exit run, §11.8.
 
-The backend-comparison table WS1.7's exit criterion asks for, both backends
-recording the same game, is not here yet. Since #237 it can be run on the Game
-preset, and since #238 on every preset's track 0; the stems wait on #239.
-
-- [ ] **A release build shows no Advanced group** in Settings at all.
-- [ ] **The row renders** in the devtools build. `libobs` is selected and
-      **Own** is enabled on Windows 11 (build 20348 or newer). On a Windows 10
-      box Own is disabled instead, and the row says "Own isn't available: the
-      own capture backend needs Windows build 20348 or newer …", naming the
-      box's build. "In use now" reads `libobs (idle)` with no client open.
+- [ ] **A release build shows the Advanced group**, with a line explaining
+      each backend: Own the default, libobs the fallback for one release.
+- [ ] **The row renders.** On a fresh install (no saved row) **Own** is
+      selected and enabled on Windows 11 (build 20348 or newer). On a Windows
+      10 box Own is disabled instead, and the row says "Own isn't available:
+      the own capture backend needs Windows build 20348 or newer …", naming
+      the box's build. "In use now" reads `own (idle)` with no client open.
 - [ ] **The daemon log names the setting.** `daemon.log`'s
       `[recorder] backend:` line reads
-      `libobs (idle) (capture_backend = libobs)`.
-- [ ] **Refused mid-game.** Start a Practice Tool game on libobs, and in the
-      game click **Own** in the row (or call `set_capture_backend` with `own`
-      from the dev portal's Commands panel). It is refused with "can't be
+      `own (idle) (capture_backend = own)` on a fresh install.
+- [ ] **Refused mid-game.** Start a Practice Tool game on Own, and in the
+      game click **libobs** in the row (or call `set_capture_backend` with
+      `libobs` from the dev portal's Commands panel). It is refused with "can't be
       changed while a recording is in progress", the recording carries on on
-      libobs and finalizes normally, and `get_capture_backend` still reports
-      `libobs` as configured.
+      Own and finalizes normally, and `get_capture_backend` still reports
+      `own` as configured.
 - [ ] **Switch, and the next recording uses it.** Back in the lobby with the
       client open, make the same `set_capture_backend` call, or click
       `libobs` in the row. `daemon.log` gains a
       `[recorder] backend: … (capture_backend = libobs, changed in Settings)`
-      line, Task Manager shows **one** `extprocess_recorder.exe` rather than
-      two (the old worker was released before the new one came up), and the
-      next game records, with `diagnostics_json.backend` (dev portal →
-      Library) naming libobs. Then switch to **Own** the same way: the log line
-      names `own (…)`, no `extprocess_recorder.exe` is left running, and the
-      next game's `diagnostics_json.backend` starts with `own (`. Switch back
-      to libobs before the next section's games.
-- [ ] **A saved backend that cannot be built refuses, and says so.** Needs a
-      Windows 10 box, where the own backend is below its floor. Set the row to
-      `own` with `set_ui_pref` (`key` `capture_backend`, `value` `own`) and
-      restart the daemon (tray → Quit, then start the app). The log's backend
-      line reads `unavailable (the own capture backend needs Windows build
-      20348 or newer …)`, the Settings row shows the "Nothing will be
-      recorded" warning, a game produces **no** recording rather than one made
-      on libobs, and choosing `libobs` in the row puts recording back without a
-      restart. On a Windows 11 box this row cannot be reached; leave it empty
-      and say so.
+      line, Task Manager shows **one** `extprocess_recorder.exe` and no
+      `ninja-recorder.exe --capture-worker` (the own backend's worker was
+      released before libobs came up), and the next game records, with
+      `diagnostics_json.backend` (dev portal → Library) naming libobs. Then
+      switch to **Own** the same way: the log line names `own (…)`, no
+      `extprocess_recorder.exe` is left running, and the next game's
+      `diagnostics_json.backend` starts with `own (`.
+- [ ] **A saved backend that cannot be built refuses, and says so.** Uses an
+      unbuildable **libobs**, which any box can produce. Choose `libobs` in
+      the row, quit the app from the tray, and rename
+      `libobs\extprocess_recorder.exe` in the install folder. Start the app.
+      The log's backend line reads `unavailable (the libobs worker is not
+      beside the executable) (capture_backend = libobs)`, the row shows libobs
+      disabled with that reason and the "Nothing will be recorded" warning, a
+      game produces **no** recording rather than one made on Own, and
+      choosing **Own** in the row puts recording back without a restart. Put
+      the file's name back afterwards (a repair install does the same).
+- [ ] **Below the floor with nothing saved.** Needs a Windows 10 box. A fresh
+      install there has no saved row, so the default, Own, is refused: the
+      log line reads `unavailable (the own capture backend needs Windows build
+      20348 or newer …) (capture_backend = own)`, and the row shows the
+      warning with libobs selectable. Choosing libobs records. On a Windows 11
+      box this row cannot be reached; leave it empty and say so.
 
 | What | Result | Notes |
 |---|---|---|
-| 9: a release build shows no Advanced group | | |
+| 9: a release build shows the Advanced group, a line per backend | | |
+| 9: a fresh install has Own selected and in use | | |
 | 9: switch the setting, and the next recording uses the chosen backend | | |
 | 9: refused mid-game; the recording in flight is unaffected | | |
-| 9: an unbuildable saved backend records nothing and says why | | |
+| 9: an unbuildable saved libobs records nothing and says why | | |
 | 9: switch to own, and the next recording is made by it | | |
+| 9: Windows 10, nothing saved: Own refused, the warning, libobs records | | |
 
 ## 10. Installing over a running app (#220)
 
@@ -1490,10 +1497,12 @@ uninstaller it runs is this one.
 
 ## 11. The own backend (WS1.6, #10)
 
-The own backend (Option B, `recorder/own/`) is built in pieces, and each adds
-its rows here. Every row runs on a **devtools build** with Settings → Advanced
-→ Capture backend set to **Own**, on Windows build 20348 or newer, except
-§11.3, which is the test of whether that floor can come down. Why the
+The own backend (Option B, `recorder/own/`) was built in pieces, and each
+added its rows here. Every row in §11.1 to §11.7 runs on a **devtools build**
+with Settings → Advanced → Capture backend set to **Own** (the default since
+#243), on Windows build 20348 or newer, except §11.3, which is the test of
+whether that floor can come down. §11.8, the exit run that gates the flip,
+runs on a **release** installer. Why the
 backend is shaped this way is
 [DEVELOPMENT.md §2.2](../DEVELOPMENT.md#22-the-recorder-trait) and §16.
 
