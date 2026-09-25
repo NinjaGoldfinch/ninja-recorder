@@ -1628,6 +1628,12 @@ scales; it does not crop"). Each size change writes
 `daemon.log` (the first dozen per recording): paste the lines with the result.
 Play one Practice Tool game per row, or several rows in one game.
 
+- [ ] **The scaling test, on the GPU.** CI's runner has no D3D11 video
+      processor, so the test that checks the scaling pixel by pixel only
+      skips there. In `src-tauri` on the box, run
+      `cargo test the_video_processor_letterboxes_a_resized_frame -- --nocapture`
+      and paste the `[own backend test]` line: `RAN … on <GPU>` passes,
+      `SKIPPED` with a reason is a finding.
 - [ ] **Alt-tab.** Alt-tab out of the game for ten seconds and back, twice.
       The file has no gap and no corruption; the time away shows the game as
       WGC saw it (it keeps compositing a window that is not in front).
@@ -1676,6 +1682,7 @@ Play one Practice Tool game per row, or several rows in one game.
 
 | What | Result | Notes |
 |---|---|---|
+| 11.4: the scaling test runs on the GPU | | |
 | 11.4: alt-tab, twice | | |
 | 11.4: resolution change to another aspect: black bars, not cropped | | |
 | 11.4: resolution change to the same aspect, smaller: fills the frame | | |
