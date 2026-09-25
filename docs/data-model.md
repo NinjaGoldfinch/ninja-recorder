@@ -160,6 +160,7 @@ erDiagram
         INTEGER recording_id FK "UNIQUE, ON DELETE SET NULL"
         INTEGER riot_game_id UK "nullable"
         INTEGER started_at "unix millis"
+        INTEGER ended_at "nullable; what the block gap is measured from"
         INTEGER block_id FK "ON DELETE SET NULL"
         TEXT    champion "nullable"
         TEXT    matchup "nullable"

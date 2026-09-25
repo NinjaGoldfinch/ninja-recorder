@@ -347,6 +347,7 @@ static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
             recording_id         INTEGER UNIQUE REFERENCES recordings(id) ON DELETE SET NULL,
             riot_game_id         INTEGER UNIQUE,
             started_at           INTEGER NOT NULL, -- unix millis
+            ended_at             INTEGER,          -- unix millis; NULL while in progress, or unknown
             block_id             INTEGER REFERENCES blocks(id) ON DELETE SET NULL,
             champion             TEXT,
             matchup              TEXT,
