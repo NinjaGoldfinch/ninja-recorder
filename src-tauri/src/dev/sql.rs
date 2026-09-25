@@ -13,8 +13,23 @@ use serde_json::Value as Json;
 /// the migration bookkeeping table are deliberately absent — they are
 /// reachable from the SQL console for anyone who really wants them, but
 /// they should not show up as ordinary editable data.
-const BROWSABLE_TABLES: &[&str] =
-    &["recordings", "markers", "samples", "settings", "settings_kv"];
+///
+/// `game_objectives` is absent for a different reason: its key is the pair
+/// `(game_id, objective_id)`, and the row editor addresses a row by one
+/// column. It is reachable from the SQL console.
+const BROWSABLE_TABLES: &[&str] = &[
+    "recordings",
+    "markers",
+    "samples",
+    "settings",
+    "settings_kv",
+    "games",
+    "blocks",
+    "game_reviews",
+    "objectives",
+    "notes",
+    "takeaways",
+];
 
 #[derive(Serialize)]
 pub struct Column {
@@ -343,14 +358,28 @@ pub fn dev_reset_db(
         let mut deleted = 0usize;
         // markers/samples cascade from recordings, but deleting them
         // explicitly keeps this correct if a future migration drops the
-        // foreign key.
-        for table in ["markers", "samples", "recordings", "settings"] {
+        // foreign key. The review tables go first: `games` outlives a
+        // recording on purpose, so nothing cascades them away.
+        for table in [
+            "notes",
+            "takeaways",
+            "game_objectives",
+            "game_reviews",
+            "games",
+            "blocks",
+            "objectives",
+            "markers",
+            "samples",
+            "recordings",
+            "settings",
+        ] {
             deleted += tx
                 .execute(&format!("DELETE FROM {table}"), [])
                 .map_err(|e| e.to_string())?;
         }
         tx.execute(
-            "DELETE FROM sqlite_sequence WHERE name IN ('recordings','markers','samples')",
+            "DELETE FROM sqlite_sequence WHERE name IN \
+             ('recordings','markers','samples','games','blocks','objectives','notes','takeaways')",
             [],
         )
         .map_err(|e| e.to_string())?;
@@ -408,6 +437,8 @@ fn primary_key(table: &str) -> &'static str {
         // autoincrement id — editing or deleting a row here by `id` would
         // silently match nothing.
         "settings_kv" => "key",
+        // 1:1 with `games`, so the game is the key.
+        "game_reviews" => "game_id",
         // Everything else keys on `id`, `settings` included (a single-row
         // table with `CHECK (id = 1)`).
         _ => "id",

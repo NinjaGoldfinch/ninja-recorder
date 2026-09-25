@@ -87,6 +87,17 @@ worked because there was one connection; they now use `Db::open_temporary()`.
 erDiagram
     recordings ||--o{ markers : "has"
     recordings ||--o{ samples : "has"
+    recordings |o--o| games : "VOD of, SET NULL"
+    blocks ||--o{ games : "groups"
+    games ||--o| game_reviews : "has"
+    games ||--o{ game_objectives : "snapshots"
+    objectives ||--o{ game_objectives : "active in"
+    games ||--o{ notes : "annotated by"
+    markers |o--o{ notes : "linked"
+    objectives |o--o{ notes : "tagged"
+    games ||--o{ takeaways : "yields"
+    blocks ||--o{ takeaways : "yields"
+    takeaways |o--o| objectives : "promoted to"
 
     recordings {
         INTEGER id PK
@@ -144,6 +155,64 @@ erDiagram
         TEXT key PK
         TEXT value
     }
+    games {
+        INTEGER id PK
+        INTEGER recording_id FK "UNIQUE, ON DELETE SET NULL"
+        INTEGER riot_game_id UK "nullable"
+        INTEGER started_at "unix millis"
+        INTEGER ended_at "nullable; what the block gap is measured from"
+        INTEGER block_id FK "ON DELETE SET NULL"
+        TEXT    champion "nullable"
+        TEXT    matchup "nullable"
+        TEXT    result "win or loss, nullable"
+        INTEGER recording_offset_ms "nullable until P1"
+    }
+    blocks {
+        INTEGER id PK
+        INTEGER started_at "unix millis"
+        INTEGER ended_at "unix millis"
+    }
+    game_reviews {
+        INTEGER game_id PK "and FK, ON DELETE CASCADE"
+        TEXT    game_rating "win, loss"
+        TEXT    lane_rating "win, neutral, loss"
+        TEXT    mental_rating "good, neutral, bad"
+        INTEGER first_clear_ms "entered by hand"
+        INTEGER smites_at_clear
+        INTEGER deaths "NULL = count the death markers"
+        TEXT    free_notes "plain text"
+    }
+    objectives {
+        INTEGER id PK
+        TEXT    body
+        TEXT    category "macro, lane, mental, mechanics, other"
+        TEXT    status "active, paused, retired"
+        INTEGER created_at
+        INTEGER retired_at "nullable"
+    }
+    game_objectives {
+        INTEGER game_id PK "FK, CASCADE"
+        INTEGER objective_id PK "FK, CASCADE"
+        INTEGER ticked "0 or 1"
+    }
+    notes {
+        INTEGER id PK
+        INTEGER game_id FK "CASCADE"
+        INTEGER ts_ms "game time"
+        TEXT    kind "mistake, good, question, takeaway"
+        TEXT    body
+        INTEGER objective_id FK "SET NULL"
+        INTEGER marker_id FK "SET NULL"
+    }
+    takeaways {
+        INTEGER id PK
+        INTEGER game_id FK "CASCADE; exactly one of game_id, block_id"
+        INTEGER block_id FK "CASCADE"
+        TEXT    body
+        INTEGER objective_id FK "SET NULL"
+        INTEGER promoted_to_id FK "SET NULL"
+        INTEGER created_at
+    }
 ```
 
 `markers.kind` is an open TEXT column with no CHECK constraint, so adding a
@@ -151,6 +220,23 @@ kind needs no migration. The list above is the authority; the inline comment
 in migration 1 is a frozen snapshot of what existed when that migration was
 written and is deliberately left alone (migrations are append-only, comments
 included).
+
+### The review tables outlive the recording
+
+Everything from `games` down is WS9's VOD review, specified in the plan
+repository ([docs/workstreams.md](workstreams.md)). A review hangs off
+**`games`, not `recordings`**, because a `recordings` row is deleted whenever
+its file goes: by `reconcile`, by retention and by the user's Delete. Deleting
+a recording therefore sets `games.recording_id` to NULL and leaves the game,
+its review, its takeaways and its objective snapshot in place; a note loses
+its `marker_id` and keeps its text. A `games` row with no recording is also
+what the spreadsheet importer creates for a game that was never recorded.
+
+Events are not a table of their own: a note links to a `markers` row, which
+already carries the raw Live Client payload and the aligned seek position.
+The enums are `CHECK` constraints, and a NULL passes one, which is how a
+rating is left unset. The three provisional defaults the schema carries are
+recorded in [DEVELOPMENT.md §20](../DEVELOPMENT.md#20-vod-review-ws9-the-provisional-p0-defaults).
 
 ### Migration history
 
@@ -167,6 +253,7 @@ included).
 | 9 | `recordings.scoreboard_json` (nullable), `recordings.cs` (nullable) | The end-of-game scoreboard: all ten champions, their KDA and CS, the items and spells they finished with, and our own rune page. JSON for the same three reasons as `audio_tracks_json` and `diagnostics_json` (always read whole, never queried by predicate, one per recording) plus a fourth: a column is disposed of with its row, so retention needs no cascade. Nothing filters or sorts on the other nine players, and the five filters the library offers are all columns that already exist. **`cs` is the exception** and gets a real column: it is shown on the row, is worth sorting by, and CS per minute wants it beside `duration_s` rather than inside a blob every query would parse |
 | 8 | `samples.gold_diff_est` → `gold_diff`, existing values cleared | The column stops claiming to be an estimate because it stops being one: gold now comes from the LCU's match timeline, which is Riot's own per-participant accounting. The old values are cleared rather than carried across: every one of them is the item-price estimate, and leaving them under a column named `gold_diff` would relabel a known-wrong number as Riot's. NULL renders as "no gold data", which is true; a flat line near zero read as "you were even", which was the bug |
 | 7 | `recordings.diagnostics_json` (nullable) | What the app *observed* while making the recording, as against what the recording contains: how many Live Client Data polls landed, whether we were ever found in `allPlayers`, the alignment the markers were mapped through, which capture backend was live. None of it is derivable afterwards: the live API is gone the moment the game ends. JSON rather than a child table for the same reasons as `audio_tracks_json`, plus one more: a column is disposed of with its row, so retention and `delete_recording` need no cascade to get wrong |
+| 13 | `games`, `blocks`, `game_reviews`, `objectives`, `game_objectives`, `notes`, `takeaways`, and six indexes | WS9's VOD review. Hung off `games` rather than `recordings` so a review survives its VOD (see "The review tables outlive the recording" above). Reuses `markers` for events instead of adding an event table (#249). `takeaways` enforces exactly one owner with `CHECK ((game_id IS NULL) <> (block_id IS NULL))` |
 
 ### The audio layout is JSON, not a child table
 
