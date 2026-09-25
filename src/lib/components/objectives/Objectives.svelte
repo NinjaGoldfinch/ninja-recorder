@@ -2,6 +2,10 @@
   The objectives list (WS9 P0): what is active, paused and retired, with
   create and retire. Enough to see what a promoted takeaway became and to
   manage it; P2 adds the evidence and the desktop widget.
+
+  It also carries the spreadsheet import, because the objectives are the part
+  of the spreadsheet a user sees first: the file is read here, parsed in
+  `reviewform/sheet.ts`, and sent to the daemon as rows.
 -->
 
 <script lang="ts">
@@ -10,6 +14,8 @@ import type { ObjectiveCategory, ObjectiveStatus } from "../../contract/types";
 import { whenDaemonReachable } from "../../stores/daemon.svelte";
 import {
   createObjective,
+  type ImportOutcome,
+  importSheet,
   loadObjectives,
   objectives,
   setObjectiveStatus,
@@ -25,6 +31,21 @@ const CATEGORIES: ObjectiveCategory[] = ["macro", "lane", "mental", "mechanics",
 
 let body = $state("");
 let category = $state<ObjectiveCategory>("other");
+let fileInput: HTMLInputElement | undefined = $state();
+let importing = $state(false);
+let outcome = $state<ImportOutcome | null>(null);
+
+async function onFile(input: HTMLInputElement) {
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  importing = true;
+  try {
+    outcome = await importSheet(await file.text());
+  } finally {
+    importing = false;
+  }
+}
 
 $effect(() => {
   whenDaemonReachable(() => void loadObjectives());
@@ -94,5 +115,45 @@ async function submit(event: SubmitEvent) {
         </li>
       {/each}
     </ul>
+  {/if}
+</section>
+
+<section class="settings-group">
+  <h3>Import from the spreadsheet</h3>
+  <p class="setting-hint">
+    A CSV export with the columns date, time, block, game no, playing, matchup, game, lane,
+    mental, clear time, smites, deaths, learning objectives, key takeaways and block takeaways.
+    Dates are day first. Importing the same file twice changes nothing.
+  </p>
+  <input
+    bind:this={fileInput}
+    type="file"
+    accept=".csv,text/csv"
+    hidden
+    aria-label="Spreadsheet CSV"
+    onchange={(e) => void onFile(e.currentTarget)}
+  />
+  <button type="button" class="ghost" disabled={importing} onclick={() => fileInput?.click()}
+    >{importing ? "Importing…" : "Import spreadsheet…"}</button
+  >
+  {#if outcome}
+    <div class="import-outcome" role="status">
+      {#if outcome.report}
+        <p>
+          {outcome.report.rows} rows: {outcome.report.games_created} new games,
+          {outcome.report.games_matched} matched to games already here,
+          {outcome.report.objectives_created} new objectives,
+          {outcome.report.takeaways_created} new takeaways.
+        </p>
+      {/if}
+      {#if outcome.errors.length > 0}
+        <p class="import-errors-title">Not imported:</p>
+        <ul class="import-errors">
+          {#each outcome.errors as error (error.line)}
+            <li>Line {error.line}: {error.message}</li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
   {/if}
 </section>

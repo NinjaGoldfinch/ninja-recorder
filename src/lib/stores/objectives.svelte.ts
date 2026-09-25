@@ -8,8 +8,20 @@
  */
 
 import { client } from "../../bridge";
-import type { Objective, ObjectiveCategory, ObjectiveStatus } from "../contract/types";
+import type {
+  ImportReport,
+  Objective,
+  ObjectiveCategory,
+  ObjectiveStatus,
+} from "../contract/types";
+import { parseSheet, type SheetError } from "../reviewform/sheet";
 import { toast } from "./toast.svelte";
+
+/** What the last spreadsheet import did, for the view to report. */
+export interface ImportOutcome {
+  report: ImportReport | null;
+  errors: SheetError[];
+}
 
 let all = $state<Objective[]>([]);
 let filter = $state<ObjectiveStatus>("active");
@@ -64,6 +76,24 @@ export async function setObjectiveStatus(id: number, status: ObjectiveStatus): P
     all = all.map((o) => (o.id === id ? updated : o));
   } catch (err) {
     toast(`Couldn't update the objective: ${err}`, "error");
+  }
+}
+
+/**
+ * Import the review spreadsheet from a CSV export's text. Rows that cannot be
+ * read are reported by line, and the rest are imported; the daemon's side is
+ * idempotent, so importing the same file again changes nothing.
+ */
+export async function importSheet(text: string): Promise<ImportOutcome> {
+  const sheet = parseSheet(text);
+  if (sheet.rows.length === 0) return { report: null, errors: sheet.errors };
+  try {
+    const report = await client.import_review_rows(sheet.rows);
+    await loadObjectives();
+    return { report, errors: sheet.errors };
+  } catch (err) {
+    toast(`Couldn't import the spreadsheet: ${err}`, "error");
+    return { report: null, errors: sheet.errors };
   }
 }
 

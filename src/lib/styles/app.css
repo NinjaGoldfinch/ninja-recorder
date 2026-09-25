@@ -2129,3 +2129,23 @@ button.small {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-ring);
 }
+
+.import-outcome {
+  margin-top: var(--sp-3);
+  font-size: var(--fs-sm);
+}
+
+.import-outcome p {
+  margin: 0 0 var(--sp-2);
+}
+
+.import-errors-title {
+  color: var(--loss-fg);
+  font-weight: 600;
+}
+
+.import-errors {
+  margin: 0;
+  padding-left: 1.2em;
+  color: var(--text-muted);
+}
