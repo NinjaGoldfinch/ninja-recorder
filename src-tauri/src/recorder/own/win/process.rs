@@ -15,7 +15,7 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
 use windows::Win32::System::Threading::{
     GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
 };
-use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+use windows::Win32::UI::WindowsAndMessaging::{GetWindowThreadProcessId, IsWindow};
 
 use crate::recorder::own::root::Proc;
 
@@ -82,4 +82,19 @@ pub fn window_owner(hwnd: HWND) -> Option<u32> {
     // return 0 rather than misbehave.
     unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
     (pid != 0).then_some(pid)
+}
+
+/// Whether `hwnd` names a window at all ([`IsWindow`][iswindow]).
+///
+/// Microsoft's page warns that a window another thread created can be
+/// destroyed straight after this answers, and that handles are recycled.
+/// The one caller, `own::watch` through the session, polls it, so the first
+/// is the next poll's to notice; and it checks the owner with
+/// [`window_owner`] beside it, which is what catches the second.
+///
+/// [iswindow]: https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-iswindow
+pub fn is_window(hwnd: HWND) -> bool {
+    // SAFETY: takes the handle by value and only looks it up; a handle that
+    // names no window is answered false, not dereferenced.
+    unsafe { IsWindow(Some(hwnd)) }.as_bool()
 }

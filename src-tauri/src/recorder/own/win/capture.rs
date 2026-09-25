@@ -128,6 +128,9 @@ pub fn create_slots(
 /// session thread rather than pushed to a dispatcher this process does not
 /// have.
 pub struct Capture {
+    /// The window captured, which the session polls to learn it has gone
+    /// (`own::watch`), because `Closed` has not been seen to fire.
+    window: HWND,
     item: GraphicsCaptureItem,
     pool: Direct3D11CaptureFramePool,
     session: GraphicsCaptureSession,
@@ -176,7 +179,7 @@ impl Capture {
         // so a VOD shows where the player was pointing.
         let _ = session.SetIsCursorCaptureEnabled(true);
         session.StartCapture().map_err(|e| format!("StartCapture failed: {e}"))?;
-        Ok(Capture { item, pool, session, pool_size: size, closed, closed_token, border })
+        Ok(Capture { window, item, pool, session, pool_size: size, closed, closed_token, border })
     }
 
     /// The item's size when the capture started, which is what the encoder
@@ -185,8 +188,22 @@ impl Capture {
         self.pool_size
     }
 
-    /// Whether the window has gone: WGC raises `Closed` when the game ends
-    /// or crashes. No frame comes after it.
+    /// The window this captures.
+    pub fn window(&self) -> HWND {
+        self.window
+    }
+
+    /// Whether WGC has raised `Closed`: the window has gone, or WGC ended
+    /// the capture (Microsoft's page for the event says an app replacing
+    /// its window does that). No frame comes after it.
+    ///
+    /// **A second signal, not the main one.** On the box it has never fired,
+    /// on a normal game end or with the game's process killed (#302), so the
+    /// session polls the window itself (`own::watch`). Microsoft documents
+    /// no thread or context the event is raised on; the frame pool's events
+    /// need a `DispatcherQueue` unless the pool is free-threaded, and this
+    /// thread is MTA with none, which is the likeliest reason, and not one
+    /// the poll depends on.
     pub fn closed(&self) -> bool {
         self.closed.load(Ordering::Acquire)
     }

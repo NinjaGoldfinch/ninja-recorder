@@ -21,15 +21,18 @@ use super::capture::{self, Capture, Slot};
 use super::device::{self, Device};
 use super::encode;
 use super::output::Output;
+use super::process;
 use super::scale::{self, Fitter};
 use crate::recorder::CaptureProblem;
 use crate::recorder::audio::AudioLayout;
 use crate::recorder::own::clock;
 use crate::recorder::own::fit::Size;
 use crate::recorder::own::plan::{self, CapturePlan};
+use crate::recorder::own::root;
 use crate::recorder::own::select::{self, Choice};
 use crate::recorder::own::stats;
 use crate::recorder::own::status::{self, Status};
+use crate::recorder::own::watch::{self, Candidate, Due, Lost, Verdict, Watch};
 use crate::recorder::window;
 use crate::{info, warn};
 
@@ -398,8 +401,9 @@ struct Recording {
     /// Puts each frame into a slot, scaling it if the window has changed
     /// size since `start`.
     fitter: Fitter,
-    /// WGC said the window closed.
-    window_closed: bool,
+    /// Whether the game window is still there, and when to look for a new
+    /// one once it is not (`own::watch`).
+    watch: Watch,
     /// The slot every tick shows is black now, or has stopped trying to be.
     black: bool,
     /// Every audio track, the mix and the stems, over every source that
@@ -440,6 +444,7 @@ impl Recording {
         };
 
         let mut capture = Capture::start(&warm.device, hwnd)?;
+        let window = watch::Window { handle: hwnd.0 as isize, owner: process::window_owner(hwnd) };
         let size = capture.size();
         let (width, height) = status::even_size(size.Width, size.Height)
             .ok_or("the game window has no area to capture (minimised?)")?;
@@ -524,7 +529,7 @@ impl Recording {
             next_slot: 1,
             status,
             fitter,
-            window_closed: false,
+            watch: Watch::new(window, Instant::now()),
             black: false,
             audio,
             layout,
@@ -548,11 +553,21 @@ impl Recording {
     ///   frame and every tick repeats the last one until the window comes
     ///   back. Nothing here waits on WGC, so nothing stalls: the file keeps
     ///   its cadence, frozen on the last picture.
-    /// - *Close* (the game ended or crashed): WGC raises `Closed`, and the
+    /// - *Close* (the game ended or crashed): noticed by polling the window
+    ///   every quarter second (`IsWindow`, and that its owner is the same
+    ///   process), because WGC's `Closed` never fired on the box (#302);
+    ///   `Closed` is still a second signal. Either is logged once, and the
     ///   loop keeps ticking, black, until `stop`. The supervisor finalizes
     ///   when the Live Client API goes away, about five seconds later; ending
     ///   the recording here instead would leave the file shorter than the
     ///   state machine's idea of it.
+    /// - *Come back* (the game crashed and the player reconnected): while
+    ///   black, the loop looks for a game window every second, by the same
+    ///   lookup `begin` used, and captures one it finds that has a size and
+    ///   belongs to `League of Legends.exe`. The picture returns, letterboxed
+    ///   if the new window is another size, and the game's audio source is
+    ///   restarted on the new process; the tracks carry silence across the
+    ///   gap. A normal game end finds nothing, and the black runs to `stop`.
     /// - *Lose the GPU* (a driver update, a TDR): the loop ends and what was
     ///   written is finalized; `stop` returns the file and logs why.
     fn run(&mut self, device: &Device, origin: i64, commands: &Receiver<Command>) -> Ended {
@@ -580,7 +595,8 @@ impl Recording {
             if let Some(reason) = device::removed(device) {
                 return Ended::Problem(format!("the GPU device was lost ({reason})"));
             }
-            if self.capture.closed() {
+            self.watch_window(device);
+            if self.watch.is_lost() {
                 self.go_black(device);
             } else if let Err(e) = self.take_frame(device) {
                 return Ended::Problem(lost_or(device, e));
@@ -640,19 +656,102 @@ impl Recording {
         Ok(())
     }
 
-    /// The game window has closed: every tick from here on is black. Logged
-    /// once; retried each pass until a slot is free.
+    /// Asks whatever `watch` says is due: whether the window is still there,
+    /// or, once it is not, whether a game window has appeared to capture
+    /// instead; and notices WGC's `Closed` either way.
+    fn watch_window(&mut self, device: &Device) {
+        let now = Instant::now();
+        let lost = match self.watch.due(now) {
+            Due::Nothing => None,
+            Due::Check => {
+                let hwnd = self.capture.window();
+                let then = self.watch.window().owner;
+                watch::gone(process::is_window(hwnd), process::window_owner(hwnd), then)
+                    .then_some(Lost::Destroyed)
+            }
+            Due::Search => {
+                self.search(device, now);
+                None
+            }
+        };
+        let lost = lost.or_else(|| self.capture.closed().then_some(Lost::Closed));
+        let logging = self.watch.logging();
+        if let Some(how) = lost.and_then(|how| self.watch.lose(how, now))
+            && logging
+        {
+            info!(
+                "recorder",
+                "own backend: the game window closed (the game ended or crashed; {}); recording \
+                 black until stop, or until a game window comes back",
+                how.describe()
+            );
+        }
+    }
+
+    /// Looks for a game window once the last one has gone, by the lookup
+    /// `begin` used, and captures it if `watch` says to: the black ends at
+    /// its first frame, and the game's audio moves to its process.
+    fn search(&mut self, device: &Device, now: Instant) {
+        let Some(hwnd) = window::find_by_class() else {
+            return;
+        };
+        let owner = process::window_owner(hwnd);
+        let sized = window::client_size(hwnd).is_some();
+        // The snapshot only for a window worth capturing.
+        let game = sized
+            && owner.is_some_and(|pid| {
+                process::snapshot().is_ok_and(|procs| root::is_game(&procs, pid))
+            });
+        let window = watch::Window { handle: hwnd.0 as isize, owner };
+        let found = Candidate { window, sized, game };
+        let Verdict::Attach(window) = self.watch.consider(Some(found)) else {
+            return;
+        };
+        let capture = match Capture::start(device, hwnd) {
+            Ok(capture) => capture,
+            Err(e) => {
+                if self.watch.attach_failed(window) {
+                    warn!(
+                        "recorder",
+                        "own backend: a game window came back (PID {}) and could not be \
+                         captured ({e}); still black, trying again each second",
+                        owner.map_or_else(|| "unknown".to_string(), |pid| pid.to_string())
+                    );
+                }
+                return;
+            }
+        };
+        // The old capture goes here; the new pool is at the new window's
+        // size, and the fitter letterboxes that into the encoder's.
+        self.capture = capture;
+        self.watch.attached(window, now);
+        self.black = false;
+        if self.watch.logging() || self.watch.last_logged() {
+            info!(
+                "recorder",
+                "own backend: the game window came back (PID {}); capturing it again (reattach \
+                 {} this recording){}",
+                owner.map_or_else(|| "unknown".to_string(), |pid| pid.to_string()),
+                self.watch.reattached(),
+                if self.watch.last_logged() {
+                    "; further closes and returns are not logged"
+                } else {
+                    ""
+                }
+            );
+        }
+        if let Some(audio) = self.audio.as_mut()
+            && let Some(what) = audio.restart_game(hwnd)
+        {
+            info!("recorder", "own backend: the game came back: {what}");
+        }
+    }
+
+    /// The game window has gone: every tick from here on is black, until a
+    /// game window comes back. Retried each pass until a slot is free.
     fn go_black(&mut self, device: &Device) {
         if self.black {
             return;
-        }
-        if !self.window_closed {
-            self.window_closed = true;
-            info!(
-                "recorder",
-                "own backend: the game window closed (the game ended or crashed); recording \
-                 black until stop"
-            );
         }
         let Some(i) = self.free_slot() else {
             return;
