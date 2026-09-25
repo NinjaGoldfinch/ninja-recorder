@@ -100,6 +100,7 @@ version scheme, the alpha channel, the signed updater, and ffmpeg (LGPL static,
 | Document | What it covers |
 |---|---|
 | [docs/provenance.md](docs/provenance.md) | Where this code came from, what is owed because of it, the licence exit |
+| [docs/licensing.md](docs/licensing.md) | The WS8 audits: contributors, derived code, ffmpeg, and which releases are GPL |
 | [docs/measurement.md](docs/measurement.md) | How install size and memory are measured, so a figure means one thing |
 | [CLAUDE.md](CLAUDE.md) | Module ownership, the gates, the rules that are easy to break by accident |
 | [docs/architecture.md](docs/architecture.md) | Components, module map, the `Recorder` trait boundary |
@@ -194,4 +195,9 @@ release of v2.0.0 has been in the field, not before.
 [`src-tauri/deny.toml`](src-tauri/deny.toml) is what makes the exit mechanical:
 GPL is denied with exactly two named exceptions, this crate and the libobs
 fork, and deleting them is the proof. See
-[docs/provenance.md](docs/provenance.md).
+[docs/provenance.md](docs/provenance.md) and
+[docs/licensing.md](docs/licensing.md).
+
+**The change is not retroactive.** Every release before `v2.1.0`, here and in
+[`ninja-recorder-deprecated`](https://github.com/NinjaGoldfinch/ninja-recorder-deprecated/releases),
+is GPL-2.0-only, stays GPL-2.0-only, and stays available.

@@ -52,6 +52,10 @@ licence exit; it is not a formality:
 
 **Do not add a third without asking.** The count is the measurement.
 
+The WS8 audits of this record are in [licensing.md](licensing.md): who holds
+copyright in the tree (#49), what was derived from the fork or from other GPL
+code (#50), and the checklist #51 executes.
+
 ## Copied paths
 
 Every path in the import, grouped by what the plan (§2.1, Appendix D) says
@@ -95,8 +99,8 @@ Two of them have been appended to since the import, and neither renumbers
 anything: `windows-verification.md` gains **§5.2** (the v2 measurement method's
 three empty rows; §5.0 was already "Launch modes", which is why it is not
 §5.0.5), and `ci-and-releases.md` gains the new gate list. `DEVELOPMENT.md` is
-untouched; v2's §17 has landed with WS2 and §16 with WS1.5, which
-leaves §18 as WS8's to write.
+untouched; v2's §17 has landed with WS2 and §16 with WS1.5, and §18 with
+WS8's audit.
 
 ### Rewritten for v2, not carried
 
@@ -183,11 +187,12 @@ becomes a tag pin, at which point WS1.7 flips it to `deny`. Leaving it at
 
 ### ffmpeg
 
-The bundled ffmpeg is the BtbN **lgpl** static build, staged by CI, invoked
-only through `lib.rs::ffmpeg_command` and only ever with `-c copy`. It stays
-valid under every capture outcome and survives WS8, because it is a separate
-process doing stream copies. It is not a Cargo dependency and so does not
-appear in `cargo deny` output; this paragraph is its record.
+The bundled ffmpeg is the BtbN **lgpl** static build, staged by CI and
+invoked only through `lib.rs::ffmpeg_command`. It survives WS8, because it is a
+separate process doing stream copies. It is not a Cargo dependency and so does
+not appear in `cargo deny` output. Its record, including the licence version and
+what is still owed for shipping it, is
+[licensing.md §3](licensing.md#3-ffmpeg-the-one-copyleft-component-that-stays-53).
 
 ## Full file list at import
 

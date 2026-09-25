@@ -3220,6 +3220,66 @@ applies".
 
 ---
 
+## 18. The licensing exit
+
+WS8's section. The audit it rests on, the checklist #51 executes and the
+ffmpeg obligations are in [docs/licensing.md](docs/licensing.md). This section
+is why the exit is shaped the way it is.
+
+**The licence is GPL-2.0-only because of libobs and nothing else** (§2.1).
+The target is **MIT at v2.1**, decided in
+[#66](https://github.com/NinjaGoldfinch/ninja-recorder/issues/66). The
+sequencing is the planning repository's decision record
+[0002](https://github.com/NinjaGoldfinch/ninja-recorder-v2-plan/blob/main/docs/decisions/0002-two-release-relicensing-sequence.md).
+
+### Deletion first, and the licence in one commit
+
+The order is: the own backend becomes the default, libobs stays selectable for
+one release (§16, "The switch"), #51 deletes it, and #52 changes the licence
+in a single commit tagged `v2.1.0`.
+
+- **The deletion comes first because it is the proof.** `deny.toml` allows GPL
+  for this crate and the fork's five crates and nothing else. Deleting the fork
+  and watching `cargo deny check` stay green is what shows no other copyleft
+  dependency arrived in the meantime. Relicensing first would make that an
+  audit instead of a check.
+- **One release with the fallback** is so that a recording the own backend
+  gets wrong has an answer a user can pick without reinstalling.
+- **One commit** makes the change a single reviewable point in history: every
+  tag before it is GPL-2.0-only, and every tag from it on is MIT.
+
+### Written from Microsoft's documentation, never from the fork
+
+Rewriting code *from* the fork, from libobs or from league_record produces a
+derivative of a GPL work, and that would defeat the exit. So anything the own
+backend needs is written from Microsoft Learn and Microsoft's samples, and cites
+them.
+
+**Reading GPL code for behaviour is allowed; carrying its code is not.**
+Learning from libobs *that* the WGC border can be turned off, or that process
+loopback is how OBS isolates a game's audio, is a fact about what Windows can
+do. The implementation then comes from Microsoft's pages, written fresh, and the
+comment cites those pages rather than the file that prompted it. A comparison
+("as libobs does") can stay as the reason for a behaviour, and a citation
+cannot stay as its source. `recorder/window.rs` is the one place the audit
+found that fell on the wrong side of this line; docs/licensing.md has the
+evidence and the fix.
+
+### What survives, and what does not change
+
+**ffmpeg survives** because it is a separate, unmodified LGPL executable that
+only copies streams or reads headers. Its licence does not reach a program
+that runs it rather than linking it, and the copy-only rule is what makes the
+LGPL build sufficient. That is why every spawn goes through
+`lib.rs::ffmpeg_command`.
+
+**The change is not retroactive.** Every release before `v2.1.0` was
+distributed under GPL-2.0-only and stays so. Those releases stay published,
+because deleting them would not relicense them and would strand installs that
+update from them.
+
+---
+
 ## 19. The Svelte migration: what WS4.1 decided
 
 WS4 replaces the frontend view by view rather than at once, so the decisions
