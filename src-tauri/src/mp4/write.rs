@@ -169,7 +169,9 @@ pub fn annex_b_nals(stream: &[u8]) -> Vec<&[u8]> {
 /// which is what an `avc1` sample holds (`avcC`'s `lengthSizeMinusOne = 3`).
 ///
 /// Every NAL is kept. [`Writer::write_sample`] additionally drops access unit
-/// delimiters and the parameter sets `avcC` already carries.
+/// delimiters and the parameter sets `avcC` already carries, and is what the
+/// own backend writes through, so only the tests call this.
+#[cfg(test)]
 pub fn annex_b_to_avcc(stream: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(stream.len() + 16);
     for nal in annex_b_nals(stream) {

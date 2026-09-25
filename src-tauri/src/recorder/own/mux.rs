@@ -133,6 +133,7 @@ impl Mux {
     }
 
     /// Whether the file exists yet: the first keyframe has come.
+    #[cfg(test)]
     pub fn is_open(&self) -> bool {
         self.writer.is_some()
     }

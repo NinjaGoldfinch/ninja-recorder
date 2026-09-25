@@ -110,6 +110,7 @@ impl<T> AsyncPump<T> {
     }
 
     /// Frames waiting for a credit.
+    #[cfg(test)]
     pub fn queued(&self) -> usize {
         self.queue.len()
     }
@@ -126,6 +127,7 @@ impl<T> AsyncPump<T> {
         self.credits = 0;
     }
 
+    #[cfg(test)]
     pub fn draining(&self) -> bool {
         self.draining
     }
