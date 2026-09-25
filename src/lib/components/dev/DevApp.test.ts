@@ -391,10 +391,13 @@ describe("the panels that write", () => {
 
   it("invokes a command with no arguments as no payload at all", async () => {
     await open("#/commands");
+    // Chosen by name: the list is alphabetical, so whichever command happens
+    // to come first is not guaranteed to take no arguments.
+    await press("is_recording");
     await press("Invoke");
     // `undefined` rather than `{}`: an empty object is a claim that the
     // command takes arguments.
-    expect(call).toHaveBeenCalledWith(expect.any(String), undefined);
+    expect(call).toHaveBeenCalledWith("is_recording", undefined);
   });
 
   it("dispatches a state event into the live supervisor", async () => {
