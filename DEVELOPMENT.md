@@ -3269,3 +3269,31 @@ verification of its own. Moving rules into components is safe work, a few at a
 time, checked against a running window; doing it blind in the same commit that
 rewrote every panel would have been a large invisible-failure surface for no
 gain.
+
+## 20. VOD review (WS9): the provisional P0 defaults
+
+WS9's specification leaves five questions open on purpose
+([docs/workstreams.md](docs/workstreams.md)). P0 cannot ship without an answer
+to three of them, so it takes a default for each. **All three are
+provisional.** Each has an open issue, and the phase that needs the real answer
+is the one that closes it.
+
+| Default | Question | Settled by |
+|---|---|---|
+| First clear time is entered by hand, as mm:ss on the review form | [#248](https://github.com/NinjaGoldfinch/ninja-recorder/issues/248) | P1 |
+| A new block starts when a game begins more than 2 hours after the previous one ended | [#250](https://github.com/NinjaGoldfinch/ninja-recorder/issues/250) | P3 |
+| Note, takeaway, objective and free-note bodies are plain text | [#251](https://github.com/NinjaGoldfinch/ninja-recorder/issues/251) | P1 |
+
+**Why these.** Each is the one that costs nothing to change later. Manual entry
+stores the same `first_clear_ms` that a derived value would. The gap is one
+constant behind a pure function, and splitting or merging a block by hand
+already covers the cases it gets wrong. Plain text is readable under Markdown or
+anything richer, and it renders through Svelte's text interpolation, which is
+what keeps the no-`{@html}` rule free (`CLAUDE.md`).
+
+**What is not provisional.** A review hangs off a `games` row rather than a
+`recordings` row. A recording is deleted with its file (by `db::reconcile`,
+retention and the user's Delete), and a review has to outlive its VOD. It also
+has to exist for a spreadsheet row that was never recorded. The other two
+questions are answered or not needed by P0: events reuse `markers` (#249), and
+there is no widget until P2 (#252).
