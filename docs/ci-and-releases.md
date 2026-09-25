@@ -279,6 +279,15 @@ can be asserted without a person at a desktop:
 - the pipe's ACL grants the user who created it, and does **not** grant
   `Everyone`, `Authenticated Users` or `BUILTIN\Users`
 - a second daemon exits 0 and writes nothing to the log
+- no capture worker (`--capture-worker`, #241) is running, since the runner has
+  no League client; found by command line, because by name it is the daemon
+
+`cargo test` starts the binary too, in one mode: `tests/capture_worker.rs`
+spawns `--capture-worker` (Windows only), completes the handshake, sends a
+`prepare`, and checks it exits 0 on `Release` and on EOF, 2 on a wrong protocol
+version, and that its stdout carries nothing but protocol lines. `smoke-ui.ps1`
+excludes a capture worker when it picks the daemon to kill, so a hand run on a
+machine with League open does not kill the worker in its place.
 
 It exists because of a specific failure. The first report from a real Windows
 box was "a console window appears and instantly closes", with no log to say why,

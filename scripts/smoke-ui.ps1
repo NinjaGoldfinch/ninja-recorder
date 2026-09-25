@@ -145,8 +145,15 @@ if ($ui.HasExited) { Fail "the UI exited with code $($ui.ExitCode) while we watc
 if (-not $connected) {
     Note "skipping the recovery check: there was no connection to lose"
 } else {
+    # Not the UI, and not a capture worker (#241): the own backend's worker is
+    # this same executable with `--capture-worker`, so by name alone it would
+    # pass for the daemon. It only exists while a League client does, so CI
+    # never has one, but a hand run on a machine with League open would.
+    $workerIds = @(Get-CimInstance Win32_Process -Filter "Name = 'ninja-recorder.exe'" -EA SilentlyContinue |
+        Where-Object { $_.CommandLine -match '--capture-worker' } |
+        ForEach-Object { $_.ProcessId })
     $daemon = Get-Process ninja-recorder -EA SilentlyContinue |
-        Where-Object { $_.Id -ne $ui.Id }
+        Where-Object { $_.Id -ne $ui.Id -and $workerIds -notcontains $_.Id }
     if (-not $daemon) {
         Fail "no daemon process to kill; the UI reported connected without one"
     } else {

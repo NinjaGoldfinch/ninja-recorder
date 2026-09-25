@@ -472,8 +472,8 @@ fn video_processor_device() -> Result<(device::Device, String), String> {
 }
 
 /// The whole backend against a window of the game's class: prepare, start,
-/// two seconds, stop. Needs a desktop session for WGC, so it is ignored
-/// until it proves stable on a runner.
+/// two seconds, stop, through a real capture worker. Needs a desktop session
+/// for WGC, so it is ignored until it proves stable on a runner.
 #[test]
 #[ignore = "needs a desktop session for WGC; run by hand on a Windows box"]
 fn own_backend_records_a_window() {
@@ -541,7 +541,15 @@ fn own_backend_records_a_window() {
     });
 
     let dir = scratch_dir("wgc");
-    let mut recorder = super::OwnRecorder::new(None);
+    // The capture runs in the worker, which is `ninja-recorder.exe` itself:
+    // this test's own executable is the harness, so name the built binary
+    // beside it (`target/<profile>/deps/..`). `cargo build` first.
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|harness| Some(harness.parent()?.parent()?.join("ninja-recorder.exe")))
+        .filter(|exe| exe.exists())
+        .expect("no ninja-recorder.exe beside the test harness: run `cargo build` first");
+    let mut recorder = super::OwnRecorder::with_worker(Some(exe), None);
     recorder.prepare().expect("prepare");
     report(&format!("prepared: {}", recorder.backend_name()));
     let config =

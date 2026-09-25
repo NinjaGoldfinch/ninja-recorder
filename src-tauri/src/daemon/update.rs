@@ -250,6 +250,11 @@ pub async fn install(ctx: &Arc<Ctx>, events: &Stream) {
     // then fails to start, nothing is lost: `start` brings the backend back up
     // on its own. The installer's pre-install hook stops the worker too; this
     // is the orderly half, and the hook is the backstop for whatever it misses.
+    //
+    // The own backend's capture worker (#241) goes the same way: `release`
+    // sends it `Release` and waits for it to exit. It is also in a kill-on-close
+    // job this process owns, so the `exit` below would end it regardless, and
+    // it is `ninja-recorder.exe` by name, which the installer kills by name.
     let supervisor = Arc::clone(&ctx.supervisor);
     let recorder = Arc::clone(&ctx.recorder);
     let _ = tokio::task::spawn_blocking(move || {

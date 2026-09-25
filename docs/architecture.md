@@ -89,7 +89,8 @@ flowchart TB
 | `recorder/own/root.rs` | Which process tree a process-loopback capture targets, from a process snapshot: the game (the window's owner, checked against `League of Legends.exe`), or the top of an application's tree (Discord, since #238). Reused parent PIDs are caught by creation time | `game_root`, `application_root` |
 | `recorder/own/select.rs` | Which H.264 encoder: hardware by adapter vendor (NVIDIA → AMD → Intel), the software MFT only as a marked fallback; the Windows build floor (20348) and its devtools-only override; a preset's checked audio layout (every preset since #238) | `rank`, `Choice`, `availability`, `floor_ignored`, `audio_layout` |
 | `recorder/own/status.rs` | The even frame size, whether the encoder Media Foundation loaded is the one `rank` chose, and the backend's name (`own (ready: …)`, `own (software encoding: …)`, `own (unavailable: …)`) | `even_size`, `check_loaded`, `Status` |
-| `recorder/own/win/` | Everything that calls Windows, and the only part of `own/` gated to it: the adapters and D3D11 device, the WGC capture with its border off, `scale` (frames into the fixed-size slots: a copy, or the D3D11 video processor when the window has been resized; the processor is shared with #239's BGRA → NV12), the process table, one thread per audio source (the game and applications by process loopback, include mode; the microphone and the desktop from their endpoints, the desktop with a silent keep-alive; all 48 kHz stereo float), track 0's `MixTrack`, the sink writer (H.264 8 Mbps CBR, GOP 120, AAC 160 kbps, fragmented MP4), and the session thread that owns them | `OwnRecorder`, `session::run`, `audio::start`, `audio::MixTrack`, `scale::Processor`, `scale::Fitter` |
+| `recorder/own/win/` | Everything that calls Windows, and the only part of `own/` gated to it: the adapters and D3D11 device, the WGC capture with its border off, `scale` (frames into the fixed-size slots: a copy, or the D3D11 video processor when the window has been resized; the processor is shared with #239's BGRA → NV12), the process table, one thread per audio source (the game and applications by process loopback, include mode; the microphone and the desktop from their endpoints, the desktop with a silent keep-alive; all 48 kHz stereo float), track 0's `MixTrack`, the sink writer (H.264 8 Mbps CBR, GOP 120, AAC 160 kbps, fragmented MP4), and the session thread that owns them, which runs in the capture worker (`host`: the session as the worker's `Host`). `OwnRecorder` is the daemon's thin client of that worker | `OwnRecorder`, `session::run`, `host::SessionHost`, `audio::start`, `audio::MixTrack`, `scale::Processor`, `scale::Fitter` |
+| `recorder/own/worker/` | The capture worker, `ninja-recorder --capture-worker` (#241): the process the session thread runs in, spawned only while League runs. The line protocol both sides share, the worker's loop (EOF is a shutdown), the pure lifetime rule, and the daemon's client with its timeouts and its kill-on-close job object | `run`, `protocol::{Request, Reply}`, `serve::serve`, `lifetime::Lifetime`, `client::Worker` |
 | `recorder/stub.rs` | Non-Windows dev backend that copies a fixture MP4 | `StubRecorder` |
 | `recorder/remux.rs` | The faststart remux, a `-c copy` through `ffmpeg_command` that moves the index to the front so a fragmented file scrubs. Shared by both Windows backends' `stop` and startup recovery; the argument list is pure | `faststart_args`, `remux_faststart` |
 | `mp4/read.rs` | Reading an MP4's top-level boxes directly, no ffmpeg: fragmented or not, how many whole fragments, how many audio tracks, and what a kill cut short | `summarize`, `Summary` |
@@ -160,7 +161,8 @@ flowchart TB
     SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release · collect_output"}
     T -->|"libobs, #[cfg(windows)]"| L["LibObsRecorder<br/><small>WGC window capture,<br/>NVENC/AMF/QSV H.264,<br/>one AAC track per audio source,<br/>fragmented MP4 + faststart remux</small>"]
     T -->|"own, #[cfg(windows)], build 20348+"| O["OwnRecorder<br/><small>Option B: WGC → D3D11 →<br/>Media Foundation sink writer,<br/>every source mixed into track 0,<br/>stems with #239,<br/>fragmented MP4 + faststart remux</small>"]
-    O -.->|"channel"| SES["session thread<br/><small>owns every COM object:<br/>device, WGC, sink writer</small>"]
+    O -.->|"stdin / stdout,<br/>one JSON line each"| WK["capture worker process<br/><small>--capture-worker, only while<br/>League runs; kill-on-close job</small>"]
+    WK -.->|"channel"| SES["session thread<br/><small>owns every COM object:<br/>device, WGC, sink writer</small>"]
     AUD["audio source threads<br/><small>game, applications: process loopback<br/>microphone, desktop: WASAPI endpoints</small>"] -.->|"stamped packets"| MIX["own::mix<br/><small>per-source aligner,<br/>10 ms blocks, watermark</small>"]
     MIX -.->|"track 0"| SES
     T -->|"libobs, everything else"| S["StubRecorder<br/><small>copies fixtures/sample.mp4</small>"]
@@ -181,15 +183,23 @@ goes away, off the resulting state rather than off individual actions
 ([DEVELOPMENT.md §2.2](../DEVELOPMENT.md#22-the-recorder-trait)). Both default
 to no-ops, so `StubRecorder` ignores them entirely.
 
-The own backend keeps the same shape in one process. `OwnRecorder` holds a
-channel and a join handle and nothing else; the session thread it spawns owns
-the D3D11 device, the WGC capture and the sink writer, so the recorder stays
-`Send` under the supervisor's mutex. `prepare` warms that thread (COM, Media
-Foundation, `select::rank`, the device), `start` refuses any audio preset but
-Game (`select::audio_layout`), waits at most about three seconds for the game
-window's first frame, starts the game's audio, and then takes the file's
-t = 0 as its last act, `stop` finalizes and remuxes, and `release` ends the
-thread.
+The own backend keeps the same shape, with its worker spawned on demand too.
+`OwnRecorder` holds the capture worker's child process, its job object and its
+pipes, and nothing else; the session thread runs in the worker
+(`ninja-recorder --capture-worker`, #241) and owns the D3D11 device, the WGC
+capture and the sink writer, so the recorder stays `Send` under the
+supervisor's mutex and a driver fault in an encoder ends the worker rather than
+the daemon. `prepare` spawns the worker and warms the thread (COM, Media
+Foundation, `select::rank`, the device), `start` plans the sources the preset
+names (`select::audio_layout`, `plan::plan`, sent to the worker with the path),
+spawns the worker if `prepare` did not, waits at most about three seconds for
+the game window's first frame, starts the audio sources, and then takes the
+file's t = 0 as its last act, `stop` finalizes and
+remuxes, and `release` ends the worker (after the `stop`, if a recording is in
+flight). A worker that dies mid-recording is logged with its exit code, and
+`stop` hands over what reached the disk, remuxed, rather than an error; the
+next `prepare` spawns a fresh one
+([DEVELOPMENT.md §12](../DEVELOPMENT.md#the-capture-worker-a-third-mode-and-only-while-league-runs-241)).
 
 The game's audio has a thread of its own, started for each recording. It
 finds the process tree to capture from the window being recorded
@@ -206,10 +216,13 @@ recording video only, and `stop` reports no audio track
 sequenceDiagram
     participant S as Supervisor
     participant R as OwnRecorder
+    participant W as capture worker
     participant T as session thread
     participant A as game audio thread
-    S->>R: prepare()
-    R->>T: Prepare
+    S->>R: prepare() (the client opened)
+    R->>W: spawn --capture-worker, into the job; hello
+    W-->>R: hello (protocol, pid)
+    R->>T: Prepare (a line on stdin, then the channel)
     T-->>R: status (ranked encoder)
     S->>R: start(config)
     Note over R: preset must be Game
@@ -233,6 +246,10 @@ sequenceDiagram
     T-->>R: finalized
     R->>R: faststart remux (1 audio track)
     R-->>S: RecordingOutput (Game track, or none)
+    S->>R: release() (the client closed)
+    R->>W: Release
+    W->>T: Release: finalize anything in flight, tear down
+    W-->>R: exits 0
 ```
 
 The output size is fixed at `start` and the game window is not (#240). Each
@@ -246,8 +263,9 @@ does not end the loop: it writes black until the supervisor's `stop`, which
 comes when the Live Client API goes away, and the game audio carries on under
 it, held with silence once the game has gone. A lost GPU device
 (`DXGI_ERROR_DEVICE_REMOVED`, `_RESET`) does end it, with what was written
-finalized, and `stop` waits at most 20 s for the session thread whatever
-happens, so a wedged driver cannot hold the supervisor.
+finalized, and `stop` waits at most 20 s for the capture worker whatever
+happens: a worker wedged in a driver past that is killed and its file kept, so
+it cannot hold the supervisor.
 
 ```mermaid
 flowchart LR
@@ -374,12 +392,28 @@ flowchart LR
     subgraph D["ninja-recorder.exe --daemon"]
         SUP["Supervisor · Recorder · SQLite writer"]
     end
+    subgraph C["ninja-recorder.exe --capture-worker<br/><small>own backend only; only while League runs</small>"]
+        SES["session thread<br/><small>WGC · D3D11 · Media Foundation</small>"]
+    end
     W1 -. invoke rpc .-> LINK
     W2 -. invoke rpc .-> LINK
     LINK -- "pipe" --> SUP
     SUP -- "snapshot · events" --> LINK
     LINK -. snapshot / event / daemon-health .-> W1
+    SUP -- "stdin / stdout<br/>(kill-on-close job)" --> SES
 ```
+
+The daemon may have a third process under it. With the own capture backend
+selected, it spawns `ninja-recorder.exe --capture-worker` when the League client
+opens and ends it when the client closes, so the session thread that holds the
+capture's COM objects runs outside the daemon: a driver fault in an encoder
+costs the worker and the recording keeps what reached the disk, but the daemon
+carries on. It is a mode of the same binary, not a second bin target, and it
+builds none of what the other two modes do: no lock, no tray, no database, no
+pipe. The job object it sits in closes when the daemon does, so it cannot
+outlive it. The libobs backend has had a worker process all along
+(`extprocess_recorder.exe`), with its own lifetime
+([DEVELOPMENT.md §12](../DEVELOPMENT.md#the-capture-worker-a-third-mode-and-only-while-league-runs-241)).
 
 Since WS3.4 the window is a client. `invoke('rpc', ...)` reaches `ui::link`,
 which forwards the name and arguments over the pipe and returns what the daemon
@@ -483,7 +517,7 @@ under the folder is per build:
 | `recordings/` | every recording, and `recordings/audio-tracks/` |
 | `fixtures/` | captured LCU / Live Client responses |
 | `ddragon/` | the Data Dragon art cache |
-| `logs/` | `daemon.log` / `ui.log` (release), `daemon-devtools.log` / `ui-devtools.log` (devtools), and the libobs worker's log |
+| `logs/` | `daemon.log` / `ui.log` (release), `daemon-devtools.log` / `ui-devtools.log` (devtools), the own backend's capture worker's `worker.log` / `worker-devtools.log`, and the libobs worker's log |
 | `daemon.<build>.sock` | the endpoint, on Unix only |
 
 The recordings folder is not configurable, so the two builds cannot be pointed

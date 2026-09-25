@@ -262,6 +262,10 @@ windows = { version = "0.62", features = [
     # The process table the own backend's process-loopback root is chosen
     # from (`recorder/own/win/process.rs`, #237), as `spikes/p0c-audio` reads it.
     "Win32_System_Diagnostics_ToolHelp",
+    # The job object the own backend's capture worker runs in, with
+    # kill-on-close, so a daemon that dies takes the worker with it
+    # (`recorder/own/worker/job.rs`, #241).
+    "Win32_System_JobObjects",
 ] }
 # `#[implement]` (the own backend's sample-release callback) expands to
 # `windows_core::` paths, so the crate it names has to be a direct

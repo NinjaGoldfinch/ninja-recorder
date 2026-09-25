@@ -81,6 +81,10 @@ pub enum Process {
     Ui,
     /// `daemon.log`, or `daemon-devtools.log`. The headless recorder.
     Daemon,
+    /// `worker.log`, or `worker-devtools.log`. The own backend's capture
+    /// worker (`recorder::own::worker`), which runs beside the daemon while
+    /// League does. One at a time per build, so one writer per file.
+    Worker,
 }
 
 impl Process {
@@ -90,6 +94,8 @@ impl Process {
             (Process::Ui, true) => "ui-devtools",
             (Process::Daemon, false) => "daemon",
             (Process::Daemon, true) => "daemon-devtools",
+            (Process::Worker, false) => "worker",
+            (Process::Worker, true) => "worker-devtools",
         }
     }
 
@@ -213,8 +219,14 @@ pub fn write(level: Level, tag: &str, message: &str) {
 
     // Keeps `npm run tauri:dev` behaving exactly as it did when all of
     // this was `eprintln!`. A release build has no console to write to.
+    //
+    // Not the capture worker's: its stderr is drained into `daemon.log`
+    // (`recorder::own::worker::client`), so echoing there would write every
+    // line twice, once in each file.
     #[cfg(debug_assertions)]
-    eprintln!("{line}");
+    if PROCESS.get() != Some(&Process::Worker) {
+        eprintln!("{line}");
+    }
 
     if let Some(sink) = SINK.get() {
         // A poisoned lock means another thread panicked mid-write. The log
@@ -922,11 +934,14 @@ mod tests {
     #[test]
     fn each_build_and_process_writes_a_file_of_its_own() {
         let expected = if cfg!(feature = "devtools") {
-            ["ui-devtools.log", "daemon-devtools.log"]
+            ["ui-devtools.log", "daemon-devtools.log", "worker-devtools.log"]
         } else {
-            ["ui.log", "daemon.log"]
+            ["ui.log", "daemon.log", "worker.log"]
         };
-        assert_eq!([Process::Ui.file_name(), Process::Daemon.file_name()], expected);
+        assert_eq!(
+            [Process::Ui.file_name(), Process::Daemon.file_name(), Process::Worker.file_name()],
+            expected
+        );
     }
 
     /// The same rule for the file the libobs worker writes, which this

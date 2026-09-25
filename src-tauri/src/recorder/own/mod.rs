@@ -40,6 +40,9 @@
 //!   layout of an audio preset.
 //! - `status` — the even frame size, whether the encoder Media Foundation
 //!   loaded is the one `select` chose, and the backend's name.
+//! - `worker` — the capture worker (`--capture-worker`, #241): the process
+//!   the session runs in, its protocol, its loop, when it exists, and the
+//!   daemon's client for it.
 //! - `win` — everything that calls Windows, and `OwnRecorder`.
 //!
 //! Stages, in the order the spike proved them (implementation plan §4.5):
@@ -81,6 +84,10 @@ pub mod root;
 pub mod select;
 #[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
 pub mod status;
+// Compiled everywhere, like the pure modules: the protocol, the worker's loop
+// and the lifetime rule are tested on any host. Off Windows `--capture-worker`
+// still runs, and refuses every request with the reason.
+pub mod worker;
 
 #[cfg(target_os = "windows")]
 mod win;
