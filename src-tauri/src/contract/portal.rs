@@ -774,6 +774,13 @@ macro_rules! production_form_table {
         danger: false,
         args: [],
     }
+    import_review_rows {
+        group: "Review",
+        danger: true,
+        args: [
+            { name: "rows", kind: "json", default: "[]", help: "ImportRow objects; the Objectives view builds them from a CSV", optional: false },
+        ],
+    }
     install_update {
         group: "Updates",
         danger: true,

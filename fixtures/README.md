@@ -24,3 +24,9 @@ recording backend.
 - LCU / Live Client Data JSON fixtures land here — every response shape
   the app depends on gets captured the first time it's seen, per
   DEVELOPMENT.md §3.3.
+- `review/spreadsheet.csv` — a CSV export in the shape of the review
+  spreadsheet the WS9 importer replaces. It has quoted multi-line bullet
+  cells, a doubled quote, a day-first date with a weekday, 12- and 24-hour
+  times, a blank row, and one row with an unreadable time. That row is there
+  to prove the rest of the sheet still imports.
+  `src/lib/reviewform/sheet.test.ts` reads it.

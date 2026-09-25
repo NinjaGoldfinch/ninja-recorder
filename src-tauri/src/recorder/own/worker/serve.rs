@@ -21,14 +21,16 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
 use super::protocol::{self, Line, PROTOCOL_VERSION, Reply, Request, Started};
+use crate::recorder::audio::AudioLayout;
 use crate::recorder::own::status::Status;
 
 /// What the loop asks of the session. Each method is one `Command`.
 pub trait Host {
     fn prepare(&mut self) -> Result<Status, String>;
-    /// Brings the capture up for `path`. On `Ok` the host waits for
-    /// [`Host::origin`]; anything else first abandons the start.
-    fn start(&mut self, path: PathBuf) -> Result<Started, String>;
+    /// Brings the capture up for `path`, opening the sources `plan` names.
+    /// On `Ok` the host waits for [`Host::origin`]; anything else first
+    /// abandons the start.
+    fn start(&mut self, path: PathBuf, plan: AudioLayout) -> Result<Started, String>;
     /// The origin for the start that was just answered.
     fn origin(&mut self, qpc_hns: i64);
     fn stop(&mut self) -> Result<Option<String>, String>;
@@ -118,8 +120,8 @@ fn run(reader: &mut impl BufRead, writer: &mut impl Write, host: &mut impl Host)
         let reply = match request {
             Request::Hello { .. } => Reply::Refused { reason: "hello twice".to_string() },
             Request::Prepare => Reply::Prepared { result: host.prepare() },
-            Request::Start { path } => {
-                let result = host.start(path);
+            Request::Start { path, plan } => {
+                let result = host.start(path, plan);
                 origin_due = result.is_ok();
                 Reply::Started { result }
             }
@@ -150,7 +152,7 @@ impl Host for Refusing {
         Err("the own capture backend records on Windows only".to_string())
     }
 
-    fn start(&mut self, _path: PathBuf) -> Result<Started, String> {
+    fn start(&mut self, _path: PathBuf, _plan: AudioLayout) -> Result<Started, String> {
         Err("the own capture backend records on Windows only".to_string())
     }
 
@@ -180,13 +182,13 @@ mod tests {
             Ok(Status::Ready { encoder: "fake".into() })
         }
 
-        fn start(&mut self, path: PathBuf) -> Result<Started, String> {
+        fn start(&mut self, path: PathBuf, plan: AudioLayout) -> Result<Started, String> {
             self.calls.push(format!("start {}", path.display()));
             if path.as_os_str() == "refuse" {
                 return Err("no window".into());
             }
             self.recording = true;
-            Ok(Started { status: Status::Ready { encoder: "fake".into() }, game_audio: true })
+            Ok(Started { status: Status::Ready { encoder: "fake".into() }, audio: plan })
         }
 
         fn origin(&mut self, qpc_hns: i64) {
@@ -226,6 +228,10 @@ mod tests {
         }
     }
 
+    fn no_audio() -> AudioLayout {
+        AudioLayout { sources: Vec::new(), tracks: Vec::new() }
+    }
+
     fn hello() -> Request {
         Request::Hello { protocol: PROTOCOL_VERSION }
     }
@@ -235,7 +241,7 @@ mod tests {
         let input = lines(&[
             hello(),
             Request::Prepare,
-            Request::Start { path: "x.mp4".into() },
+            Request::Start { path: "x.mp4".into(), plan: no_audio() },
             Request::Origin { qpc_hns: 1234 },
             Request::Stop,
             Request::Release,
@@ -261,7 +267,7 @@ mod tests {
     fn eof_mid_recording_finalizes_and_exits_cleanly() {
         let input = lines(&[
             hello(),
-            Request::Start { path: "x.mp4".into() },
+            Request::Start { path: "x.mp4".into(), plan: no_audio() },
             Request::Origin { qpc_hns: 1 },
         ]);
         let mut host = Fake::default();
@@ -331,7 +337,7 @@ mod tests {
         let input = lines(&[
             hello(),
             Request::Origin { qpc_hns: 5 },
-            Request::Start { path: "refuse".into() },
+            Request::Start { path: "refuse".into(), plan: no_audio() },
             Request::Origin { qpc_hns: 6 },
             Request::Release,
         ]);

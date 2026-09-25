@@ -26,6 +26,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::recorder::audio::AudioLayout;
 use crate::recorder::own::status::Status;
 
 /// Bumped on any change to the messages below. The worker refuses a daemon
@@ -41,9 +42,14 @@ pub enum Request {
     Hello { protocol: u32 },
     /// The pre-warm. Answered with [`Reply::Prepared`].
     Prepare,
-    /// Start recording to `path`. Answered with [`Reply::Started`], and on
-    /// success followed by exactly one [`Request::Origin`].
-    Start { path: PathBuf },
+    /// Start recording to `path`, capturing the sources `plan` names.
+    /// Answered with [`Reply::Started`], and on success followed by exactly
+    /// one [`Request::Origin`].
+    ///
+    /// The capture plan (`own::plan::CapturePlan`) travels as the layout it
+    /// describes: its sources and the tracks that sum them, which is all a
+    /// plan is (`CapturePlan::layout` and its inverse).
+    Start { path: PathBuf, plan: AudioLayout },
     /// The file's t = 0, in QPC 100 ns units, read by the daemon as the last
     /// thing its `start` does. No answer.
     Origin { qpc_hns: i64 },
@@ -77,8 +83,9 @@ pub enum Reply {
 pub struct Started {
     /// The status for the encoder that actually loaded.
     pub status: Status,
-    /// Whether the file has the game's audio track.
-    pub game_audio: bool,
+    /// The audio layout the file holds: the plan's, less every source that
+    /// could not open. No tracks when none did.
+    pub audio: AudioLayout,
 }
 
 /// Writes one message and flushes it: the other side is waiting on the line.
@@ -135,12 +142,24 @@ mod tests {
         }
     }
 
+    fn discord() -> AudioLayout {
+        crate::recorder::audio::AudioPreset::GameMicDiscord { mic_device_id: Some("{0.0.1}".into()) }
+            .layout()
+    }
+
     #[test]
     fn every_request_round_trips() {
         for request in [
             Request::Hello { protocol: PROTOCOL_VERSION },
             Request::Prepare,
-            Request::Start { path: PathBuf::from(r"C:\Users\a b\recordings\x.mp4") },
+            Request::Start {
+                path: PathBuf::from(r"C:\Users\a b\recordings\x.mp4"),
+                plan: discord(),
+            },
+            Request::Start {
+                path: "y.mp4".into(),
+                plan: AudioLayout { sources: Vec::new(), tracks: Vec::new() },
+            },
             Request::Origin { qpc_hns: i64::MAX - 1 },
             Request::Origin { qpc_hns: -5 },
             Request::Stop,
@@ -161,7 +180,7 @@ mod tests {
             Reply::Prepared { result: Ok(Status::Idle) },
             Reply::Prepared { result: Ok(Status::Unavailable { reason: "x".into() }) },
             Reply::Prepared { result: Err("MFStartup failed".into()) },
-            Reply::Started { result: Ok(Started { status: software, game_audio: true }) },
+            Reply::Started { result: Ok(Started { status: software, audio: discord() }) },
             Reply::Started { result: Err("no game window".into()) },
             Reply::Stopped { result: Ok(None) },
             Reply::Stopped { result: Ok(Some("the game window closed".into())) },

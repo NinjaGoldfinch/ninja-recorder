@@ -238,6 +238,30 @@ The enums are `CHECK` constraints, and a NULL passes one, which is how a
 rating is left unset. The three provisional defaults the schema carries are
 recorded in [DEVELOPMENT.md §20](../DEVELOPMENT.md#20-vod-review-ws9-the-provisional-p0-defaults).
 
+### Importing the review spreadsheet
+
+`db::review_import` is the database half of WS9's one-off importer. The CSV is
+parsed in the webview (`src/lib/reviewform/sheet.ts`), because that is where
+the file is chosen and where the local timezone lives: a row's "16/09/2026,
+5:23pm" only becomes a moment through the machine's own clock rules, DST
+included. The daemon receives typed `ImportRow`s through `import_review_rows`
+and writes them in one transaction.
+
+**Importing the same file twice changes nothing**, and a re-import cannot
+undo work done in the app:
+
+| A row's… | Becomes | Deduplicated by |
+|---|---|---|
+| date and time | the game whose start is nearest, within 5 minutes; failing that, the game of a recording from before WS9 in that window, made now; failing that, a new `games` row with no recording | the match itself |
+| ratings, clear time, smites, deaths | its `game_reviews` row, **filling only what is empty** | the review is 1:1 with the game |
+| learning objectives | `objectives`, linked through `game_objectives`; those the latest row lists are active, the rest retired as of the last game that listed them | text compared case-, spacing- and bullet-insensitively, against existing objectives too |
+| key takeaways | `takeaways` on the game | exact text per game |
+| block label | one block for every row that shares it, merging what the gap rule split | the merge is a no-op once done |
+| block takeaways | `takeaways` on that block | exact text per block |
+
+The spreadsheet's block column wins over the 2-hour rule because it is the
+user's own account of their sessions.
+
 ### Migration history
 
 | # | Adds | Why it is shaped that way |

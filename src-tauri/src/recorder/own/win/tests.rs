@@ -18,13 +18,17 @@
 //! `#[ignore]`d until it proves stable on the runner, and runs by hand with
 //! `cargo test own_backend_records_a_window -- --ignored`.
 //!
-//! Process loopback needs an audio engine and a render endpoint, which a
-//! runner does not have, so the game-audio track is tested from the feed
-//! onwards with synthetic PCM, and the capture itself only by hand:
-//! `cargo test process_loopback_activates -- --ignored` activates it on this
-//! test's own process tree and reports what the stamps were. On a Windows 10
-//! box that is the quickest check of whether the API exists there at all
-//! (#237's floor test; `spikes/p0c-audio/README.md` has the full one).
+//! Process loopback and the endpoints need an audio engine and devices, which
+//! a runner does not have, so the audio track is tested from the feeds onwards
+//! with synthetic PCM: one source for the Game preset (#237), and two through
+//! the mixer (#238), one of which joins late and stops early. The captures
+//! themselves run only by hand:
+//! `cargo test process_loopback_activates -- --ignored` activates process
+//! loopback on this test's own process tree and reports what the stamps were
+//! (on a Windows 10 box, the quickest check of whether the API exists there
+//! at all: #237's floor test, and `spikes/p0c-audio/README.md` has the full
+//! one), and `cargo test endpoints_capture -- --ignored` opens the default
+//! microphone and the desktop in loopback.
 
 use std::fs::File;
 use std::io::Write as _;
@@ -41,7 +45,7 @@ use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninit
 use super::{audio, capture, device, encode, scale, session};
 use crate::mp4;
 use crate::recorder::own::fit::Size;
-use crate::recorder::own::{clock, feed};
+use crate::recorder::own::{clock, feed, mix};
 
 /// Straight to the process's stderr, past the harness's capture.
 fn report(line: &str) {
@@ -57,7 +61,7 @@ fn scratch_dir(name: &str) -> std::path::PathBuf {
 
 enum Outcome {
     Skipped(String),
-    Written { encoder: String },
+    Written { encoder: String, mix: String },
 }
 
 const W: u32 = 320;
@@ -92,19 +96,18 @@ fn paint(device: &device::Device, slot: &capture::Slot) {
     };
 }
 
-/// Two seconds of a 440 Hz tone as 10 ms packets on the QPC clock, from
-/// tick 0: what the game audio thread would send, with the stamps it would
-/// carry if the engine's were real.
-fn tone_packets(origin: i64) -> Vec<feed::Packet> {
+/// 10 ms packets of a `hz` tone at `amplitude`, on the QPC clock, for
+/// packets `from..to` counted from tick 0: what a source thread would send,
+/// with the stamps it would carry if the engine's were real.
+fn tone_packets(origin: i64, hz: f64, amplitude: f64, from: i64, to: i64) -> Vec<feed::Packet> {
     let rate = i64::from(audio::SAMPLE_RATE);
-    let seconds = (TICKS / u64::from(session::FPS)) as i64;
-    (0..seconds * 100)
+    (from..to)
         .map(|p| {
             let first = p * rate / 100;
-            let pcm: Vec<i16> = (first..first + rate / 100)
+            let pcm: Vec<f32> = (first..first + rate / 100)
                 .flat_map(|n| {
-                    let v = (n as f64 * 440.0 * std::f64::consts::TAU / rate as f64).sin();
-                    let s = (v * 8_000.0) as i16;
+                    let v = (n as f64 * hz * std::f64::consts::TAU / rate as f64).sin();
+                    let s = (v * amplitude) as f32;
                     [s, s]
                 })
                 .collect();
@@ -119,11 +122,14 @@ fn tone_packets(origin: i64) -> Vec<feed::Packet> {
         .collect()
 }
 
-/// The sink-writer path, fed `TICKS` ticks of one synthetic frame, and with
-/// `with_audio` two seconds of tone through a [`feed::Feed`] into the AAC
-/// stream, interleaved tick by tick as the session does it. Media Foundation
-/// must already be started.
-fn write_synthetic(out: &Path, with_audio: bool) -> Result<Outcome, String> {
+/// The sink-writer path, fed `TICKS` ticks of one synthetic frame and, for
+/// `sources` above 0, synthetic sources through a [`mix::Mixdown`] into the
+/// AAC stream, interleaved tick by tick as the session does it, each packet
+/// handed over once the video has passed its end. Source 0 is a 440 Hz tone
+/// throughout; source 1 is 660 Hz from 0.5 s to 1.5 s only, so the mix has a
+/// source joining late and one going quiet. Media Foundation must already be
+/// started.
+fn write_synthetic(out: &Path, sources: usize) -> Result<Outcome, String> {
     let encoders = match encode::h264_encoders() {
         Ok(encoders) => encoders,
         Err(e) => return Ok(Outcome::Skipped(format!("no encoder list: {e}"))),
@@ -138,32 +144,53 @@ fn write_synthetic(out: &Path, with_audio: bool) -> Result<Outcome, String> {
     let slots = capture::create_slots(&device.device, W, H, 2)?;
     paint(&device, &slots[0]);
 
-    let audio_rate = with_audio.then_some(audio::SAMPLE_RATE);
+    let audio_rate = (sources > 0).then_some(audio::SAMPLE_RATE);
     let sink = encode::Sink::create(out, W, H, session::FPS, &device.device, false, audio_rate)?;
     sink.begin()?;
     let loaded = sink.loaded()?;
     let origin = 1_000 * clock::HNS_PER_SECOND;
-    let mut feed = feed::Feed::new(audio::SAMPLE_RATE, origin);
-    if with_audio {
-        for packet in tone_packets(origin) {
-            feed.push(packet);
-        }
-    }
+    let packets_total = (TICKS / u64::from(session::FPS)) as i64 * 100;
+    let mut queues: Vec<std::collections::VecDeque<feed::Packet>> = (0..sources)
+        .map(|i| match i {
+            0 => tone_packets(origin, 440.0, 0.25, 0, packets_total),
+            _ => tone_packets(origin, 660.0, 0.25, 50, 150),
+        })
+        .map(Into::into)
+        .collect();
+    let mut mixdown = mix::Mixdown::new(audio::SAMPLE_RATE, origin, sources);
     let mut write = |pcm: &[i16], position: u64| sink.write_audio(pcm, position);
     for k in 0..TICKS {
         let t = clock::tick_time(k, session::FPS);
         let d = clock::tick_time(k + 1, session::FPS) - t;
         sink.write(&slots[0], t, d).map_err(|e| format!("{e} (at tick {k})"))?;
-        if with_audio {
-            feed.write_ready(t + d, &mut write)?;
+        if sources > 0 {
+            let video_end = t + d;
+            for (i, queue) in queues.iter_mut().enumerate() {
+                while let Some(packet) = queue.pop_front() {
+                    let end = clock::samples_at(packet.hns - origin, audio::SAMPLE_RATE)
+                        + i64::from(packet.frames);
+                    if end > clock::samples_at(video_end, audio::SAMPLE_RATE) {
+                        queue.push_front(packet);
+                        break;
+                    }
+                    mixdown.push(i, packet);
+                }
+            }
+            mixdown.write(video_end, video_end, &mut write)?;
         }
     }
-    if with_audio {
-        feed.finish(clock::tick_time(TICKS, session::FPS), &mut write)?;
-        let written = feed.aligner().written();
+    let mut mix_line = String::new();
+    if sources > 0 {
+        mixdown.finish(clock::tick_time(TICKS, session::FPS), &mut write)?;
+        let written = mixdown.mixer().emitted();
         if written != u64::from(audio::SAMPLE_RATE) * TICKS / u64::from(session::FPS) {
-            return Err(format!("the feed wrote {written} audio frames"));
+            return Err(format!("the mix wrote {written} audio frames"));
         }
+        let stats = &mixdown.mixer().stats;
+        mix_line = format!(
+            "; mix of {sources}: {written} frames in {} blocks, {} clipped",
+            stats.blocks, stats.clipped
+        );
     }
     sink.finalize()?;
     drop(slots);
@@ -173,6 +200,7 @@ fn write_synthetic(out: &Path, with_audio: bool) -> Result<Outcome, String> {
             loaded.name.as_deref().unwrap_or("(no name)"),
             loaded.hardware()
         ),
+        mix: mix_line,
     })
 }
 
@@ -181,18 +209,27 @@ fn write_synthetic(out: &Path, with_audio: bool) -> Result<Outcome, String> {
 /// complete fragments and nothing but the video track.
 #[test]
 fn the_sink_writer_writes_a_fragmented_mp4_from_a_warp_device() {
-    sink_writer_test("warp", false);
+    sink_writer_test("warp", 0);
 }
 
 /// The same, with the Game preset's one AAC track fed synthetic PCM through
-/// the feed the session uses (#237). Process loopback itself cannot run on
-/// a runner, with no game and no audio engine; this is everything after it.
+/// the feed and the mix the session uses (#237). Process loopback itself
+/// cannot run on a runner, with no game and no audio engine; this is
+/// everything after it.
 #[test]
 fn the_sink_writer_writes_the_game_audio_track() {
-    sink_writer_test("warp-aac", true);
+    sink_writer_test("warp-aac", 1);
 }
 
-fn sink_writer_test(name: &str, with_audio: bool) {
+/// Two synthetic sources through their feeds and the mixer into the one AAC
+/// track, as Game + mic records (#238): the mix is track 0, and the file
+/// still has exactly one audio track.
+#[test]
+fn the_sink_writer_writes_a_mix_of_two_sources() {
+    sink_writer_test("warp-mix", 2);
+}
+
+fn sink_writer_test(name: &str, sources: usize) {
     let dir = scratch_dir(name);
     let out = dir.join(format!("{name}.mp4"));
 
@@ -206,7 +243,7 @@ fn sink_writer_test(name: &str, with_audio: bool) {
         Ok(()) => match unsafe { MFStartup(session::mf_version(), MFSTARTUP_FULL) } {
             Err(e) => Ok(Outcome::Skipped(format!("MFStartup failed: {e}"))),
             Ok(()) => {
-                let outcome = write_synthetic(&out, with_audio);
+                let outcome = write_synthetic(&out, sources);
                 // SAFETY: pairs MFStartup; every MF object above is dropped.
                 let _ = unsafe { MFShutdown() };
                 outcome
@@ -220,19 +257,20 @@ fn sink_writer_test(name: &str, with_audio: bool) {
         Ok(Outcome::Skipped(why)) => {
             report(&format!("SKIPPED the WARP sink-writer test ({name}): {why}"));
         }
-        Ok(Outcome::Written { encoder }) => {
+        Ok(Outcome::Written { encoder, mix }) => {
             let mut file = File::open(&out).expect("the sink writer left no file");
             let summary = mp4::summarize(&mut file).expect("summarize");
             report(&format!(
-                "RAN the WARP sink-writer test ({name}): {TICKS} ticks via {encoder}; {} bytes, \
-                 layout {}",
+                "RAN the WARP sink-writer test ({name}): {TICKS} ticks via {encoder}{mix}; {} \
+                 bytes, layout {}",
                 summary.file_len, summary.layout
             ));
             assert!(summary.structurally_playable(), "{summary:?}");
             assert!(summary.mvex, "not fragmented: {summary:?}");
             assert!(summary.complete_fragments > 0, "{summary:?}");
             assert_eq!(summary.truncated, None, "{summary:?}");
-            let audio = u32::from(with_audio);
+            // However many sources, one audio track: the mix (#238).
+            let audio = u32::from(sources > 0);
             assert_eq!(summary.tracks, 1 + audio, "video and {audio} audio: {summary:?}");
             assert_eq!(summary.audio_tracks, audio, "{summary:?}");
         }
@@ -529,7 +567,8 @@ fn own_backend_records_a_window() {
     report(&format!("WGC run: {} bytes, layout {}", summary.file_len, summary.layout));
     assert!(summary.structurally_playable(), "{summary:?}");
     // The window is this test's, owned by no `League of Legends.exe`, so
-    // there is no game audio to capture: video only, and reported as such.
+    // the Game preset's one source cannot open: video only, and reported as
+    // such.
     assert!(output.audio.tracks.is_empty());
     assert_eq!(summary.audio_tracks, 0, "{summary:?}");
     let _ = std::fs::remove_dir_all(&dir);
@@ -547,7 +586,8 @@ fn process_loopback_activates() {
     report(&format!("Windows build {:?}", device::windows_build()));
     let (tx, rx) = std::sync::mpsc::channel();
     // The source thread initialises its own COM; this one needs none.
-    let outcome = audio::start_game(std::process::id(), tx).map(|source| {
+    let target = audio::Target::Process(std::process::id());
+    let outcome = audio::start("game", target, tx).map(|source| {
         std::thread::sleep(std::time::Duration::from_secs(2));
         source.stop()
     });
@@ -560,4 +600,43 @@ fn process_loopback_activates() {
         Ok(Err(e)) => panic!("process loopback started, then failed: {e}"),
         Err(e) => panic!("process loopback did not start: {e}"),
     }
+}
+
+/// The default microphone and the desktop in loopback, with its keep-alive,
+/// open at 48 kHz stereo float through the engine's own conversion and
+/// deliver for two seconds (#238). Needs an audio engine and devices, so it
+/// is ignored on the runner. A machine with no microphone reports that and
+/// still passes on the desktop alone.
+#[test]
+#[ignore = "needs an audio engine, a microphone and an output device; run by hand on a Windows box"]
+fn endpoints_capture() {
+    let mut opened = 0;
+    for (name, target) in [
+        ("microphone", audio::Target::Microphone(None)),
+        ("desktop", audio::Target::Desktop),
+    ] {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let outcome = audio::start(name, target, tx).map(|source| {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            source.stop()
+        });
+        let received: Vec<feed::Packet> = rx.try_iter().collect();
+        let frames: u64 = received.iter().map(|p| u64::from(p.frames)).sum();
+        match outcome {
+            Ok(Ok(summary)) => {
+                opened += 1;
+                report(&format!(
+                    "{name} ran: {} packets ({frames} frames, {:.2} s), clock {:?}, {} silent",
+                    summary.packets,
+                    frames as f64 / f64::from(audio::SAMPLE_RATE),
+                    summary.clock,
+                    summary.silent_packets
+                ));
+                assert!(summary.packets > 0, "{name} delivered nothing in two seconds");
+            }
+            Ok(Err(e)) => panic!("{name} started, then failed: {e}"),
+            Err(e) => report(&format!("{name} did not open: {e}")),
+        }
+    }
+    assert!(opened > 0, "neither endpoint opened");
 }

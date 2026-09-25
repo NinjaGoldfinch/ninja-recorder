@@ -295,7 +295,7 @@ only the reference goes.
 
 #### Code the own backend keeps
 
-- [ ] **Rewrite from Microsoft's docs: `recorder/window.rs`'s `client_size`,
+- [x] **Rewrite from Microsoft's docs: `recorder/window.rs`'s `client_size`,
       and `find_window` if anything still calls it.** The evidence: #247
       extracted this file from `recorder/libobs/window.rs`, which v1 wrote in
       `6570b2f` (2026-09-01). That file matches league_record's
@@ -322,6 +322,16 @@ only the reference goes.
         Client"` and `"League of Legends.exe"` are **not derived**. They are
         names Riot's game gives its window and process, facts that anyone can
         read with Spy++ or Task Manager, and they are not anyone's expression.
+
+      **`client_size`: done in #275.** It was deleted by line range without
+      its body or doc comment being read, and written again from Microsoft
+      Learn's `GetClientRect`, `IsIconic`, `IsWindow` and high-DPI pages,
+      which its doc comment cites. It now checks `IsIconic` first, returns
+      `None` for a failed call or a side under two pixels, and does its
+      rectangle arithmetic in a pure, unit-tested `usable_size`. The doc
+      comment also records a finding: the executable declares no DPI
+      awareness and the daemon never sets one, so the daemon reads the game's
+      size in unaware coordinates. `find_window` stays for #51 to delete.
 - [ ] **Not derived, re-cite: `own/win/capture.rs::hide_border`** (and its spike
       original, `spikes/p0c-video/src/win/mod.rs`). Its comment says it follows
       "the same three steps as libobs's `winrt-capture.cpp`". The steps are

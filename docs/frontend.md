@@ -48,7 +48,7 @@ flowchart TB
     RFS["lib/stores/gameReview.svelte.ts<br/><small>owns: the open game, its draft review,<br/>the autosave queue</small>"]
     OBV["lib/components/objectives/<br/><small>Objectives</small>"]
     OBS["lib/stores/objectives.svelte.ts<br/><small>owns: the objectives list and its tab</small>"]
-    RFP["lib/reviewform/<br/><small>fields, ratings, autosave<br/>pure, tested</small>"]
+    RFP["lib/reviewform/<br/><small>fields, ratings, autosave, sheet<br/>pure, tested</small>"]
     BRIDGE["bridge.ts<br/><small>composition root: picks a transport,<br/>exposes the generated client</small>"]
     TRANSPORT["lib/transport/<br/><small>pipe.ts (live) · mock.ts<br/>invoke.ts kept for the dev portal</small>"]
     CONTRACT["lib/contract/<br/><small>GENERATED from Rust</small>"]
@@ -88,6 +88,7 @@ flowchart TB
     RFS --> TOASTS
     OBV --> OBS
     OBS --> BRIDGE
+    OBS --> RFP
     OBS --> TOASTS
     SHELL --> DAEMONS
     SHELL --> QUITS
@@ -491,6 +492,11 @@ P1 moves it next to the player.
 - **A blank box means "not entered", never zero.** For deaths, that is what
   lets the form fall back to the death markers the recording counted.
   `reviewform/fields.ts` holds those rules, and the clear time's `m:ss` shape.
+- **The spreadsheet is parsed here, not in the daemon.** The Objectives
+  view reads the chosen CSV and `reviewform/sheet.ts` turns it into typed rows.
+  The local timezone, DST included, is only known on this side, and it is
+  what turns a spreadsheet's date and time into a moment. Unreadable rows are
+  listed by line, and the rest are imported.
 - **Both stores move on command results, not events.** No review event exists
   yet, because this form is the only writer. When P1 or P2 adds a second one,
   the stores should move to an event like everything else.
@@ -783,7 +789,7 @@ stay in the UI process; `dev_registered_commands` must stay direct because
 a shipped build.
 
 > **`src/types.ts` is no longer the source of truth either.** Since WS2.2 all
-> 55 types crossing the boundary derive `ts_rs::TS` beside their serde derives,
+> 57 types crossing the boundary derive `ts_rs::TS` beside their serde derives,
 > and WS2.5's generator emits the TypeScript from those. The hand-written
 > interfaces in `src/types.ts` are what that replaces.
 >
@@ -859,6 +865,7 @@ a shipped build.
 | `add_takeaway` / `delete_takeaway` / `promote_takeaway` | `Takeaway` / nothing / `Objective` | review form → Takeaways |
 | `list_objectives` / `create_objective` / `update_objective` / `set_objective_status` | `Vec<Objective>` / `Objective` | Objectives view |
 | `split_block` / `merge_blocks` | new block id / nothing | nothing in the UI yet: the block view is WS9 P3. The dev portal's Commands panel drives them |
+| `import_review_rows` | `ImportReport` | Objectives view → "Import spreadsheet…", with the rows `reviewform/sheet.ts` parsed from the chosen CSV |
 
 **Start on login is the one setting that is not a pref.** It lives in the
 platform's own store (`HKCU\…\Run` on Windows) which the user can also edit

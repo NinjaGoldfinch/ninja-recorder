@@ -13,6 +13,8 @@ use std::sync::mpsc::{Sender, channel};
 use std::thread::JoinHandle;
 
 use super::session::{self, Command};
+use crate::recorder::audio::AudioLayout;
+use crate::recorder::own::plan::CapturePlan;
 use crate::recorder::own::status::Status;
 use crate::recorder::own::worker::protocol::Started;
 use crate::recorder::own::worker::serve::Host;
@@ -64,12 +66,14 @@ impl Host for SessionHost {
         self.ask(Command::Prepare)?
     }
 
-    fn start(&mut self, path: PathBuf) -> Result<Started, String> {
+    fn start(&mut self, path: PathBuf, plan: AudioLayout) -> Result<Started, String> {
         self.origin = None;
+        // The plan arrived as the layout it describes (`protocol::Request`).
+        let plan = CapturePlan { sources: plan.sources, tracks: plan.tracks };
         let (origin, receiver) = channel();
-        let started = self.ask(|reply| Command::Start { path, reply, origin: receiver })??;
+        let started = self.ask(|reply| Command::Start { path, plan, reply, origin: receiver })??;
         self.origin = Some(origin);
-        Ok(Started { status: started.status, game_audio: started.game_audio })
+        Ok(Started { status: started.status, audio: started.audio })
     }
 
     fn origin(&mut self, qpc_hns: i64) {
