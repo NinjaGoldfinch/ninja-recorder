@@ -25,6 +25,8 @@
 //!   packets on it, and whether a packet's stamp is QPC at all.
 //! - `feed` — one audio source's packets, through its aligner, to the mixer,
 //!   never past the video.
+//! - `fit` — where a frame from a resized window goes in the fixed-size
+//!   output: scaled, aspect kept, centred, black around it.
 //! - `mix` — track 0: every source summed in 10 ms blocks on the aligned
 //!   timeline, released by a watermark so no source can stall it, clamped,
 //!   then i16 for the encoder.
@@ -65,6 +67,8 @@
 pub mod clock;
 #[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
 pub mod feed;
+#[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
+pub mod fit;
 #[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
 pub mod mix;
 #[cfg_attr(not(test), allow(dead_code))]

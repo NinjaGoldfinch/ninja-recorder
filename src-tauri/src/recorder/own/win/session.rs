@@ -20,8 +20,10 @@ use super::audio::{self, MixTrack};
 use super::capture::{self, Capture, Slot};
 use super::device::{self, Device};
 use super::encode::{self, Sink};
+use super::scale::{self, Fitter};
 use crate::recorder::audio::AudioLayout;
 use crate::recorder::own::clock;
+use crate::recorder::own::fit::Size;
 use crate::recorder::own::plan::CapturePlan;
 use crate::recorder::own::select::{self, Choice};
 use crate::recorder::own::status::{self, Status};
@@ -137,7 +139,7 @@ struct Session {
     warm: Option<Warm>,
     mf_started: bool,
     /// The answer for the next `Stop`, when the recording ended on its own
-    /// (the window closed, or a write failed) and was finalized then.
+    /// (a write failed, or the GPU device was lost) and was finalized then.
     ended: Option<Result<Option<String>, String>>,
 }
 
@@ -147,7 +149,8 @@ enum Ended {
     Stop(Sender<Result<Option<String>, String>>),
     /// `release`, or `OwnRecorder` dropped: finalize and exit.
     Exit,
-    /// The recording cannot go on (the window closed, or a write failed).
+    /// The recording cannot go on (a write failed, or the GPU device was
+    /// lost). The game window closing is not one: see [`Recording::run`].
     Problem(String),
 }
 
@@ -268,6 +271,12 @@ impl Session {
         unsafe { timeEndPeriod(1) };
 
         let finalized = recording.finish();
+        // A lost device stays lost, and everything warm was made on it: the
+        // next `start` warms up again from scratch, on whatever GPU is there.
+        if self.warm.as_ref().is_some_and(|warm| device::removed(&warm.device).is_some()) {
+            warn!("recorder", "own backend: the GPU device was lost; the next start rebuilds it");
+            self.warm = None;
+        }
         match ended {
             Ended::Stop(reply) => {
                 let _ = reply.send(finalized.map(|()| None));
@@ -281,7 +290,10 @@ impl Session {
             }
             Ended::Problem(problem) => {
                 warn!("recorder", "own backend: the recording ended early: {problem}");
-                self.ended = Some(finalized.map(|()| Some(problem)));
+                self.ended = Some(match finalized {
+                    Ok(()) => Ok(Some(problem)),
+                    Err(e) => Err(format!("{problem}; then {e}")),
+                });
                 false
             }
         }
@@ -294,6 +306,15 @@ pub fn mf_version() -> u32 {
     const MF_SDK_VERSION: u32 = 0x0002;
     const MF_API_VERSION: u32 = 0x0070;
     (MF_SDK_VERSION << 16) | MF_API_VERSION
+}
+
+/// `problem`, or why the device was lost if it was: a failing call on a lost
+/// device reports its own symptom, and the removal is the cause.
+fn lost_or(device: &Device, problem: String) -> String {
+    match device::removed(device) {
+        Some(reason) => format!("the GPU device was lost ({reason}): {problem}"),
+        None => problem,
+    }
 }
 
 fn status_of(warm: &Warm) -> Status {
@@ -320,12 +341,17 @@ struct Recording {
     /// `None` once finalized.
     sink: Option<Sink>,
     slots: Vec<Slot>,
-    width: u32,
-    height: u32,
     /// The slot holding the frame the next tick shows.
     latest: usize,
     next_slot: usize,
     status: Status,
+    /// Puts each frame into a slot, scaling it if the window has changed
+    /// size since `start`.
+    fitter: Fitter,
+    /// WGC said the window closed.
+    window_closed: bool,
+    /// The slot every tick shows is black now, or has stopped trying to be.
+    black: bool,
     /// Track 0, the mix of every source that opened, or `None` for a
     /// video-only recording.
     audio: Option<MixTrack>,
@@ -381,14 +407,17 @@ impl Recording {
             std::thread::sleep(Duration::from_millis(5));
         };
         let slots = capture::create_slots(&warm.device.device, width, height, SLOTS)?;
+        let mut fitter = Fitter::new(Size::new(width, height));
         let (texture, content) = capture.texture(&warm.device, &first)?;
-        capture::copy_into(
-            &warm.device.context,
-            &slots[0],
+        // Black first: a new texture's contents are undefined, and a first
+        // frame the fitter skips would otherwise show them.
+        scale::fill_black(&warm.device, &slots[0].texture)?;
+        fitter.place(
+            &warm.device,
             &texture,
-            width.min(content.Width.max(0) as u32),
-            height.min(content.Height.max(0) as u32),
-        );
+            Size::from_i32(content.Width, content.Height),
+            &slots[0].texture,
+        )?;
         drop(first);
 
         // Every source the plan names: the game from the process that owns
@@ -447,11 +476,12 @@ impl Recording {
             capture,
             sink: Some(sink),
             slots,
-            width,
-            height,
             latest: 0,
             next_slot: 1,
             status,
+            fitter,
+            window_closed: false,
+            black: false,
             audio,
             layout,
             ticks: 0,
@@ -461,6 +491,23 @@ impl Recording {
     /// The cadence loop: take the newest frame WGC has, and write every tick
     /// that is due on the 60 fps grid laid from `origin`. A tick with no new
     /// frame repeats the last one, which is what holds the file at CFR.
+    ///
+    /// **What the game window can do meanwhile** (#240):
+    ///
+    /// - *Resize*: WGC's frames change size, the pool is recreated at the new
+    ///   one, and the fitter scales each frame into the size the encoder was
+    ///   set up for, letterboxed (`fit`, `scale`).
+    /// - *Minimise*: WGC delivers nothing at all, so `take_frame` finds no
+    ///   frame and every tick repeats the last one until the window comes
+    ///   back. Nothing here waits on WGC, so nothing stalls: the file keeps
+    ///   its cadence, frozen on the last picture.
+    /// - *Close* (the game ended or crashed): WGC raises `Closed`, and the
+    ///   loop keeps ticking, black, until `stop`. The supervisor finalizes
+    ///   when the Live Client API goes away, about five seconds later; ending
+    ///   the recording here instead would leave the file shorter than the
+    ///   state machine's idea of it.
+    /// - *Lose the GPU* (a driver update, a TDR): the loop ends and what was
+    ///   written is finalized; `stop` returns the file and logs why.
     fn run(&mut self, device: &Device, origin: i64, commands: &Receiver<Command>) -> Ended {
         if let Some(audio) = self.audio.as_mut() {
             audio.begin(origin);
@@ -483,15 +530,20 @@ impl Recording {
                 }
                 Err(TryRecvError::Empty) => {}
             }
-            if self.capture.closed() {
-                return Ended::Problem("the game window closed".to_string());
+            if let Some(reason) = device::removed(device) {
+                return Ended::Problem(format!("the GPU device was lost ({reason})"));
             }
-            if let Err(e) = self.take_frame(device) {
-                return Ended::Problem(e);
+            if self.capture.closed() {
+                self.go_black(device);
+            } else if let Err(e) = self.take_frame(device) {
+                return Ended::Problem(lost_or(device, e));
             }
             if let Err(e) = self.write_due(origin) {
-                return Ended::Problem(format!("{e} (at tick {})", self.ticks));
+                return Ended::Problem(lost_or(device, format!("{e} (at tick {})", self.ticks)));
             }
+            // Audio keeps flowing after the window closes, under the black
+            // frames: a crashed game goes quiet, and the mixer's watermark
+            // carries it as silence until `stop`.
             if let Err(e) = self.write_audio(origin) {
                 return Ended::Problem(format!("{e} (audio, at tick {})", self.ticks));
             }
@@ -513,25 +565,59 @@ impl Recording {
         })
     }
 
-    /// Copies WGC's newest frame, if there is one, into a free slot.
+    /// Puts WGC's newest frame, if there is one, into a free slot. No frame
+    /// (a minimised window sends none) leaves the last one showing.
     fn take_frame(&mut self, device: &Device) -> Result<(), String> {
         let Some(frame) = self.capture.newest_frame() else {
             return Ok(());
         };
         let (texture, content) = self.capture.texture(device, &frame)?;
-        let free = (0..self.slots.len())
-            .map(|o| (self.next_slot + o) % self.slots.len())
-            .find(|&i| i != self.latest && !self.slots[i].busy());
         // No free slot means the encoder is holding every one: the frame is
         // dropped and the tick repeats the last, which is what CFR asks for.
-        if let Some(i) = free {
-            let w = self.width.min(content.Width.max(0) as u32);
-            let h = self.height.min(content.Height.max(0) as u32);
-            capture::copy_into(&device.context, &self.slots[i], &texture, w, h);
-            self.latest = i;
-            self.next_slot = i + 1;
+        if let Some(i) = self.free_slot() {
+            let content = Size::from_i32(content.Width, content.Height);
+            let placed = self.fitter.place(device, &texture, content, &self.slots[i].texture)?;
+            if placed != scale::Placed::Skipped {
+                self.latest = i;
+                self.next_slot = i + 1;
+            }
         }
         Ok(())
+    }
+
+    /// The game window has closed: every tick from here on is black. Logged
+    /// once; retried each pass until a slot is free.
+    fn go_black(&mut self, device: &Device) {
+        if self.black {
+            return;
+        }
+        if !self.window_closed {
+            self.window_closed = true;
+            info!(
+                "recorder",
+                "own backend: the game window closed (the game ended or crashed); recording \
+                 black until stop"
+            );
+        }
+        let Some(i) = self.free_slot() else {
+            return;
+        };
+        match scale::fill_black(device, &self.slots[i].texture) {
+            Ok(()) => {
+                self.latest = i;
+                self.next_slot = i + 1;
+            }
+            // Not worth ending a recording over: the last frame repeats.
+            Err(e) => warn!("recorder", "own backend: could not write black ({e})"),
+        }
+        self.black = true;
+    }
+
+    /// A slot the encoder has let go of and no tick is about to show.
+    fn free_slot(&self) -> Option<usize> {
+        (0..self.slots.len())
+            .map(|o| (self.next_slot + o) % self.slots.len())
+            .find(|&i| i != self.latest && !self.slots[i].busy())
     }
 
     /// Writes every tick from the next one up to the one due now.
@@ -556,6 +642,10 @@ impl Recording {
     /// any A/V offset in the file was added downstream of here; then the sink
     /// drains, and only then do the slots go: every sample written from a
     /// slot has to be released before its callback is.
+    ///
+    /// With the GPU device lost this still runs: the encoder's drain fails
+    /// rather than waits, the sink writer returns that, and the fragments
+    /// already on disk are the recording (`stop` bounds the wait regardless).
     fn finish(mut self) -> Result<(), String> {
         drop(self.capture);
         let end = clock::tick_time(self.ticks, FPS);

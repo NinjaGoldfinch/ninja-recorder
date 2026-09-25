@@ -1587,7 +1587,7 @@ cast, attack a dummy), then end it.
       Settings → Audio to **Game + mic** and start a game: nothing is
       recorded, and `daemon.log` says the own backend records the Game preset
       only. Switch back to Game. From #238 on this row does not apply: every
-      preset records, and §11.4 checks them.
+      preset records, and §11.5 checks them.
 
 | What | Result | Notes |
 |---|---|---|
@@ -1619,7 +1619,85 @@ backend itself below the floor.
 | 11.3: `p0c-audio` exclude on 19045: Discord, no game | | |
 | 11.3 (optional): §11.2 on 19045 with the override | | |
 
-### 11.4 Microphone, desktop and application sources, mixed into track 0 (#238)
+### 11.4 Resize, minimise, and the game window closing (#240)
+
+§4's resilience cases on the own backend. The recording's size is fixed when
+it starts; a window of any other size is **scaled** into it, aspect kept,
+centred, with black bars, the way libobs fits a window into its canvas
+([DEVELOPMENT.md §2.2](../DEVELOPMENT.md#22-the-recorder-trait), "a resize
+scales; it does not crop"). Each size change writes
+`own backend: the game window is now WxH; into the …x… recording it is …` to
+`daemon.log` (the first dozen per recording): paste the lines with the result.
+Play one Practice Tool game per row, or several rows in one game.
+
+- [ ] **The scaling test, on the GPU.** CI's runner has no D3D11 video
+      processor, so the test that checks the scaling pixel by pixel only
+      skips there. In `src-tauri` on the box, run
+      `cargo test the_video_processor_letterboxes_a_resized_frame -- --nocapture`
+      and paste the `[own backend test]` line: `RAN … on <GPU>` passes,
+      `SKIPPED` with a reason is a finding.
+- [ ] **Alt-tab.** Alt-tab out of the game for ten seconds and back, twice.
+      The file has no gap and no corruption; the time away shows the game as
+      WGC saw it (it keeps compositing a window that is not in front).
+- [ ] **A resolution change mid-game.** In-game video settings, change the
+      resolution to one of a *different aspect* (1920x1080 to 1280x1024, say),
+      play a minute, change it back. The file stays at the starting size, the
+      5:4 minute is pillarboxed with **black** bars, not cropped and not
+      smeared with stale pixels, and the picture is not stretched. Then change
+      to a smaller size of the *same* aspect (1280x720): it fills the frame,
+      scaled up.
+- [ ] **Minimise.** Minimise the game (Win+D, or the taskbar) for ten
+      seconds and restore it. The recording keeps going (no `ended early`
+      warning), the file keeps its length, and the minimised stretch is the
+      last frame held still. Recording carries on normally after the restore.
+- [ ] **Borderless.** Start a game in borderless: records normally.
+- [ ] **Windowed.** Start a game windowed, and drag the window's border
+      mid-game. Records normally at the starting size; the drag scales, and
+      the log's size lines stop after a dozen with `(further size changes are
+      not logged)`.
+- [ ] **Exclusive fullscreen.** Start a game in fullscreen. **Record what WGC
+      gets**: a normal picture, black, or a frozen frame, and whether
+      `start` failed (`no frame from WGC for the game window` in the log).
+      Then switch between fullscreen and borderless mid-game and record the
+      same. If the log says `the game window closed` on a mode switch, League
+      recreated its window, and the rest of that recording is black: that is
+      a finding, file it.
+- [ ] **The game closing.** End a game normally: the log has `the game window
+      closed (the game ended or crashed); recording black until stop` once,
+      then the recording stops about five seconds later as usual, and the
+      file ends with a few seconds of black, with the audio track running
+      to the end under it (silent once the game has gone). `stop` does not
+      warn. A `the game audio capture ended before the recording did` line
+      here is expected if process loopback ends with the game's process:
+      note which way it went.
+- [ ] **The game crashing.** Kill `League of Legends.exe` in Task Manager
+      mid-game: the same line, then the supervisor's stop, and the file plays
+      up to the kill and is black after it. No `ended early` warning, no
+      hang, and the next game records.
+- [ ] **A lost GPU device**, if it can be caused safely (a driver update
+      mid-game, or `dxcap -forcetdr` from the Windows SDK's graphics tools):
+      `daemon.log` has `the recording ended early: the GPU device was lost
+      (DXGI_ERROR_…)` and `the GPU device was lost; the next start rebuilds
+      it`; `stop` returns within 20 s with the file up to that point, which
+      plays; the next game records. Skip the row if it cannot be caused; do
+      not guess.
+
+| What | Result | Notes |
+|---|---|---|
+| 11.4: the scaling test runs on the GPU | | |
+| 11.4: alt-tab, twice | | |
+| 11.4: resolution change to another aspect: black bars, not cropped | | |
+| 11.4: resolution change to the same aspect, smaller: fills the frame | | |
+| 11.4: minimise: last frame held, recording continues | | |
+| 11.4: borderless | | |
+| 11.4: windowed, with a border drag | | |
+| 11.4: exclusive fullscreen: what WGC gets | | |
+| 11.4: fullscreen ↔ borderless mid-game: what WGC gets | | |
+| 11.4: game ends: black tail, one log line, no warning | | |
+| 11.4: game killed: plays to the kill, black after, next game records | | |
+| 11.4: GPU device lost (only if it can be caused) | | |
+
+### 11.5 Microphone, desktop and application sources, mixed into track 0 (#238)
 
 Every preset now records, and every source it names is mixed into **one AAC
 track**, track 0: the stems after it arrive with #239. Each source is placed
@@ -1699,17 +1777,17 @@ Game + mic with a USB microphone:
 
 | What | Result | Notes |
 |---|---|---|
-| 11.4: the default microphone is the picker's Windows default; a chosen one is that one | | |
-| 11.4: Game + mic: voice and game on track 0, in sync | | |
-| 11.4: Game + mic: one AAC stream; the row says `Everything` over two sources | | |
-| 11.4: the microphone's clock lines and the mix line (paste) | | |
-| 11.4: Desktop: desktop captured, game not doubled, no game source opened | | |
-| 11.4: Desktop: silent stretch in sync, keep-alive held packets | | |
-| 11.4: Discord's root line (paste) | | |
-| 11.4: Discord in track 0, in sync | | |
-| 11.4: Discord not running: recorded, left out, logged, row over two sources | | |
-| 11.4: microphone unplugged: no stall, plays to the end | | |
-| 11.4: microphone unplugged: one line with the reason (paste) | | |
+| 11.5: the default microphone is the picker's Windows default; a chosen one is that one | | |
+| 11.5: Game + mic: voice and game on track 0, in sync | | |
+| 11.5: Game + mic: one AAC stream; the row says `Everything` over two sources | | |
+| 11.5: the microphone's clock lines and the mix line (paste) | | |
+| 11.5: Desktop: desktop captured, game not doubled, no game source opened | | |
+| 11.5: Desktop: silent stretch in sync, keep-alive held packets | | |
+| 11.5: Discord's root line (paste) | | |
+| 11.5: Discord in track 0, in sync | | |
+| 11.5: Discord not running: recorded, left out, logged, row over two sources | | |
+| 11.5: microphone unplugged: no stall, plays to the end | | |
+| 11.5: microphone unplugged: one line with the reason (paste) | | |
 
 ## Outcome
 
