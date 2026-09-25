@@ -106,7 +106,7 @@ macro_rules! dev_ui_command_table {
         danger: false,
         args: [],
     }
-    /// Build, platform, active recorder backend, and every resolved path.
+    /// Build, platform, and every resolved path, as the UI process sees them. Nothing about the recorder: the daemon owns it, and dev_health reports it.
     dev_env_info {
         group: "Dev · Diagnostics",
         danger: false,
@@ -178,7 +178,7 @@ macro_rules! dev_ui_command_table {
 macro_rules! dev_rpc_command_table {
     ($m:ident) => {
         $m! {
-    /// Everything the Overview panel polls, in one round trip.
+    /// Everything the Overview and Recorder panels poll, in one round trip: the supervisor, the live session, the library counts, and the daemon's recorder (live backend, capturing, current file, capture worker).
     dev_health {
         group: "Dev · Diagnostics",
         danger: false,

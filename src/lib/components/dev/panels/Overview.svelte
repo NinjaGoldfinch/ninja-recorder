@@ -4,7 +4,7 @@
 import { tryCall } from "../../../../dev/ipc";
 import { GAME_STATES, type LcuStatus } from "../../../../dev/types";
 import { devContext } from "../../../dev/context";
-import { bytes, duration, timestamp } from "../../../dev/format";
+import { bytes, duration, timestamp, workerState } from "../../../dev/format";
 import { dev } from "../../../stores/dev.svelte";
 import { devToast } from "../../../stores/devToast.svelte";
 import Card from "../Card.svelte";
@@ -56,11 +56,14 @@ async function reveal(which: string) {
   </Card>
 
   <div class="card-grid">
-    <Card title="Recorder">
+    <!-- The daemon's recorder, from dev_health. Not env: that is the UI's. -->
+    <Card title="Recorder (daemon)">
       <KeyValues
         pairs={[
-          ["Backend", env?.recorder_backend ?? "?"],
+          ["Backend", health.recorder.backend],
           ["Capturing", health.is_recording ? "yes" : "no"],
+          ["Current file", health.recorder.current_file],
+          ["Capture worker", workerState(health.recorder.worker_running)],
           ["Free space", bytes(health.free_bytes)],
         ]}
       />
@@ -166,12 +169,11 @@ async function reveal(which: string) {
 {/if}
 
 {#if env}
-  <Card title="Environment">
+  <Card title="Environment (UI process)">
     <KeyValues
       pairs={[
         ["Version", `${env.app_version} (${env.build_profile})`],
         ["Platform", `${env.os}/${env.arch} · Tauri ${env.tauri_version}`],
-        ["Recorder", env.recorder_backend],
         ["Identifier", env.identifier],
         ["Database", env.db_path],
         ["Recordings", env.recordings_dir],

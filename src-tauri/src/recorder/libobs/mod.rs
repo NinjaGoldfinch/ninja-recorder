@@ -285,6 +285,16 @@ impl Recorder for LibObsRecorder {
         }
     }
 
+    fn current_file(&self) -> Option<PathBuf> {
+        self.active_path.clone()
+    }
+
+    /// `inner` is the worker: bringing `LibObs` up spawns it, and `tear_down`
+    /// ends it.
+    fn worker_running(&self) -> Option<bool> {
+        Some(self.inner.is_some())
+    }
+
     fn prepare(&mut self) -> Result<(), RecorderError> {
         self.ensure_up().map(|_| ())
     }

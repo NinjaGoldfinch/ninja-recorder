@@ -162,7 +162,7 @@ behind a three-method trait and nothing above it knows libobs exists.
 
 ```mermaid
 flowchart TB
-    SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release · collect_output"}
+    SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release · collect_output<br/>backend_name · current_file · worker_running"}
     T -->|"libobs, #[cfg(windows)]"| L["LibObsRecorder<br/><small>WGC window capture,<br/>NVENC/AMF/QSV H.264,<br/>one AAC track per audio source,<br/>fragmented MP4 + faststart remux</small>"]
     T -->|"own, #[cfg(windows)], build 20348+"| O["OwnRecorder<br/><small>Option B: WGC → D3D11 →<br/>Media Foundation MFTs, driven directly,<br/>every track (mix + stems) in one file<br/>by our own writer, + faststart remux</small>"]
     O -.->|"stdin / stdout,<br/>one JSON line each"| WK["capture worker process<br/><small>--capture-worker, only while<br/>League runs; kill-on-close job</small>"]
@@ -297,6 +297,15 @@ reply, so the libobs backend answers it with an `IsRecording` round trip: that
 moves them into the libobs log mid-game, and a worker that says it has stopped
 gets one warning. `try_lock`, so a recorder busy starting or stopping is
 skipped rather than waited for (#221).
+
+`backend_name`, `current_file` and `worker_running` are read-only diagnostics,
+and nothing decides anything from them. The dev portal's `dev_health` reads
+all three in the daemon, under one recorder lock, so its Overview and Recorder
+panels describe the recorder that is actually capturing rather than the UI's
+`FailedRecorder` (#282). `current_file` is what `start` was told, not the fact
+`stop` reports; `worker_running` is `None` for a backend with no worker, and
+for the two that have one it is as of the last call the backend handled,
+because a `&self` read once a second must not wait on a pipe.
 
 `start` takes the user's audio preset and `stop` reports the track layout it
 actually wrote: reported, not assumed, because a microphone can be unplugged

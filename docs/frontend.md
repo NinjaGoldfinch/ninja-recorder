@@ -858,7 +858,7 @@ a shipped build.
 | none | the `updateChannel` pref | the channel dropdown rides `get_ui_prefs`/`set_ui_pref`, so it needs no command of its own |
 | `check_for_update` | nothing | settings → About → "Check now" |
 | `install_update` | nothing | settings → About → "Install and restart"; ends the process |
-| `start_recording` / `stop_recording` / `is_recording` | nothing | registered but unreferenced by the main UI; the dev portal's Recorder panel drives them |
+| `start_recording` / `stop_recording` / `is_recording` | nothing | registered but unreferenced by the main UI, and since #282 by the dev portal's panels too: they reach the daemon's recorder around the supervisor ([dev-portal.md](dev-portal.md#the-recorder-panel-has-no-manual-controls)). Only the Commands panel can still invoke them |
 | `open_game_for_recording` | the game's id | review form, opened from a library row; makes the game for a recording from before WS9 |
 | `get_game_review` / `save_game_review` | `GameReview \| null` / nothing | review form: load, then the debounced autosave of the whole `ReviewInput` |
 | `set_objective_ticked` | nothing | review form → "Reviewing against" |

@@ -415,6 +415,16 @@ impl Recorder for OwnRecorder {
         self.status.backend_name()
     }
 
+    fn current_file(&self) -> Option<PathBuf> {
+        self.active.as_ref().map(|active| active.path.clone())
+    }
+
+    /// Whether a worker has been spawned and not yet seen to end. One that
+    /// died since the last call still counts until `decide` notices it.
+    fn worker_running(&self) -> Option<bool> {
+        Some(self.worker.is_some())
+    }
+
     /// The pre-warm (DEVELOPMENT.md §2.2): spawns the capture worker, and in
     /// it COM, Media Foundation, the adapters and encoders, `select::rank`,
     /// and the device. `start` does the same itself if this never ran.

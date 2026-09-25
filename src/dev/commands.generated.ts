@@ -545,7 +545,7 @@ export const COMMANDS: PortalCommand[] = [
     dev: true,
     overRpc: false,
     danger: false,
-    description: "Build, platform, active recorder backend, and every resolved path.",
+    description: "Build, platform, and every resolved path, as the UI process sees them. Nothing about the recorder: the daemon owns it, and dev_health reports it.",
     args: [],
   },
   {
@@ -598,7 +598,7 @@ export const COMMANDS: PortalCommand[] = [
     dev: true,
     overRpc: true,
     danger: false,
-    description: "Everything the Overview panel polls, in one round trip.",
+    description: "Everything the Overview and Recorder panels poll, in one round trip: the supervisor, the live session, the library counts, and the daemon's recorder (live backend, capturing, current file, capture worker).",
     args: [],
   },
   {
