@@ -31,6 +31,7 @@ use crate::recorder::own::feed::{Feed, Packet};
 use crate::recorder::own::mix::TrackMix;
 use crate::recorder::own::plan::{self, CapturePlan, source_name};
 use crate::recorder::own::root::{self, Proc};
+use crate::recorder::own::stats::{AudioStop, Opened, SourceStop};
 use crate::{info, warn};
 
 /// How long a stop waits for the audio packets of the last video tick,
@@ -69,13 +70,14 @@ pub struct AudioTracks {
     mix: Option<TrackMix>,
 }
 
-/// Resolves `kind` to what its thread captures. `procs` is the process
-/// snapshot, taken on first use and shared by every process source.
+/// Resolves `kind` to what its thread captures, and says what that is for
+/// the start line. `procs` is the process snapshot, taken on first use and
+/// shared by every process source.
 fn target(
     kind: &AudioSourceKind,
     hwnd: HWND,
     procs: &mut Option<Vec<Proc>>,
-) -> Result<Target, String> {
+) -> Result<(Target, String), String> {
     let mut snapshot = || -> Result<Vec<Proc>, String> {
         if procs.is_none() {
             *procs = Some(process::snapshot()?);
@@ -86,33 +88,46 @@ fn target(
         AudioSourceKind::Game => {
             let root = root::game_root(&snapshot()?, process::window_owner(hwnd))?;
             info!("recorder", "own backend: game audio from PID {}, {}", root.pid, root.how);
-            Ok(Target::Process(root.pid))
+            Ok((Target::Process(root.pid), format!("PID {} ({})", root.pid, root.how)))
         }
         AudioSourceKind::Application { exe } => {
             let root = root::application_root(&snapshot()?, exe)?;
             info!("recorder", "own backend: {exe} audio from PID {}, {}", root.pid, root.how);
-            Ok(Target::Process(root.pid))
+            Ok((Target::Process(root.pid), format!("PID {} ({})", root.pid, root.how)))
         }
-        AudioSourceKind::Microphone { device_id } => Ok(Target::Microphone(device_id.clone())),
-        AudioSourceKind::Desktop => Ok(Target::Desktop),
+        AudioSourceKind::Microphone { device_id } => Ok((
+            Target::Microphone(device_id.clone()),
+            device_id.clone().unwrap_or_else(|| "default".to_string()),
+        )),
+        AudioSourceKind::Desktop => Ok((Target::Desktop, "default output".to_string())),
     }
 }
 
 impl AudioTracks {
     /// Opens every source `plan` names, for the game window `hwnd`. Returns
-    /// the tracks, or `None` if no source opened, and the layout the file
-    /// will hold: `plan`'s, less whatever did not open.
-    pub fn start(hwnd: HWND, plan: &CapturePlan) -> (Option<AudioTracks>, AudioLayout) {
+    /// the tracks, or `None` if no source opened; the layout the file will
+    /// hold, `plan`'s less whatever did not open; and what became of each
+    /// source, for the start line (`own::stats`).
+    pub fn start(
+        hwnd: HWND,
+        plan: &CapturePlan,
+    ) -> (Option<AudioTracks>, AudioLayout, Vec<Opened>) {
         let mut procs = None;
         let mut inputs = Vec::new();
         let mut opened = Vec::with_capacity(plan.sources.len());
+        let mut report = Vec::with_capacity(plan.sources.len());
         for kind in &plan.sources {
             let name = source_name(kind);
             let (tx, packets) = channel();
-            let source = target(kind, hwnd, &mut procs)
-                .and_then(|target| super::start(&name, target, tx));
+            let source = target(kind, hwnd, &mut procs).and_then(|(target, what)| {
+                super::start(&name, target, tx).map(|source| (source, what))
+            });
+            report.push(Opened {
+                name: name.clone(),
+                outcome: source.as_ref().map(|(_, what)| what.clone()).map_err(Clone::clone),
+            });
             match source {
-                Ok(source) => {
+                Ok((source, _)) => {
                     inputs.push(Input {
                         name,
                         source: Some(source),
@@ -140,7 +155,7 @@ impl AudioTracks {
             layout: layout.clone(),
             mix: None,
         });
-        (tracks, layout)
+        (tracks, layout, report)
     }
 
     /// The origin has arrived: packets can be placed from here on.
@@ -205,8 +220,9 @@ impl AudioTracks {
     /// each source's clock did and what each track's mixer did. Errors are
     /// logged rather than returned, because the file is finalized either way.
     /// A recording with nothing to write to drops the tracks instead, which
-    /// stops the sources.
-    pub fn finish<W>(mut self, end_rel: i64, write: &mut W)
+    /// stops the sources. Returns what the stop line sums up, if anything
+    /// was placed: each source's clock, and what track 0, the mix, clipped.
+    pub fn finish<W>(mut self, end_rel: i64, write: &mut W) -> Option<AudioStop>
     where
         W: FnMut(usize, &[i16], u64) -> Result<(), String>,
     {
@@ -235,9 +251,7 @@ impl AudioTracks {
             input.ended = true;
         }
         self.receive();
-        let Some(mut mix) = self.mix.take() else {
-            return;
-        };
+        let mut mix = self.mix.take()?;
 
         let finished = mix.finish(end_rel, write);
         for (t, result) in finished.iter().enumerate() {
@@ -250,10 +264,13 @@ impl AudioTracks {
             }
         }
         // Each source once, from the first track that sums it.
+        let mut sources = Vec::with_capacity(self.inputs.len());
         for (i, input) in self.inputs.iter_mut().enumerate() {
             let Some((t, lane)) = mix.first_lane(i) else { continue };
             let pad = finished[t].as_ref().ok().and_then(|p| p.get(lane)).copied().unwrap_or(0);
             let mixdown = mix.track(t);
+            let failed = matches!(input.summary, Some(Err(_)));
+            sources.push(SourceStop::from_aligner(&input.name, mixdown.feed(lane).aligner(), failed));
             let (late, missing) = (mixdown.mixer().late(lane), mixdown.mixer().missing(lane));
             log_source(input, mixdown.feed(lane), pad, late, missing);
         }
@@ -276,6 +293,8 @@ impl AudioTracks {
                 mixer.emitted() as f64 / f64::from(SAMPLE_RATE)
             );
         }
+        let clipped = if mix.tracks() > 0 { mix.track(0).mixer().stats.clipped } else { 0 };
+        Some(AudioStop { sources, clipped })
     }
 }
 

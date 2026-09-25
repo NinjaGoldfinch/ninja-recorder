@@ -1497,6 +1497,14 @@ its rows here. Every row runs on a **devtools build** with Settings → Advanced
 backend is shaped this way is
 [DEVELOPMENT.md §2.2](../DEVELOPMENT.md#22-the-recorder-trait) and §16.
 
+**Paste the summary lines with every row that records.** Since #242 each
+recording on Own writes `own: recording <file>: …` when it starts,
+`own: stopped <file>: …` when it stops, and `own: remux <file>: …` after
+([DEVELOPMENT.md §13](../DEVELOPMENT.md#the-own-backends-summary-lines) says
+what each field means). The first two are in `worker.log` with a copy in
+`daemon.log`; the remux line is in `daemon.log` only. They sum up the
+detailed lines the rows below ask for, and do not replace them: paste both.
+
 ### 11.1 WGC video into a fragmented MP4 (#236)
 
 The first piece: the game window's video, through Media Foundation's sink
@@ -1884,7 +1892,8 @@ Tool game of five minutes or more:
       line per track, and `own backend: file closed: <n> video frames (<k>
       keyframes, 0 dropped before the first), AAC frames per track [...], <f>
       fragments`, with the four AAC counts equal and `<f>` about one per two
-      seconds. Paste them.
+      seconds; the summary line `own: stopped …` (both logs) carries the same
+      `<f> fragments`. Paste them.
 
 **Desktop**:
 
@@ -1899,9 +1908,10 @@ Tool game of five minutes or more:
 
 - [ ] **Repaired, with every stem.** Five minutes into a game, end the
       `--capture-worker` process (§11.6's step). `daemon-devtools.log` has
-      `own backend: repaired <file>: <n> whole fragment(s) kept, <b> torn
-      byte(s) cut`. The recording plays and scrubs to about minute five, and
-      `ffprobe` still shows four AAC streams with `a:0` default.
+      `own: remux <file>: repaired first (<n> whole fragments kept, <b> torn
+      bytes cut), then ok in <ms> ms`. The recording plays and scrubs to about
+      minute five, and `ffprobe` still shows four AAC streams with `a:0`
+      default.
 - [ ] **The same through startup recovery.** Repeat, but end the `--daemon`
       process instead (the worker goes with it), then restart the app.
       `daemon-devtools.log` has `repaired recovered <file>: …` and then the

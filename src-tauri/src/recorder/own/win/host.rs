@@ -73,7 +73,8 @@ impl Host for SessionHost {
         let (origin, receiver) = channel();
         let started = self.ask(|reply| Command::Start { path, plan, reply, origin: receiver })??;
         self.origin = Some(origin);
-        Ok(Started { status: started.status, audio: started.audio })
+        let summary = Some(started.summary);
+        Ok(Started { status: started.status, audio: started.audio, summary })
     }
 
     fn origin(&mut self, qpc_hns: i64) {
@@ -83,11 +84,14 @@ impl Host for SessionHost {
         }
     }
 
-    fn stop(&mut self) -> Result<Option<String>, String> {
+    fn stop(&mut self) -> (Result<Option<String>, String>, Option<String>) {
         // A start whose origin never came is abandoned by the session when
         // this sender goes: it finds the channel closed.
         self.origin = None;
-        self.ask(Command::Stop)?
+        match self.ask(Command::Stop) {
+            Ok(stopped) => (stopped.result, stopped.summary),
+            Err(e) => (Err(e), None),
+        }
     }
 
     /// Ends the session thread, finalizing anything it is still recording,

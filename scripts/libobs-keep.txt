@@ -133,6 +133,11 @@ libcurl.dll
 # decision rather than a trim.
 ffmpeg.exe
 
+# ffmpeg's licence texts and source record, staged beside it by
+# scripts/stage-ffmpeg.ps1. Shipping ffmpeg without them is what #53 fixed, so
+# a trimmed build keeps them for as long as it keeps ffmpeg.exe.
+FFMPEG-*
+
 # --- Expected removals ------------------------------------------------------
 
 # The OpenGL graphics module. The fork asks for it only off Windows.

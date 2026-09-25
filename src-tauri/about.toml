@@ -1,0 +1,67 @@
+# cargo-about: the notices half of what deny.toml checks.
+#
+# deny.toml decides which licences the Rust graph may use. This file collects
+# the notices those licences ask a binary distribution to carry (the MIT and
+# BSD copyright lines, Apache-2.0's text) into THIRD_PARTY_NOTICES.txt, which
+# the installer ships. `node scripts/notices.mjs` writes it; CI runs the same
+# script with `--check` and fails if the committed file is stale, so a new
+# dependency cannot land without its notice. See docs/licensing.md.
+
+# **Keep `accepted` the same set as deny.toml's `[licenses] allow`.** Not a
+# subset and not a superset: deny.toml is the policy, and this list only has
+# to be wide enough that cargo-about can pick a licence for every crate that
+# policy already admitted. Adding a licence here without adding it there would
+# not let anything new in (cargo deny would still fail), but the two drifting
+# apart is how a reader stops being able to trust either.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "0BSD",
+    "CC0-1.0",
+    "MIT-0",
+    "BSL-1.0",
+    "Unlicense",
+    "MPL-2.0",
+]
+
+# The shipped build: Windows, default features (deny.toml adds
+# `all-features`, because the devtools build has to pass its policy too; the
+# devtools bundle is never released, so its extra crates owe no notice).
+targets = ["x86_64-pc-windows-msvc"]
+
+# Neither is linked into the binary that ships.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+
+# The script runs cargo-about with `--offline`: the check has to give the same
+# output for the same Cargo.lock, on any machine, without asking a crate's git
+# host for a licence file it forgot to package. The licence comes from each
+# crate's own manifest and the files in its published package.
+
+# deny.toml's two GPL exceptions, allowed here for the same crates and no
+# others. They are listed in the notices as what they are: this crate is
+# GPL-2.0-only until WS8, and the libobs fork is GPL-2.0 until #51 deletes it.
+# Deleting these tables goes with deleting deny.toml's exceptions.
+#
+# Four of the fork's five crates, not five: `build-helper` is only a build
+# dependency, so it is not in the graph above, and cargo-about warns about
+# configuration for a crate it cannot see.
+[ninja-recorder]
+accepted = ["GPL-2.0-only"]
+
+[libobs-recorder]
+accepted = ["GPL-2.0"]
+
+[intprocess-recorder]
+accepted = ["GPL-2.0"]
+
+[ipc-link]
+accepted = ["GPL-2.0"]
+
+[libobs-sys]
+accepted = ["GPL-2.0"]

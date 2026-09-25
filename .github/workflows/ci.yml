@@ -322,6 +322,52 @@ jobs:
         shell: powershell
         run: ./scripts/smoke-ui.ps1
 
+  # The notices gate. THIRD_PARTY_NOTICES.txt ships in the installer, and
+  # `scripts/notices.mjs --check` regenerates it from Cargo.lock (cargo-about)
+  # and the production frontend bundle (Vite, in memory) and fails if the
+  # committed copy differs. So a dependency added, removed or bumped without
+  # regenerating cannot merge, the same way `gen-contract --check` works for
+  # the contract. It also fails on an npm package whose licence is not on
+  # deny.toml's allow list, which nothing else checks.
+  #
+  # Its own job, on Linux, because nothing in it needs Windows: cargo-about
+  # reads `cargo metadata` filtered to the Windows target (about.toml) and
+  # compiles nothing, and the frontend build is platform-independent. It runs
+  # beside `test` rather than inside it, so a stale file fails in a minute
+  # instead of after the Windows compile. See docs/licensing.md §5.
+  notices:
+    name: Third-party notices
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      # No version argument: reads src-tauri/rust-toolchain.toml, same as
+      # `test`. cargo-about only runs `cargo metadata`, but the toolchain
+      # decides how Cargo.lock is read, so it should be the pinned one.
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Pinned, unlike cargo-deny above: cargo-about's output is committed, so
+      # a new version that words a licence differently would fail the check on
+      # a commit that changed nothing. Bump it in its own PR, with the
+      # regenerated file.
+      - name: Install cargo-about
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9.2
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Third-party notices are current
+        run: node scripts/notices.mjs --check
+
   # Pull requests do not build at all. Three Tauri bundles — two of them
   # Windows, each ~6min — are the overwhelming majority of this workflow's
   # minute spend and its artifact storage, and nothing consumes a PR's
@@ -445,12 +491,11 @@ jobs:
           fi
           echo "rev=$rev" >> "$GITHUB_OUTPUT"
 
-      # Both staging steps below write into src-tauri/target/libobs and
-      # neither output depends on this repo's own sources, so the whole
-      # directory caches as a unit. ffmpeg has no version to key on (see
-      # the download step), so bump FFMPEG_EPOCH in the key to pull a
-      # fresher build; GitHub also evicts caches untouched for 7 days,
-      # which refreshes it on its own.
+      # Both staging steps below write into src-tauri/target/libobs, so the
+      # whole directory caches as a unit, keyed on what decides its contents:
+      # the libobs-recorder revision, and ffmpeg's pin together with the
+      # script that stages it. Bumping scripts/ffmpeg-pin.json is therefore
+      # a cache miss on its own, with nothing else to remember.
       #
       # Restore and save are separate steps, and the save runs straight after
       # staging, before the opt-in trim below. So the cache only ever holds
@@ -463,7 +508,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: src-tauri/target/libobs
-          key: libobs-${{ runner.os }}-${{ steps.libobs-rev.outputs.rev }}-ffmpeg-epoch2
+          key: libobs-${{ runner.os }}-${{ steps.libobs-rev.outputs.rev }}-ffmpeg-${{ hashFiles('scripts/ffmpeg-pin.json', 'scripts/stage-ffmpeg.ps1') }}
 
       # Builds the out-of-process libobs worker from our capture-backend
       # fork (github.com/NinjaGoldfinch/libobs-recorder — see
@@ -494,31 +539,28 @@ jobs:
           Copy-Item ../libobs-recorder-build/target/release/extprocess_recorder.exe src-tauri/target/libobs/extprocess_recorder.exe -Force
 
       # The **lgpl** build, not gpl. Every ffmpeg invocation this app makes is
-      # `-c copy` — the faststart remux (`recorder/libobs/mod.rs`) and stem
-      # extraction (`audio_tracks.rs`) are both stream copies, and libobs does
-      # all the encoding — so not one GPL-only encoder is ever reachable.
-      # Dropping x264/x265 and friends takes ~13% off a bundle that is a large
-      # share of the 248 MB install (docs/windows-verification.md §5).
+      # `-c copy` or a header read (docs/licensing.md §3), so not one GPL-only
+      # encoder is ever reachable. Dropping x264/x265 and friends takes ~13%
+      # off a bundle that is a large share of the 248 MB install
+      # (docs/windows-verification.md §5).
       #
-      # ffmpeg.exe is bundled into the same `libobs` resource folder so
-      # `LibObsRecorder::stop` (src-tauri/src/recorder/libobs/mod.rs) can
-      # remux each recording to a seekable faststart MP4 after capture —
-      # the crash-safe fragmented format `start()` records with has no
-      # seek index (DEVELOPMENT.md §2.2). Optional at
-      # runtime (lib.rs resolves it with `.ok()`), so a failed/missing
-      # download here degrades to unseekable-but-playable recordings
-      # rather than breaking the build. BtbN's "latest" release is a
-      # continuously-updated static build, not a pinned version — same
-      # looseness as the fork clone above had before it was pinned.
-      - name: Stage ffmpeg for faststart remux
+      # **Pinned, and checked.** scripts/ffmpeg-pin.json names one dated BtbN
+      # release, one release-branch asset in it and that asset's SHA-256, and
+      # the script refuses to stage anything else. A bump is an edit to that
+      # file alone (docs/ci-and-releases.md, "Bumping ffmpeg"). The script also
+      # stages the LGPLv3 and GPLv3 texts beside the binary and writes
+      # FFMPEG-SOURCE.txt, naming the FFmpeg commit and the BtbN build scripts
+      # that are the corresponding source.
+      #
+      # ffmpeg.exe is bundled into the same `libobs` resource folder, where
+      # daemon::ffmpeg() and lib.rs::ffmpeg_path resolve it for the faststart
+      # remux, recovery, trim and stem extraction. It is optional at runtime
+      # but not here: a download that fails or does not match fails the build,
+      # because shipping an unidentified binary is worse than not shipping.
+      - name: Stage ffmpeg (pinned) and its licence texts
         if: matrix.platform == 'windows-latest' && steps.libobs-cache.outputs.cache-hit != 'true'
         shell: pwsh
-        run: |
-          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl.zip" -OutFile ffmpeg.zip
-          Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-extracted
-          $bin = Get-ChildItem ffmpeg-extracted -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
-          New-Item -ItemType Directory -Force -Path src-tauri/target/libobs | Out-Null
-          Copy-Item $bin.FullName src-tauri/target/libobs/ffmpeg.exe -Force
+        run: ./scripts/stage-ffmpeg.ps1
 
       - name: Save libobs backend + ffmpeg
         if: matrix.platform == 'windows-latest' && steps.libobs-cache.outputs.cache-hit != 'true'
@@ -526,6 +568,15 @@ jobs:
         with:
           path: src-tauri/target/libobs
           key: ${{ steps.libobs-cache.outputs.cache-primary-key }}
+
+      # On a cache hit the staging step did not run, so this is what says the
+      # restored folder is the pinned build: every licence text present,
+      # FFMPEG-SOURCE.txt matching both the pin and the binary, and
+      # `ffmpeg -version` naming the pinned version and an LGPLv3 configuration.
+      - name: Check the staged ffmpeg against its pin
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: ./scripts/stage-ffmpeg.ps1 -Verify
 
       # WS1.1, the P0a arm (#5): trim the staged backend to
       # scripts/libobs-keep.txt. Only in the devtools entry of a manual run
@@ -660,6 +711,14 @@ jobs:
           $nsi = Get-ChildItem src-tauri/target/release -Recurse -Filter installer.nsi -EA SilentlyContinue |
                  Select-Object -First 1
           if (-not $nsi) { throw "no generated installer.nsi under src-tauri/target/release" }
+
+          # The third-party notices (#85), named in tauri.windows.conf.json's
+          # resources. Checked against the generated script because the
+          # devtools config is merged over that file.
+          if (-not (Select-String -Path $nsi.FullName -Pattern 'THIRD_PARTY_NOTICES\.txt' -Quiet)) {
+            throw "installer.nsi does not install THIRD_PARTY_NOTICES.txt"
+          }
+          Write-Host "the installer ships THIRD_PARTY_NOTICES.txt"
           $m = [regex]::Match((Get-Content $nsi.FullName -Raw), '!define\s+MAINBINARYNAME\s+"([^"]+)"')
           if (-not $m.Success) {
             Select-String -Path $nsi.FullName -Pattern '^!define' | ForEach-Object { $_.Line }
@@ -681,6 +740,16 @@ jobs:
           }
           Write-Host "the installer includes the hooks that stop the libobs worker"
 
+          # ffmpeg's licence texts and source record (#53). The staging step put
+          # them in the resource folder; this reads back that the generated
+          # installer actually installs each one.
+          foreach ($f in 'ffmpeg.exe', 'FFMPEG-LICENSE.txt', 'FFMPEG-COPYING.GPLv3.txt', 'FFMPEG-LICENSE.md', 'FFMPEG-SOURCE.txt') {
+            if (-not (Select-String -Path $nsi.FullName -Pattern ('libobs[\\/]' + [regex]::Escape($f)) -Quiet)) {
+              throw "installer.nsi does not install libobs\$f"
+            }
+          }
+          Write-Host "the installer ships ffmpeg.exe beside its licence texts and FFMPEG-SOURCE.txt"
+
       # A trimmed build says so in its name, so it cannot be mistaken for the
       # devtools build of the same commit when the two sit side by side.
       - name: Upload build artifact
@@ -694,10 +763,11 @@ jobs:
   # Publishes a release for every commit that lands on main, from the
   # bundles the matrix above just produced. Nothing is rebuilt.
   #
-  # `needs: [version, test, build]` is the gate that makes this safe to
-  # publish unattended rather than leave as a draft: it cannot start until
-  # tsc, cargo test and clippy have all gone green on the same commit, so
-  # "published" already means "tested". Publishing creates the tag, which
+  # `needs: [version, test, notices, build]` is the gate that makes this safe
+  # to publish unattended rather than leave as a draft: it cannot start until
+  # tsc, cargo test and clippy have all gone green on the same commit, and the
+  # notices the installer carries match what it links, so "published" already
+  # means "tested". Publishing creates the tag, which
   # becomes the base `version` counts from next time.
   #
   # This replaces the old release.yml, which triggered on a manually pushed
@@ -724,7 +794,7 @@ jobs:
     # publishes — the pair is the same one v1 ships with, because the public
     # half is baked into every installer already in the field.
     if: needs.version.outputs.release == 'true' && needs.version.outputs.can_publish == 'true'
-    needs: [version, test, build]
+    needs: [version, test, notices, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -189,7 +189,7 @@ Implemented in `src-tauri/src/recorder/`: `Recorder`, `RecordConfig`, `RecorderE
 
 **Runtime files: staged outside Cargo, not via artifact-dependencies.** league_record gets `extprocess_recorder.exe` + its libobs DLLs into the build via Cargo's artifact-dependency feature (`artifact = "bin:..."`), which needs nightly Rust + the unstable `bindeps` flag, since their whole project builds on nightly (CI: `dtolnay/rust-toolchain@nightly`). We can't do that: `-Z bindeps` syntax in `Cargo.toml` breaks manifest parsing *for every platform*, confirmed locally (`cargo check` on macOS failed until the artifact-dependency lines were removed). It would force the dev box's `cargo check`/`npm run tauri dev` onto nightly + an unstable flag just to support an optional Windows-only binary, which is a real regression against §9's dev loop. Instead, CI's "Stage libobs capture backend" step (`.github/workflows/ci.yml`'s `build` job, Windows leg only) builds the fork's `extprocess_recorder` binary as a fully separate `cargo build` invocation and copies it + the matching `libobs_<version>/` DLL folder into `src-tauri/target/libobs/` directly, with no Cargo dependency-graph involvement and ordinary stable Rust throughout. `tauri.windows.conf.json` then bundles that folder as a resource, and `LibObsRecorder::new` (lib.rs) resolves it at runtime via Tauri's path resolver. Anyone working on the capture backend locally on the Windows box needs to run the same clone-build-copy sequence by hand before `cargo run`/`npm run tauri dev` until that's scripted for local use too.
 
-**Faststart remux on stop, staged the same way.** The fork's `muxer_settings` (above) trade seekability for crash-safety: `frag_keyframe+empty_moov+default_base_moof` means no player, including the review UI's own WebView2 `<video>`, can reliably scrub the file, since there's no upfront seek index. `LibObsRecorder::stop` fixes this up after every *clean* stop with a stream-copy remux (`ffmpeg -c copy -movflags +faststart`, lossless, just rewrites the container index) before handing the path back. `ffmpeg.exe` is staged into the same `target/libobs/` resource folder by a sibling CI step ("Stage ffmpeg for faststart remux") that downloads a static build from BtbN's FFmpeg-Builds releases. It is optional at runtime (`lib.rs` resolves it with `.ok()`), so a failed download degrades to unseekable-but-still-playable recordings rather than breaking the build. **Not verified**, with the same caveat as the rest of this backend below: nothing has confirmed the remux actually runs against a real capture on a real Windows box yet, only that it type-checks.
+**Faststart remux on stop, staged the same way.** The fork's `muxer_settings` (above) trade seekability for crash-safety: `frag_keyframe+empty_moov+default_base_moof` means no player, including the review UI's own WebView2 `<video>`, can reliably scrub the file, since there's no upfront seek index. `LibObsRecorder::stop` fixes this up after every *clean* stop with a stream-copy remux (`ffmpeg -c copy -movflags +faststart`, lossless, just rewrites the container index) before handing the path back. `ffmpeg.exe` is staged into the same `target/libobs/` resource folder by a sibling CI step ("Stage ffmpeg (pinned) and its licence texts") that downloads a static build from BtbN's FFmpeg-Builds releases, pinned and checksummed in `scripts/ffmpeg-pin.json` (§18). It is optional at runtime (`lib.rs` resolves it with `.ok()`), so a missing binary degrades to unseekable-but-still-playable recordings; a download that fails or does not match its pin fails the build. **Not verified**, with the same caveat as the rest of this backend below: nothing has confirmed the remux actually runs against a real capture on a real Windows box yet, only that it type-checks.
 
 **Every ffmpeg spawn gets `CREATE_NO_WINDOW`.** ffmpeg ships as a console-subsystem binary, so a GUI process spawning one makes Windows allocate it a fresh console: an empty black terminal window sitting over the game for the length of every faststart remux, and again each time the review player extracts a stem (§2.5). Both call sites capture stdout and stderr, so that window never had anything to display; it is pure noise, and on the remux path it lands at exactly the moment the player is reading the post-game screen. `lib.rs`'s `ffmpeg_command` is now the only way the bundled ffmpeg is launched and it sets the flag there, so a third call site cannot reintroduce the window by forgetting. The libobs worker needs no equivalent: the fork builds `extprocess_recorder.exe` with `windows_subsystem = "windows"` for release, so it is only ever visible in Task Manager, which is where [windows-verification.md](docs/windows-verification.md) checks for it.
 
@@ -622,7 +622,7 @@ toward the "N unknown" sub-label on the Recorded tile.
 
 The obvious tool is `ffprobe -show_format`, which answers this in clean JSON.
 **We don't ship it.** CI stages exactly one binary into the bundle,
-`ffmpeg.exe` (`.github/workflows/ci.yml`, "Stage ffmpeg for faststart remux"),
+`ffmpeg.exe` (`.github/workflows/ci.yml`, "Stage ffmpeg (pinned) and its licence texts"),
 and adding ffprobe would roughly double that download to obtain one number.
 
 So the probe runs `ffmpeg -hide_banner -i <file>` with no output file. ffmpeg
@@ -2318,6 +2318,80 @@ would show an empty view. Both costs are what a handler *inside* the worker
 would fix, and that is a change to the fork, worth making once a real
 capture shows it is needed (#69).
 
+### The own backend's summary lines
+
+The own backend (`recorder/own/`, §16) logs a great deal as it goes: the
+warm-up, the WGC border, each source's root and clock, and at stop each
+source's clock stats and the mix. Those detailed lines stay, because they are
+what the verification rows ask to have pasted. But judging a run from them
+means reading a dozen lines, so the session also writes **one line at start
+and one at stop** that sum it up (#242), and a third for the remux. That is
+what #11's comparison of the two backends can be filled in from, one recording
+per row. The rendering is pure (`own::stats`), and the session only fills its
+structs with counters it already had, plus two it did not.
+
+**Which log holds which line.** The session runs in the capture worker, so the
+start and stop lines are logged there, in `worker.log`, beside the detailed
+lines they sum up. The worker also sends each line back to the daemon, in the
+`Started` and `Stopped` replies (`summary`, an optional field, so no protocol
+version bump: each side reads the other's messages with or without it), and
+`OwnRecorder` logs a copy in `daemon.log`, which is where people look first.
+The remux line is the daemon's alone, because the daemon does the remux. A
+worker that dies before it answers `Stop` leaves its stop line nowhere;
+`daemon.log` then has the death, with the exit code, instead.
+
+The values below show the shape and are not a measurement:
+
+```text
+[recorder] own: recording 2026-09-26_12-00-00.mp4: 1920x1080 from NVIDIA GeForce RTX 3070, encoder NVIDIA H.264 Encoder MFT [VEN_10DE] (hardware), sources: game=PID 4242 (the game window's owner, named League of Legends.exe), microphone=default, Discord.exe=failed (no Discord.exe process is running); tracks: Everything
+[recorder] own: stopped 2026-09-26_12-00-00.mp4: 1800.000 s, 108000 ticks, 0.41% repeated, worst tick 0.62 f late; per source: game clock=qpc raw=-12.35 ppm slips=7 gaps=0 holds=3, microphone clock=device slips=0 gaps=1 holds=0; mix clipped 0; 1836.0 MB; 900 fragments; finalize ok
+[recorder] own: remux 2026-09-26_12-00-00.mp4: ok in 812 ms
+```
+
+**Start.** The file, the encoded size, the adapter the capture runs on, the
+encoder actually activated (after `status::check_loaded`, so a
+substitution shows) and whether it is hardware or the **software fallback,
+with the reason**. Then every source the plan named: what it opened
+(`PID <n> (<how the root was chosen>)` for a process-loopback source,
+`default` or the configured device id for the microphone, `default output`
+for the desktop), or `failed (<why>)`; and the labels of the tracks the file
+holds, or `none (video only)`.
+
+**Stop.** The video first: its length (ticks over 60 fps), the ticks written,
+the share that **repeated** the tick before because no new picture had arrived
+(a static or minimised window, or capture falling behind), and the **worst
+lateness** of any tick, in frames: how long after its own time it was written.
+Those two are counted for this line (`stats::Cadence`); nothing counted them
+before. Then per source, from its aligner: the clock it ran on, the raw drift
+in ppm (QPC clock only: on the device clock the audio is stamped from its own
+sample count, so there is nothing to compare, and it is left out rather than
+printed as a meaningless number), slips (single frames dropped or repeated to
+hold it on QPC), gaps (holes over 50 ms filled with silence), holds (silence
+written because the source was quiet), and `ended early` for one whose capture
+died before the recording did. Then the samples the mix clipped, the file's
+size after the finalize, the **fragments** the file was closed with, and
+whether the finalize succeeded. A video-only recording says `no audio`; one
+that wrote nothing says `no ticks written`.
+
+**The fragment count arrived with #239.** The sink writer closed its
+fragments itself and did not say how many, and an estimate from the GOP would
+have been a plausible number, not a measured one, so the line left it out.
+Our own MP4 writer (`own::mux`) closes one per GOP and counts them, so the
+line now carries the count it made, and leaves it out only when the finalize
+failed before the file was closed.
+
+**The remux is its own line** because it happens in a different process. The
+worker finalizes the file and logs the stop line before it answers; the daemon
+remuxes afterwards, once the answer is in. Holding the stop line back until
+the remux was done would mean the worker's copy could not have it, and the
+two logs would disagree. The remux line says `ok in <ms> ms`,
+`failed in <ms> ms, kept unseekable` (the existing warning beside it carries
+ffmpeg's error), or `skipped` when there is no ffmpeg to run. When the worker
+did not close the file itself (it died, or its finalize failed), the daemon
+runs `mp4::write::repair` first (#239), and the same line says so before the
+remux result: `repaired first (<n> whole fragments kept, <b> torn bytes
+cut), then ok in <ms> ms`, or `not repaired (<why>), then …`.
+
 ### Why not `tracing`
 
 `tracing`, and `log` + `fern`, both do this and more. What was needed was a timestamp, a level, a tag and a file that rotates; `tracing`'s value is spans and structured fields, and nothing in this app has asked for either. This project has kept its dependency tree deliberately small (§1.2), and a date crate would have been a second dependency purely to format a timestamp, so `log.rs` hand-rolls Howard Hinnant's `civil_from_days`, which is the same closed form a date crate would run, and pins it with tests for the leap-year and century rules. Revisit when something genuinely wants spans.
@@ -3558,6 +3632,24 @@ cannot stay as its source. `recorder/window.rs` is the one place the audit
 found that fell on the wrong side of this line; docs/licensing.md has the
 evidence and the fix.
 
+### Notices are generated from what ships, and checked
+
+A permissive licence still has a condition: the notice travels with the binary.
+`THIRD_PARTY_NOTICES.txt` carries those notices, and it is generated rather
+than written, because a hand-kept list is stale by the next dependency bump.
+CI regenerates it and fails on a difference (docs/licensing.md §5).
+
+Two choices in it are deliberate. **The Rust half runs offline** after a
+`cargo fetch`, so the file is a function of `Cargo.lock` and nothing a network
+lookup could change between two runs of the same commit. **The npm half reads
+the production bundle, not `package.json`.** Svelte's runtime ships while Svelte
+is a devDependency, so "production dependencies only" would miss the largest
+JavaScript component in the app and list nothing in its place. The two
+off-the-shelf tools considered were rejected for reasons of their own.
+`license-checker-rseidelsohn` needs Node 24 and CI runs 22.
+`generate-license-file` prints a dual licence as its expression, with no text.
+Both read the manifest, which is the wrong source here anyway.
+
 ### What survives, and what does not change
 
 **ffmpeg survives** because it is a separate, unmodified LGPL executable that
@@ -3565,6 +3657,18 @@ only copies streams or reads headers. Its licence does not reach a program
 that runs it rather than linking it, and the copy-only rule is what makes the
 LGPL build sufficient. That is why every spawn goes through
 `lib.rs::ffmpeg_command`.
+
+**It is pinned to a release-branch build from a month-end release.** The
+LGPL's source obligation is about the exact binary shipped, so "BtbN's
+latest", a floating asset rebuilt daily from FFmpeg's `master`, identified no
+source at all. `scripts/ffmpeg-pin.json` names one `autobuild-*` release, a
+release-branch asset in it (a tagged FFmpeg version plus its backports rather
+than whatever `master` held that afternoon), and the asset's SHA-256, and CI
+stages nothing else. The release is a month-end one because BtbN keeps those
+for two years and the dailies for fourteen days: a pin that expires in a
+fortnight turns the next cache miss into a broken build. The source itself
+does not depend on that retention, because what ships beside the binary
+points at git commits, FFmpeg's and BtbN's, not at the release asset.
 
 **The change is not retroactive.** Every release before `v2.1.0` was
 distributed under GPL-2.0-only and stays so. Those releases stay published,

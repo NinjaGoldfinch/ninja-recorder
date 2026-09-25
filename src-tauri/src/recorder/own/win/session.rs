@@ -27,6 +27,7 @@ use crate::recorder::own::clock;
 use crate::recorder::own::fit::Size;
 use crate::recorder::own::plan::{self, CapturePlan};
 use crate::recorder::own::select::{self, Choice};
+use crate::recorder::own::stats;
 use crate::recorder::own::status::{self, Status};
 use crate::recorder::window;
 use crate::{info, warn};
@@ -59,6 +60,24 @@ pub struct Started {
     /// recording at all: the same trade the libobs fork makes ("lose per-app
     /// audio, not all recording").
     pub audio: AudioLayout,
+    /// The start line, as logged (`own::stats`).
+    pub summary: String,
+}
+
+/// What a stop answers with.
+pub struct Stopped {
+    /// `Ok(None)` for a clean stop, `Ok(Some(_))` for a recording that ended
+    /// early but was finalized, and `Err` when the finalize itself failed.
+    pub result: Result<Option<String>, String>,
+    /// The stop line, as logged (`own::stats`), when a recording was
+    /// finalized.
+    pub summary: Option<String>,
+}
+
+impl Stopped {
+    fn not_recording() -> Stopped {
+        Stopped { result: Err("not recording".to_string()), summary: None }
+    }
 }
 
 /// What `OwnRecorder` asks of the session thread. Every variant that expects
@@ -77,10 +96,8 @@ pub enum Command {
         reply: Sender<Result<Started, String>>,
         origin: Receiver<i64>,
     },
-    /// Stop and finalize. Answers `Ok(None)` for a clean stop, `Ok(Some(_))`
-    /// for a recording that ended early but was finalized, and `Err` when the
-    /// finalize itself failed.
-    Stop(Sender<Result<Option<String>, String>>),
+    /// Stop and finalize. Answers with how that went ([`Stopped`]).
+    Stop(Sender<Stopped>),
     /// Tear down and exit. A recording in flight is finalized first.
     Release,
 }
@@ -121,7 +138,7 @@ fn refuse_all(commands: &Receiver<Command>, why: &str) {
                 let _ = reply.send(Err(why.to_string()));
             }
             Command::Stop(reply) => {
-                let _ = reply.send(Err("not recording".to_string()));
+                let _ = reply.send(Stopped::not_recording());
             }
             Command::Release => return,
         }
@@ -134,6 +151,8 @@ struct Warm {
     encoders: Vec<select::Encoder>,
     choice: Choice,
     device: Device,
+    /// The adapter the capture runs on, for the start line.
+    adapter: String,
 }
 
 struct Session {
@@ -141,13 +160,13 @@ struct Session {
     mf_started: bool,
     /// The answer for the next `Stop`, when the recording ended on its own
     /// (a write failed, or the GPU device was lost) and was finalized then.
-    ended: Option<Result<Option<String>, String>>,
+    ended: Option<Stopped>,
 }
 
 /// How a recording's loop ended.
 enum Ended {
     /// `stop` asked.
-    Stop(Sender<Result<Option<String>, String>>),
+    Stop(Sender<Stopped>),
     /// `release`, or `OwnRecorder` dropped: finalize and exit.
     Exit,
     /// The recording cannot go on (a write failed, or the GPU device was
@@ -169,9 +188,7 @@ impl Session {
                     }
                 }
                 Command::Stop(reply) => {
-                    let answer =
-                        self.ended.take().unwrap_or_else(|| Err("not recording".to_string()));
-                    let _ = reply.send(answer);
+                    let _ = reply.send(self.ended.take().unwrap_or_else(Stopped::not_recording));
                 }
                 Command::Release => return,
             }
@@ -219,7 +236,8 @@ impl Session {
             Status::from_choice(&choice, &encoders).backend_name(),
             offered(&encoders)
         );
-        Ok(Warm { adapters: infos, encoders, choice, device })
+        let adapter = adapter.info.name.clone();
+        Ok(Warm { adapters: infos, encoders, choice, device, adapter })
     }
 
     /// One recording, from `Start` to the command that ends it. Returns true
@@ -246,8 +264,11 @@ impl Session {
                 return false;
             }
         };
-        let started =
-            Started { status: recording.status.clone(), audio: recording.layout.clone() };
+        let started = Started {
+            status: recording.status.clone(),
+            audio: recording.layout.clone(),
+            summary: recording.started.clone(),
+        };
         if reply.send(Ok(started)).is_err() {
             // `start`'s caller has gone. Nothing will ever stop this, so do
             // not begin.
@@ -271,7 +292,11 @@ impl Session {
         // SAFETY: pairs timeBeginPeriod(1).
         unsafe { timeEndPeriod(1) };
 
-        let finalized = recording.finish();
+        let (finalized, summary) = recording.finish();
+        let bytes = std::fs::metadata(&path).ok().map(|m| m.len());
+        let line = stats::render_stop(&path, FPS, &summary, &finalized, bytes);
+        info!("recorder", "{line}");
+        let summary = Some(line);
         // A lost device stays lost, and everything warm was made on it: the
         // next `start` warms up again from scratch, on whatever GPU is there.
         if self.warm.as_ref().is_some_and(|warm| device::removed(&warm.device).is_some()) {
@@ -280,7 +305,7 @@ impl Session {
         }
         match ended {
             Ended::Stop(reply) => {
-                let _ = reply.send(finalized.map(|()| None));
+                let _ = reply.send(Stopped { result: finalized.map(|()| None), summary });
                 false
             }
             Ended::Exit => {
@@ -291,10 +316,11 @@ impl Session {
             }
             Ended::Problem(problem) => {
                 warn!("recorder", "own backend: the recording ended early: {problem}");
-                self.ended = Some(match finalized {
+                let result = match finalized {
                     Ok(()) => Ok(Some(problem)),
                     Err(e) => Err(format!("{problem}; then {e}")),
-                });
+                };
+                self.ended = Some(Stopped { result, summary });
                 false
             }
         }
@@ -360,6 +386,10 @@ struct Recording {
     layout: AudioLayout,
     /// Ticks written so far: tick `ticks` is the next one due.
     ticks: u64,
+    /// What the stop line sums up (`own::stats`).
+    summary: stats::Stop,
+    /// The start line, for `Started`.
+    started: String,
 }
 
 impl Recording {
@@ -427,7 +457,7 @@ impl Recording {
         // is an AAC encoder and a track for each track that kept a source; a
         // source that fails costs itself (and any stem it alone fed), not the
         // recording, and the reported layout says which it was.
-        let (audio, layout) = AudioTracks::start(hwnd, plan);
+        let (audio, layout, opened) = AudioTracks::start(hwnd, plan);
         if audio.is_none() && !plan.sources.is_empty() {
             warn!("recorder", "own backend: no audio source opened, recording video only");
         }
@@ -458,6 +488,9 @@ impl Recording {
             plan::describe(&layout),
             path.display()
         );
+        let started =
+            stats::render_start(path, (width, height), &warm.adapter, &status, &opened, &layout);
+        info!("recorder", "{started}");
         Ok(Recording {
             capture,
             output: Some(output),
@@ -471,6 +504,8 @@ impl Recording {
             audio,
             layout,
             ticks: 0,
+            summary: stats::Stop::default(),
+            started,
         })
     }
 
@@ -573,6 +608,7 @@ impl Recording {
             if placed != scale::Placed::Skipped {
                 self.latest = i;
                 self.next_slot = i + 1;
+                self.summary.cadence.frame();
             }
         }
         Ok(())
@@ -599,6 +635,7 @@ impl Recording {
             Ok(()) => {
                 self.latest = i;
                 self.next_slot = i + 1;
+                self.summary.cadence.frame();
             }
             // Not worth ending a recording over: the last frame repeats.
             Err(e) => warn!("recorder", "own backend: could not write black ({e})"),
@@ -625,6 +662,7 @@ impl Recording {
                 let d = clock::tick_time(self.ticks + 1, FPS) - t;
                 output.write(device, &self.slots, self.latest, t, d)?;
                 self.ticks += 1;
+                self.summary.cadence.tick(now - t);
             }
         }
         Ok(())
@@ -640,19 +678,25 @@ impl Recording {
     /// With the GPU device lost this still runs: the encoder's drain fails
     /// rather than waits (or gives up after five seconds), and the fragments
     /// already on disk are the recording (`stop` bounds the wait regardless).
-    fn finish(mut self) -> Result<(), String> {
+    ///
+    /// Returns the finalize's result and the counters for the stop line.
+    fn finish(mut self) -> (Result<(), String>, stats::Stop) {
         drop(self.capture);
         let end = clock::tick_time(self.ticks, FPS);
         if let Some(audio) = self.audio.take() {
             match self.output.as_mut() {
-                Some(output) => audio.finish(end, &mut |track: usize, pcm: &[i16], position: u64| {
-                    output.write_audio(track, pcm, position)
-                }),
+                Some(output) => {
+                    self.summary.audio = audio.finish(end, &mut |track, pcm, position| {
+                        output.write_audio(track, pcm, position)
+                    });
+                }
                 None => drop(audio),
             }
         }
+        let fragments = &mut self.summary.fragments;
         let result = match self.output.take() {
             Some(output) => output.finalize().map(|stats| {
+                *fragments = Some(stats.fragments);
                 info!(
                     "recorder",
                     "own backend: file closed: {} video frames ({} keyframes, {} dropped before \
@@ -667,7 +711,7 @@ impl Recording {
             None => Ok(()),
         };
         drop(self.slots);
-        result
+        (result, self.summary)
     }
 
 }

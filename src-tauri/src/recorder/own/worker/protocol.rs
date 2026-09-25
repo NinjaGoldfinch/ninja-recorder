@@ -29,9 +29,12 @@ use serde::{Deserialize, Serialize};
 use crate::recorder::audio::AudioLayout;
 use crate::recorder::own::status::Status;
 
-/// Bumped on any change to the messages below. The worker refuses a daemon
-/// that says another number, and the daemon refuses a worker that answers
-/// with one.
+/// Bumped on any change to the messages below that one side could not read
+/// from the other. The worker refuses a daemon that says another number, and
+/// the daemon refuses a worker that answers with one. An optional field that
+/// defaults when absent and is left out when empty (the `summary` lines) is
+/// not such a change: each side reads the other's messages with or without
+/// it, and `optional_fields_read_both_ways` pins that.
 pub const PROTOCOL_VERSION: u32 = 1;
 
 /// Daemon to worker.
@@ -72,7 +75,15 @@ pub enum Reply {
     Started { result: Result<Started, String> },
     /// `Ok(None)` for a clean stop, `Ok(Some(_))` for a recording that ended
     /// early but was finalized, `Err` when the finalize itself failed.
-    Stopped { result: Result<Option<String>, String> },
+    ///
+    /// `summary` is the stop line the worker logged to `worker.log`
+    /// (`own::stats`), for the daemon to log a copy of in `daemon.log`;
+    /// `None` when no recording was finalized.
+    Stopped {
+        result: Result<Option<String>, String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
+    },
     /// A line the worker could not act on: not JSON, the wrong version, or a
     /// message out of order. The daemon treats it as a broken worker.
     Refused { reason: String },
@@ -86,6 +97,10 @@ pub struct Started {
     /// The audio layout the file holds: the plan's, less every source that
     /// could not open. No tracks when none did.
     pub audio: AudioLayout,
+    /// The start line the worker logged to `worker.log` (`own::stats`), for
+    /// the daemon to log a copy of in `daemon.log`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 /// Writes one message and flushes it: the other side is waiting on the line.
@@ -180,11 +195,23 @@ mod tests {
             Reply::Prepared { result: Ok(Status::Idle) },
             Reply::Prepared { result: Ok(Status::Unavailable { reason: "x".into() }) },
             Reply::Prepared { result: Err("MFStartup failed".into()) },
-            Reply::Started { result: Ok(Started { status: software, audio: discord() }) },
+            Reply::Started {
+                result: Ok(Started { status: software.clone(), audio: discord(), summary: None }),
+            },
+            Reply::Started {
+                result: Ok(Started {
+                    status: software,
+                    audio: discord(),
+                    summary: Some("own: recording x.mp4: 2x2 from a, encoder e (hardware)".into()),
+                }),
+            },
             Reply::Started { result: Err("no game window".into()) },
-            Reply::Stopped { result: Ok(None) },
-            Reply::Stopped { result: Ok(Some("the game window closed".into())) },
-            Reply::Stopped { result: Err("finalize failed".into()) },
+            Reply::Stopped { result: Ok(None), summary: None },
+            Reply::Stopped {
+                result: Ok(Some("the game window closed".into())),
+                summary: Some("own: stopped x.mp4: 0.000 s, no ticks written".into()),
+            },
+            Reply::Stopped { result: Err("finalize failed".into()), summary: None },
             Reply::Refused { reason: "what".into() },
         ] {
             round_trip(reply);
@@ -208,8 +235,31 @@ mod tests {
         let hello = serde_json::to_string(&Request::Hello { protocol: 1 }).unwrap();
         assert_eq!(hello, r#"{"type":"hello","protocol":1}"#);
         assert_eq!(serde_json::to_string(&Request::Release).unwrap(), r#"{"type":"release"}"#);
-        let stopped = serde_json::to_string(&Reply::Stopped { result: Ok(None) }).unwrap();
+        let stopped =
+            serde_json::to_string(&Reply::Stopped { result: Ok(None), summary: None }).unwrap();
         assert_eq!(stopped, r#"{"type":"stopped","result":{"Ok":null}}"#);
+    }
+
+    /// The summary lines were added without a version bump, so a reply
+    /// without them still reads, and one with them reads on a side that
+    /// does not know them (serde skips a field it does not know).
+    #[test]
+    fn optional_fields_read_both_ways() {
+        let old = r#"{"type":"stopped","result":{"Ok":null}}"#;
+        let old: Reply = serde_json::from_str(old).unwrap();
+        assert_eq!(old, Reply::Stopped { result: Ok(None), summary: None });
+        #[derive(Deserialize)]
+        #[serde(tag = "type", rename_all = "snake_case")]
+        enum OldReply {
+            Stopped { result: Result<Option<String>, String> },
+        }
+        let new = serde_json::to_string(&Reply::Stopped {
+            result: Ok(None),
+            summary: Some("own: stopped x.mp4".into()),
+        })
+        .unwrap();
+        let OldReply::Stopped { result } = serde_json::from_str(&new).unwrap();
+        assert_eq!(result, Ok(None));
     }
 
     #[test]
