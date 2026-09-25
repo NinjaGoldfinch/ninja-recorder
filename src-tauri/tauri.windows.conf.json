@@ -1,7 +1,8 @@
 {
   "bundle": {
     "resources": {
-      "target/libobs": "libobs"
+      "target/libobs": "libobs",
+      "../THIRD_PARTY_NOTICES.txt": "THIRD_PARTY_NOTICES.txt"
     },
     "windows": {
       "nsis": {

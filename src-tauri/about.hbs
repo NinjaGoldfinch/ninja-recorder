@@ -1,0 +1,31 @@
+{{!-- cargo-about's template for the Rust half of THIRD_PARTY_NOTICES.txt.
+      Plain text rather than HTML: the file is read from the install folder,
+      in whatever opens a .txt, and diffs as text in review.
+
+      This crate is named without its version: Cargo.toml's is a placeholder
+      that CI stamps at build time, after this file has been checked. --}}
+RUST CRATES
+
+The ninja-recorder binary links the Rust crates below. They are grouped by
+licence text: each text is printed once, after the crates it covers.
+
+Licences in use:
+{{#each overview}}
+  {{{name}}} ({{count}})
+{{/each}}
+{{#each licenses}}
+
+------------------------------------------------------------------------------
+{{{name}}}
+
+Used by:
+{{#each used_by}}
+{{#if (eq crate.name "ninja-recorder")}}
+  ninja-recorder (this program)
+{{else}}
+  {{{crate.name}}} {{{crate.version}}}{{#if crate.repository}} <{{{crate.repository}}}>{{/if}}
+{{/if}}
+{{/each}}
+
+{{{text}}}
+{{/each}}

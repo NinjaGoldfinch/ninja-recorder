@@ -22,6 +22,13 @@ import Update from "./Update.svelte";
       <dt>Last recording</dt>
       <dd class="mono">{about.lastFinalized}</dd>
     </div>
+    <!-- Static text, and deliberately not a link: the file is in the install
+         folder, which the UI has no command to open, and the notices are
+         generated rather than written here (docs/licensing.md §5). -->
+    <div>
+      <dt>Third-party notices</dt>
+      <dd><span class="mono">THIRD_PARTY_NOTICES.txt</span>, in the install folder</dd>
+    </div>
     <Update />
   </dl>
 </section>
