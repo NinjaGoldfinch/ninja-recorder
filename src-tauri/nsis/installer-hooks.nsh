@@ -13,6 +13,14 @@
 ;
 ; So both hooks stop the worker before the template touches a file.
 ;
+; The own backend's capture worker (#241) needs nothing here. It is the main
+; executable run with `--capture-worker`, so its image name is
+; `${MAINBINARYNAME}.exe` and the template's by-name kill ends it with the app
+; and the daemon, before the executable they all run is replaced. It also lives
+; in a kill-on-close job object the daemon owns, so the daemon dying ends it.
+; The devtools build's worker is `ninja-recorder-dev.exe`, so the kill cannot
+; reach across builds.
+;
 ; ## Only this install's worker
 ;
 ; The release and devtools builds install side by side (DEVELOPMENT.md section 10),

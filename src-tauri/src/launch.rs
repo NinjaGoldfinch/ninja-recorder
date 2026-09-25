@@ -28,6 +28,12 @@
 /// What autostart registers. See `autostart_args`.
 pub const DAEMON_FLAG: &str = "--daemon";
 
+/// Run as the own backend's capture worker (#241). Only ever passed by the
+/// daemon, to its own executable, when League's client opens; never written
+/// anywhere a later build could be handed it back, so unlike `--daemon` it is
+/// not an on-disk contract. See `recorder::own::worker`.
+pub const CAPTURE_WORKER_FLAG: &str = "--capture-worker";
+
 /// The arguments written into `HKCU\...\Run` when the user ticks start-on-login.
 ///
 /// ## `--daemon`, since WS3.5
@@ -84,6 +90,13 @@ pub enum Launch {
     /// returned by the daemon, and then a function body: filling WS3 in meant
     /// implementing `run`, not rerouting a process.
     Daemon,
+    /// The own backend's capture worker: the session thread, served over
+    /// stdin and stdout to the daemon that spawned it.
+    ///
+    /// Dispatched by `main.rs` before anything else is built. It takes no
+    /// single-instance lock, builds no tray, opens no database and binds no
+    /// pipe, so it can run beside the daemon that owns all of those.
+    CaptureWorker,
 }
 
 impl Launch {
@@ -99,12 +112,17 @@ impl Launch {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        let mut mode = Launch::Ui;
         for arg in args {
-            if arg.as_ref() == DAEMON_FLAG {
-                return Launch::Daemon;
+            match arg.as_ref() {
+                // Wins over anything else: a worker must never become a
+                // second daemon or a window.
+                CAPTURE_WORKER_FLAG => return Launch::CaptureWorker,
+                DAEMON_FLAG => mode = Launch::Daemon,
+                _ => {}
             }
         }
-        Launch::Ui
+        mode
     }
 
     /// Reads the mode from the real process arguments.
@@ -221,6 +239,19 @@ mod tests {
     fn only_the_ui_mode_creates_a_window() {
         assert!(Launch::Ui.creates_window());
         assert!(!Launch::Daemon.creates_window());
+        assert!(!Launch::CaptureWorker.creates_window());
+    }
+
+    /// The worker is its own mode, and nothing beside it can turn it into a
+    /// daemon or a window: a worker that became a second daemon would find
+    /// the endpoint owned and leave, and one that became a window would
+    /// open one on the player's screen mid-game.
+    #[test]
+    fn the_capture_worker_is_its_own_mode_whatever_else_is_passed() {
+        assert_eq!(Launch::from_args(["--capture-worker"]), Launch::CaptureWorker);
+        assert_eq!(Launch::from_args(["--daemon", "--capture-worker"]), Launch::CaptureWorker);
+        assert_eq!(Launch::from_args(["--capture-worker", "--daemon"]), Launch::CaptureWorker);
+        assert_eq!(CAPTURE_WORKER_FLAG, "--capture-worker");
     }
 
     /// The registry holds the *string*, so renaming the constant is free and

@@ -193,6 +193,25 @@ if ($after -eq $before) {
     Fail "a second daemon added to the log: $($added.Trim())"
 }
 
+# --- no capture worker without League (#241) --------------------------------
+#
+# The own backend's capture worker is this same executable with
+# `--capture-worker`, spawned only when a League client opens. A runner has no
+# League, so none may exist. Found by command line, because by name it cannot
+# be told from the daemon.
+#
+# The second-daemon check above cannot be fooled by one either: a second
+# daemon finds the endpoint owned and exits before it builds a backend, so it
+# never spawns a worker for `-Wait` to wait on.
+$exeName = [System.IO.Path]::GetFileName($Exe)
+$workers = @(Get-CimInstance Win32_Process -Filter "Name = '$exeName'" -EA SilentlyContinue |
+    Where-Object { $_.CommandLine -match '--capture-worker' })
+if ($workers.Count -eq 0) {
+    Note "no capture worker is running, as there is no League client"
+} else {
+    Fail "a capture worker is running with no League client: pid $($workers.ProcessId -join ', ')"
+}
+
 Stop-Process -Id $daemon.Id -Force -EA SilentlyContinue
 
 Write-Host "--- $logName ---"

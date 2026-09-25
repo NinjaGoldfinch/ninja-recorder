@@ -18,6 +18,10 @@ mod dev;
 mod fixtures;
 // `pub` for the same reason as `daemon`: `main.rs` reads the mode.
 pub mod launch;
+/// The own backend's capture worker, for `main.rs`'s `--capture-worker`
+/// branch and the process-level test in `tests/capture_worker.rs`. A single
+/// named re-export rather than making `recorder` public.
+pub use recorder::own::worker as capture_worker;
 mod notify;
 mod lcu;
 mod live_client;
