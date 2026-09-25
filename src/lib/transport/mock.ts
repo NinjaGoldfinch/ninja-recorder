@@ -297,7 +297,9 @@ const MOCKS: Record<string, unknown> = {
   // state worth seeing in a browser session.
   get_capture_backend: {
     configured: "libobs",
+    automatic: false,
     active: "libobs (idle)",
+    software_encoding: false,
     options: [
       { backend: "libobs", unavailable: null },
       { backend: "own", unavailable: "the own capture backend records on Windows only" },

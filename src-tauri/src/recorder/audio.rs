@@ -96,7 +96,7 @@ impl AudioLayout {
         }
         if self.tracks.len() > MAX_TRACKS {
             return Err(format!(
-                "{} audio tracks requested, libobs supports at most {MAX_TRACKS}",
+                "{} audio tracks requested, and a recording can have at most {MAX_TRACKS}",
                 self.tracks.len()
             ));
         }
@@ -363,7 +363,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_more_tracks_than_libobs_has_mixes() {
+    fn validate_rejects_more_tracks_than_the_limit() {
         let layout = AudioLayout {
             sources: vec![AudioSourceKind::Game],
             tracks: (0..MAX_TRACKS + 1)

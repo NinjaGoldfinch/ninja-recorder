@@ -561,15 +561,20 @@ async fn start(paths: Paths) -> Result<Option<Started>, DaemonError> {
     // The setting is chosen in Settings and applied to the next recording by
     // swapping the box inside `recorder`, so nothing re-reads it per game.
     //
-    // An unreadable setting is the default, loudly, rather than no backend:
-    // the database opened a line ago, so this is a bad read rather than a
-    // missing library, and refusing to record over it would be the worse
-    // failure.
+    // An unreadable setting is treated as unset, loudly, rather than no
+    // backend: the database opened a line ago, so this is a bad read rather
+    // than a missing library, and refusing to record over it would be the
+    // worse failure.
     let setting = db.get_capture_backend().unwrap_or_else(|e| {
-        error!("recorder", "cannot read capture_backend, using the default: {e}");
-        CaptureBackend::default()
+        error!("recorder", "cannot read capture_backend, treating it as unset: {e}");
+        None
     });
-    let backend = capture::construct(setting, &DaemonBackends);
+    let (backend, decision) = capture::construct(setting, &DaemonBackends);
+    // The one place an unset key's fallback is logged: startup is the only
+    // time the daemon builds a backend for a key nobody saved.
+    if let Ok(capture::Selection { backend: chosen, fallback: Some(why), .. }) = &decision {
+        warn!("recorder", "capture_backend unset; {why}, using {}", chosen.as_pref());
+    }
     // Which backend you get depends on the setting, the OS and whether the
     // chosen backend can be built here, and the difference decides whether
     // recording works at all.
@@ -577,7 +582,7 @@ async fn start(paths: Paths) -> Result<Option<Started>, DaemonError> {
         "recorder",
         "backend: {} (capture_backend = {})",
         backend.backend_name(),
-        setting.as_pref()
+        setting.map_or("unset", CaptureBackend::as_pref)
     );
     let recorder: Arc<Mutex<Box<dyn Recorder>>> = Arc::new(Mutex::new(backend));
 

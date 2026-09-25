@@ -77,9 +77,9 @@ flowchart TB
 | `state_machine/supervisor.rs` | Spawning/aborting watchers, driving the recorder, finalizing | `Supervisor` |
 | `recorder/mod.rs` | The `Recorder` trait and its config/error types | `Recorder`, `RecordConfig` |
 | `recorder/backend.rs` | The `capture_backend` setting, and the pure choice of which backend to build from it | `CaptureBackend`, `choose`, `construct`, `Backends` |
-| `recorder/libobs/` | Windows capture backend (WGC + hardware encode) | `LibObsRecorder` |
+| `recorder/libobs/` | Windows capture backend (WGC + hardware encode). The fallback since #243, selectable for one release; WS8 deletes it | `LibObsRecorder` |
 | `recorder/window.rs` | Finding the League game window and its client size, for both Windows backends | `find_window`, `find_by_class`, `client_size` |
-| `recorder/own/` | Option B, the target backend (WGC → D3D11 → Media Foundation), being built through WS1.6. Constructible since #236 on Windows build 20348+: the game window's video and every source the audio preset names (the game by process loopback since #237; the microphone, the desktop and applications since #238), and since #239 every track of the preset's layout, the mix and each stem, in one file: the encoder MFTs driven directly, the file written by `mp4::write`. Selected only by a devtools build until #243 | `OwnRecorder` |
+| `recorder/own/` | Option B (WGC → D3D11 → Media Foundation), built through WS1.6 and **the default backend since #243**, on Windows build 19041+: the game window's video and every source the audio preset names (the game by process loopback; the microphone, the desktop and applications), every track of the preset's layout, the mix and each stem, in one file: the encoder MFTs driven directly, the file written by `mp4::write` | `OwnRecorder` |
 | `recorder/own/clock.rs` | The video tick grid on QPC, and placing audio packets on it: drift measured, corrected by slipping frames, or trusted from the device count when a source has no QPC stamps. Which of the two a source gets is decided from its first packet's stamp | `tick_time`, `ticks_due`, `Aligner`, `check_stamp`, `Stamper`, `DeviceTimeline` |
 | `recorder/own/feed.rs` | One audio source's packets through its own `Aligner` into the mixer: never past the video, held with silence to the mixer's watermark while the source is quiet, padded to the last tick at stop | `Feed`, `Packet` |
 | `recorder/own/fit.rs` | Where a frame from a resized game window goes in the fixed-size output: scaled with its aspect kept, centred, black around it, even dimensions and offsets; and whether a frame is copied, scaled or skipped | `letterbox`, `place`, `Placement` |
@@ -164,9 +164,9 @@ behind a three-method trait and nothing above it knows libobs exists.
 
 ```mermaid
 flowchart TB
-    SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release · collect_output<br/>backend_name · current_file · worker_running"}
-    T -->|"libobs, #[cfg(windows)]"| L["LibObsRecorder<br/><small>WGC window capture,<br/>NVENC/AMF/QSV H.264,<br/>one AAC track per audio source,<br/>fragmented MP4 + faststart remux</small>"]
-    T -->|"own, #[cfg(windows)], build 20348+"| O["OwnRecorder<br/><small>Option B: WGC → D3D11 →<br/>Media Foundation MFTs, driven directly,<br/>every track (mix + stems) in one file<br/>by our own writer, + faststart remux</small>"]
+    SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release · collect_output<br/>backend_name · software_encoding<br/>current_file · worker_running"}
+    T -->|"libobs, #[cfg(windows)]:<br/>the fallback, for one release"| L["LibObsRecorder<br/><small>WGC window capture,<br/>NVENC/AMF/QSV H.264,<br/>one AAC track per audio source,<br/>fragmented MP4 + faststart remux</small>"]
+    T -->|"own, #[cfg(windows)], build 19041+:<br/>the default"| O["OwnRecorder<br/><small>Option B: WGC → D3D11 →<br/>Media Foundation MFTs, driven directly,<br/>every track (mix + stems) in one file<br/>by our own writer, + faststart remux</small>"]
     O -.->|"stdin / stdout,<br/>one JSON line each"| WK["capture worker process<br/><small>--capture-worker, only while<br/>League runs; kill-on-close job</small>"]
     WK -.->|"channel"| SES["session thread<br/><small>owns every COM object:<br/>device, WGC, encoder MFTs</small>"]
     AUD["audio source threads<br/><small>game, applications: process loopback<br/>microphone, desktop: WASAPI endpoints</small>"] -.->|"stamped packets"| MIX["own::mix::TrackMix<br/><small>per track, per source aligner,<br/>10 ms blocks, watermark</small>"]
@@ -292,6 +292,15 @@ flowchart LR
     W --> E["H.264 MFT"]
 ```
 
+`software_encoding` defaults to `false`, and only `OwnRecorder` overrides it:
+true once a bring-up chose Microsoft's software H.264 encoder, and kept
+through `release` until one chooses hardware
+(`own::status::Status::software_encoding`). `get_capture_backend` carries it
+to Settings as `CaptureBackendStatus::software_encoding`, which shows a notice
+about the extra CPU
+([DEVELOPMENT.md §2.4](../DEVELOPMENT.md#24-encoding-defaults)). A flag rather
+than a parse of `backend_name`, so that string's wording stays free to change.
+
 `collect_output` is the third default no-op, and the supervisor calls it every
 fifth Live Client poll while a recording runs. The libobs worker's info and
 warnings come up its IPC pipe and are only read while a command waits for a
@@ -325,8 +334,9 @@ is that it does not record.
 
 ```mermaid
 flowchart LR
-    KV[("settings_kv<br/>capture_backend")] --> C{"backend::choose<br/><small>pure</small>"}
-    OPT["DaemonBackends::options<br/><small>libobs: worker staged?<br/>own: Windows build 20348+?<br/>(devtools: floor override)</small>"] --> C
+    KV[("settings_kv<br/>capture_backend")] -->|"libobs or own,<br/>as saved"| C{"backend::choose<br/><small>pure</small>"}
+    KV -->|"no row, or unrecognised:<br/>own if buildable, else libobs"| C
+    OPT["DaemonBackends::options<br/><small>libobs: worker staged?<br/>own: Windows build 19041+?<br/>(devtools: floor override)</small>"] --> C
     C -->|"buildable"| B["DaemonBackends::build"]
     C -->|"not buildable: the reason"| F["FailedRecorder(reason)"]
     B --> BOX["the recorder box<br/><small>one Arc · Mutex · Box dyn Recorder,<br/>shared by the supervisor and Ctx</small>"]
@@ -341,20 +351,23 @@ flowchart LR
   refused while a game is loading, recording or finalizing, by the same rule
   the updater uses, and the swap happens under the recorder lock that `start`
   takes, so a recording is never switched under.
-- **The default is `libobs` until #243**, WS1.6's last piece, which flips it
-  to `own`. Since #236 `DaemonBackends` offers `own` wherever
-  `select::availability` passes (Windows build 20348 or newer) and builds an
-  `OwnRecorder` for it; off Windows it is listed as unavailable, with the
-  reason. Whether the machine has an encoder is the backend's own answer, in
+- **The default is `own`, since #243**, WS1.6's last piece, wherever own
+  can be built. It moved only the users with no saved row: a stored `libobs`
+  stays libobs, with no migration. `DaemonBackends` offers `own` wherever
+  `select::availability` passes (Windows build 19041 or newer) and builds an
+  `OwnRecorder` for it; below that build, and off Windows, it is listed as
+  unavailable with the reason. There, an unset key resolves to libobs
+  (`backend::resolve`), logged once at startup, and Settings shows
+  "Automatic: libobs" with the reason. A *saved* `own` there is refused. Whether the machine has an encoder is the backend's own answer, in
   its name, once `prepare` has run. A **devtools** build started with
   `NINJA_OWN_IGNORE_OS_FLOOR=1` offers `own` below the floor too, with a
   warning in `daemon.log`, for #237's Windows 10 test; a release build never
   reads the variable.
-- **A chosen backend that cannot be built is refused, never replaced by the
+- **A saved backend that cannot be built is refused, never replaced by the
   other one.** The UI shows it disabled with the daemon's reason, so in
   practice this is only reached by a row written some other way.
-- **The Settings row is devtools-only until #243**, which un-hides it. The
-  setting and the commands are live in every build.
+- **The Settings row is in every build since #243**, which un-hid it along
+  with the flip. It was devtools-only before that.
 
 The reasoning is
 [DEVELOPMENT.md §16, "The switch, and when it applies"](../DEVELOPMENT.md#the-switch-and-when-it-applies).

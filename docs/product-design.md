@@ -397,6 +397,23 @@ the updater, and the review player last as an imperative island, because a
 `<video>` element wants to be driven rather than declared. Both files are
 deleted, the vanilla shell is gone, and `index.html` is one div.
 
+### The capture backend
+
+Option B shipped as the default (#243). The own backend, `recorder/own/`,
+captures the game window with Windows.Graphics.Capture, the game's audio by
+process loopback and the microphone, the desktop and applications from their
+own endpoints, encodes on the GPU's H.264 encoder through Media Foundation
+(the software encoder only as a visible fallback), and writes every track
+into one fragmented MP4 through its own writer. It runs in a capture worker
+that exists only while League does. It was built in eleven pieces through
+WS1.6 (the plan is the comment on #10), each behind a devtools-only switch,
+and made the default only after an exit run on a release installer
+([windows-verification.md §11.8](windows-verification.md#118-the-exit-run-243)).
+
+libobs stays selectable in Settings → Advanced for one release, as the
+fallback a user can pick without a reinstall, and anyone who had saved it
+keeps it. WS8 deletes it, which is what lets the licence change.
+
 ### The gates
 
 v1 had 447 Rust tests and **zero** frontend tests, against 12,797 lines of
@@ -409,10 +426,9 @@ claim about types and framing, and the daemon and the UI are processes.
 
 ### What has *not* changed
 
-- **The capture backend.** Still libobs with WGC, still GPL-2.0, still the
-  reason this repository is. Option B is WS1, in progress: both P0c spike arms
-  exist as crates, neither has been run, so the go/no-go gate is unanswered.
-- **The licence.** GPL-2.0-only until libobs goes (WS8).
+- **The licence.** GPL-2.0-only until libobs goes (WS8). The own backend is
+  the default, but libobs is still linked for its one release as the
+  fallback, and that is what keeps the licence.
 - **The recording pipeline.** The state machine, the marker tracker and the
   alignment logic are v1's, unchanged, and deliberately so: they were the part
   that worked.

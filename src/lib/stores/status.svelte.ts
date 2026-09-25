@@ -9,6 +9,7 @@ import {
   setLcuPill,
 } from "./about.svelte";
 import { refreshDiskUsage, refreshLibrary } from "./library.svelte";
+import { refreshCaptureBackend } from "./settings.svelte";
 import { refreshUpdateStatus } from "./update.svelte";
 
 // The two Tauri events the backend pushes (`library-changed`,
@@ -105,6 +106,11 @@ async function pollOnce(): Promise<GameState> {
   // refuse at the click. Only on the edge: `get_update_status` is a mutex
   // read, but so is this poll, and every tick would be waste.
   if (changed) void refreshUpdateStatus();
+
+  // The same edge is when the capture backend's answer moves: the own backend
+  // learns its encoder when the client opens, which is when Settings can
+  // first say it is encoding in software.
+  if (changed) void refreshCaptureBackend();
 
   // A finished game should appear on its own. Derived from the two edges
   // already in the payload rather than polling `list_recordings`, which

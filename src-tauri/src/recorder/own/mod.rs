@@ -1,7 +1,7 @@
 //! The own capture backend — WGC → D3D11 → Media Foundation.
 //!
-//! **Constructible since #236, and only selected by a devtools build.** WS1.6
-//! builds it in pieces (the plan is the comment on #10). It records the game
+//! **The default capture backend since #243.** WS1.6 built it in pieces (the
+//! plan is the comment on #10). It records the game
 //! window's video and every source the audio preset names (the game by
 //! process loopback since #237; the microphone, the desktop and applications
 //! such as Discord since #238), each on the video's clock, into one
@@ -10,9 +10,9 @@
 //! transforms driven directly, and the file is written by our own MP4 writer
 //! (`crate::mp4::write`), because Media Foundation's sink writer holds one
 //! audio stream (DEVELOPMENT.md §2.5).
-//! The default backend stays libobs until #243, and the Settings row that
-//! selects this one stays devtools-only until then (DEVELOPMENT.md §16, "The
-//! switch, and when it applies").
+//! A missing `capture_backend` setting means this backend; a stored `libobs`
+//! row keeps libobs, and Settings → Advanced switches between them in every
+//! build (DEVELOPMENT.md §16, "The switch, and when it applies").
 //!
 //! This is Option B, the *target* backend: it is what removes libobs, and
 //! removing libobs is what allows the licence to change at v2.1. It plugs in
