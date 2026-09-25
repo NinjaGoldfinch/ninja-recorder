@@ -10,6 +10,9 @@
 //! ClientRunning ──(phase: InProgress/Reconnect)──▶ WaitingForGame
 //! WaitingForGame ──(live client data reachable)──▶ Recording
 //! Recording ──(phase: EndOfGame | live client data gone)──▶ Finalizing
+//! Recording ──(capture lost mid-game)──▶ WaitingForGame, which records
+//!   again at the next poll (or, once the restarts are spent, waits the
+//!   game out without polling)
 //! Finalizing ──(finalize actions complete)──▶ ClientRunning (or Idle if
 //!   the client vanished too)
 //! ```
@@ -42,7 +45,21 @@ pub enum StateEvent {
     /// on its own — DEVELOPMENT.md's diagram shows it as a transient
     /// processing state, not one that waits on further external input.
     FinalizeComplete,
+    /// The capture backend lost the recording in flight while the game was
+    /// still running: the own backend's capture worker died (#299). Sent by
+    /// the supervisor as soon as the recorder reports it, not at the next
+    /// stop, so the recording is finished and the state leaves `Recording`
+    /// while the game is still going.
+    CaptureLost,
 }
+
+/// How many times one game's recording is restarted after its capture was
+/// lost (`StateEvent::CaptureLost`). Each restart is a fresh recording of
+/// the rest of the game, the way a daemon restarted mid-game resumes one.
+/// Bounded so that a capture that fails straight after every start (a
+/// worker that crashes on the first frame, say) costs a few short files and
+/// a few notifications, not one of each per second for the rest of the game.
+pub const MAX_CAPTURE_RESTARTS: u8 = 3;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
@@ -57,6 +74,9 @@ pub enum Action {
 pub struct StateMachine {
     pub state: GameState,
     lockfile: Option<LockfileInfo>,
+    /// Restarts left for the game in progress after a lost capture. Refilled
+    /// whenever a new game begins (`ClientRunning` → `WaitingForGame`).
+    capture_restarts_left: u8,
 }
 
 impl StateMachine {
@@ -64,6 +84,7 @@ impl StateMachine {
         Self {
             state: GameState::Idle,
             lockfile: None,
+            capture_restarts_left: MAX_CAPTURE_RESTARTS,
         }
     }
 
@@ -116,6 +137,7 @@ impl StateMachine {
                 if Self::is_game_running_phase(&phase) =>
             {
                 self.state = WaitingForGame;
+                self.capture_restarts_left = MAX_CAPTURE_RESTARTS;
                 vec![Action::StartLiveClientPoll]
             }
 
@@ -164,6 +186,27 @@ impl StateMachine {
                     Action::StopLiveClientPoll,
                     Action::StopGameflowWatch,
                 ]
+            }
+            // The capture died under a game that is still running (#299).
+            // The recording is finished now, with what reached the disk, and
+            // the state goes back to `WaitingForGame` rather than through
+            // `Finalizing`: the game has not ended, the gameflow watch and
+            // the Live Client poll are both still wanted, and the next
+            // successful poll (`LiveClientUp`) starts a fresh recording of the
+            // rest of it, exactly as a daemon restarted mid-game would.
+            //
+            // Once this game's restarts are spent the poll is stopped too, so
+            // nothing sends that `LiveClientUp`: the game is waited out in
+            // `WaitingForGame`, not recorded, and the gameflow phase leaving
+            // the game (or the client going) moves on from there as usual.
+            (Recording, StateEvent::CaptureLost) => {
+                self.state = WaitingForGame;
+                if self.capture_restarts_left > 0 {
+                    self.capture_restarts_left -= 1;
+                    vec![Action::StopRecording]
+                } else {
+                    vec![Action::StopRecording, Action::StopLiveClientPoll]
+                }
             }
             (Recording, StateEvent::LockfileChanged(LockfileState::Absent)) => {
                 self.lockfile = None;
@@ -395,6 +438,88 @@ mod tests {
         let actions = m.handle(StateEvent::FinalizeComplete);
         assert_eq!(m.state, GameState::Idle);
         assert!(actions.is_empty());
+    }
+
+    /// The capture worker died mid-game (#299): the recording is stopped at
+    /// once and the state leaves `Recording`, but the game is still on, so
+    /// the watchers stay up and the next poll records the rest of it.
+    #[test]
+    fn a_lost_capture_finishes_the_recording_and_waits_for_the_next_poll() {
+        let mut m = StateMachine::new();
+        enter_recording(&mut m);
+
+        let actions = m.handle(StateEvent::CaptureLost);
+        assert_eq!(m.state, GameState::WaitingForGame);
+        assert_eq!(actions, vec![Action::StopRecording]);
+
+        // The blanket follow-up `dispatch` sends is a no-op here.
+        assert!(m.handle(StateEvent::FinalizeComplete).is_empty());
+        assert_eq!(m.state, GameState::WaitingForGame);
+
+        let actions = m.handle(StateEvent::LiveClientUp);
+        assert_eq!(m.state, GameState::Recording);
+        assert_eq!(actions, vec![Action::StartRecording]);
+    }
+
+    /// A capture that keeps dying is restarted a bounded number of times per
+    /// game; after that the poll is stopped, so nothing starts another.
+    #[test]
+    fn a_capture_that_keeps_dying_is_given_up_on_for_the_rest_of_the_game() {
+        let mut m = StateMachine::new();
+        enter_recording(&mut m);
+        for _ in 0..MAX_CAPTURE_RESTARTS {
+            assert_eq!(m.handle(StateEvent::CaptureLost), vec![Action::StopRecording]);
+            assert_eq!(m.handle(StateEvent::LiveClientUp), vec![Action::StartRecording]);
+        }
+        let actions = m.handle(StateEvent::CaptureLost);
+        assert_eq!(m.state, GameState::WaitingForGame);
+        assert_eq!(actions, vec![Action::StopRecording, Action::StopLiveClientPoll]);
+
+        // The game going on reports nothing that moves the state...
+        assert!(m.handle(StateEvent::GameflowPhase(GameflowPhase::InProgress)).is_empty());
+        assert_eq!(m.state, GameState::WaitingForGame);
+        // ...and its end returns to the client as a dodge would.
+        let actions = m.handle(StateEvent::GameflowPhase(GameflowPhase::EndOfGame));
+        assert_eq!(m.state, GameState::ClientRunning);
+        assert_eq!(actions, vec![Action::StopLiveClientPoll]);
+    }
+
+    /// The next game starts with its restarts refilled.
+    #[test]
+    fn the_next_game_gets_its_restarts_back() {
+        let mut m = StateMachine::new();
+        enter_recording(&mut m);
+        for _ in 0..MAX_CAPTURE_RESTARTS {
+            m.handle(StateEvent::CaptureLost);
+            m.handle(StateEvent::LiveClientUp);
+        }
+        m.handle(StateEvent::CaptureLost);
+        m.handle(StateEvent::GameflowPhase(GameflowPhase::EndOfGame));
+        assert_eq!(m.state, GameState::ClientRunning);
+
+        m.handle(StateEvent::GameflowPhase(GameflowPhase::InProgress));
+        m.handle(StateEvent::LiveClientUp);
+        assert_eq!(m.state, GameState::Recording);
+        assert_eq!(m.handle(StateEvent::CaptureLost), vec![Action::StopRecording]);
+    }
+
+    /// A loss reported after the recording has already ended some other way
+    /// (the game ended in the same moment) changes nothing.
+    #[test]
+    fn a_lost_capture_outside_recording_is_a_no_op() {
+        let mut m = StateMachine::new();
+        assert!(m.handle(StateEvent::CaptureLost).is_empty());
+        assert_eq!(m.state, GameState::Idle);
+
+        enter_recording(&mut m);
+        m.handle(StateEvent::GameflowPhase(GameflowPhase::EndOfGame));
+        assert_eq!(m.state, GameState::Finalizing);
+        assert!(m.handle(StateEvent::CaptureLost).is_empty());
+        assert_eq!(m.state, GameState::Finalizing);
+
+        m.handle(StateEvent::FinalizeComplete);
+        assert!(m.handle(StateEvent::CaptureLost).is_empty());
+        assert_eq!(m.state, GameState::ClientRunning);
     }
 
     #[test]

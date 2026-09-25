@@ -47,17 +47,20 @@ mod process;
 mod scale;
 mod session;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::problem::{self, StopAnswer};
 use super::{plan, select, stats};
 use super::status::Status;
-use super::worker::client::Worker;
+use super::worker::client::{OnClose, Worker};
 use super::worker::lifetime::{Action, Call, Lifetime};
 use super::worker::protocol::{Reply, Request, Started};
 use crate::recorder::audio::AudioLayout;
-use crate::recorder::{CaptureProblem, RecordConfig, Recorder, RecorderError, RecordingOutput};
+use crate::recorder::{
+    CaptureProblem, CaptureWatch, RecordConfig, Recorder, RecorderError, RecordingOutput,
+};
 use crate::{info, warn};
 
 pub use device::windows_build;
@@ -93,7 +96,9 @@ const SHUTDOWN_WAIT: Duration = Duration::from_secs(30);
 ///
 /// The worker exists only while League does (`worker::lifetime`): `prepare`
 /// spawns it, `release` ends it once nothing is recording, and a worker that
-/// dies mid-recording leaves a file that `stop` hands over anyway.
+/// dies mid-recording leaves a file that `stop` hands over anyway. That death
+/// is announced as it happens (`watch_capture`, `capture_lost`), so the
+/// supervisor stops the recording then, not when the game ends (#299).
 ///
 /// Every audio preset since #238, and every track of it since #239: the mix
 /// and each stem, in one file. Reachable only from a devtools build that selects it
@@ -117,6 +122,14 @@ pub struct OwnRecorder {
     /// How the last worker to go went, with its exit code: for the problem a
     /// recording it was writing reports (`problem::stop_problem`).
     lost: Option<String>,
+    /// What the supervisor gave `watch_capture`, read by every worker's reply
+    /// thread when its pipe closes. Shared, not copied into the worker at
+    /// spawn, because `prepare` spawns the worker before the supervisor's
+    /// `start` installs the watch.
+    watch: Arc<Mutex<Option<CaptureWatch>>>,
+    /// `capture_lost` has reported the recording in flight's loss: it says so
+    /// once per recording.
+    loss_reported: bool,
 }
 
 /// What `stop` reports, fixed when the recording starts: the file, and the
@@ -152,6 +165,8 @@ impl OwnRecorder {
             active: None,
             ffmpeg_path,
             lost: None,
+            watch: Arc::new(Mutex::new(None)),
+            loss_reported: false,
         }
     }
 
@@ -181,7 +196,16 @@ impl OwnRecorder {
         let exe = self.exe.as_deref().ok_or_else(|| {
             RecorderError::Backend("cannot find this executable to start the capture worker".into())
         })?;
-        match Worker::spawn(exe, crate::log::dir().as_deref()) {
+        // Every worker's pipe closing is told to whatever watch is installed
+        // then, which is what makes a death mid-recording known at once.
+        let watch = Arc::clone(&self.watch);
+        let on_close: OnClose = Box::new(move || {
+            let installed = watch.lock().ok().and_then(|slot| slot.clone());
+            if let Some(watch) = installed {
+                watch();
+            }
+        });
+        match Worker::spawn(exe, crate::log::dir().as_deref(), Some(on_close)) {
             Ok(worker) => {
                 info!("recorder", "own backend: capture worker up, pid {}", worker.pid());
                 self.worker = Some(worker);
@@ -217,6 +241,21 @@ impl OwnRecorder {
         warn!("recorder", "own backend: {why}");
         self.shut_down();
         RecorderError::Backend(why)
+    }
+
+    /// How long the file at `path` plays, for a recording that stopped short
+    /// of its stop (#299): read back with ffmpeg, as startup recovery reads a
+    /// killed recording's, or failing that from what `repair` kept.
+    fn file_duration_s(
+        &self,
+        path: &Path,
+        repair: Option<&Result<crate::mp4::write::Repaired, String>>,
+    ) -> Option<f64> {
+        let probed = self.ffmpeg_path.as_ref().and_then(|ffmpeg| crate::probe::duration_s(ffmpeg, path));
+        probed.or_else(|| match repair {
+            Some(Ok(repaired)) if repaired.duration_ms > 0 => Some(repaired.duration_ms as f64 / 1000.0),
+            _ => None,
+        })
     }
 
     /// Ends the worker, finalizing anything it is still recording, and waits
@@ -319,6 +358,7 @@ impl Recorder for OwnRecorder {
         }
         // A worker lost before this recording is not this recording's loss.
         self.lost = None;
+        self.loss_reported = false;
         self.active = Some(Active { path, audio, problems });
         Ok(())
     }
@@ -372,17 +412,9 @@ impl Recorder for OwnRecorder {
         let has_bytes = path.metadata().is_ok_and(|m| m.len() > 0);
         // The worker closed the file itself, `mfra` and all.
         let finalized = matches!(answer, Some(Ok(_)));
-        // How the recording ended, for the user. A failed finalize or a dead
-        // worker with nothing on disk is the error below instead, which the
-        // supervisor reports as not saved, so only a kept file reaches this.
-        let stopped = match &answer {
-            Some(Ok(None)) => StopAnswer::Clean,
-            Some(Ok(Some(problem))) => StopAnswer::EndedEarly(problem),
-            Some(Err(e)) => StopAnswer::FinalizeFailed(e),
-            None => StopAnswer::WorkerGone(self.lost.as_deref()),
-        };
-        problems.extend(problem::stop_problem(stopped));
-        match answer {
+        // Stopped when asked, so the file runs to this stop.
+        let clean = matches!(answer, Some(Ok(None)));
+        match &answer {
             Some(Ok(None)) => {}
             Some(Ok(Some(problem))) => {
                 warn!("recorder", "own backend: the recording ended before stop: {problem}");
@@ -392,7 +424,7 @@ impl Recorder for OwnRecorder {
             Some(Err(e)) if has_bytes => {
                 warn!("recorder", "own backend: finalize failed, keeping what was written: {e}");
             }
-            Some(Err(e)) => return Err(RecorderError::Backend(e)),
+            Some(Err(e)) => return Err(RecorderError::Backend(e.clone())),
             None if has_bytes => {
                 warn!(
                     "recorder",
@@ -435,7 +467,21 @@ impl Recorder for OwnRecorder {
         }
         info!("recorder", "{}", stats::render_remux(&path, repair.as_ref(), remux.as_ref()));
 
-        Ok(RecordingOutput { path, audio, problems })
+        // Where the file ends, when that is not where this stop is (#299):
+        // the length the row should have, and the time the problem names.
+        let duration_s = (!clean).then(|| self.file_duration_s(&path, repair.as_ref())).flatten();
+        // How the recording ended, for the user. A failed finalize or a dead
+        // worker with nothing on disk was the error above instead, which the
+        // supervisor reports as not saved, so only a kept file reaches this.
+        let stopped = match &answer {
+            Some(Ok(None)) => StopAnswer::Clean,
+            Some(Ok(Some(problem))) => StopAnswer::EndedEarly(problem),
+            Some(Err(e)) => StopAnswer::FinalizeFailed(e),
+            None => StopAnswer::WorkerGone { why: self.lost.as_deref(), at_s: duration_s },
+        };
+        problems.extend(problem::stop_problem(stopped));
+
+        Ok(RecordingOutput { path, audio, problems, duration_s })
     }
 
     fn is_recording(&self) -> bool {
@@ -463,9 +509,38 @@ impl Recorder for OwnRecorder {
     }
 
     /// Whether a worker has been spawned and not yet seen to end. One that
-    /// died since the last call still counts until `decide` notices it.
+    /// died since the last call still counts until `decide` or
+    /// `capture_lost` notices it, which for one that dies mid-recording is
+    /// at once.
     fn worker_running(&self) -> Option<bool> {
         Some(self.worker.is_some())
+    }
+
+    /// Called by every worker's reply thread when its pipe closes, from now
+    /// on, including a worker `prepare` already spawned.
+    fn watch_capture(&mut self, watch: CaptureWatch) {
+        if let Ok(mut slot) = self.watch.lock() {
+            *slot = Some(watch);
+        }
+    }
+
+    /// The worker writing the recording in flight has gone (#299): reaped
+    /// here, with its exit code, so that the `stop` the supervisor sends next
+    /// recovers the file from the disk rather than asking a dead worker.
+    /// Said once per recording, and never for a worker ending while nothing
+    /// records (a release, the client closing).
+    fn capture_lost(&mut self) -> Option<String> {
+        if self.active.is_none() || self.loss_reported {
+            return None;
+        }
+        if let Some(worker) = self.worker.as_mut() {
+            let why = worker.gone()?;
+            warn!("recorder", "own backend: {why} while recording");
+            self.worker = None;
+            self.lost = Some(why);
+        }
+        self.loss_reported = true;
+        Some(self.lost.clone().unwrap_or_else(|| "the capture worker is not running".to_string()))
     }
 
     /// The pre-warm (DEVELOPMENT.md §2.2): spawns the capture worker, and in

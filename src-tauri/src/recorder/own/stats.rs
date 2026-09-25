@@ -458,6 +458,7 @@ mod tests {
             kept_bytes: 300_000_000,
             removed_bytes: 4_096,
             already_complete: false,
+            duration_ms: 178_000,
         };
         assert_eq!(
             render_remux(path(), Some(&Ok(repaired)), Some(&(Ok(()), took))),
