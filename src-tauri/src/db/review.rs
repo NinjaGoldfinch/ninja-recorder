@@ -281,7 +281,7 @@ fn get_takeaway(tx: &rusqlite::Connection, id: i64) -> Result<Takeaway, DbError>
 
 /// Puts a game in the block `choose_block` picks, or a new one, and widens
 /// that block to cover it.
-fn assign_block(tx: &Transaction, game_id: i64, started_at: i64) -> Result<i64, DbError> {
+pub(super) fn assign_block(tx: &Transaction, game_id: i64, started_at: i64) -> Result<i64, DbError> {
     let candidates = {
         let mut stmt = tx.prepare(
             "SELECT id, started_at, ended_at FROM blocks
@@ -320,6 +320,85 @@ fn refit_block(tx: &Transaction, block_id: i64) -> Result<(), DbError> {
         [block_id],
     )?;
     Ok(())
+}
+
+/// `merge_blocks`, inside a transaction the caller owns: the importer merges
+/// as part of its own.
+pub(super) fn merge_blocks_in(tx: &Transaction, into: i64, from: i64) -> Result<(), DbError> {
+    if into == from {
+        return Err(refuse("a block cannot be merged into itself"));
+    }
+    for id in [into, from] {
+        let exists: bool =
+            tx.query_row("SELECT EXISTS (SELECT 1 FROM blocks WHERE id = ?1)", [id], |r| r.get(0))?;
+        if !exists {
+            return Err(refuse(format!("no block {id}")));
+        }
+    }
+    tx.execute("UPDATE games SET block_id = ?1 WHERE block_id = ?2", [into, from])?;
+    tx.execute("UPDATE takeaways SET block_id = ?1 WHERE block_id = ?2", [into, from])?;
+    // The absorbed block's bounds count even if it had no games.
+    tx.execute(
+        "UPDATE blocks SET
+            started_at = MIN(started_at, (SELECT started_at FROM blocks WHERE id = ?2)),
+            ended_at = MAX(ended_at, (SELECT ended_at FROM blocks WHERE id = ?2))
+         WHERE id = ?1",
+        [into, from],
+    )?;
+    tx.execute("DELETE FROM blocks WHERE id = ?1", [from])?;
+    refit_block(tx, into)?;
+    Ok(())
+}
+
+/// `ensure_game_for_recording`, inside a transaction the caller owns: the
+/// importer matches recordings from before WS9 as part of its own.
+pub(super) fn ensure_game_in(tx: &Transaction, recording_id: i64) -> Result<i64, DbError> {
+    if let Some(id) = tx
+        .query_row("SELECT id FROM games WHERE recording_id = ?1", [recording_id], |r| r.get(0))
+        .optional()?
+    {
+        return Ok(id);
+    }
+    let recording = tx
+        .query_row(
+            "SELECT started_at, duration_s, champion, win, scoreboard_json, game_id
+             FROM recordings WHERE id = ?1",
+            [recording_id],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, Option<f64>>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<bool>>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, Option<i64>>(5)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| refuse(format!("no recording {recording_id}")))?;
+    let (started_at, duration_s, champion, win, scoreboard_json, riot_game_id) = recording;
+    let ended_at = duration_s.map(|d| started_at + (d * 1000.0) as i64);
+    let result = win.map(|w| if w { GameResult::Win } else { GameResult::Loss });
+    tx.execute(
+        "INSERT INTO games
+            (recording_id, riot_game_id, started_at, ended_at, champion, matchup, result)
+         VALUES (?1,
+                 CASE WHEN EXISTS (SELECT 1 FROM games WHERE riot_game_id = ?2) THEN NULL ELSE ?2 END,
+                 ?3, ?4, ?5, ?6, ?7)",
+        params![
+            recording_id,
+            riot_game_id,
+            started_at,
+            ended_at,
+            champion,
+            lane_opponent_json(scoreboard_json.as_deref()),
+            result,
+        ],
+    )?;
+    let game_id = tx.last_insert_rowid();
+    assign_block(tx, game_id, started_at)?;
+    Ok(game_id)
 }
 
 fn snapshot_active_objectives(tx: &Transaction, game_id: i64) -> Result<(), DbError> {
@@ -400,51 +479,7 @@ impl Db {
     pub fn ensure_game_for_recording(&self, recording_id: i64) -> Result<i64, DbError> {
         let mut conn = self.pool.write();
         let tx = conn.transaction()?;
-        if let Some(id) = tx
-            .query_row("SELECT id FROM games WHERE recording_id = ?1", [recording_id], |r| r.get(0))
-            .optional()?
-        {
-            return Ok(id);
-        }
-        let recording = tx
-            .query_row(
-                "SELECT started_at, duration_s, champion, win, scoreboard_json, game_id
-                 FROM recordings WHERE id = ?1",
-                [recording_id],
-                |r| {
-                    Ok((
-                        r.get::<_, i64>(0)?,
-                        r.get::<_, Option<f64>>(1)?,
-                        r.get::<_, Option<String>>(2)?,
-                        r.get::<_, Option<bool>>(3)?,
-                        r.get::<_, Option<String>>(4)?,
-                        r.get::<_, Option<i64>>(5)?,
-                    ))
-                },
-            )
-            .optional()?
-            .ok_or_else(|| refuse(format!("no recording {recording_id}")))?;
-        let (started_at, duration_s, champion, win, scoreboard_json, riot_game_id) = recording;
-        let ended_at = duration_s.map(|d| started_at + (d * 1000.0) as i64);
-        let result = win.map(|w| if w { GameResult::Win } else { GameResult::Loss });
-        tx.execute(
-            "INSERT INTO games
-                (recording_id, riot_game_id, started_at, ended_at, champion, matchup, result)
-             VALUES (?1,
-                     CASE WHEN EXISTS (SELECT 1 FROM games WHERE riot_game_id = ?2) THEN NULL ELSE ?2 END,
-                     ?3, ?4, ?5, ?6, ?7)",
-            params![
-                recording_id,
-                riot_game_id,
-                started_at,
-                ended_at,
-                champion,
-                lane_opponent_json(scoreboard_json.as_deref()),
-                result,
-            ],
-        )?;
-        let game_id = tx.last_insert_rowid();
-        assign_block(&tx, game_id, started_at)?;
+        let game_id = ensure_game_in(&tx, recording_id)?;
         tx.commit()?;
         Ok(game_id)
     }
@@ -707,30 +742,9 @@ impl Db {
 
     /// Moves everything in `from` into `into` and deletes `from`.
     pub fn merge_blocks(&self, into: i64, from: i64) -> Result<(), DbError> {
-        if into == from {
-            return Err(refuse("a block cannot be merged into itself"));
-        }
         let mut conn = self.pool.write();
         let tx = conn.transaction()?;
-        for id in [into, from] {
-            let exists: bool =
-                tx.query_row("SELECT EXISTS (SELECT 1 FROM blocks WHERE id = ?1)", [id], |r| r.get(0))?;
-            if !exists {
-                return Err(refuse(format!("no block {id}")));
-            }
-        }
-        tx.execute("UPDATE games SET block_id = ?1 WHERE block_id = ?2", [into, from])?;
-        tx.execute("UPDATE takeaways SET block_id = ?1 WHERE block_id = ?2", [into, from])?;
-        // The absorbed block's bounds count even if it had no games.
-        tx.execute(
-            "UPDATE blocks SET
-                started_at = MIN(started_at, (SELECT started_at FROM blocks WHERE id = ?2)),
-                ended_at = MAX(ended_at, (SELECT ended_at FROM blocks WHERE id = ?2))
-             WHERE id = ?1",
-            [into, from],
-        )?;
-        tx.execute("DELETE FROM blocks WHERE id = ?1", [from])?;
-        refit_block(&tx, into)?;
+        merge_blocks_in(&tx, into, from)?;
         tx.commit()?;
         Ok(())
     }

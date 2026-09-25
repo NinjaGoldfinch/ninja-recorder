@@ -8,6 +8,7 @@
 pub mod pool;
 pub mod reconcile;
 pub mod review;
+pub mod review_import;
 
 use crate::warn;
 use rusqlite::{params, Connection, OptionalExtension};
