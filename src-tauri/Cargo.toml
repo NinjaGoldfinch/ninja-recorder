@@ -238,6 +238,10 @@ windows = { version = "0.62", features = [
     # `timeBeginPeriod`, so the cadence loop sleeps to the millisecond.
     "Win32_Media",
     "Win32_Media_MediaFoundation",
+    # `ICodecAPI::SetValue`, which the own backend's H.264 encoder is
+    # configured through since it drives the MFT directly (#239): windows-rs
+    # gates the method on this, because its argument is a `VARIANT`.
+    "Win32_System_Ole",
     # `LoadLibraryExW`, to ask whether Media Foundation is installed before
     # the first call into its delay-loaded DLLs (`build.rs`).
     "Win32_System_LibraryLoader",

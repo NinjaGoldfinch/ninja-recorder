@@ -5,9 +5,10 @@
 //! §13, "The own backend's summary lines").
 //!
 //! Everything here is plain data and rendering. `own/win/` fills the structs
-//! with what the session already knows (the adapter, the encoder the sink
-//! writer loaded, the sources that opened, each source's aligner, the ticks
-//! it wrote) and logs the result; the wording is a unit test on any host.
+//! with what the session already knows (the adapter, the encoder it
+//! activated, the sources that opened, each source's aligner, the ticks it
+//! wrote, the fragments the file got) and logs the result; the wording is a
+//! unit test on any host.
 //!
 //! The detailed lines the session logs as it goes stay: they are what the
 //! verification rows ask to have pasted. These sum them up.
@@ -17,6 +18,7 @@ use std::time::Duration;
 
 use super::clock::{self, Aligner, AudioClock};
 use super::status::Status;
+use crate::mp4::write::Repaired;
 use crate::recorder::audio::AudioLayout;
 
 /// The file a line names: its file name, or the whole path if it has none.
@@ -155,11 +157,14 @@ pub struct Stop {
     pub cadence: Cadence,
     /// `None` for a video-only recording, or one that never got its origin.
     pub audio: Option<AudioStop>,
+    /// The fragments the file was closed with (`own::mux`, one per GOP), or
+    /// `None` if the finalize did not get that far.
+    pub fragments: Option<u64>,
 }
 
 /// The stop line: `own: stopped <file>: <s> s, <n> ticks, <p>% repeated,
-/// worst tick <x> f late; per source: …; mix clipped <n>; <MB> MB; finalize
-/// <ok|failed>`.
+/// worst tick <x> f late; per source: …; mix clipped <n>; <MB> MB; <f>
+/// fragments; finalize <ok|failed>`.
 ///
 /// `bytes` is the file's size after the finalize, if it could be read.
 pub fn render_stop(
@@ -209,22 +214,42 @@ pub fn render_stop(
         }
     };
     let size = bytes.map_or_else(String::new, |b| format!("; {:.1} MB", b as f64 / 1e6));
+    let fragments = stop.fragments.map_or_else(String::new, |f| format!("; {f} fragments"));
     let finalize = match finalized {
         Ok(()) => "ok",
         Err(_) => "failed",
     };
-    format!("own: stopped {}: {video}; {audio}{size}; finalize {finalize}", file_name(path))
+    format!(
+        "own: stopped {}: {video}; {audio}{size}{fragments}; finalize {finalize}",
+        file_name(path)
+    )
 }
 
-/// The line after the stop, from the daemon's side: the faststart remux.
-/// `None` is a remux that was not attempted, because there is no ffmpeg.
-pub fn render_remux(path: &Path, remux: Option<&(Result<(), String>, Duration)>) -> String {
+/// The line after the stop, from the daemon's side: the repair, if the
+/// worker did not close the file itself, and the faststart remux.
+///
+/// `repair` is `None` for a file the worker finalized, which needs none.
+/// `remux` is `None` for a remux that was not attempted, because there is no
+/// ffmpeg.
+pub fn render_remux(
+    path: &Path,
+    repair: Option<&Result<Repaired, String>>,
+    remux: Option<&(Result<(), String>, Duration)>,
+) -> String {
+    let repair = match repair {
+        None => String::new(),
+        Some(Ok(r)) => format!(
+            "repaired first ({} whole fragments kept, {} torn bytes cut), then ",
+            r.fragments, r.removed_bytes
+        ),
+        Some(Err(e)) => format!("not repaired ({e}), then "),
+    };
     let result = match remux {
         None => "skipped".to_string(),
         Some((Ok(()), took)) => format!("ok in {} ms", took.as_millis()),
         Some((Err(_), took)) => format!("failed in {} ms, kept unseekable", took.as_millis()),
     };
-    format!("own: remux {}: {result}", file_name(path))
+    format!("own: remux {}: {repair}{result}", file_name(path))
 }
 
 #[cfg(test)]
@@ -373,6 +398,7 @@ mod tests {
                 ],
                 clipped: 12,
             }),
+            fragments: Some(50),
         };
         let line = render_stop(path(), 60, &stop, &Ok(()), Some(104_857_600));
         assert_eq!(
@@ -380,7 +406,7 @@ mod tests {
             "own: stopped 2026-09-26_12-00-00.mp4: 100.000 s, 6000 ticks, 1.00% repeated, worst \
              tick 0.50 f late; per source: game clock=qpc raw=-12.35 ppm slips=7 gaps=1 holds=3, \
              microphone clock=device slips=0 gaps=2 holds=0 ended early; mix clipped 12; 104.9 \
-             MB; finalize ok"
+             MB; 50 fragments; finalize ok"
         );
     }
 
@@ -401,6 +427,7 @@ mod tests {
         let stop = Stop {
             cadence: Cadence { ticks: 1, ..Cadence::default() },
             audio: Some(AudioStop { sources: vec![source], clipped: 0 }),
+            fragments: None,
         };
         let line = render_stop(path(), 60, &stop, &Ok(()), Some(0));
         assert!(line.contains("game clock=qpc raw=unmeasured slips=7"), "{line}");
@@ -411,14 +438,37 @@ mod tests {
     fn remux_ok_failed_and_skipped() {
         let took = Duration::from_millis(812);
         assert_eq!(
-            render_remux(path(), Some(&(Ok(()), took))),
+            render_remux(path(), None, Some(&(Ok(()), took))),
             "own: remux 2026-09-26_12-00-00.mp4: ok in 812 ms"
         );
         assert_eq!(
-            render_remux(path(), Some(&(Err("ffmpeg exited 1".into()), took))),
+            render_remux(path(), None, Some(&(Err("ffmpeg exited 1".into()), took))),
             "own: remux 2026-09-26_12-00-00.mp4: failed in 812 ms, kept unseekable"
         );
-        assert_eq!(render_remux(path(), None), "own: remux 2026-09-26_12-00-00.mp4: skipped");
+        assert_eq!(render_remux(path(), None, None), "own: remux 2026-09-26_12-00-00.mp4: skipped");
+    }
+
+    /// A worker that died left a file with no `mfra`: the line says what the
+    /// repair kept and cut before the remux, or why it was refused.
+    #[test]
+    fn remux_after_a_repair_says_what_it_did() {
+        let took = Duration::from_millis(40);
+        let repaired = Repaired {
+            fragments: 150,
+            kept_bytes: 300_000_000,
+            removed_bytes: 4_096,
+            already_complete: false,
+        };
+        assert_eq!(
+            render_remux(path(), Some(&Ok(repaired)), Some(&(Ok(()), took))),
+            "own: remux 2026-09-26_12-00-00.mp4: repaired first (150 whole fragments kept, 4096 \
+             torn bytes cut), then ok in 40 ms"
+        );
+        assert_eq!(
+            render_remux(path(), Some(&Err("not a file this writer made".into())), None),
+            "own: remux 2026-09-26_12-00-00.mp4: not repaired (not a file this writer made), \
+             then skipped"
+        );
     }
 
     #[test]

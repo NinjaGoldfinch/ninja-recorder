@@ -10,24 +10,25 @@
 //! reindexed, so the layout `stop` reports describes the file that exists
 //! rather than the one that was asked for (DEVELOPMENT.md §2.5).
 //!
-//! **This piece (#238) writes track 0 only**, the combined mix, through Media
-//! Foundation's sink writer, which holds one audio stream. The stems after it
-//! arrive in #239, which writes every track through our own MP4 writer and
-//! raises [`TRACKS_WRITTEN`] to the whole layout.
+//! **Every track is written since #239**: track 0, the combined mix, and each
+//! stem after it, one AAC encoder apiece, into one file through our own MP4
+//! writer (`own::mux`). #238 wrote track 0 only, because Media Foundation's
+//! sink writer holds one audio stream; [`TRACKS_WRITTEN`] was 1 then.
+//! [`describe`] is how the log names what a file holds.
 
 use crate::recorder::audio::{AudioLayout, AudioSourceKind, AudioTrackSpec};
 
-/// How many of a layout's tracks the own backend writes: track 0, the mix.
-/// #239 writes the stems, and this becomes every track.
-pub const TRACKS_WRITTEN: usize = 1;
+/// How many of a layout's tracks the own backend writes: all of them.
+/// [`plan`] takes at most this many, so any layout is planned whole.
+pub const TRACKS_WRITTEN: usize = usize::MAX;
 
 /// The sources a recording opens, and what each written track sums.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CapturePlan {
     /// Every source to open, each once, in the order the layout first names
-    /// them. Only sources that feed a written track are here: the Desktop
-    /// preset's game source feeds only its stem, so until #239 it is not
-    /// opened at all.
+    /// them. Only sources that feed a written track are here, which since
+    /// #239 is every source the layout names: the Desktop preset's game
+    /// source feeds only its stem, and is opened for it.
     pub sources: Vec<AudioSourceKind>,
     /// The written tracks, in file order. Each track's `sources` index
     /// [`CapturePlan::sources`], without repeats.
@@ -112,6 +113,42 @@ pub fn realised_layout(layout: &AudioLayout, opened: &[bool]) -> AudioLayout {
     AudioLayout { sources, tracks }
 }
 
+/// What a source is called in the log, and its capture thread's name:
+/// `game`, `microphone`, `desktop`, or the application's executable.
+pub fn source_name(kind: &AudioSourceKind) -> String {
+    match kind {
+        AudioSourceKind::Game => "game".to_string(),
+        AudioSourceKind::Microphone { .. } => "microphone".to_string(),
+        AudioSourceKind::Desktop => "desktop".to_string(),
+        AudioSourceKind::Application { exe } => exe.clone(),
+    }
+}
+
+/// Every track of `layout` as the log names it, in file order: `a:0
+/// "Everything" (game + microphone + Discord.exe); a:1 "Game" (game)`. Track
+/// `a:N` is the file's audio stream N, which is how ffprobe and the review
+/// player count them; `a:0` is the default. `no audio tracks` for a
+/// video-only layout.
+pub fn describe(layout: &AudioLayout) -> String {
+    if layout.tracks.is_empty() {
+        return "no audio tracks".to_string();
+    }
+    let tracks: Vec<String> = layout
+        .tracks
+        .iter()
+        .enumerate()
+        .map(|(i, track)| {
+            let names: Vec<String> = track
+                .sources
+                .iter()
+                .map(|&s| layout.sources.get(s).map_or_else(|| format!("source {s}"), source_name))
+                .collect();
+            format!("a:{i} \"{}\" ({})", track.label, names.join(" + "))
+        })
+        .collect();
+    tracks.join("; ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,8 +187,17 @@ mod tests {
         }
     }
 
-    /// What this piece opens and mixes: track 0 of each preset, and only the
-    /// sources it sums.
+    /// What the backend writes since #239: every track of every preset, so
+    /// the plan is the layout itself.
+    #[test]
+    fn every_track_is_written() {
+        for preset in every_preset() {
+            let layout = preset.layout();
+            assert_eq!(plan(&layout, TRACKS_WRITTEN).layout(), layout, "{preset:?}");
+        }
+    }
+
+    /// Track 0 alone, as #238 wrote it: only the sources the mix sums.
     #[test]
     fn the_mix_plan_of_every_preset_is_track_0() {
         let cases = [
@@ -166,7 +212,7 @@ mod tests {
             (AudioPreset::Unknown, vec![AudioSourceKind::Game], "Game"),
         ];
         for (preset, sources, label) in cases {
-            let mix = plan(&preset.layout(), TRACKS_WRITTEN);
+            let mix = plan(&preset.layout(), 1);
             assert_eq!(mix.sources, sources, "{preset:?}");
             let every: Vec<usize> = (0..sources.len()).collect();
             assert_eq!(mix.tracks, vec![track(label, &every)], "{preset:?}");
@@ -178,7 +224,7 @@ mod tests {
     /// (the same promise `audio.rs`'s Desktop test makes of the layout).
     #[test]
     fn the_desktop_mix_never_has_the_game_twice() {
-        let mix = plan(&AudioPreset::Desktop.layout(), TRACKS_WRITTEN);
+        let mix = plan(&AudioPreset::Desktop.layout(), 1);
         assert_eq!(mix.sources, vec![AudioSourceKind::Desktop]);
         assert_eq!(mix.tracks[0].sources, vec![0]);
         assert!(!mix.sources.contains(&AudioSourceKind::Game));
@@ -243,7 +289,7 @@ mod tests {
         realised.validate().unwrap();
 
         // Discord not running, with the mix only: two sources, one track.
-        let mix = plan(&layout, TRACKS_WRITTEN).layout();
+        let mix = plan(&layout, 1).layout();
         let realised = realised_layout(&mix, &[true, true, false]);
         assert_eq!(realised.sources, vec![AudioSourceKind::Game, mic()]);
         assert_eq!(realised.tracks, vec![track("Everything", &[0, 1])]);
@@ -264,12 +310,48 @@ mod tests {
     }
 
     /// Desktop with the desktop failed: its track goes, and the game's stem is
-    /// what is left. Only reachable once #239 writes stems.
+    /// what is left.
     #[test]
     fn a_failed_mix_source_leaves_the_stems_in_order() {
         let layout = AudioPreset::Desktop.layout();
         let realised = realised_layout(&layout, &[false, true]);
         assert_eq!(realised.sources, vec![AudioSourceKind::Game]);
         assert_eq!(realised.tracks, vec![track("Game", &[0])]);
+    }
+
+    /// What `start` logs for the file, for every preset: each track in file
+    /// order with its label and the sources it sums, `a:0` first.
+    #[test]
+    fn every_track_is_named_with_its_label_and_sources() {
+        let cases = [
+            (AudioPreset::Game, r#"a:0 "Game" (game)"#),
+            (
+                AudioPreset::GameMic { mic_device_id: None },
+                r#"a:0 "Everything" (game + microphone); a:1 "Game" (game); a:2 "Mic" (microphone)"#,
+            ),
+            (
+                AudioPreset::GameMicDiscord { mic_device_id: None },
+                r#"a:0 "Everything" (game + microphone + Discord.exe); a:1 "Game" (game); a:2 "Mic" (microphone); a:3 "Discord" (Discord.exe)"#,
+            ),
+            (AudioPreset::Desktop, r#"a:0 "System audio" (desktop); a:1 "Game" (game)"#),
+        ];
+        for (preset, want) in cases {
+            assert_eq!(describe(&preset.layout()), want, "{preset:?}");
+        }
+        let empty = AudioLayout { sources: vec![], tracks: vec![] };
+        assert_eq!(describe(&empty), "no audio tracks");
+    }
+
+    /// What `stop` reports after a failed microphone is described the same
+    /// way: the stems that exist, renumbered.
+    #[test]
+    fn a_realised_layout_is_described_as_the_file_holds_it() {
+        let layout = AudioPreset::GameMicDiscord { mic_device_id: None }.layout();
+        let realised = realised_layout(&layout, &[true, false, true]);
+        assert_eq!(
+            describe(&realised),
+            r#"a:0 "Everything" (game + Discord.exe); a:1 "Game" (game); a:2 "Discord" (Discord.exe)"#
+        );
+        assert_eq!(source_name(&AudioSourceKind::Microphone { device_id: Some("x".into()) }), "microphone");
     }
 }

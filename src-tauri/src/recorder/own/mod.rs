@@ -4,10 +4,12 @@
 //! builds it in pieces (the plan is the comment on #10). It records the game
 //! window's video and every source the audio preset names (the game by
 //! process loopback since #237; the microphone, the desktop and applications
-//! such as Discord since #238), each on the video's clock, into a fragmented
-//! MP4 through Media Foundation's sink writer. That holds one audio stream, so
-//! the file has **track 0 only**, the mix of them all; the stems after it
-//! arrive with #239, which writes through our own MP4 writer.
+//! such as Discord since #238), each on the video's clock, into one
+//! fragmented MP4 with **every track** of the preset's layout (#239): track 0,
+//! the mix, and each stem after it. The encoders are Media Foundation
+//! transforms driven directly, and the file is written by our own MP4 writer
+//! (`crate::mp4::write`), because Media Foundation's sink writer holds one
+//! audio stream (DEVELOPMENT.md §2.5).
 //! The default backend stays libobs until #243, and the Settings row that
 //! selects this one stays devtools-only until then (DEVELOPMENT.md §16, "The
 //! switch, and when it applies").
@@ -27,9 +29,15 @@
 //!   never past the video.
 //! - `fit` — where a frame from a resized window goes in the fixed-size
 //!   output: scaled, aspect kept, centred, black around it.
-//! - `mix` — track 0: every source summed in 10 ms blocks on the aligned
-//!   timeline, released by a watermark so no source can stall it, clamped,
-//!   then i16 for the encoder.
+//! - `mft` — the bookkeeping of an asynchronous (hardware) encoder MFT:
+//!   `NeedInput` credits, owed outputs, the bounded frame queue, the drain.
+//! - `mix` — one written track: its sources summed in 10 ms blocks on the
+//!   aligned timeline, released by a watermark so no source can stall it,
+//!   clamped, then i16 for the encoder.
+//! - `mux` — encoded samples into the file: created at the first keyframe,
+//!   100 ns times to each track's timescale, a fragment per GOP.
+//! - `nv12` — BGRA to NV12 on the CPU, BT.709 studio range, for a device with
+//!   no video processor.
 //! - `pcm` — endpoint sample formats to stereo f32 for the mixer (or i16).
 //! - `plan` — which sources a preset's layout opens and what each written
 //!   track sums, and the layout that is left once some fail to open.
@@ -39,9 +47,10 @@
 //!   only as a marked fallback), the Windows build floor, and the checked
 //!   layout of an audio preset.
 //! - `stats` — the session summary: one line in the log at start, one at
-//!   stop (and one for the remux), rendered from plain counters.
-//! - `status` — the even frame size, whether the encoder Media Foundation
-//!   loaded is the one `select` chose, and the backend's name.
+//!   stop (and one for the repair and the remux), rendered from plain
+//!   counters.
+//! - `status` — the even frame size, whether the encoder that was activated
+//!   is the one `select` chose, and the backend's name.
 //! - `worker` — the capture worker (`--capture-worker`, #241): the process
 //!   the session runs in, its protocol, its loop, when it exists, and the
 //!   daemon's client for it.
@@ -75,7 +84,13 @@ pub mod feed;
 #[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
 pub mod fit;
 #[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
+pub mod mft;
+#[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
 pub mod mix;
+#[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
+pub mod mux;
+#[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
+pub mod nv12;
 #[cfg_attr(not(test), allow(dead_code))]
 pub mod pcm;
 #[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]

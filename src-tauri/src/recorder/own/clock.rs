@@ -316,7 +316,7 @@ impl Aligner {
     /// How much silence to append so the audio ends where the video does,
     /// at `end_rel_hns`. Returns `(pad, overhang)`: the frames to append, and
     /// how far the audio already runs past the end (which is left alone,
-    /// because a sink writer cannot take samples back).
+    /// because an encoder cannot take samples back).
     pub fn finish(&mut self, end_rel_hns: i64) -> (u64, u64) {
         let target = samples_at(end_rel_hns, self.rate).max(0) as u64;
         if self.written < target {

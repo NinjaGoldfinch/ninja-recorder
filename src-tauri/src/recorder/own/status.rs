@@ -21,8 +21,9 @@ pub fn even_size(width: i32, height: i32) -> Option<(u32, u32)> {
     (w > 0 && h > 0).then_some((w, h))
 }
 
-/// What the sink writer actually loaded for the video stream, read back from
-/// the encoder transform's own attributes after `BeginWriting`.
+/// What was actually activated as the video encoder, read back from the
+/// transform's own attributes (and its activation object's, for what the
+/// transform does not say) once it is created.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Loaded {
     /// `MFT_FRIENDLY_NAME_Attribute`.
@@ -104,12 +105,13 @@ impl Status {
     }
 }
 
-/// Checks what Media Foundation loaded against what [`select::rank`] chose.
+/// Checks what was activated against what [`select::rank`] chose.
 ///
-/// The sink writer picks its own encoder from the media types and the device
-/// it was given, so a ranked choice is a request, not a guarantee. What it
-/// loaded is what the file is made with, and that is what the status has to
-/// name:
+/// Since #239 the backend activates the ranked encoder itself, found again by
+/// its description, rather than leaving the choice to the sink writer, so a
+/// substitution is far less likely than it was. The check stays, because what
+/// was activated is what the file is made with, and that is what the status
+/// has to name:
 ///
 /// - hardware ranked, a hardware encoder of that adapter's vendor loaded:
 ///   ready;
@@ -119,10 +121,10 @@ impl Status {
 /// - hardware ranked, another vendor's hardware encoder loaded: ready, with
 ///   a warning for the log, because it is hardware and still records;
 /// - software ranked: the fallback with `rank`'s own reason (or ready, should
-///   the sink writer have found hardware after all).
+///   the activated transform turn out to be hardware after all).
 ///
 /// Returns the status and, separately, a warning the caller logs. `Err` for
-/// [`Choice::Unavailable`], which never reaches a sink writer.
+/// [`Choice::Unavailable`], which never reaches an encoder.
 pub fn check_loaded(
     choice: &Choice,
     adapters: &[Adapter],
@@ -221,7 +223,8 @@ mod tests {
         assert_eq!(warning, None);
     }
 
-    /// The case §2.4 is about: the sink writer quietly swapped in software.
+    /// The case §2.4 is about: software quietly in place of the hardware
+    /// that was ranked.
     #[test]
     fn software_loaded_in_place_of_hardware_is_surfaced_as_a_fallback() {
         let (adapters, encoders) = nvidia();

@@ -1,12 +1,25 @@
 //! The own backend against real Windows.
 //!
 //! What a hosted runner can run is the encoding half: a WARP device, a
-//! synthetic frame and the software H.264 MFT, through the same sink writer
-//! a recording uses. The runner image may not have Media Foundation (Windows
-//! Server installs it as an optional feature), so that test **skips, and
-//! says why**, rather than failing. Its report goes straight to stderr,
-//! which the test harness does not capture, so a CI log shows which way it
-//! went on every run.
+//! synthetic frame and **the software H.264 MFT, synchronous**, plus one AAC
+//! MFT per audio track, through the same `output::Output` a recording uses,
+//! into our own MP4 writer (#239). The runner image may not have Media
+//! Foundation (Windows Server installs it as an optional feature), so those
+//! tests **skip, and say why**, rather than failing. Their report goes
+//! straight to stderr, which the test harness does not capture, so a CI log
+//! shows which way each went on every run.
+//!
+//! **Frames reach the software encoder as NV12 in system memory, converted
+//! on the CPU.** The runner has no video processor (neither WARP nor its
+//! Basic Render Driver offers the D3D11 video DDI), so the GPU conversion a
+//! recording would do cannot run there; `convert.rs` falls back to reading
+//! the BGRA slot back and converting it with `own::nv12`, which is the path a
+//! GPU-less machine really takes. The GPU conversion is covered by the video
+//! processor test below, where a device has one, and by a recording.
+//!
+//! **The asynchronous (hardware) path cannot run on a runner**, which has no
+//! GPU encoder: `hardware_encoder_writes_every_track` is `#[ignore]`d and runs
+//! on a box with `cargo test hardware_encoder_writes_every_track -- --ignored`.
 //!
 //! Frames into slots (#240) are checked by reading the pixels back. The
 //! copy, the crop-over-black fallback and `fill_black` run on WARP. The video
@@ -19,10 +32,12 @@
 //! `cargo test own_backend_records_a_window -- --ignored`.
 //!
 //! Process loopback and the endpoints need an audio engine and devices, which
-//! a runner does not have, so the audio track is tested from the feeds onwards
-//! with synthetic PCM: one source for the Game preset (#237), and two through
-//! the mixer (#238), one of which joins late and stops early. The captures
-//! themselves run only by hand:
+//! a runner does not have, so the audio tracks are tested from the mixer
+//! onwards with synthetic PCM, one tone per source, through the same
+//! `mix::TrackMix` a recording uses: the Game preset (one track), Game + mic
+//! (the mix and two stems: a four-track file) and Game + mic + Discord (the
+//! mix and three stems), with one source joining late and stopping early.
+//! The captures themselves run only by hand:
 //! `cargo test process_loopback_activates -- --ignored` activates process
 //! loopback on this test's own process tree and reports what the stamps were
 //! (on a Windows 10 box, the quickest check of whether the API exists there
@@ -33,6 +48,7 @@
 use std::fs::File;
 use std::io::Write as _;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_TEXTURE2D_DESC,
@@ -42,9 +58,11 @@ use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SA
 use windows::Win32::Media::MediaFoundation::{MFSTARTUP_FULL, MFShutdown, MFStartup};
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 
-use super::{audio, capture, device, encode, scale, session};
+use super::{audio, capture, device, encode, output, scale, session};
 use crate::mp4;
+use crate::recorder::audio::{AudioLayout, AudioPreset};
 use crate::recorder::own::fit::Size;
+use crate::recorder::own::select::{self, Choice};
 use crate::recorder::own::{clock, feed, mix};
 
 /// Straight to the process's stderr, past the harness's capture.
@@ -61,12 +79,14 @@ fn scratch_dir(name: &str) -> std::path::PathBuf {
 
 enum Outcome {
     Skipped(String),
-    Written { encoder: String, mix: String },
+    Written { encoder: String, how: String, tracks: String },
 }
 
 const W: u32 = 320;
 const H: u32 = 240;
-const TICKS: u64 = 120;
+/// Five seconds: keyframes at 0, 2 and 4 s with a GOP of 120, so three
+/// fragments, each opening on its keyframe.
+const TICKS: u64 = 300;
 
 /// Fills `slot` with vertical colour bars, so the encoder has something that
 /// is not flat to compress.
@@ -122,77 +142,116 @@ fn tone_packets(origin: i64, hz: f64, amplitude: f64, from: i64, to: i64) -> Vec
         .collect()
 }
 
-/// The sink-writer path, fed `TICKS` ticks of one synthetic frame and, for
-/// `sources` above 0, synthetic sources through a [`mix::Mixdown`] into the
-/// AAC stream, interleaved tick by tick as the session does it, each packet
-/// handed over once the video has passed its end. Source 0 is a 440 Hz tone
-/// throughout; source 1 is 660 Hz from 0.5 s to 1.5 s only, so the mix has a
-/// source joining late and one going quiet. Media Foundation must already be
-/// started.
-fn write_synthetic(out: &Path, sources: usize) -> Result<Outcome, String> {
+/// The encoder to test and a device to run it on: the software MFT on WARP,
+/// or, for `hardware`, what `select::rank` picks on this machine's GPUs.
+fn encoder_and_device(
+    hardware: bool,
+) -> Result<Result<(select::Encoder, device::Device), String>, String> {
     let encoders = match encode::h264_encoders() {
         Ok(encoders) => encoders,
-        Err(e) => return Ok(Outcome::Skipped(format!("no encoder list: {e}"))),
+        Err(e) => return Ok(Err(format!("no encoder list: {e}"))),
     };
-    if !encoders.iter().any(|e| !e.hardware) {
-        let names: Vec<&str> = encoders.iter().map(|e| e.name.as_str()).collect();
-        return Ok(Outcome::Skipped(format!(
-            "no software H.264 MFT on this image (offered: {names:?})"
-        )));
+    let names: Vec<&str> = encoders.iter().map(|e| e.name.as_str()).collect();
+    if !hardware {
+        let Some(software) = encoders.iter().find(|e| !e.hardware) else {
+            return Ok(Err(format!("no software H.264 MFT on this image (offered: {names:?})")));
+        };
+        return Ok(Ok((software.clone(), device::create_warp_device()?)));
     }
-    let device = device::create_warp_device()?;
+    let adapters = device::adapters()?;
+    let infos: Vec<select::Adapter> = adapters.iter().map(|a| a.info.clone()).collect();
+    match select::rank(&infos, &encoders) {
+        Choice::Hardware { encoder, adapter } => {
+            let device = device::create_device(&adapters[adapter].adapter)?;
+            Ok(Ok((encoders[encoder].clone(), device)))
+        }
+        other => Ok(Err(format!("no hardware encoder is ranked here ({other:?}; offered {names:?})"))),
+    }
+}
+
+/// The path a recording takes from the slots to the file, `output::Output`,
+/// fed `TICKS` ticks of one synthetic frame and, for each track of `layout`,
+/// synthetic sources through a [`mix::TrackMix`] into that track's AAC
+/// encoder, interleaved tick by tick as the session does it, each packet
+/// handed over once the video has passed its end. Source 0 is a 440 Hz tone
+/// throughout; source 1 is 660 Hz from 0.5 s to 1.5 s only, so the mix has a
+/// source joining late and one going quiet; source 2 is 880 Hz throughout.
+/// `hardware` paces the ticks in real time, as an asynchronous encoder is
+/// fed. Media Foundation must already be started.
+fn write_synthetic(out: &Path, layout: &AudioLayout, hardware: bool) -> Result<Outcome, String> {
+    let (encoder, device) = match encoder_and_device(hardware)? {
+        Ok(found) => found,
+        Err(why) => return Ok(Outcome::Skipped(why)),
+    };
     let slots = capture::create_slots(&device.device, W, H, 2)?;
     paint(&device, &slots[0]);
 
-    let audio_rate = (sources > 0).then_some(audio::SAMPLE_RATE);
-    let sink = encode::Sink::create(out, W, H, session::FPS, &device.device, false, audio_rate)?;
-    sink.begin()?;
-    let loaded = sink.loaded()?;
+    let size = Size::new(W, H);
+    let tracks = layout.tracks.len();
+    let mut output =
+        output::Output::create(out, &device, size, session::FPS, &encoder, slots.len(), tracks)?;
+    let loaded = output.loaded().clone();
+    let how = output.describe();
     let origin = 1_000 * clock::HNS_PER_SECOND;
     let packets_total = (TICKS / u64::from(session::FPS)) as i64 * 100;
-    let mut queues: Vec<std::collections::VecDeque<feed::Packet>> = (0..sources)
+    let mut queues: Vec<std::collections::VecDeque<feed::Packet>> = (0..layout.sources.len())
         .map(|i| match i {
             0 => tone_packets(origin, 440.0, 0.25, 0, packets_total),
-            _ => tone_packets(origin, 660.0, 0.25, 50, 150),
+            1 => tone_packets(origin, 660.0, 0.25, 50, 150),
+            _ => tone_packets(origin, 880.0, 0.25, 0, packets_total),
         })
         .map(Into::into)
         .collect();
-    let mut mixdown = mix::Mixdown::new(audio::SAMPLE_RATE, origin, sources);
-    let mut write = |pcm: &[i16], position: u64| sink.write_audio(pcm, position);
+    let mut mix = mix::TrackMix::new(audio::SAMPLE_RATE, origin, layout);
+    let started = Instant::now();
     for k in 0..TICKS {
         let t = clock::tick_time(k, session::FPS);
         let d = clock::tick_time(k + 1, session::FPS) - t;
-        sink.write(&slots[0], t, d).map_err(|e| format!("{e} (at tick {k})"))?;
-        if sources > 0 {
-            let video_end = t + d;
-            for (i, queue) in queues.iter_mut().enumerate() {
-                while let Some(packet) = queue.pop_front() {
-                    let end = clock::samples_at(packet.hns - origin, audio::SAMPLE_RATE)
-                        + i64::from(packet.frames);
-                    if end > clock::samples_at(video_end, audio::SAMPLE_RATE) {
-                        queue.push_front(packet);
-                        break;
-                    }
-                    mixdown.push(i, packet);
-                }
+        if hardware {
+            let due = Duration::from_nanos(t as u64 * 100);
+            while started.elapsed() < due {
+                output.poll().map_err(|e| format!("{e} (polling before tick {k})"))?;
+                std::thread::sleep(Duration::from_millis(1));
             }
-            mixdown.write(video_end, video_end, &mut write)?;
         }
-    }
-    let mut mix_line = String::new();
-    if sources > 0 {
-        mixdown.finish(clock::tick_time(TICKS, session::FPS), &mut write)?;
-        let written = mixdown.mixer().emitted();
-        if written != u64::from(audio::SAMPLE_RATE) * TICKS / u64::from(session::FPS) {
-            return Err(format!("the mix wrote {written} audio frames"));
+        output.write(&device, &slots, 0, t, d).map_err(|e| format!("{e} (at tick {k})"))?;
+        let video_end = t + d;
+        for (i, queue) in queues.iter_mut().enumerate() {
+            while let Some(packet) = queue.pop_front() {
+                let end = clock::samples_at(packet.hns - origin, audio::SAMPLE_RATE)
+                    + i64::from(packet.frames);
+                if end > clock::samples_at(video_end, audio::SAMPLE_RATE) {
+                    queue.push_front(packet);
+                    break;
+                }
+                mix.push(i, packet);
+            }
         }
-        let stats = &mixdown.mixer().stats;
-        mix_line = format!(
-            "; mix of {sources}: {written} frames in {} blocks, {} clipped",
-            stats.blocks, stats.clipped
-        );
+        mix.write(video_end, video_end, &mut |track: usize, pcm: &[i16], position: u64| {
+            output.write_audio(track, pcm, position)
+        })?;
     }
-    sink.finalize()?;
+    let end = clock::tick_time(TICKS, session::FPS);
+    let finished = mix.finish(end, &mut |track: usize, pcm: &[i16], position: u64| {
+        output.write_audio(track, pcm, position)
+    });
+    let mut lines = Vec::new();
+    let expected = u64::from(audio::SAMPLE_RATE) * TICKS / u64::from(session::FPS);
+    for (t, result) in finished.into_iter().enumerate() {
+        result.map_err(|e| format!("audio track {t}: {e}"))?;
+        let mixer = mix.track(t).mixer();
+        if mixer.emitted() != expected {
+            return Err(format!("audio track {t} wrote {} frames, not {expected}", mixer.emitted()));
+        }
+        lines.push(format!(
+            "a:{t} {} ({} blocks, {} clipped)",
+            layout.tracks[t].label, mixer.stats.blocks, mixer.stats.clipped
+        ));
+    }
+    let stats = output.finalize()?;
+    if stats.video_frames != TICKS {
+        return Err(format!("{} video frames reached the file, not {TICKS}", stats.video_frames));
+    }
     drop(slots);
     Ok(Outcome::Written {
         encoder: format!(
@@ -200,36 +259,57 @@ fn write_synthetic(out: &Path, sources: usize) -> Result<Outcome, String> {
             loaded.name.as_deref().unwrap_or("(no name)"),
             loaded.hardware()
         ),
-        mix: mix_line,
+        how,
+        tracks: format!(
+            "{} keyframes, {} fragments, AAC frames {:?}; {}",
+            stats.keyframes,
+            stats.fragments,
+            stats.audio_frames,
+            if lines.is_empty() { "no audio".to_string() } else { lines.join(", ") }
+        ),
     })
 }
 
-/// A WARP device, a synthetic BGRA texture and the software MFT write 120
-/// ticks through the sink writer, and the file is a fragmented MP4 with
-/// complete fragments and nothing but the video track.
+/// No audio at all (every source failed to open): a video-only file, one
+/// track, fragmented, with an `mfra`.
 #[test]
-fn the_sink_writer_writes_a_fragmented_mp4_from_a_warp_device() {
-    sink_writer_test("warp", 0);
+fn the_software_encoder_writes_a_video_only_file() {
+    let layout = AudioLayout { sources: vec![], tracks: vec![] };
+    encode_test("video-only", &layout, false);
 }
 
-/// The same, with the Game preset's one AAC track fed synthetic PCM through
-/// the feed and the mix the session uses (#237). Process loopback itself
-/// cannot run on a runner, with no game and no audio engine; this is
-/// everything after it.
+/// The Game preset: one AAC track, fed one source through the mixer.
 #[test]
-fn the_sink_writer_writes_the_game_audio_track() {
-    sink_writer_test("warp-aac", 1);
+fn the_software_encoder_writes_the_game_track() {
+    encode_test("game", &AudioPreset::Game.layout(), false);
 }
 
-/// Two synthetic sources through their feeds and the mixer into the one AAC
-/// track, as Game + mic records (#238): the mix is track 0, and the file
-/// still has exactly one audio track.
+/// Game + mic: the mix and two stems, a four-track file (video and three
+/// audio), which Media Foundation's sink writer could not hold (#239).
 #[test]
-fn the_sink_writer_writes_a_mix_of_two_sources() {
-    sink_writer_test("warp-mix", 2);
+fn the_software_encoder_writes_a_four_track_file() {
+    encode_test("game-mic", &AudioPreset::GameMic { mic_device_id: None }.layout(), false);
 }
 
-fn sink_writer_test(name: &str, sources: usize) {
+/// Game + mic + Discord: the mix and three stems, five tracks.
+#[test]
+fn the_software_encoder_writes_every_stem_of_game_mic_discord() {
+    let layout = AudioPreset::GameMicDiscord { mic_device_id: None }.layout();
+    encode_test("game-mic-discord", &layout, false);
+}
+
+/// The asynchronous path: the hardware encoder `select::rank` picks on this
+/// machine, driven by its events, with NV12 textures from the video
+/// processor, and the Game + mic + Discord layout. A runner has no GPU
+/// encoder, so this runs on the box, by hand.
+#[test]
+#[ignore = "needs a hardware H.264 encoder; run by hand on a Windows box with a GPU"]
+fn hardware_encoder_writes_every_track() {
+    let layout = AudioPreset::GameMicDiscord { mic_device_id: None }.layout();
+    encode_test("hardware", &layout, true);
+}
+
+fn encode_test(name: &str, layout: &AudioLayout, hardware: bool) {
     let dir = scratch_dir(name);
     let out = dir.join(format!("{name}.mp4"));
 
@@ -243,7 +323,7 @@ fn sink_writer_test(name: &str, sources: usize) {
         Ok(()) => match unsafe { MFStartup(session::mf_version(), MFSTARTUP_FULL) } {
             Err(e) => Ok(Outcome::Skipped(format!("MFStartup failed: {e}"))),
             Ok(()) => {
-                let outcome = write_synthetic(&out, sources);
+                let outcome = write_synthetic(&out, layout, hardware);
                 // SAFETY: pairs MFStartup; every MF object above is dropped.
                 let _ = unsafe { MFShutdown() };
                 outcome
@@ -255,28 +335,57 @@ fn sink_writer_test(name: &str, sources: usize) {
 
     match outcome {
         Ok(Outcome::Skipped(why)) => {
-            report(&format!("SKIPPED the WARP sink-writer test ({name}): {why}"));
+            if hardware {
+                panic!("the hardware test could not run: {why}");
+            }
+            report(&format!("SKIPPED the encoding test ({name}): {why}"));
         }
-        Ok(Outcome::Written { encoder, mix }) => {
-            let mut file = File::open(&out).expect("the sink writer left no file");
+        Ok(Outcome::Written { encoder, how, tracks }) => {
+            let mut file = File::open(&out).expect("no file was written");
             let summary = mp4::summarize(&mut file).expect("summarize");
             report(&format!(
-                "RAN the WARP sink-writer test ({name}): {TICKS} ticks via {encoder}{mix}; {} \
-                 bytes, layout {}",
+                "RAN the encoding test ({name}): {TICKS} ticks via {encoder}, {how}; {tracks}; \
+                 {} bytes, layout {}",
                 summary.file_len, summary.layout
             ));
+            let audio = layout.tracks.len() as u32;
             assert!(summary.structurally_playable(), "{summary:?}");
             assert!(summary.mvex, "not fragmented: {summary:?}");
-            assert!(summary.complete_fragments > 0, "{summary:?}");
+            assert!(summary.mfra, "no mfra: {summary:?}");
             assert_eq!(summary.truncated, None, "{summary:?}");
-            // However many sources, one audio track: the mix (#238).
-            let audio = u32::from(sources > 0);
+            assert_eq!(summary.trailing_garbage, 0, "{summary:?}");
             assert_eq!(summary.tracks, 1 + audio, "video and {audio} audio: {summary:?}");
             assert_eq!(summary.audio_tracks, audio, "{summary:?}");
+            // One fragment per GOP: at least the three keyframes of five
+            // seconds at GOP 120, if the encoder honoured the GOP.
+            assert!(summary.complete_fragments >= 1, "{summary:?}");
+            // A finished file is left alone by the repair recovery runs.
+            assert!(mp4::write::repair(&out).expect("repair").already_complete);
+            decode(&out, 1 + audio);
         }
-        Err(e) => panic!("the sink-writer path failed: {e}"),
+        Err(e) => panic!("the encoding path failed: {e}"),
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A full decode of every stream with ffmpeg, if one is on `PATH`, which the
+/// hosted runner's image may or may not have. Reports which way it went.
+fn decode(file: &Path, streams: u32) {
+    let ffmpeg = Path::new("ffmpeg");
+    let probe = crate::ffmpeg_command(ffmpeg).arg("-version").output();
+    if !probe.is_ok_and(|o| o.status.success()) {
+        report("no ffmpeg on PATH, so no decode");
+        return;
+    }
+    let out = crate::ffmpeg_command(ffmpeg)
+        .args(["-v", "error", "-i"])
+        .arg(file)
+        .args(["-map", "0", "-f", "null", "-"])
+        .output()
+        .expect("ffmpeg ran");
+    let errors = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success() && errors.trim().is_empty(), "decode failed: {errors}");
+    report(&format!("decoded all {streams} stream(s) of {} with ffmpeg, cleanly", file.display()));
 }
 
 // --- The video processor, on the runner (#240) -----------------------------

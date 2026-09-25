@@ -74,7 +74,7 @@ trait Recorder {
 Backends:
 - `LibObsRecorder`: Windows, the real one.
 - `StubRecorder`: every non-Windows build. It sleeps, then copies a fixture MP4 into place. Keeps the entire app layer developable and testable without Windows. Nothing ships it; since the macOS bundle was dropped it exists purely for the dev loop and `cargo test` (§9).
-- `OwnRecorder` (Option B, `recorder/own/`): being built through WS1.6, and **constructible since #236** on Windows build 20348 or newer. It records the game window's video and every source the audio preset names, the game by process loopback since #237 and the microphone, the desktop and applications since #238, through Media Foundation's sink writer: every preset, as one mixed track until the stems arrive with #239. Only a devtools build can select it until the default flips (#243). Its pure core (the tick grid, the audio aligner and feed, the mixer, the capture plan, the process-tree root, encoder ranking, the loaded-encoder check) is compiled and tested on every platform. Which of it and libobs the daemon builds is the `capture_backend` setting, and what happens when the chosen one cannot be built is §16's "The switch, and when it applies".
+- `OwnRecorder` (Option B, `recorder/own/`): being built through WS1.6, and **constructible since #236** on Windows build 20348 or newer. It records the game window's video and every source the audio preset names, the game by process loopback since #237 and the microphone, the desktop and applications since #238, and since #239 every track of the preset in one file, the mix and each stem, with the encoder MFTs driven directly and the file written by our own muxer (§2.5). Only a devtools build can select it until the default flips (#243). Its pure core (the tick grid, the audio aligner and feed, the mixer of every track, the capture plan, the process-tree root, encoder ranking, the loaded-encoder check, the asynchronous encoder's bookkeeping, the mux, the CPU colour conversion) is compiled and tested on every platform. Which of it and libobs the daemon builds is the `capture_backend` setting, and what happens when the chosen one cannot be built is §16's "The switch, and when it applies".
 
 **Decision: the own backend holds no COM object; a session thread does.**
 Every D3D11, Media Foundation and WinRT object lives on one thread
@@ -89,8 +89,9 @@ worker's pipe loop (§12, "The capture worker"). `prepare` is the same
 pre-warm libobs has: COM, `MFStartup`, the adapters and encoders,
 `select::rank`, the D3D11 device. `start` finds the game window by class, waits
 about three seconds at most for a real size and WGC's first frame, and brings
-the sink writer up; `stop` drains, finalizes and runs the shared faststart
-remux; `release` ends the worker, or, during a recording, does so after `stop`.
+the encoders up (§16, "The sink writer retired"); `stop` drains them, writes
+the file's `mfra`, and runs the shared faststart remux; `release` ends the
+worker, or, during a recording, does so after `stop`.
 
 **Video time zero is the last act of `start`.** The tick grid's origin is a
 QPC read `OwnRecorder::start` takes after the session thread has said
@@ -114,8 +115,8 @@ Cropping is the spike's behaviour and the bug. Restarting the encoder at the
 new size would give one file two frame sizes, which fragmented MP4 can hold in
 principle, but which the review player's `<video>` and the faststart remux
 have never been asked to handle, and the restart would drop frames mid-game.
-The video processor is a separate `Processor` type because #239 needs it
-anyway, for BGRA → NV12. The common case, a window that never changes size,
+The video processor is a separate `Processor` type because #239 uses it
+too, for BGRA → NV12 (`own/win/convert.rs`). The common case, a window that never changes size,
 stays a plain GPU copy: a window of the recording's own size (give or take the
 odd pixel it was rounded down by) is never scaled.
 
@@ -136,13 +137,14 @@ capture worker's answer, and a worker wedged in a driver past that is killed
 and remuxed like any other, and the supervisor is never held.
 
 **Decision: Media Foundation is delay-loaded.** `build.rs` passes
-`/DELAYLOAD` for `mfplat.dll` and `mfreadwrite.dll`. An ordinary import would
-stop Windows starting the executable at all where they are missing, which is a
-Windows N edition without the Media Feature Pack, taking the daemon, the
-library and the libobs backend with it. Delay-loaded, the executable starts
-everywhere, and `own::win::device::media_foundation` loads both from System32
-before the first MF call, turning their absence into the own backend's
-`unavailable` reason instead of the delay-load helper's exception.
+`/DELAYLOAD` for `mfplat.dll`. An ordinary import would stop Windows starting
+the executable at all where it is missing, which is a Windows N edition
+without the Media Feature Pack, taking the daemon, the library and the libobs
+backend with it. Delay-loaded, the executable starts everywhere, and
+`own::win::device::media_foundation` loads it from System32 before the first
+MF call, turning its absence into the own backend's `unavailable` reason
+instead of the delay-load helper's exception. `mfreadwrite.dll` was the second
+DLL until #239: it is the sink writer's, and nothing calls it any more.
 
 **Decision: the backend is warm only while the League client is.** Bringing
 `LibObs` up spawns the out-of-process worker *and* sends it `Init`, which runs
@@ -226,9 +228,11 @@ Implemented in `src-tauri/src/recorder/`: `Recorder`, `RecordConfig`, `RecorderE
     `RecordingDiagnostics::backend` records) reads `own (software encoding:
     <encoder>, because <reason>)`. The UI notice is still owed, and arrives
     before the fallback can reach a release user (#243). The check is made
-    twice: once on the ranking, and again on what the sink writer actually
-    loaded, because a sink writer asked for hardware can still load the
-    software MFT (`own::status::check_loaded`). The reason for the change is that refusing
+    twice: once on the ranking, and again on what was actually activated
+    (`own::status::check_loaded`). Until #239 that second check caught the
+    sink writer loading the software MFT when asked for hardware; now the
+    backend activates the ranked encoder itself, and the check is what keeps
+    the diagnostics naming the encoder the file was really made with. The reason for the change is that refusing
     turns a wrong vendor match (#224) or an unusual GPU into no recording at
     all, where a fallback turns it into a recording that costs CPU and says
     so. The software path's CPU cost on the gameplay machine is **measured
@@ -364,7 +368,29 @@ track and any number of AAC tracks (#235). It is pure Rust with no Windows
 calls, so it is built and tested on Linux, where the tests write files with
 one, two and four audio tracks and check each with ffprobe and a full ffmpeg
 decode. What it costs on Windows is doing without the sink writer's plumbing:
-the encoders are driven directly (#239).
+the encoders are driven directly, which #239 did (§16, "The sink writer
+retired").
+
+**Since #239 every stem is in one file.** Each source is captured once and
+feeds every track that sums it (`own::mix::TrackMix`): Game + mic + Discord
+opens three sources and writes four AAC tracks, the mix and three stems, each
+from its own mixer and its own AAC encoder, so a stem goes through exactly the
+alignment and watermark its share of the mix does and is sample for sample
+what that source put into it. The tracks are in the table's order above, `a:0` the
+mix and the only default; `stop` reports the realised layout, every track with
+its label, less any source that did not open and any stem it alone fed, and
+`daemon.log`'s start line names each (`a:0 "Everything" (game + microphone)`,
+`own::plan::describe`). The file is created at the first keyframe, because the
+`moov` carries the SPS and PPS, and a fragment is closed before every keyframe
+after it (`own::mux`), so a kill costs at most one two-second GOP.
+`mp4::write::repair` finishes a killed file in Rust, cutting a torn last
+fragment and writing the `mfra`: startup recovery runs it before anything
+else, and so does `stop` when the capture worker died mid-recording. It refuses
+files it did not write, so a libobs recording is recovered exactly as before.
+**The faststart remux stays on a clean stop, and after a repair, for now**:
+the file already has an `mfra`, but whether WebView2's `<video>` seeks such a
+file has not been shown, and until it has, the review player gets the layout it
+is known to scrub.
 
 - **The file is fragmented, as libobs's is**: a `moof` + `mdat` per keyframe
   interval, so a killed process loses at most one GOP, and an `mfra` at the
@@ -413,14 +439,13 @@ source's packets on the video's clock with its own `clock::Aligner`
   `daemon.log` says why, and `stop` reports no audio tracks, so the library
   row describes the file that exists. That is the trade the libobs fork makes
   too ("lose per-app audio, not all recording").
-- **Every preset records since #238, as one mixed track until #239.** The
-  sink writer holds one audio stream, so the file has track 0 only, the
-  combined mix, and the layout `stop` reports says exactly that: one track,
-  labelled as the preset labels its mix, over the sources that opened
-  (`own::plan::realised_layout`). A source that cannot open (no microphone,
-  Discord not running) is logged, dropped from the layout with its stem, and
-  the recording goes ahead without it; only when nothing opens is the file
-  video only. #239 writes the stems through our own writer (above).
+- **Every preset records since #238, and every track of it since #239.**
+  #238 wrote track 0 only, the combined mix, because the sink writer holds one
+  audio stream; #239 writes the stems too, through our own writer (above).
+  The layout `stop` reports is the file's (`own::plan::realised_layout`): a
+  source that cannot open (no microphone, Discord not running) is logged,
+  dropped from every track with its stem, and the recording goes ahead
+  without it; only when nothing opens is the file video only.
 
 #238 adds the other three kinds of source, and mixes them:
 
@@ -451,8 +476,8 @@ source's packets on the video's clock with its own `clock::Aligner`
   or the video, back, and nothing is mixed past the video written so far.
 - **The Desktop preset's mix is the desktop alone.** Desktop capture already
   contains the game, so summing the game in too would play it twice; the
-  game source feeds only its stem, which means that until #239 it is not
-  opened at all (`own::plan`).
+  game source feeds only its stem, `a:1` (`own::plan`), and until #239 wrote
+  the stems it was not opened at all.
 
 **This reverses, for the own backend, the decision above that rejected a
 separately captured microphone.** For libobs the alternative was capturing the
@@ -2319,12 +2344,12 @@ The values below show the shape and are not a measurement:
 
 ```text
 [recorder] own: recording 2026-09-26_12-00-00.mp4: 1920x1080 from NVIDIA GeForce RTX 3070, encoder NVIDIA H.264 Encoder MFT [VEN_10DE] (hardware), sources: game=PID 4242 (the game window's owner, named League of Legends.exe), microphone=default, Discord.exe=failed (no Discord.exe process is running); tracks: Everything
-[recorder] own: stopped 2026-09-26_12-00-00.mp4: 1800.000 s, 108000 ticks, 0.41% repeated, worst tick 0.62 f late; per source: game clock=qpc raw=-12.35 ppm slips=7 gaps=0 holds=3, microphone clock=device slips=0 gaps=1 holds=0; mix clipped 0; 1836.0 MB; finalize ok
+[recorder] own: stopped 2026-09-26_12-00-00.mp4: 1800.000 s, 108000 ticks, 0.41% repeated, worst tick 0.62 f late; per source: game clock=qpc raw=-12.35 ppm slips=7 gaps=0 holds=3, microphone clock=device slips=0 gaps=1 holds=0; mix clipped 0; 1836.0 MB; 900 fragments; finalize ok
 [recorder] own: remux 2026-09-26_12-00-00.mp4: ok in 812 ms
 ```
 
 **Start.** The file, the encoded size, the adapter the capture runs on, the
-encoder Media Foundation actually loaded (after `status::check_loaded`, so a
+encoder actually activated (after `status::check_loaded`, so a
 substitution shows) and whether it is hardware or the **software fallback,
 with the reason**. Then every source the plan named: what it opened
 (`PID <n> (<how the root was chosen>)` for a process-loopback source,
@@ -2344,13 +2369,16 @@ printed as a meaningless number), slips (single frames dropped or repeated to
 hold it on QPC), gaps (holes over 50 ms filled with silence), holds (silence
 written because the source was quiet), and `ended early` for one whose capture
 died before the recording did. Then the samples the mix clipped, the file's
-size after the finalize, and whether the finalize succeeded. A video-only
-recording says `no audio`; one that wrote nothing says `no ticks written`.
+size after the finalize, the **fragments** the file was closed with, and
+whether the finalize succeeded. A video-only recording says `no audio`; one
+that wrote nothing says `no ticks written`.
 
-**Not in it, deliberately.** The number of fragments: the sink writer closes
-them itself and does not say, and #239's own MP4 writer is what will be able
-to count them. An estimate from the GOP would be a plausible number, not a
-measured one.
+**The fragment count arrived with #239.** The sink writer closed its
+fragments itself and did not say how many, and an estimate from the GOP would
+have been a plausible number, not a measured one, so the line left it out.
+Our own MP4 writer (`own::mux`) closes one per GOP and counts them, so the
+line now carries the count it made, and leaves it out only when the finalize
+failed before the file was closed.
 
 **The remux is its own line** because it happens in a different process. The
 worker finalizes the file and logs the stop line before it answers; the daemon
@@ -2358,7 +2386,11 @@ remuxes afterwards, once the answer is in. Holding the stop line back until
 the remux was done would mean the worker's copy could not have it, and the
 two logs would disagree. The remux line says `ok in <ms> ms`,
 `failed in <ms> ms, kept unseekable` (the existing warning beside it carries
-ffmpeg's error), or `skipped` when there is no ffmpeg to run.
+ffmpeg's error), or `skipped` when there is no ffmpeg to run. When the worker
+did not close the file itself (it died, or its finalize failed), the daemon
+runs `mp4::write::repair` first (#239), and the same line says so before the
+remux result: `repaired first (<n> whole fragments kept, <b> torn bytes
+cut), then ok in <ms> ms`, or `not repaired (<why>), then …`.
 
 ### Why not `tracing`
 
@@ -3053,6 +3085,66 @@ with silence to the same point, so the muxer is never left waiting on the
 audio, and a packet that resumes after it lands where its stamp says, with
 the gap filled.
 
+### The sink writer retired, and how the encoders are driven
+
+The own backend reached its first recordings (#236-#238) through Media
+Foundation's sink writer, which chose the encoder, converted BGRA to NV12,
+fed the encoders and wrote the file. It holds one audio stream (§2.5), so #239
+retired it, and the backend now does each of those itself
+(`own/win/output.rs` holds them together):
+
+- **BGRA → NV12 on the GPU**, by the D3D11 video processor #240 built for
+  scaling (`scale::Processor`), told the input is full-range RGB and the output
+  **BT.709 studio range** (`ID3D11VideoContext1`'s DXGI colour spaces, or the
+  older bitfield). Left to the driver, the range is its choice, and the wrong
+  one is a picture that is washed out or crushed. Once per new frame, not per
+  tick: a repeated frame is the same NV12 again.
+- **The H.264 MFT, activated directly**: enumerated with `MFTEnumEx` and
+  chosen by `select::rank` exactly as before, then found again and activated
+  for each recording (an activation object hands out the same transform until
+  it is shut down, which a hardware encoder's is after every recording, to
+  free its session).
+- **Asynchronous or synchronous, as the transform declares.** A hardware MFT
+  (`MF_TRANSFORM_ASYNC`) is unlocked with `MF_TRANSFORM_ASYNC_UNLOCK`, given
+  the session's device with `MFT_MESSAGE_SET_D3D_MANAGER` when it is
+  D3D11-aware, and fed the NV12 texture itself, wrapped by
+  `MFCreateDXGISurfaceBuffer` in a tracked sample so the slot knows when the
+  encoder lets go of it. It is driven by its events: the cadence loop polls
+  them without blocking on every pass, and `own::mft::AsyncPump` spends one
+  `METransformNeedInput` per frame and makes one `ProcessOutput` per
+  `METransformHaveOutput`, queueing frames that arrive with no request (two
+  seconds' worth at most; beyond that the encoder has stopped, and the
+  recording ends with what it has). Microsoft's software MFT is synchronous:
+  `ProcessInput`, then `ProcessOutput` until it wants more, fed NV12 in system
+  memory.
+- **`ICodecAPI`**: CBR 8 Mbps, a GOP of 120, low-latency mode and **no
+  B-frames**, so the output order is the presentation order. A property an
+  encoder refuses is logged in the start line, not fatal. Keyframes are read
+  from `MFSampleExtension_CleanPoint`; the SPS and PPS from the first keyframe,
+  or from `MF_MT_MPEG_SEQUENCE_HEADER` for an encoder that does not put them
+  in-band. The media types carry BT.709 studio range too, so the stream's VUI
+  says what the conversion did.
+- **One AAC MFT per written track**, synchronous, 160 kbps, 48 kHz stereo,
+  `MF_MT_AAC_PAYLOAD_TYPE` 0 (raw frames, which is what `mp4a` carries).
+- **`status::check_loaded` still checks what was activated** against the
+  ranking (§2.4), from the transform's own attributes.
+
+**Where there is no video processor, the CPU converts.** The hosted CI runner
+has WARP and the Basic Render Driver, neither of which offers the D3D11 video
+DDI, and the software MFT reads system memory anyway, so `convert.rs` reads
+the BGRA slot back and converts it with `own::nv12` (the same matrix and range,
+unit-tested on Linux). That is what a GPU-less machine does for real, and it is
+what lets CI run the whole software path end to end: a WARP device, a
+synthetic frame, the synchronous H.264 MFT and three AAC MFTs into a
+four-track file, read back with `mp4::summarize` (`own/win/tests.rs`). The
+asynchronous hardware path cannot run on a runner; its test is `#[ignore]`d
+and runs on the box ([windows-verification.md §11.7](docs/windows-verification.md#117-every-stem-in-one-file-encoded-directly-239)).
+
+**Not yet measured**: whether NVENC's MFT honours every `ICodecAPI` property
+(the start line says which it refused), the colour against a libobs recording,
+and the AAC encoder's priming delay, which the file does not compensate with an
+edit list (neither did the sink writer's). All three are §11.7 rows.
+
 ### The switch, and when it applies
 
 WS1.7's `capture_backend` setting, built ahead of the backend it switches to.
@@ -3072,9 +3164,9 @@ every other key in that table ([data-model.md](docs/data-model.md#what-lives-in-
 Option B. A default the build cannot construct would refuse every game for
 everyone who never opened Settings, and before #236 that is what `own` would
 have done. Since #236 `own` is constructible on Windows build 20348 or newer,
-since #237 it records the Game preset's audio, and since #238 every source a
-preset names, mixed into track 0; but the flip waits until it carries every
-track (#239) and has been measured against libobs. The flip
+since #237 it records the Game preset's audio, since #238 every source a
+preset names, mixed into track 0, and since #239 every track; the flip waits
+until it has been measured against libobs. The flip
 is a one-line change to `CaptureBackend`'s `#[default]`, pinned by a test so
 that it cannot happen by accident. It moves only the users who never chose.
 Someone who picked libobs explicitly has a stored row and keeps it.
@@ -3153,7 +3245,8 @@ and that the next game records on the backend the row says is in use. Since
 #236 a devtools build can switch to a real own backend, so that row can be
 checked both ways. The comparison WS1.7's exit criterion asks for, both
 backends recording the same game with audio, can be run on the Game preset
-since #237, and on every preset's track 0 since #238; the stems wait on #239.
+since #237, on every preset's track 0 since #238, and on every track since
+#239.
 
 ---
 

@@ -4,8 +4,9 @@
 //! Ported from the loop in `spikes/p0c-video/src/win/mod.rs` that fed its
 //! sink writer, and pulled out of the session so the whole path, packets in
 //! and PCM out at a sample position, is a unit test. Since #238 every source
-//! has one [`Feed`], and `mix::Mixdown` hands each a writer into its lane of
-//! the mixer, which is what writes to the encoder.
+//! has one [`Feed`] per track that sums it, and `mix::Mixdown` hands each a
+//! writer into its lane of that track's mixer, which is what writes to the
+//! track's encoder.
 //!
 //! Three rules, all the spike's:
 //!

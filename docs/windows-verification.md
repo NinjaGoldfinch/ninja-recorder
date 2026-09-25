@@ -1746,7 +1746,8 @@ on "Windows default".
 - [ ] **The desktop is captured, the game once.** `worker-devtools.log` has `own
       backend: desktop audio from the default output, in loopback, <name>
       (<id>), kept running by a silent stream`, and **no** `game audio from
-      PID` line: until #239 the Desktop preset opens the desktop only. The
+      PID` line: until #239 the Desktop preset opened the desktop only (it
+      now opens the game too, for its stem: §11.7). The
       recording has the game and the browser, and the game is not doubled
       (no echo, no louder than on the Game preset).
 - [ ] **Quiet stretches.** Mute everything for thirty seconds mid-game: the
@@ -1855,6 +1856,100 @@ and the worker can be told apart: they have the same image name.
 | 11.6: worker killed mid-game: daemon alive, recording kept, plays and scrubs (paste the lines) | | |
 | 11.6: the next game spawns a fresh worker | | |
 | 11.6: daemon killed: no orphan worker, idle and mid-game | | |
+
+### 11.7 Every stem in one file, encoded directly (#239)
+
+The sink writer is gone. The own backend drives the encoder MFTs itself (the
+hardware H.264 encoder asynchronously, by its events; one AAC encoder per
+track) and writes every track of the preset into one fragmented MP4 through
+its own writer, a fragment per two-second GOP, with an `mfra` at the end
+([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#decision-the-own-backend-writes-its-own-mp4),
+§16). The start line in `worker-devtools.log` says how: `own backend:
+<w>x<h> at 60 fps, H.264 8 Mbps CBR, GOP 120, no B-frames, asynchronous,
+driven by its events, texture input, NV12 textures from the video processor;
+AAC 160 kbps per track, a:0 "Everything" (game + microphone + Discord.exe);
+…`. **Paste it for every block**: which way the encoder is driven, and
+anything it refused, has never been seen on a GPU.
+
+For each file, `ffprobe -v error -show_entries
+stream=index,codec_name,sample_rate,channels:stream_disposition=default
+<file>` lists the streams and which is the default.
+
+**Game + mic + Discord**, in a voice channel with someone talking, a Practice
+Tool game of five minutes or more:
+
+- [ ] **Four audio tracks, in §2.5's order.** `ffprobe` shows one H.264
+      stream and four AAC streams, 48000 Hz stereo, and only the first AAC
+      stream (`a:0`) has `default=1`. `audio_tracks_json` (dev portal →
+      Library) is `Everything`, `Game`, `Mic`, `Discord`, in that order.
+- [ ] **Each stem is isolated.** Extract each with `ffmpeg -i <file> -map 0:a:N
+      -c copy aN.m4a` and listen: `a:1` has the game and nothing else, `a:2`
+      your voice and nothing else, `a:3` Discord and nothing else, and `a:0`
+      all three together. The review player's track switcher plays the same.
+- [ ] **In sync with each other.** Speak as you click an ability: your voice in
+      `a:0` and in `a:2` lands at the same moment against the video.
+- [ ] **The stop lines.** `worker-devtools.log` has one `audio track N (…)`
+      line per track, and `own backend: file closed: <n> video frames (<k>
+      keyframes, 0 dropped before the first), AAC frames per track [...], <f>
+      fragments`, with the four AAC counts equal and `<f>` about one per two
+      seconds; the summary line `own: stopped …` (both logs) carries the same
+      `<f> fragments`. Paste them.
+
+**Desktop**:
+
+- [ ] **Two tracks.** `ffprobe` shows two AAC streams, `a:0` default;
+      `audio_tracks_json` is `System audio`, `Game`. `worker-devtools.log` now
+      has a `game audio from PID` line as well as the desktop's.
+- [ ] **The game is in `a:0` once and alone in `a:1`.** Play something in a
+      browser for part of it: `a:0` has the game and the browser, not doubled,
+      and `a:1` has the game only.
+
+**A kill at minute five**, on Game + mic + Discord:
+
+- [ ] **Repaired, with every stem.** Five minutes into a game, end the
+      `--capture-worker` process (§11.6's step). `daemon-devtools.log` has
+      `own: remux <file>: repaired first (<n> whole fragments kept, <b> torn
+      bytes cut), then ok in <ms> ms`. The recording plays and scrubs to about
+      minute five, and `ffprobe` still shows four AAC streams with `a:0`
+      default.
+- [ ] **The same through startup recovery.** Repeat, but end the `--daemon`
+      process instead (the worker goes with it), then restart the app.
+      `daemon-devtools.log` has `repaired recovered <file>: …` and then the
+      remux line; the recording is in the library with every stem.
+
+**The hardware encoder**:
+
+- [ ] **An NVENC session exists while recording.** During a game, run
+      `nvidia-smi encodersessions` (or `nvidia-smi -q -d ENCODER_STATS`):
+      one H.264 session, whose PID is the `--capture-worker` process's. Stop
+      the game: it goes. Paste the output from during the game.
+- [ ] **Colour matches libobs.** Record the same Practice Tool scene with the
+      libobs backend and with own, and compare a frame from each side by side
+      (the review player, or `ffmpeg -ss 60 -i <file> -frames:v 1 frame.png`).
+      Own's is neither washed out (greys lifted, blacks grey) nor crushed
+      (shadows black, highlights clipped) against libobs's. `ffprobe
+      -show_streams` on the own file reports `color_range=tv` and
+      `color_space=bt709`; paste that and libobs's for comparison.
+- [ ] **The asynchronous path's own test.** On the box, from `src-tauri`:
+      `cargo test hardware_encoder_writes_every_track -- --ignored
+      --nocapture`. It passes, and its `RAN the encoding test (hardware)` line
+      names the NVIDIA encoder, `asynchronous, driven by its events, texture
+      input`. Paste the line.
+
+| What | Result | Notes |
+|---|---|---|
+| 11.7: the start line, for each block (paste) | | |
+| 11.7: Game + mic + Discord: four AAC streams in order, `a:0` the only default | | |
+| 11.7: Game + mic + Discord: each stem isolated, `a:0` the mix | | |
+| 11.7: Game + mic + Discord: voice in sync across `a:0` and `a:2` | | |
+| 11.7: the stop lines, equal AAC counts, a fragment per GOP (paste) | | |
+| 11.7: Desktop: two tracks, `a:0` default, the game source opened | | |
+| 11.7: Desktop: game once in `a:0`, alone in `a:1` | | |
+| 11.7: worker killed at minute five: repaired, plays, every stem (paste) | | |
+| 11.7: daemon killed: repaired at startup, every stem | | |
+| 11.7: an NVENC session in `nvidia-smi` while recording (paste) | | |
+| 11.7: colour against libobs: not washed out, not crushed; `tv`/`bt709` (paste) | | |
+| 11.7: `hardware_encoder_writes_every_track` on the box (paste) | | |
 
 ## Outcome
 
