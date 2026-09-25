@@ -250,14 +250,29 @@ impl Drop for Capture {
 /// what happened (#219).
 ///
 /// The border is drawn on screen only and never reaches the file, but the
-/// libobs backend shows none, because libobs turns it off where Windows
-/// allows; so does this, or the own backend would be a visible regression.
-/// The same three steps as libobs's `winrt-capture.cpp`: the property only
-/// exists from Windows build 20348, so ask `ApiInformation` first; request
-/// `Borderless` access, which some builds require before the setter takes
-/// effect; then clear the flag. Like libobs, the access status is reported
-/// and not acted on. The flag is read back, so a setter that silently did
-/// nothing shows as `on`.
+/// libobs backend shows none where Windows allows it to be turned off, so
+/// this turns it off too, or the own backend would be a visible regression.
+///
+/// The steps are the ones Microsoft Learn documents:
+///
+/// 1. `GraphicsCaptureSession.IsBorderRequired` exists from Windows 10
+///    build 20348 (its "Windows requirements" table), so ask
+///    `ApiInformation.IsPropertyPresent` before touching it.
+///    <https://learn.microsoft.com/en-us/uwp/api/windows.graphics.capture.graphicscapturesession.isborderrequired>
+///    <https://learn.microsoft.com/en-us/uwp/api/windows.foundation.metadata.apiinformation.ispropertypresent>
+/// 2. Get consent with `GraphicsCaptureAccess.RequestAccessAsync`, passing
+///    `GraphicsCaptureAccessKind.Borderless`. The `IsBorderRequired` page
+///    says the system disables the border only once that consent is given,
+///    and that without it setting the property to `false` still succeeds
+///    but is ignored.
+///    <https://learn.microsoft.com/en-us/uwp/api/windows.graphics.capture.graphicscaptureaccess.requestaccessasync>
+/// 3. Set the property to `false`.
+///
+/// The access status is reported and not acted on: a denial is not an
+/// error, because the page says the setter succeeds anyway and the border
+/// simply stays. The same page notes that another app requiring the border
+/// on the same window wins. That is why the flag is read back, so a setter
+/// that did nothing shows as `on`.
 fn hide_border(session: &GraphicsCaptureSession) -> String {
     let supported = ApiInformation::IsPropertyPresent(
         &HSTRING::from("Windows.Graphics.Capture.GraphicsCaptureSession"),

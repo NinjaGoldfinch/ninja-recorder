@@ -184,7 +184,12 @@ source files cited as references. It leaves out `docs/`, `DEVELOPMENT.md` and
 `README.md`, because a history of why libobs was used and then removed is
 allowed to name it, and it leaves out `Cargo.lock`, which regenerates.
 
-**Today it returns 133 lines in 22 files:**
+**Today it returns 134 lines in 20 files.** The audit counted 133 in 22;
+#277 then added `about.toml`'s notice entries for the fork's crates and
+`scripts/notices.mjs`'s note about the libobs runtime (six lines),
+#269 added `own/worker/serve.rs`'s mention of a libobs-recorder PR (one), and
+#286 re-cited the own backend's four comments that leaned on libobs or
+OBS (six lines, five files: 140 before it, 134 after):
 
 | Lines | File |
 |---:|---|
@@ -194,14 +199,18 @@ allowed to name it, and it leaves out `Cargo.lock`, which regenerates.
 | 13 | `src-tauri/deny.toml` |
 | 11 | `scripts/libobs-keep.txt` |
 | 9 | `src-tauri/src/recorder/libobs/worker_log.rs` |
+| 5 | `src-tauri/about.toml` |
 | 4 | `src-tauri/nsis/installer-hooks.nsh` |
 | 3 | `src-tauri/src/daemon/mod.rs` |
 | 3 | `src-tauri/Cargo.toml` |
-| 2 | `src-tauri/src/recorder/own/select.rs` |
 | 2 | `src-tauri/src/lib.rs` |
 | 2 | `src-tauri/build.rs` |
 | 2 | `scripts/trim-libobs.ps1` |
-| 1 each | `recorder/own/win/mod.rs`, `recorder/own/win/capture.rs`, `recorder/mod.rs`, `recorder/libobs/window.rs`, `recorder/devices.rs`, `recorder/audio.rs`, `spikes/p0c-video/src/win/mod.rs`, `spikes/p0c-audio/src/main.rs`, `.github/dependabot.yml` |
+| 1 each | `recorder/own/win/mod.rs`, `recorder/own/worker/serve.rs`, `recorder/mod.rs`, `recorder/libobs/window.rs`, `spikes/p0c-audio/src/main.rs`, `scripts/notices.mjs`, `.github/dependabot.yml` |
+
+Every line left is either the libobs backend itself, its staging and
+notices, or a sentence about the fork in a file #51 already rewrites, so
+all of it goes with #51.
 
 After #51 it must return nothing.
 
@@ -332,7 +341,7 @@ only the reference goes.
       comment also records a finding: the executable declares no DPI
       awareness and the daemon never sets one, so the daemon reads the game's
       size in unaware coordinates. `find_window` stays for #51 to delete.
-- [ ] **Not derived, re-cite: `own/win/capture.rs::hide_border`** (and its spike
+- [x] **Not derived, re-cite: `own/win/capture.rs::hide_border`** (and its spike
       original, `spikes/p0c-video/src/win/mod.rs`). Its comment says it follows
       "the same three steps as libobs's `winrt-capture.cpp`". The steps are
       Microsoft's: the
@@ -345,7 +354,16 @@ only the reference goes.
       which is C++. **Replace the libobs citation with that page.** Keeping
       the border off because libobs did is a behavioural parity goal, and it
       can stay in the comment as the reason.
-- [ ] **Not derived, re-cite: `own/select.rs`'s `MIN_BUILD` comment.** It quotes
+
+      **Done in #286.** Both copies now cite the `IsBorderRequired`,
+      [`RequestAccessAsync`](https://learn.microsoft.com/en-us/uwp/api/windows.graphics.capture.graphicscaptureaccess.requestaccessasync)
+      and [`IsPropertyPresent`](https://learn.microsoft.com/en-us/uwp/api/windows.foundation.metadata.apiinformation.ispropertypresent)
+      pages, step by step. The `IsBorderRequired` page is also where the
+      decision not to act on the access status comes from: it says that
+      without consent the setter still succeeds and is ignored, which is why
+      the flag is read back. libobs survives in the comment only as the
+      reason (the libobs backend shows no border).
+- [x] **Not derived, re-cite: `own/select.rs`'s `MIN_BUILD` comment.** It quotes
       one sentence from OBS's `win-wasapi/plugin-main.cpp` ("MS says 20348, but
       process filtering seems to work earlier"), to explain why the floor is
       *not* 19041. The constant itself, 20348, comes from Microsoft Learn's
@@ -353,7 +371,15 @@ only the reference goes.
       sentence to disagree with it is not porting code, but after #51 the
       comment is better off saying "some capture software enables it from
       19041" without the file name. The test's `(19_041, false)` row stays.
-- [ ] **Not derived, re-cite: `own/win/audio/loopback.rs`**, ported from
+
+      **Done in #286.** The comment now says, without quoting, that
+      OBS enables its process audio capture from build 19041, earlier than
+      Microsoft documents. It cites
+      [#237's decision](https://github.com/NinjaGoldfinch/ninja-recorder/issues/237#issuecomment-5822380979)
+      and gives the
+      [`AUDIOCLIENT_ACTIVATION_TYPE`](https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ne-audioclientactivationparams-audioclient_activation_type)
+      page's URL.
+- [x] **Not derived, re-cite: `own/win/audio/loopback.rs`**, ported from
       `spikes/p0c-audio`. It says process loopback is "the same API the libobs
       fork's process-output source calls". That sentence is about the fork, not
       taken from it. The API use follows Microsoft's `ActivateAudioInterfaceAsync`
@@ -361,15 +387,47 @@ only the reference goes.
       sample, and the `ManuallyDrop` around the `PROPVARIANT` came from a crash
       the spike hit (DEVELOPMENT.md §16), not from the fork. Once the fork is
       gone, drop the comparison.
-- [ ] **Not derived, re-justify: `recorder/audio.rs`'s `MAX_TRACKS`**, which is
+
+      **Done in #286.** The comparison is gone. The header now
+      describes the activation sequence against
+      [`ActivateAudioInterfaceAsync`](https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-activateaudiointerfaceasync),
+      [`AUDIOCLIENT_ACTIVATION_PARAMS`](https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ns-audioclientactivationparams-audioclient_activation_params),
+      `AUDIOCLIENT_ACTIVATION_TYPE`,
+      [`AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS`](https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ns-audioclientactivationparams-audioclient_process_loopback_params)
+      and the
+      [Application Loopback sample](https://learn.microsoft.com/en-us/samples/microsoft/windows-classic-samples/applicationloopbackaudio-sample/),
+      and says where the `ManuallyDrop` came from.
+- [x] **Not derived, re-justify: `recorder/audio.rs`'s `MAX_TRACKS`**, which is
       documented as "libobs' `MAX_AUDIO_MIXES`". After #51 the limit belongs to
       the own backend's muxer (`mp4/write.rs`), which can say what it actually
       supports. The same file's comments describing how "the backend hands every
       source to libobs" go with it.
-- [ ] **Not derived, reword: `recorder/devices.rs`**, which enumerates devices
+
+      **The constant: done in #286.** Its doc comment now justifies
+      six in this project's terms. The format has no such limit (a 32-bit
+      `track_ID`, and 255 in `mp4/write.rs` because of `tfra`'s one-byte
+      traf number), so the limit is a product choice about how many stems a
+      preset offers, and it bounds what a hand-edited `Custom` row can ask
+      for. The value is unchanged. `AudioLayout::validate`'s message is
+      #243's to reword. The two comments that describe the libobs backend
+      (`AudioSourceKind`'s header and `is_microphone`) are still true while
+      it ships, so they stay for #51.
+- [x] **Not derived, reword: `recorder/devices.rs`**, which enumerates devices
       through `IMMDeviceEnumerator` (Microsoft's API) and explains the string it
       returns in terms of what OBS's `wasapi_input_capture` expects. After #51
       the consumer is the own backend, so explain it in those terms.
+
+      **Done in #286.** The id is now explained as Microsoft
+      documents it:
+      [`IMMDevice::GetId`](https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdevice-getid)'s
+      opaque endpoint ID string, reopened in another process through
+      [`IMMDeviceEnumerator::GetDevice`](https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdeviceenumerator-getdevice),
+      which is what the own backend's capture worker does with it. "Windows
+      default" is explained through
+      [`GetDefaultAudioEndpoint(eCapture, eCommunications)`](https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdeviceenumerator-getdefaultaudioendpoint)
+      and [device roles](https://learn.microsoft.com/en-us/windows/win32/coreaudio/device-roles),
+      and by the fact that `own/win/audio/endpoint.rs` resolves it the same
+      way.
 - [ ] **Not derived: the spikes' comments** (`spikes/p0c-audio/src/main.rs`
       line 6, and the five places in `spikes/p0c-audio/src/main.rs`,
       `spikes/p0c-video/src/main.rs` and `spikes/p0c-video/src/win/video.rs` that
