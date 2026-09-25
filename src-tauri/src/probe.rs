@@ -6,7 +6,7 @@
 //! their length can come from is the container itself.
 //!
 //! **ffmpeg, not ffprobe.** Only `ffmpeg.exe` is staged into the bundle
-//! (`.github/workflows/ci.yml`, "Stage ffmpeg for faststart remux"), so
+//! (`.github/workflows/ci.yml`, "Stage ffmpeg (pinned) and its licence texts"), so
 //! ffprobe's clean `-show_format` JSON is not available to us and adding it
 //! would double the download for one number. `ffmpeg -i` with no output file
 //! prints the same container header to stderr and exits non-zero saying "At

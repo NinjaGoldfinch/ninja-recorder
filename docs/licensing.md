@@ -404,13 +404,14 @@ a GPL source.
 
 | | |
 |---|---|
-| Build | [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), asset `ffmpeg-master-latest-win64-lgpl.zip` (`ci.yml`, step "Stage ffmpeg for faststart remux") |
+| Build | [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) release [`autobuild-2026-08-31-13-27`](https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-08-31-13-27), asset `ffmpeg-n9.0.1-11-ge47273f4d9-win64-lgpl-9.0.zip`, staged by [`scripts/stage-ffmpeg.ps1`](../scripts/stage-ffmpeg.ps1) from `ci.yml`'s step "Stage ffmpeg (pinned) and its licence texts" |
+| Pin | [`scripts/ffmpeg-pin.json`](../scripts/ffmpeg-pin.json): the release tag, the asset, its SHA-256 (`2484854ad6988d34560f4e6ea7a6ecb9dde0af7c229d2591815d056b04ec4f56`, from BtbN's `checksums.sha256` for that release, and the same digest GitHub's API reports for the asset), the FFmpeg commit and the BtbN commit. A mismatch fails the build |
 | Variant | `lgpl`: "lacking libraries that are GPL-only. Most prominently libx264 and libx265" (BtbN's README) |
 | Linking | static: the non-`shared` variants are "pure static executables", and CI copies `ffmpeg.exe` alone |
-| Licence | **LGPL-3.0-or-later**, not 2.1. BtbN's `variants/defaults-lgpl.sh` configures `--enable-version3` and names `COPYING.LGPLv3` as the licence file |
-| Version | not pinned. `latest` is a floating tag on FFmpeg's `master`, rebuilt daily. BtbN keeps the last 14 daily builds and the last build of each month for two years |
+| Licence | **LGPL-3.0-or-later**, not 2.1. BtbN's `variants/defaults-lgpl.sh` configures `--enable-version3` and names `COPYING.LGPLv3` as the licence file. CI checks both: the zip's `LICENSE.txt` must be byte-identical to FFmpeg's `COPYING.LGPLv3` at the pinned commit, and `ffmpeg -version` must show `--enable-version3` and neither `--enable-gpl` nor `--enable-nonfree` |
+| Version | **FFmpeg `n9.0.1-11-ge47273f4d9`**: the `release/9.0` branch, 11 commits past the `n9.0.1` tag, at commit [`e47273f4d9227152dcbf543cebaf9e2430ddbcc4`](https://github.com/FFmpeg/FFmpeg/commit/e47273f4d9227152dcbf543cebaf9e2430ddbcc4). Built by BtbN's scripts at [`8267213e26c1031621e6e1210fe3aa4867214f6a`](https://github.com/BtbN/FFmpeg-Builds/tree/8267213e26c1031621e6e1210fe3aa4867214f6a). A month-end release, which BtbN keeps for two years; the dailies go after 14 days |
 | Where it lands | `src-tauri/target/libobs/ffmpeg.exe`, bundled to `$INSTDIR\libobs\ffmpeg.exe` |
-| What ships beside it | nothing. The zip's `LICENSE.txt` is not copied into the bundle |
+| What ships beside it | `FFMPEG-LICENSE.txt` (the zip's `LICENSE.txt`: the LGPLv3), `FFMPEG-COPYING.GPLv3.txt` (the GPLv3 the LGPLv3 incorporates, from FFmpeg's source at the pinned commit, since the zip does not carry it), `FFMPEG-LICENSE.md` (FFmpeg's own licensing statement, same commit) and `FFMPEG-SOURCE.txt` (the version, both commits, the release, both checksums and where the corresponding source is). The build job asserts the generated `installer.nsi` installs all five |
 
 ### How it is run
 
@@ -453,17 +454,32 @@ calls are in its `#[cfg(test)]` module for the same reason.
 Distributing an LGPL-3.0 executable, even unmodified, still has conditions
 attached:
 
-- [ ] **The licence text beside the binary.** Ship `COPYING.LGPLv3` and the
-      GPLv3 text it incorporates next to `ffmpeg.exe`, from the same zip. Today
-      only `ffmpeg.exe` is copied.
-- [ ] **The source, for the exact build shipped.** The `latest` asset is
-      replaced daily, so "BtbN's latest" does not identify the source for any
-      given release. Pin a dated `autobuild-*` release in `ci.yml` and record
-      two things with each release: the FFmpeg commit (`ffmpeg -version`
-      prints it) and the BtbN commit that built it. BtbN's scripts are part
-      of the corresponding source. Then link both, or attach the source to the
-      release. BtbN's retention (monthly builds for two years) is not long
-      enough to be the only copy.
+- [x] **The licence text beside the binary.** `FFMPEG-LICENSE.txt` (the
+      zip's `LICENSE.txt`, which is `COPYING.LGPLv3`) and
+      `FFMPEG-COPYING.GPLv3.txt` ship next to `ffmpeg.exe`. The zip carries only
+      the first, so the GPLv3 comes from FFmpeg's source at the pinned commit
+      and is checked against a fixed SHA-256.
+- [x] **The source, for the exact build shipped.** Pinned to a dated
+      `autobuild-*` release and a release-branch asset, with its checksum, in
+      `scripts/ffmpeg-pin.json`. `FFMPEG-SOURCE.txt`, installed beside the
+      binary, records the FFmpeg commit and the BtbN commit that built it and
+      links both: FFmpeg's git (`git.ffmpeg.org` and the GitHub mirror) at the
+      commit, and BtbN's scripts at theirs, which pin every library linked into
+      the static build. Those are git commits, so they outlive BtbN's two-year
+      retention of the release asset.
+- [ ] **A copy of the source we hold ourselves.** Linking upstream's git is
+      how most redistributors meet the obligation, but it relies on two third
+      parties keeping those commits reachable. Attaching a source archive (the
+      FFmpeg tree at the commit, and BtbN's tree at theirs) to each GitHub
+      release would remove that dependency. It is an owner decision, and it
+      makes every release larger by the size of those two archives.
+- [ ] **The libraries inside the static build.** `ffmpeg -version`'s
+      configuration line enables third-party libraries (libxml2, freetype,
+      harfbuzz, fribidi, libvorbis and others), linked statically into
+      `ffmpeg.exe`, each under its own licence. BtbN's zip carries only
+      FFmpeg's `LICENSE.txt`. Their notices belong in the same place as the
+      Rust and npm ones (#85); which libraries a pin includes is in BtbN's
+      scripts at the pinned commit.
 - [ ] **Say it in the app or the release notes.** One line: the bundled ffmpeg
       is LGPL-3.0-or-later, with the source link above.
 - [ ] **Do not modify it**, and do not link to it. Both would change the
@@ -480,7 +496,7 @@ the release notes and the About panel are edited anyway.
 
 - [ ] `daemon/mod.rs::ffmpeg()` (the daemon: remux, recovery, trim, stems)
 - [ ] `lib.rs::ffmpeg_path` (the UI side's copy)
-- [ ] `ci.yml`'s "Stage ffmpeg for faststart remux" step, and the libobs cache
+- [ ] `ci.yml`'s "Stage ffmpeg (pinned) and its licence texts" step, and the libobs cache
       it shares
 
 Give it its own resource path, update all three together, and only then
