@@ -216,7 +216,22 @@ impl Session {
         let adapters = device::adapters()?;
         let encoders = encode::h264_encoders()?;
         let infos: Vec<select::Adapter> = adapters.iter().map(|a| a.info.clone()).collect();
-        let choice = select::rank(&infos, &encoders);
+        // A devtools build can be told to take the software fallback anyway
+        // (`select::FORCE_SOFTWARE_ENV`); a release build never reads it.
+        let forced = select::software_forced_in_this_build(|name| std::env::var(name).ok());
+        let choice = select::choose(&infos, &encoders, forced);
+        if forced {
+            warn!(
+                "recorder",
+                "{}=1: using the SOFTWARE H.264 encoder although {}, for testing only",
+                select::FORCE_SOFTWARE_ENV,
+                match select::rank(&infos, &encoders) {
+                    Choice::Hardware { encoder, .. } =>
+                        format!("{} would have been used", encoders[encoder].name),
+                    _ => "no hardware encoder was usable anyway".to_string(),
+                }
+            );
+        }
         let adapter = match &choice {
             Choice::Unavailable { reason } => return Err(reason.clone()),
             Choice::Hardware { adapter, .. } => &adapters[*adapter],

@@ -388,6 +388,14 @@ put them in-band), converts 100 ns times to each track's timescale, and
 closes a fragment immediately before every keyframe after the first; each
 flush leaves a playable file on disk.
 
+Which H.264 encoder is `select::choose`'s answer: `select::rank`'s hardware
+first order, or, in a **devtools** build whose daemon was started with
+`NINJA_OWN_FORCE_SOFTWARE_ENCODER=1`, the software MFT as a marked fallback
+([DEVELOPMENT.md §2.4](../DEVELOPMENT.md#24-encoding-defaults)). The daemon
+decides whether the override holds and passes that to the capture worker
+explicitly, setting the variable or removing it from the worker's environment;
+the worker applies the same devtools gate before acting on it.
+
 ```mermaid
 flowchart LR
     ENC["H.264 MFT<br/><small>Annex B access units</small>"] -->|"write_sample(0, …)"| W["Writer<br/><small>buffers every track's<br/>samples for one fragment</small>"]
