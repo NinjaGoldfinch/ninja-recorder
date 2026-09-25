@@ -29,15 +29,16 @@ use super::{FailedRecorder, Recorder};
 
 /// The two capture backends, as `settings_kv` stores them.
 ///
-/// **The default is libobs, and WS1.6 flips it to `Own`.** It is libobs today
-/// only because `recorder/own/` is still empty: a default the build cannot
-/// construct would refuse every recording for everyone who never opened
-/// Settings. WS1.6 is the task that makes `Own` constructible, and flipping
-/// this `#[default]` is part of that task, not a separate decision — the plan
-/// has Option B as the default the moment it exists (§4.5). A user who picked
-/// libobs explicitly keeps it across that flip, because the flip only changes
-/// what a *missing* key means. The same change un-hides the Settings row,
-/// which is devtools-only until then (`Settings.svelte`).
+/// **The default is libobs, and WS1.6's last piece (#243) flips it to
+/// `Own`.** `Own` is constructible since #236, but it records video only, so
+/// until it carries audio (#237, #238) and every track through its own
+/// writer (#239) a default of `Own` would make worse recordings for everyone
+/// who never opened Settings. Flipping this `#[default]` is #243's change, not
+/// a separate decision: the plan has Option B as the default once it is whole
+/// (§4.5). A user who picked libobs explicitly keeps it across that flip,
+/// because the flip only changes what a *missing* key means. The same change
+/// un-hides the Settings row, which is devtools-only until then
+/// (`Settings.svelte`).
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, ts_rs::TS,
 )]
@@ -47,8 +48,9 @@ pub enum CaptureBackend {
     /// and selectable for one release after Option B ships.
     #[default]
     Libobs,
-    /// Option B: WGC → D3D11 → Media Foundation, in `recorder/own/`. Not
-    /// constructible until WS1.6.
+    /// Option B: WGC → D3D11 → Media Foundation, in `recorder/own/`.
+    /// Constructible on Windows build 20348 or newer since #236; video only
+    /// until #237.
     Own,
 }
 
@@ -141,11 +143,6 @@ pub fn construct(setting: CaptureBackend, backends: &dyn Backends) -> Box<dyn Re
     }
 }
 
-/// Why `Own` cannot be built in this build. One string so the daemon's option
-/// list and its defensive `build` arm cannot word it differently. WS1.6
-/// deletes it.
-pub const OWN_NOT_BUILT: &str = "the own capture backend is not in this build yet";
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,18 +151,19 @@ mod tests {
         CaptureBackendOption { backend, unavailable: unavailable.map(str::to_string) }
     }
 
-    /// Today's build: libobs works, the own backend does not exist yet.
-    fn today() -> Vec<CaptureBackendOption> {
-        vec![
-            option(CaptureBackend::Libobs, None),
-            option(CaptureBackend::Own, Some(OWN_NOT_BUILT)),
-        ]
+    /// Why the own backend is refused below its OS floor, in the shape
+    /// `select::availability` words it.
+    const TOO_OLD: &str = "the own capture backend needs Windows build 20348 or newer";
+
+    /// A Windows 10 machine: libobs works, the own backend is below its floor.
+    fn windows_10() -> Vec<CaptureBackendOption> {
+        vec![option(CaptureBackend::Libobs, None), option(CaptureBackend::Own, Some(TOO_OLD))]
     }
 
-    /// Pinned so that WS1.6's flip is a deliberate one-line change that fails
+    /// Pinned so that #243's flip is a deliberate one-line change that fails
     /// this test, rather than something that happens by accident.
     #[test]
-    fn the_default_is_libobs_until_ws1_6_flips_it() {
+    fn the_default_is_libobs_until_243_flips_it() {
         assert_eq!(CaptureBackend::default(), CaptureBackend::Libobs);
         assert_eq!(CaptureBackend::from_pref(None), CaptureBackend::Libobs);
     }
@@ -197,14 +195,14 @@ mod tests {
 
     #[test]
     fn an_available_setting_is_built() {
-        assert_eq!(choose(CaptureBackend::Libobs, &today()), Ok(CaptureBackend::Libobs));
+        assert_eq!(choose(CaptureBackend::Libobs, &windows_10()), Ok(CaptureBackend::Libobs));
     }
 
-    /// The case WS1.7 has to get right before WS1.6 exists: choosing the own
-    /// backend refuses with the reason, and does not quietly record on libobs.
+    /// Choosing the own backend where it cannot run refuses with the reason,
+    /// and does not quietly record on libobs.
     #[test]
     fn an_unavailable_setting_is_refused_with_its_reason_not_substituted() {
-        assert_eq!(choose(CaptureBackend::Own, &today()), Err(OWN_NOT_BUILT.to_string()));
+        assert_eq!(choose(CaptureBackend::Own, &windows_10()), Err(TOO_OLD.to_string()));
     }
 
     #[test]
@@ -219,7 +217,7 @@ mod tests {
         );
     }
 
-    /// What WS1.6 turns on, and what it should find already works.
+    /// A build on a new enough Windows, since #236.
     #[test]
     fn the_own_backend_is_built_once_it_is_available() {
         let options = vec![option(CaptureBackend::Libobs, None), option(CaptureBackend::Own, None)];
@@ -237,21 +235,21 @@ mod tests {
     /// a refusal reaches the recorder as a refusal.
     #[test]
     fn construct_turns_a_refusal_into_a_failed_recorder() {
-        struct Today;
-        impl Backends for Today {
+        struct Windows10;
+        impl Backends for Windows10 {
             fn options(&self) -> Vec<CaptureBackendOption> {
-                today()
+                windows_10()
             }
             fn build(&self, _backend: CaptureBackend) -> Box<dyn Recorder> {
                 Box::new(crate::recorder::stub::StubRecorder::new())
             }
         }
 
-        let refused = construct(CaptureBackend::Own, &Today);
-        assert_eq!(refused.backend_name(), format!("unavailable ({OWN_NOT_BUILT})"));
+        let refused = construct(CaptureBackend::Own, &Windows10);
+        assert_eq!(refused.backend_name(), format!("unavailable ({TOO_OLD})"));
         assert!(!refused.is_recording());
 
-        let built = construct(CaptureBackend::Libobs, &Today);
+        let built = construct(CaptureBackend::Libobs, &Windows10);
         assert_eq!(built.backend_name(), "stub");
     }
 }

@@ -1371,35 +1371,36 @@ beside the result rather than as one number.
 ## 9. The capture backend switch (WS1.7, #11)
 
 Settings → Advanced → **Capture backend** chooses what the daemon records
-with: `libobs`, or the own backend (Option B). Until WS1.6 the own backend is
-not in the build, so on today's installer this section checks the half that
-exists: the row, the refusals, and that a switch reaches the *next* recording
+with: `libobs`, or the own backend (Option B). Since #236 the own backend is
+in the build and constructible on Windows build 20348 or newer (Windows 11),
+recording video only; §11 checks what it records. This section checks the
+switch: the row, the refusals, and that a switch reaches the *next* recording
 and never the current one.
 
-**Use the devtools build.** The row is devtools-only until WS1.6 un-hides it,
+**Use the devtools build.** The row is devtools-only until #243 un-hides it,
 and every step below also needs the dev portal. The release build is checked
 for one thing only, the first box. Why it works this way is
 [DEVELOPMENT.md §16, "The switch, and when it applies"](../DEVELOPMENT.md#the-switch-and-when-it-applies).
 
 The backend-comparison table WS1.7's exit criterion asks for, both backends
-recording the same game, needs WS1.6 and is not here yet.
+recording the same game, needs the own backend's audio (#237) and is not here
+yet.
 
 - [ ] **A release build shows no Advanced group** in Settings at all.
-- [ ] **The row renders** in the devtools build. `libobs` is selected, **Own** is disabled, and the
-      row says "Own isn't available: the own capture backend is not in this
-      build yet." "In use now" reads `libobs (idle)` with no client open.
+- [ ] **The row renders** in the devtools build. `libobs` is selected and
+      **Own** is enabled on Windows 11 (build 20348 or newer). On a Windows 10
+      box Own is disabled instead, and the row says "Own isn't available: the
+      own capture backend needs Windows build 20348 or newer …", naming the
+      box's build. "In use now" reads `libobs (idle)` with no client open.
 - [ ] **The daemon log names the setting.** `daemon.log`'s
       `[recorder] backend:` line reads
       `libobs (idle) (capture_backend = libobs)`.
-- [ ] **Refused mid-game.** Today's build offers only one buildable backend,
-      so a switch has to be staged by hand. Before a Practice Tool game, set
-      the row to `own` from the dev portal's Commands panel with `set_ui_pref`
-      (`key` `capture_backend`, `value` `own`). That writes the row and nothing
-      else: the daemon keeps recording on libobs. In the game, call
-      `set_capture_backend` with `libobs`. It is refused with "can't be changed
-      while a recording is in progress", the recording carries on and
-      finalizes normally, and `get_capture_backend` still reports `own` as
-      configured.
+- [ ] **Refused mid-game.** Start a Practice Tool game on libobs, and in the
+      game click **Own** in the row (or call `set_capture_backend` with `own`
+      from the dev portal's Commands panel). It is refused with "can't be
+      changed while a recording is in progress", the recording carries on on
+      libobs and finalizes normally, and `get_capture_backend` still reports
+      `libobs` as configured.
 - [ ] **Switch, and the next recording uses it.** Back in the lobby with the
       client open, make the same `set_capture_backend` call, or click
       `libobs` in the row. `daemon.log` gains a
@@ -1407,15 +1408,20 @@ recording the same game, needs WS1.6 and is not here yet.
       line, Task Manager shows **one** `extprocess_recorder.exe` rather than
       two (the old worker was released before the new one came up), and the
       next game records, with `diagnostics_json.backend` (dev portal →
-      Library) naming libobs. Once WS1.6 lands, repeat this with a real switch
-      to `own` and back.
-- [ ] **A saved backend that cannot be built refuses, and says so.** Set the
-      row to `own` with `set_ui_pref` and restart the daemon (tray → Quit,
-      then start the app). The log's backend line reads
-      `unavailable (the own capture backend is not in this build yet)`, the
-      Settings row shows the "Nothing will be recorded" warning, a game
-      produces **no** recording rather than one made on libobs, and choosing
-      `libobs` in the row puts recording back without a restart.
+      Library) naming libobs. Then switch to **Own** the same way: the log line
+      names `own (…)`, no `extprocess_recorder.exe` is left running, and the
+      next game's `diagnostics_json.backend` starts with `own (`. Switch back
+      to libobs before the next section's games.
+- [ ] **A saved backend that cannot be built refuses, and says so.** Needs a
+      Windows 10 box, where the own backend is below its floor. Set the row to
+      `own` with `set_ui_pref` (`key` `capture_backend`, `value` `own`) and
+      restart the daemon (tray → Quit, then start the app). The log's backend
+      line reads `unavailable (the own capture backend needs Windows build
+      20348 or newer …)`, the Settings row shows the "Nothing will be
+      recorded" warning, a game produces **no** recording rather than one made
+      on libobs, and choosing `libobs` in the row puts recording back without a
+      restart. On a Windows 11 box this row cannot be reached; leave it empty
+      and say so.
 
 | What | Result | Notes |
 |---|---|---|
@@ -1423,6 +1429,7 @@ recording the same game, needs WS1.6 and is not here yet.
 | 9: switch the setting, and the next recording uses the chosen backend | | |
 | 9: refused mid-game; the recording in flight is unaffected | | |
 | 9: an unbuildable saved backend records nothing and says why | | |
+| 9: switch to own, and the next recording is made by it | | |
 
 ## 10. Installing over a running app (#220)
 
@@ -1479,6 +1486,61 @@ uninstaller it runs is this one.
 | 10: the other build's worker survives | | |
 | 10: in-app update replaces every `libobs\` file | | |
 | 10: uninstall with the app running leaves no loaded DLL behind | | |
+
+## 11. The own backend (WS1.6, #10)
+
+The own backend (Option B, `recorder/own/`) is built in pieces, and each adds
+its rows here. Every row runs on a **devtools build** with Settings → Advanced
+→ Capture backend set to **Own**, on Windows build 20348 or newer. Why the
+backend is shaped this way is
+[DEVELOPMENT.md §2.2](../DEVELOPMENT.md#22-the-recorder-trait) and §16.
+
+### 11.1 WGC video into a fragmented MP4 (#236)
+
+The first piece: the game window's video, through Media Foundation's sink
+writer, H.264 8 Mbps CBR with a keyframe every two seconds. **No audio track
+is expected**: game audio is #237. Play a Practice Tool game for a couple of
+minutes, then end it.
+
+- [ ] **The pre-warm names the encoder.** Opening the client writes an
+      `own backend warm: capture on <GPU>; encoder own (ready: <encoder>);
+      offered: …` line to `daemon.log`. On a machine with an NVIDIA, AMD or
+      Intel GPU the encoder is that vendor's hardware MFT. A
+      `software encoding` line here instead is §2.4's fallback, and the
+      reason on the line says why: paste it.
+- [ ] **No border on screen.** No yellow WGC border around the game window at
+      any point in the game. `daemon.log` has
+      `own backend: WGC border off (borderless access …)`; paste the line
+      whichever way it went.
+- [ ] **The encoder is named where the file is.** The log's `recording started:
+      backend own (ready: …)` line and the recording's `diagnostics_json`
+      (dev portal → Library) `backend` both name the encoder Media Foundation
+      loaded, with its vendor id. No `loaded … instead of the hardware
+      encoder` warning.
+- [ ] **It plays.** The recording appears in the library and plays in the
+      review player, at the game window's size (rounded down to even), with
+      the cursor visible as in a libobs recording.
+- [ ] **It scrubs after the remux.** Drag the scrub bar to the middle and the
+      end: it seeks. `daemon.log` has no `faststart remux failed` line.
+- [ ] **Video only, as expected.** `ffprobe` on the file shows one H.264
+      stream and no audio stream; the review player's track menu offers
+      nothing. That is correct until #237.
+- [ ] **Markers land where they happened.** A kill's marker seeks to the
+      kill, as on libobs: video time zero is the moment `start` returned.
+- [ ] **Several games in one session.** A second game in the same client
+      session records too, and the Task Manager thread count of the daemon does
+      not keep growing between games.
+
+| What | Result | Notes |
+|---|---|---|
+| 11.1: the pre-warm line names a hardware encoder | | |
+| 11.1: no border on screen | | |
+| 11.1: `backend_name` and `diagnostics_json.backend` name the loaded encoder | | |
+| 11.1: plays | | |
+| 11.1: scrubs after the remux | | |
+| 11.1: one video stream, no audio (expected until #237) | | |
+| 11.1: markers land where they happened | | |
+| 11.1: a second game in the same session records | | |
 
 ## Outcome
 

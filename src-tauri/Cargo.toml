@@ -226,7 +226,45 @@ windows = { version = "0.62", features = [
     "Win32_System_Variant",
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_Devices_FunctionDiscovery",
+    # The own capture backend (`recorder/own/win/`, #236), from the spike's
+    # list (`spikes/p0c-video/Cargo.toml`) less what only the spike used.
+    # `RtlGetVersion`, for the build number: GetVersionEx lies to a binary
+    # with no compatibility manifest.
+    "Wdk_System_SystemServices",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    # `timeBeginPeriod`, so the cadence loop sleeps to the millisecond.
+    "Win32_Media",
+    "Win32_Media_MediaFoundation",
+    # `LoadLibraryExW`, to ask whether Media Foundation is installed before
+    # the first call into its delay-loaded DLLs (`build.rs`).
+    "Win32_System_LibraryLoader",
+    # QueryPerformanceCounter: the one clock video, audio and WGC share.
+    "Win32_System_Performance",
+    "Win32_System_SystemInformation",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+    # The WinRT half: the capture item, the frame pool and the session.
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    "Foundation",
+    # `ApiInformation`, to ask whether the border can be turned off (#219).
+    "Foundation_Metadata",
+    # The status `GraphicsCaptureAccess::RequestAccessAsync` returns: the
+    # method is gated on it.
+    "Security_Authorization_AppCapabilityAccess",
+    # `WNDCLASSW`, for the window the own backend's WGC test captures.
+    "Win32_Graphics_Gdi",
 ] }
+# `#[implement]` (the own backend's sample-release callback) expands to
+# `windows_core::` paths, so the crate it names has to be a direct
+# dependency, at the version `windows` itself uses: already in the lock
+# through `windows`, so no new crate and no new licence.
+windows-core = "0.62.2"
 
 # Full DWARF for our own crate is what fills `target/` — 30k codegen-unit
 # objects at ~500 KB of debug info each, ~8 GB before this. Line tables keep

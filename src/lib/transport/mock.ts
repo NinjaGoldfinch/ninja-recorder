@@ -284,14 +284,14 @@ const MOCKS: Record<string, unknown> = {
   get_ui_prefs: {},
   get_audio_preset: { preset: "game" } satisfies AudioPreset,
   set_audio_preset: null,
-  // Today's build: the own backend is listed and refused, which is the state
-  // worth seeing in a browser session.
+  // A daemon off Windows: the own backend is listed and refused, which is the
+  // state worth seeing in a browser session.
   get_capture_backend: {
     configured: "libobs",
     active: "libobs (idle)",
     options: [
       { backend: "libobs", unavailable: null },
-      { backend: "own", unavailable: "the own capture backend is not in this build yet" },
+      { backend: "own", unavailable: "the own capture backend records on Windows only" },
     ],
   } satisfies CaptureBackendStatus,
   list_audio_inputs: [

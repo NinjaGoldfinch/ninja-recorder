@@ -12,6 +12,9 @@ pub mod libobs;
 // platform so its pure core is tested everywhere; only `own::win` is gated to
 // Windows.
 pub mod own;
+// The game window's lookup, shared by both Windows backends.
+#[cfg(target_os = "windows")]
+pub mod window;
 // The faststart remux. Not behind a backend's `cfg`: startup recovery
 // remuxes a killed recording whichever backend wrote it.
 pub mod remux;
@@ -160,8 +163,8 @@ pub trait Recorder: Send {
 ///
 /// And since WS1.7 it is what the `capture_backend` setting gets when it names
 /// a backend this build cannot construct (`backend::construct`), which is the
-/// own backend until WS1.6 lands it. Refused with the reason, never recorded
-/// on the other backend in its place.
+/// own backend off Windows or below its OS floor. Refused with the reason,
+/// never recorded on the other backend in its place.
 pub struct FailedRecorder(pub String);
 
 impl Recorder for FailedRecorder {

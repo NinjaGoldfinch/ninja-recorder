@@ -815,13 +815,13 @@ loads instead of from the `prefs.ts` cache, and applies whatever
 It is one of two rows in the settings form that can come back disabled, when
 the build has no autostart control or the read failed.
 
-**The capture backend is the other, and it is devtools-only until WS1.6.**
+**The capture backend is the other, and it is devtools-only until #243.**
 `Settings.svelte` renders the Advanced group, which holds only this row, when
 `hasDevCommands()` answers true: the same probe that reveals the dev portal
 button, so there is no second devtools flag. In a release build the group is
-absent. Today the row could only offer libobs with the own backend disabled,
-and WS1.6, which builds the own backend and makes it the default, deletes the
-gate ([DEVELOPMENT.md §16](../DEVELOPMENT.md#the-switch-and-when-it-applies)).
+absent. Since #236 the row offers a real own backend on Windows build 20348
+or newer, but a video-only one, and #243, which makes it the default, deletes
+the gate ([DEVELOPMENT.md §16](../DEVELOPMENT.md#the-switch-and-when-it-applies)).
 `Settings.test.ts` checks both builds.
 
 `capture_backend` is a `settings_kv`
@@ -832,7 +832,8 @@ swap the live recorder
 ([DEVELOPMENT.md §16](../DEVELOPMENT.md#the-switch-and-when-it-applies)).
 `Advanced.svelte` renders what `get_capture_backend` reports: every backend
 the daemon knows about, one it cannot build **disabled with the daemon's
-reason** beside it (the own backend, until WS1.6), and the backend actually
+reason** beside it (the own backend off Windows or below build 20348), and
+the backend actually
 live. A click calls `set_capture_backend` and the control shows the status it
 returns, never the value it sent, so a refusal leaves it where it was and
 raises a toast. The row says that a change applies from the next recording.
