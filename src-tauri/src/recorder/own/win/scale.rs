@@ -350,6 +350,14 @@ impl Fitter {
         Fitter { output, staging: None, processor: None, unavailable: None, last: None, lines: 0 }
     }
 
+    /// A fitter whose video processor has already failed, so a resize takes
+    /// the crop fallback: the one path a device with a video processor never
+    /// reaches on its own.
+    #[cfg(test)]
+    pub fn cropping(output: Size, why: &str) -> Fitter {
+        Fitter { unavailable: Some(why.to_string()), ..Fitter::new(output) }
+    }
+
     /// Puts `source`, whose picture is the top-left `content` of it, into
     /// `slot`, which is output-sized. [`Placed::Skipped`] leaves the slot as
     /// it was.

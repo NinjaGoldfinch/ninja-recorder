@@ -8,10 +8,11 @@
 //! which the test harness does not capture, so a CI log shows which way it
 //! went on every run.
 //!
-//! The video processor that scales a resized window into the recording's
-//! size runs on the runner too, with a read-back of the pixels it wrote, on
-//! WARP or the Basic Render Driver; it skips the same way if neither offers
-//! a video processor.
+//! Frames into slots (#240) are checked by reading the pixels back. The
+//! copy, the crop-over-black fallback and `fill_black` run on WARP. The video
+//! processor's scaling needs a device with the D3D11 video DDI, which neither
+//! WARP nor the runner's Basic Render Driver offers, so that test skips there
+//! and says so, and runs on a box with a GPU.
 //!
 //! A WGC capture needs a desktop to composite a window on; that test is
 //! `#[ignore]`d until it proves stable on the runner, and runs by hand with
@@ -318,16 +319,19 @@ const CONTENT: [u8; 4] = [40, 160, 220, 255];
 const BLACK: [u8; 4] = [0, 0, 0, 255];
 const WHITE: [u8; 4] = [255, 255, 255, 255];
 
-/// One frame of `content` size through the fitter into a 1920x1080 slot that
+/// One frame of `content` size through `fitter` into a 1920x1080 slot that
 /// starts white, so a bar that was not cleared shows as white rather than as
 /// a texture's initial zeroes. Returns what the fitter did and the slot's
 /// pixels.
-fn fit_one(device: &device::Device, content: Size) -> Result<(scale::Placed, Vec<u8>), String> {
+fn fit_one(
+    device: &device::Device,
+    content: Size,
+    mut fitter: scale::Fitter,
+) -> Result<(scale::Placed, Vec<u8>), String> {
     let source = scale::create_bgra(device, content)?;
     fill(device, &source, content, CONTENT);
     let slots = capture::create_slots(&device.device, OUTPUT.width, OUTPUT.height, 1)?;
     fill(device, &slots[0].texture, OUTPUT, WHITE);
-    let mut fitter = scale::Fitter::new(OUTPUT);
     let placed = fitter.place(device, &source, content, &slots[0].texture)?;
     Ok((placed, read_back(device, &slots[0].texture, OUTPUT)))
 }
@@ -346,14 +350,16 @@ fn the_video_processor_letterboxes_a_resized_frame() {
     };
 
     // The same aspect: scaled up to fill the frame, no bars.
-    let (placed, px) = fit_one(&device, Size::new(1280, 720)).expect("1280x720");
+    let (placed, px) =
+        fit_one(&device, Size::new(1280, 720), scale::Fitter::new(OUTPUT)).expect("1280x720");
     assert_eq!(placed, scale::Placed::Scaled);
     for (x, y) in [(2, 2), (1917, 2), (2, 1077), (1917, 1077), (960, 540)] {
         assert_near(pixel(&px, OUTPUT, x, y), CONTENT, &format!("1280x720 at ({x}, {y})"));
     }
 
     // 5:4: 1350x1080 at x = 284, black either side.
-    let (placed, px) = fit_one(&device, Size::new(1280, 1024)).expect("1280x1024");
+    let (placed, px) =
+        fit_one(&device, Size::new(1280, 1024), scale::Fitter::new(OUTPUT)).expect("1280x1024");
     assert_eq!(placed, scale::Placed::Scaled);
     for (x, y) in [(0, 0), (100, 540), (280, 1079), (1640, 0), (1820, 540), (1919, 1079)] {
         assert_near(pixel(&px, OUTPUT, x, y), BLACK, &format!("bar at ({x}, {y})"));
@@ -362,13 +368,33 @@ fn the_video_processor_letterboxes_a_resized_frame() {
         assert_near(pixel(&px, OUTPUT, x, y), CONTENT, &format!("1280x1024 at ({x}, {y})"));
     }
 
-    // The recording's own size: copied, not scaled.
-    let (placed, px) = fit_one(&device, OUTPUT).expect("1920x1080");
+    report(&format!("RAN the video-processor test on {name}: scaled and letterboxed"));
+}
+
+/// What needs no video processor, on WARP, which the runner always has: the
+/// recording's own size is a plain copy, a resized frame falls back to a crop
+/// over black (never stale pixels) when the processor is unavailable, and
+/// `fill_black` is what the session writes after the window closes.
+#[test]
+fn a_frame_is_copied_or_cropped_over_black_without_a_video_processor() {
+    let device = device::create_warp_device().expect("a WARP device");
+
+    let (placed, px) = fit_one(&device, OUTPUT, scale::Fitter::new(OUTPUT)).expect("1920x1080");
     assert_eq!(placed, scale::Placed::Copied);
     assert_near(pixel(&px, OUTPUT, 0, 0), CONTENT, "copied corner");
     assert_near(pixel(&px, OUTPUT, 1919, 1079), CONTENT, "copied corner");
 
-    // What the session writes after the window closes.
+    let cropping = scale::Fitter::cropping(OUTPUT, "no processor, for the test");
+    let (placed, px) = fit_one(&device, Size::new(1280, 1024), cropping).expect("1280x1024");
+    assert_eq!(placed, scale::Placed::Cropped);
+    for (x, y) in [(0, 0), (100, 540), (1279, 1023)] {
+        assert_near(pixel(&px, OUTPUT, x, y), CONTENT, &format!("cropped at ({x}, {y})"));
+    }
+    // The slot started white: what the frame does not reach is black.
+    for (x, y) in [(1280, 0), (1500, 540), (100, 1024), (1919, 1079)] {
+        assert_near(pixel(&px, OUTPUT, x, y), BLACK, &format!("outside the crop at ({x}, {y})"));
+    }
+
     let slots = capture::create_slots(&device.device, OUTPUT.width, OUTPUT.height, 1)
         .expect("slot");
     fill(&device, &slots[0].texture, OUTPUT, WHITE);
@@ -376,7 +402,7 @@ fn the_video_processor_letterboxes_a_resized_frame() {
     let px = read_back(&device, &slots[0].texture, OUTPUT);
     assert_near(pixel(&px, OUTPUT, 960, 540), BLACK, "after fill_black");
 
-    report(&format!("RAN the video-processor test on {name}: scaled, letterboxed, copied, blacked"));
+    report("RAN the WARP copy, crop-over-black and fill_black test");
 }
 
 /// A device with a video processor that reads and writes BGRA: WARP first,
