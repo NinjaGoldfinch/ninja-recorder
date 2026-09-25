@@ -16,15 +16,16 @@ use windows::Win32::Media::MediaFoundation::{MFSTARTUP_FULL, MFShutdown, MFStart
 use windows::Win32::Media::{timeBeginPeriod, timeEndPeriod};
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 
-use super::audio::{self, MixTrack};
+use super::audio::AudioTracks;
 use super::capture::{self, Capture, Slot};
 use super::device::{self, Device};
-use super::encode::{self, Sink};
+use super::encode;
+use super::output::Output;
 use super::scale::{self, Fitter};
 use crate::recorder::audio::AudioLayout;
 use crate::recorder::own::clock;
 use crate::recorder::own::fit::Size;
-use crate::recorder::own::plan::CapturePlan;
+use crate::recorder::own::plan::{self, CapturePlan};
 use crate::recorder::own::select::{self, Choice};
 use crate::recorder::own::status::{self, Status};
 use crate::recorder::window;
@@ -338,8 +339,8 @@ fn offered(encoders: &[select::Encoder]) -> String {
 /// One recording in flight.
 struct Recording {
     capture: Capture,
-    /// `None` once finalized.
-    sink: Option<Sink>,
+    /// The encoders and the file. `None` once finalized.
+    output: Option<Output>,
     slots: Vec<Slot>,
     /// The slot holding the frame the next tick shows.
     latest: usize,
@@ -352,9 +353,9 @@ struct Recording {
     window_closed: bool,
     /// The slot every tick shows is black now, or has stopped trying to be.
     black: bool,
-    /// Track 0, the mix of every source that opened, or `None` for a
-    /// video-only recording.
-    audio: Option<MixTrack>,
+    /// Every audio track, the mix and the stems, over every source that
+    /// opened, or `None` for a video-only recording.
+    audio: Option<AudioTracks>,
     /// What the file holds, for `Started`.
     layout: AudioLayout,
     /// Ticks written so far: tick `ticks` is the next one due.
@@ -422,59 +423,44 @@ impl Recording {
 
         // Every source the plan names: the game from the process that owns
         // the window being recorded, and the microphone, the desktop or an
-        // application beside it. Started before the sink, because the sink's
-        // audio stream exists only if one of them did; a source that fails
-        // costs itself, not the recording, and the reported layout says which
-        // it was.
-        let (audio, layout) = MixTrack::start(hwnd, plan);
+        // application beside it. Started before the encoders, because there
+        // is an AAC encoder and a track for each track that kept a source; a
+        // source that fails costs itself (and any stem it alone fed), not the
+        // recording, and the reported layout says which it was.
+        let (audio, layout) = AudioTracks::start(hwnd, plan);
         if audio.is_none() && !plan.sources.is_empty() {
             warn!("recorder", "own backend: no audio source opened, recording video only");
         }
 
-        let hardware = matches!(warm.choice, Choice::Hardware { .. });
-        let audio_rate = audio.as_ref().map(|_| audio::SAMPLE_RATE);
-        let sink =
-            Sink::create(path, width, height, FPS, &warm.device.device, hardware, audio_rate)
-                .and_then(|sink| sink.begin().map(|()| sink));
-        let sink = match sink {
-            Ok(sink) => sink,
-            Err(e) => {
-                let _ = std::fs::remove_file(path);
-                return Err(e);
+        let chosen = match &warm.choice {
+            Choice::Hardware { encoder, .. } | Choice::SoftwareFallback { encoder, .. } => {
+                warm.encoders.get(*encoder).ok_or("the ranked encoder is not in the list")?
             }
+            Choice::Unavailable { reason } => return Err(reason.clone()),
         };
-        let checked = sink.loaded().and_then(|loaded| {
-            status::check_loaded(&warm.choice, &warm.adapters, &warm.encoders, &loaded)
-        });
-        let (status, warning) = match checked {
-            Ok(checked) => checked,
-            Err(e) => {
-                let _ = sink.finalize();
-                let _ = std::fs::remove_file(path);
-                return Err(e);
-            }
-        };
+        // Nothing is on disk yet: the file is created at the first keyframe.
+        let size = Size::new(width, height);
+        let tracks = layout.tracks.len();
+        let output = Output::create(path, &warm.device, size, FPS, chosen, SLOTS, tracks)?;
+        let (status, warning) =
+            status::check_loaded(&warm.choice, &warm.adapters, &warm.encoders, output.loaded())?;
         if let Some(warning) = warning {
             warn!("recorder", "own backend: {warning}");
         }
         info!(
             "recorder",
-            "own backend: {width}x{height} at {FPS} fps, H.264 {} Mbps CBR, GOP {}, {}, into {}",
+            "own backend: {width}x{height} at {FPS} fps, H.264 {} Mbps CBR, GOP {}, no B-frames, \
+             {}; AAC {} kbps per track, {}; into {} (one fragment per GOP)",
             encode::VIDEO_BITRATE / 1_000_000,
             encode::GOP_FRAMES,
-            match (&audio, sink.has_audio()) {
-                (Some(audio), true) => format!(
-                    "AAC {} kbps (track 0, the mix of {})",
-                    encode::AAC_BYTES_PER_SECOND * 8 / 1000,
-                    audio.names()
-                ),
-                _ => "no audio".to_string(),
-            },
+            output.describe(),
+            encode::AAC_BYTES_PER_SECOND * 8 / 1000,
+            plan::describe(&layout),
             path.display()
         );
         Ok(Recording {
             capture,
-            sink: Some(sink),
+            output: Some(output),
             slots,
             latest: 0,
             next_slot: 1,
@@ -516,7 +502,7 @@ impl Recording {
             match commands.try_recv() {
                 Ok(Command::Stop(reply)) => {
                     // Whatever is due up to now goes in before the finalize.
-                    if let Err(e) = self.write_due(origin) {
+                    if let Err(e) = self.write_due(device, origin) {
                         warn!("recorder", "own backend: the last ticks were not written: {e}");
                     }
                     return Ended::Stop(reply);
@@ -538,7 +524,13 @@ impl Recording {
             } else if let Err(e) = self.take_frame(device) {
                 return Ended::Problem(lost_or(device, e));
             }
-            if let Err(e) = self.write_due(origin) {
+            if let Err(e) = self.write_due(device, origin) {
+                return Ended::Problem(lost_or(device, format!("{e} (at tick {})", self.ticks)));
+            }
+            // A hardware encoder finishes frames between ticks: collect them.
+            if let Some(output) = self.output.as_mut()
+                && let Err(e) = output.poll()
+            {
                 return Ended::Problem(lost_or(device, format!("{e} (at tick {})", self.ticks)));
             }
             // Audio keeps flowing after the window closes, under the black
@@ -551,17 +543,18 @@ impl Recording {
         }
     }
 
-    /// Writes whatever the mix has ready, as far as the video has been
-    /// written: every source that has delivered, and the rest as silence
-    /// once the mixer's watermark has passed (`own::mix`).
+    /// Writes whatever each track's mix has ready, as far as the video has
+    /// been written, into that track's encoder: every source that has
+    /// delivered, and the rest as silence once the mixer's watermark has
+    /// passed (`own::mix`).
     fn write_audio(&mut self, origin: i64) -> Result<(), String> {
-        let (Some(sink), Some(audio)) = (&self.sink, self.audio.as_mut()) else {
+        let (Some(output), Some(audio)) = (self.output.as_mut(), self.audio.as_mut()) else {
             return Ok(());
         };
         let video_end = clock::tick_time(self.ticks, FPS);
         let now = device::qpc_hns() - origin;
-        audio.write(video_end, now, &mut |pcm: &[i16], position: u64| {
-            sink.write_audio(pcm, position)
+        audio.write(video_end, now, &mut |track: usize, pcm: &[i16], position: u64| {
+            output.write_audio(track, pcm, position)
         })
     }
 
@@ -621,8 +614,8 @@ impl Recording {
     }
 
     /// Writes every tick from the next one up to the one due now.
-    fn write_due(&mut self, origin: i64) -> Result<(), String> {
-        let Some(sink) = &self.sink else {
+    fn write_due(&mut self, device: &Device, origin: i64) -> Result<(), String> {
+        let Some(output) = self.output.as_mut() else {
             return Ok(());
         };
         let now = device::qpc_hns() - origin;
@@ -630,31 +623,49 @@ impl Recording {
             while self.ticks <= due {
                 let t = clock::tick_time(self.ticks, FPS);
                 let d = clock::tick_time(self.ticks + 1, FPS) - t;
-                sink.write(&self.slots[self.latest], t, d)?;
+                output.write(device, &self.slots, self.latest, t, d)?;
                 self.ticks += 1;
             }
         }
         Ok(())
     }
 
-    /// Finalizes the file. The capture stops first; the audio is written up
-    /// to the last video tick and padded to it exactly, as the spike did, so
-    /// any A/V offset in the file was added downstream of here; then the sink
-    /// drains, and only then do the slots go: every sample written from a
-    /// slot has to be released before its callback is.
+    /// Finalizes the file. The capture stops first; each audio track is
+    /// written up to the last video tick and padded to it exactly, as the
+    /// spike did, so any A/V offset in the file was added downstream of here;
+    /// then every encoder drains into the file and it gets its `mfra`, and
+    /// only then do the slots go: every sample made from a slot has to be
+    /// released before its callback is, which the encoder's shutdown does.
     ///
     /// With the GPU device lost this still runs: the encoder's drain fails
-    /// rather than waits, the sink writer returns that, and the fragments
+    /// rather than waits (or gives up after five seconds), and the fragments
     /// already on disk are the recording (`stop` bounds the wait regardless).
     fn finish(mut self) -> Result<(), String> {
         drop(self.capture);
         let end = clock::tick_time(self.ticks, FPS);
-        if let Some(audio) = self.audio.take()
-            && let Some(sink) = self.sink.as_ref()
-        {
-            audio.finish(end, &mut |pcm: &[i16], position: u64| sink.write_audio(pcm, position));
+        if let Some(audio) = self.audio.take() {
+            match self.output.as_mut() {
+                Some(output) => audio.finish(end, &mut |track: usize, pcm: &[i16], position: u64| {
+                    output.write_audio(track, pcm, position)
+                }),
+                None => drop(audio),
+            }
         }
-        let result = self.sink.take().map_or(Ok(()), Sink::finalize);
+        let result = match self.output.take() {
+            Some(output) => output.finalize().map(|stats| {
+                info!(
+                    "recorder",
+                    "own backend: file closed: {} video frames ({} keyframes, {} dropped before \
+                     the first), AAC frames per track {:?}, {} fragments",
+                    stats.video_frames,
+                    stats.keyframes,
+                    stats.dropped_before_keyframe,
+                    stats.audio_frames,
+                    stats.fragments
+                );
+            }),
+            None => Ok(()),
+        };
         drop(self.slots);
         result
     }
@@ -662,8 +673,8 @@ impl Recording {
 }
 
 impl Recording {
-    /// A recording that never got its origin: nothing was written but the
-    /// header, so the file goes too.
+    /// A recording that never got its origin: nothing was encoded, so there
+    /// is normally no file, and one that exists goes too.
     fn abandon(self, path: &std::path::Path) {
         let _ = self.finish();
         let _ = std::fs::remove_file(path);

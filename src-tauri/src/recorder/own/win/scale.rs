@@ -96,8 +96,9 @@ pub struct Processor {
     processor: ID3D11VideoProcessor,
     input: Size,
     output: Size,
-    /// The one input view in use, for the texture it views.
-    input_view: Option<(ID3D11Texture2D, ID3D11VideoProcessorInputView)>,
+    /// One input view per source texture: the fitter's one staging copy, or
+    /// each of the slots `convert.rs` reads.
+    input_views: Vec<(ID3D11Texture2D, ID3D11VideoProcessorInputView)>,
     /// One output view per target texture, which is one per slot.
     output_views: Vec<(ID3D11Texture2D, ID3D11VideoProcessorOutputView)>,
 }
@@ -189,7 +190,7 @@ impl Processor {
             processor,
             input,
             output,
-            input_view: None,
+            input_views: Vec::new(),
             output_views: Vec::new(),
         })
     }
@@ -251,9 +252,7 @@ impl Processor {
         &mut self,
         source: &ID3D11Texture2D,
     ) -> Result<ID3D11VideoProcessorInputView, String> {
-        if let Some((texture, view)) = &self.input_view
-            && texture == source
-        {
+        if let Some((_, view)) = self.input_views.iter().find(|(t, _)| t == source) {
             return Ok(view.clone());
         }
         let desc = D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC {
@@ -276,7 +275,12 @@ impl Processor {
         }
         .map_err(|e| format!("CreateVideoProcessorInputView failed: {e}"))?;
         let view = view.ok_or("CreateVideoProcessorInputView returned nothing")?;
-        self.input_view = Some((source.clone(), view.clone()));
+        // Bounded as the output views are, for a caller handing over new
+        // textures.
+        if self.input_views.len() >= 32 {
+            self.input_views.clear();
+        }
+        self.input_views.push((source.clone(), view.clone()));
         Ok(view)
     }
 

@@ -79,25 +79,28 @@ flowchart TB
 | `recorder/backend.rs` | The `capture_backend` setting, and the pure choice of which backend to build from it | `CaptureBackend`, `choose`, `construct`, `Backends` |
 | `recorder/libobs/` | Windows capture backend (WGC + hardware encode) | `LibObsRecorder` |
 | `recorder/window.rs` | Finding the League game window and its client size, for both Windows backends | `find_window`, `find_by_class`, `client_size` |
-| `recorder/own/` | Option B, the target backend (WGC → D3D11 → Media Foundation), being built through WS1.6. Constructible since #236 on Windows build 20348+: the game window's video and every source the audio preset names (the game by process loopback since #237; the microphone, the desktop and applications since #238), through Media Foundation's sink writer. Track 0 only, the mix, until the stems arrive with #239; selected only by a devtools build until #243 | `OwnRecorder` |
+| `recorder/own/` | Option B, the target backend (WGC → D3D11 → Media Foundation), being built through WS1.6. Constructible since #236 on Windows build 20348+: the game window's video and every source the audio preset names (the game by process loopback since #237; the microphone, the desktop and applications since #238), and since #239 every track of the preset's layout, the mix and each stem, in one file: the encoder MFTs driven directly, the file written by `mp4::write`. Selected only by a devtools build until #243 | `OwnRecorder` |
 | `recorder/own/clock.rs` | The video tick grid on QPC, and placing audio packets on it: drift measured, corrected by slipping frames, or trusted from the device count when a source has no QPC stamps. Which of the two a source gets is decided from its first packet's stamp | `tick_time`, `ticks_due`, `Aligner`, `check_stamp`, `Stamper`, `DeviceTimeline` |
 | `recorder/own/feed.rs` | One audio source's packets through its own `Aligner` into the mixer: never past the video, held with silence to the mixer's watermark while the source is quiet, padded to the last tick at stop | `Feed`, `Packet` |
 | `recorder/own/fit.rs` | Where a frame from a resized game window goes in the fixed-size output: scaled with its aspect kept, centred, black around it, even dimensions and offsets; and whether a frame is copied, scaled or skipped | `letterbox`, `place`, `Placement` |
-| `recorder/own/mix.rs` | Track 0: every source's aligned stream summed in fixed 10 ms blocks, clamped, then i16. A block is mixed once every source has delivered it or a watermark 150 ms behind now has passed it, so a silent, missing or unplugged source is silence and never a stall; never past the video, and ended on the last tick | `Mixer`, `Mixdown`, `LATENCY` |
+| `recorder/own/mft.rs` | The bookkeeping of an asynchronous (hardware) encoder MFT: a `NeedInput` is one credit for one `ProcessInput`, a `HaveOutput` one `ProcessOutput` owed, frames that arrive with no credit wait in a bounded queue, and the drain ends on `DrainComplete` | `AsyncPump`, `Event` |
+| `recorder/own/mix.rs` | Each written track: its sources' aligned streams summed in fixed 10 ms blocks, clamped, then i16. A block is mixed once every source has delivered it or a watermark 150 ms behind now has passed it, so a silent, missing or unplugged source is silence and never a stall; never past the video, and ended on the last tick. `TrackMix` is every track of a layout, each source's packets copied to every track that sums it, so a stem is a mix of one (#239) | `Mixer`, `Mixdown`, `TrackMix`, `LATENCY` |
+| `recorder/own/mux.rs` | Encoded samples into the file through `mp4::write`: created at the first keyframe (whose SPS and PPS the `moov` needs), 100 ns times to 90 kHz and to each AAC track's rate, a video frame held until the next gives its duration, and a fragment closed before every keyframe after the first | `Mux`, `to_timescale`, `flush_before` |
+| `recorder/own/nv12.rs` | BGRA to NV12 on the CPU, BT.709 studio range, for a device with no video processor (the CI runner, a GPU-less VM) | `bgra_to_nv12`, `frame_len` |
 | `recorder/own/pcm.rs` | Endpoint sample formats to stereo f32 for the mixer (or i16), and the mix back to i16 | `to_stereo_f32`, `f32_to_i16` |
-| `recorder/own/plan.rs` | A preset's `AudioLayout` to a `CapturePlan`: the sources to open, each once, and what each written track sums (track 0 only until #239; the Desktop mix is the desktop alone). `realised_layout` drops a source that failed to open with its stem and reindexes, so `stop` reports the file that exists | `plan`, `CapturePlan`, `realised_layout`, `TRACKS_WRITTEN` |
+| `recorder/own/plan.rs` | A preset's `AudioLayout` to a `CapturePlan`: the sources to open, each once, and what each written track sums (every track since #239; the Desktop mix is the desktop alone, and the game feeds only its stem). `realised_layout` drops a source that failed to open with its stem and reindexes, so `stop` reports the file that exists; `describe` is how the log names each track (`a:0 "Everything" (game + microphone)`) | `plan`, `CapturePlan`, `realised_layout`, `describe`, `TRACKS_WRITTEN` |
 | `recorder/own/root.rs` | Which process tree a process-loopback capture targets, from a process snapshot: the game (the window's owner, checked against `League of Legends.exe`), or the top of an application's tree (Discord, since #238). Reused parent PIDs are caught by creation time | `game_root`, `application_root` |
 | `recorder/own/select.rs` | Which H.264 encoder: hardware by adapter vendor (NVIDIA → AMD → Intel), the software MFT only as a marked fallback; the Windows build floor (20348) and its devtools-only override; a preset's checked audio layout (every preset since #238) | `rank`, `Choice`, `availability`, `floor_ignored`, `audio_layout` |
-| `recorder/own/status.rs` | The even frame size, whether the encoder Media Foundation loaded is the one `rank` chose, and the backend's name (`own (ready: …)`, `own (software encoding: …)`, `own (unavailable: …)`) | `even_size`, `check_loaded`, `Status` |
-| `recorder/own/win/` | Everything that calls Windows, and the only part of `own/` gated to it: the adapters and D3D11 device, the WGC capture with its border off, `scale` (frames into the fixed-size slots: a copy, or the D3D11 video processor when the window has been resized; the processor is shared with #239's BGRA → NV12), the process table, one thread per audio source (the game and applications by process loopback, include mode; the microphone and the desktop from their endpoints, the desktop with a silent keep-alive; all 48 kHz stereo float), track 0's `MixTrack`, the sink writer (H.264 8 Mbps CBR, GOP 120, AAC 160 kbps, fragmented MP4), and the session thread that owns them, which runs in the capture worker (`host`: the session as the worker's `Host`). `OwnRecorder` is the daemon's thin client of that worker | `OwnRecorder`, `session::run`, `host::SessionHost`, `audio::start`, `audio::MixTrack`, `scale::Processor`, `scale::Fitter` |
+| `recorder/own/status.rs` | The even frame size, whether the encoder that was activated is the one `rank` chose, and the backend's name (`own (ready: …)`, `own (software encoding: …)`, `own (unavailable: …)`) | `even_size`, `check_loaded`, `Status` |
+| `recorder/own/win/` | Everything that calls Windows, and the only part of `own/` gated to it: the adapters and D3D11 device, the WGC capture with its border off, `scale` (frames into the fixed-size slots: a copy, or the D3D11 video processor when the window has been resized; the same processor, told BT.709 studio range, does `convert`'s BGRA → NV12), the process table, one thread per audio source (the game and applications by process loopback, include mode; the microphone and the desktop from their endpoints, the desktop with a silent keep-alive; all 48 kHz stereo float), every track's mix (`audio::AudioTracks`), the encoders driven directly (`h264`: the H.264 MFT, asynchronous or synchronous as it declares, 8 Mbps CBR, GOP 120, low latency, no B-frames, textures in where it is D3D11-aware; `aac`: an AAC MFT per track, 160 kbps), `output` (frames, encoders and the `own::mux` file together), and the session thread that owns them, which runs in the capture worker (`host`: the session as the worker's `Host`). `OwnRecorder` is the daemon's thin client of that worker, and repairs the file of a worker that died | `OwnRecorder`, `session::run`, `host::SessionHost`, `audio::start`, `audio::AudioTracks`, `h264::VideoEncoder`, `aac::AacEncoder`, `convert::Frames`, `output::Output`, `scale::Processor`, `scale::Fitter` |
 | `recorder/own/worker/` | The capture worker, `ninja-recorder --capture-worker` (#241): the process the session thread runs in, spawned only while League runs. The line protocol both sides share, the worker's loop (EOF is a shutdown), the pure lifetime rule, and the daemon's client with its timeouts and its kill-on-close job object | `run`, `protocol::{Request, Reply}`, `serve::serve`, `lifetime::Lifetime`, `client::Worker` |
 | `recorder/stub.rs` | Non-Windows dev backend that copies a fixture MP4 | `StubRecorder` |
 | `recorder/remux.rs` | The faststart remux, a `-c copy` through `ffmpeg_command` that moves the index to the front so a fragmented file scrubs. Shared by both Windows backends' `stop` and startup recovery; the argument list is pure | `faststart_args`, `remux_faststart` |
 | `mp4/read.rs` | Reading an MP4's top-level boxes directly, no ffmpeg: fragmented or not, how many whole fragments, how many audio tracks, and what a kill cut short | `summarize`, `Summary` |
-| `mp4/write.rs` | The own backend's fragmented-MP4 muxer: one H.264 track and any number of AAC tracks, a `moof`+`mdat` per flush, an `mfra` at the end, and `repair` for a killed file. Pure Rust, no ffmpeg; nothing calls it until #239 ([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#25-multi-track-audio)) | `Writer`, `Track`, `repair` |
+| `mp4/write.rs` | The own backend's fragmented-MP4 muxer: one H.264 track and any number of AAC tracks, a `moof`+`mdat` per flush, an `mfra` at the end, and `repair` for a killed file. Pure Rust, no ffmpeg. Written through by the own backend's `own::mux` since #239, and `repair` is what startup recovery and a dead worker's `stop` run first ([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#25-multi-track-audio)) | `Writer`, `Track`, `repair` |
 | `ddragon.rs` | Champion art from Data Dragon, fetched on first use and cached on disk | `champion_icon` |
 | `db/mod.rs` | Schema, migrations, every query | `Db` |
-| `db/reconcile.rs` | Reconciling DB rows against files on disk, and finishing and remuxing the recordings a dead daemon left open | `reconcile`, `recover_unfinished`, `recovery_action` |
+| `db/reconcile.rs` | Reconciling DB rows against files on disk, and finishing the recordings a dead daemon left open: an own-backend file repaired in Rust first (`mp4::write::repair`), then every file remuxed | `reconcile`, `recover_unfinished`, `recovery_action` |
 | `probe.rs` | Reading a container's duration back out with ffmpeg, for files `reconcile` imported | `duration_s` |
 | `match_summary.rs` | Waiting out the LCU after a finalize, then patching the row with what it eventually says | `patch`, `next_delay` |
 | `retention.rs` | Deletion policy and free-space preflight | `select_for_deletion`, `enforce_now`, `has_room_to_record` |
@@ -160,11 +163,12 @@ behind a three-method trait and nothing above it knows libobs exists.
 flowchart TB
     SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release · collect_output"}
     T -->|"libobs, #[cfg(windows)]"| L["LibObsRecorder<br/><small>WGC window capture,<br/>NVENC/AMF/QSV H.264,<br/>one AAC track per audio source,<br/>fragmented MP4 + faststart remux</small>"]
-    T -->|"own, #[cfg(windows)], build 20348+"| O["OwnRecorder<br/><small>Option B: WGC → D3D11 →<br/>Media Foundation sink writer,<br/>every source mixed into track 0,<br/>stems with #239,<br/>fragmented MP4 + faststart remux</small>"]
+    T -->|"own, #[cfg(windows)], build 20348+"| O["OwnRecorder<br/><small>Option B: WGC → D3D11 →<br/>Media Foundation MFTs, driven directly,<br/>every track (mix + stems) in one file<br/>by our own writer, + faststart remux</small>"]
     O -.->|"stdin / stdout,<br/>one JSON line each"| WK["capture worker process<br/><small>--capture-worker, only while<br/>League runs; kill-on-close job</small>"]
-    WK -.->|"channel"| SES["session thread<br/><small>owns every COM object:<br/>device, WGC, sink writer</small>"]
-    AUD["audio source threads<br/><small>game, applications: process loopback<br/>microphone, desktop: WASAPI endpoints</small>"] -.->|"stamped packets"| MIX["own::mix<br/><small>per-source aligner,<br/>10 ms blocks, watermark</small>"]
-    MIX -.->|"track 0"| SES
+    WK -.->|"channel"| SES["session thread<br/><small>owns every COM object:<br/>device, WGC, encoder MFTs</small>"]
+    AUD["audio source threads<br/><small>game, applications: process loopback<br/>microphone, desktop: WASAPI endpoints</small>"] -.->|"stamped packets"| MIX["own::mix::TrackMix<br/><small>per track, per source aligner,<br/>10 ms blocks, watermark</small>"]
+    MIX -.->|"every track: mix, stems"| SES
+    SES -.->|"H.264 + AAC samples"| MUX["own::mux → mp4::write<br/><small>one fragment per GOP, mfra</small>"]
     T -->|"libobs, everything else"| S["StubRecorder<br/><small>copies fixtures/sample.mp4</small>"]
     T -->|"chosen but not buildable"| F["FailedRecorder<br/><small>refuses every start,<br/>with the reason</small>"]
     style T fill:#ede7f6,stroke:#5e35b1
@@ -187,7 +191,7 @@ The own backend keeps the same shape, with its worker spawned on demand too.
 `OwnRecorder` holds the capture worker's child process, its job object and its
 pipes, and nothing else; the session thread runs in the worker
 (`ninja-recorder --capture-worker`, #241) and owns the D3D11 device, the WGC
-capture and the sink writer, so the recorder stays `Send` under the
+capture and the encoders, so the recorder stays `Send` under the
 supervisor's mutex and a driver fault in an encoder ends the worker rather than
 the daemon. `prepare` spawns the worker and warms the thread (COM, Media
 Foundation, `select::rank`, the device), `start` plans the sources the preset
@@ -197,18 +201,20 @@ the game window's first frame, starts the audio sources, and then takes the
 file's t = 0 as its last act, `stop` finalizes and
 remuxes, and `release` ends the worker (after the `stop`, if a recording is in
 flight). A worker that dies mid-recording is logged with its exit code, and
-`stop` hands over what reached the disk, remuxed, rather than an error; the
-next `prepare` spawns a fresh one
+`stop` hands over what reached the disk, repaired by `mp4::write::repair` and
+remuxed, rather than an error; the next `prepare` spawns a fresh one
 ([DEVELOPMENT.md §12](../DEVELOPMENT.md#the-capture-worker-a-third-mode-and-only-while-league-runs-241)).
 
-The game's audio has a thread of its own, started for each recording. It
-finds the process tree to capture from the window being recorded
+Every audio source has a thread of its own, started for each recording. The
+game's finds the process tree to capture from the window being recorded
 (`root::game_root` over a Toolhelp snapshot), captures it by process loopback,
 stamps each packet (`clock::Stamper`: QPC if the first packet's stamp is real,
 the sample count if not, logged either way), and sends it to the session
-thread, whose `feed::Feed` writes it into the sink writer's AAC stream no
-further than the video has got. A capture that cannot start leaves the
-recording video only, and `stop` reports no audio track
+thread. There `mix::TrackMix` copies each packet to every track that sums its
+source, and each track's `feed::Feed`s and mixer write that track's AAC
+encoder no further than the video has got. A source that cannot start is left
+out with any stem it alone fed; with none, the recording is video only, and
+`stop` reports no audio track
 ([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#the-own-backend-captures-each-source-itself),
 [§16](../DEVELOPMENT.md#the-qpc-question-and-how-a-recording-answers-it)).
 
@@ -225,27 +231,28 @@ sequenceDiagram
     R->>T: Prepare (a line on stdin, then the channel)
     T-->>R: status (ranked encoder)
     S->>R: start(config)
-    Note over R: preset must be Game
-    R->>T: Start { path }
+    Note over R: plan every track of the preset
+    R->>T: Start { path, plan }
     Note over T: find window, WGC first frame
-    T->>A: start (root::game_root of the window's owner)
-    A-->>T: process loopback running
-    Note over T: sink writer up (H.264 + AAC),<br/>loaded encoder checked
-    T-->>R: status (loaded encoder), game audio on
+    T->>A: start each source (the game: root::game_root)
+    A-->>T: captures running (or left out)
+    Note over T: H.264 MFT activated (async or sync),<br/>one AAC MFT per track,<br/>activated encoder checked
+    T-->>R: status (activated encoder), realised layout
     R->>T: origin = QPC now (last act of start)
     R-->>S: Ok, record_started_at stamped
     loop every tick due on the 60 fps grid
-        T->>T: newest WGC frame → slot → WriteSample
+        T->>T: newest WGC frame → slot → NV12 → H.264 MFT
         A-->>T: packets, stamped qpc or device
-        T->>T: Feed: packets up to the last tick → AAC
+        T->>T: TrackMix: each track's mix up to the last tick → its AAC MFT
+        T->>T: encoded samples → mux (a fragment per GOP)
     end
     S->>R: stop()
     R->>T: Stop
     T->>A: stop (after the last tick's packets, 200 ms at most)
-    Note over T: audio padded to the last tick,<br/>clock line logged, finalized
+    Note over T: every track padded to the last tick,<br/>encoders drained, mfra written
     T-->>R: finalized
-    R->>R: faststart remux (1 audio track)
-    R-->>S: RecordingOutput (Game track, or none)
+    R->>R: faststart remux (every audio track)
+    R-->>S: RecordingOutput (every track, labelled, or none)
     S->>R: release() (the client closed)
     R->>W: Release
     W->>T: Release: finalize anything in flight, tear down
@@ -275,10 +282,11 @@ flowchart LR
     P -->|"content = output"| CP["copy into slot"]
     P -->|"other size"| VP["video processor:<br/>scale into letterbox,<br/>bars black"]
     P -->|"no content"| SK["skip: tick repeats<br/>the last slot"]
-    CP --> W["WriteSample"]
+    CP --> W["convert: NV12<br/><small>once per new frame</small>"]
     VP --> W
     B --> W
     SK --> W
+    W --> E["H.264 MFT"]
 ```
 
 `collect_output` is the third default no-op, and the supervisor calls it every
@@ -339,12 +347,36 @@ flowchart LR
 The reasoning is
 [DEVELOPMENT.md §16, "The switch, and when it applies"](../DEVELOPMENT.md#the-switch-and-when-it-applies).
 
-### The own backend's file writer
+### The own backend's encoders and file writer
 
 Media Foundation's MP4 sinks hold one audio stream, so the own backend writes
-its files with `mp4::write` ([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#decision-the-own-backend-writes-its-own-mp4)).
-It has no caller until #239. The caller buffers samples and flushes one
-fragment per keyframe interval; each flush leaves a playable file on disk.
+its files with `mp4::write` ([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#decision-the-own-backend-writes-its-own-mp4)),
+and since #239 drives the encoders itself rather than through the sink
+writer. `own/win/output.rs` holds them together for one recording:
+
+```mermaid
+flowchart LR
+    SL["BGRA slot"] --> CV{"convert"}
+    CV -->|"hardware encoder<br/>(D3D11-aware)"| TX["video processor →<br/>NV12 texture per slot<br/><small>BT.709 studio range</small>"]
+    CV -->|"software, video processor"| RB["video processor → NV12,<br/>read back"]
+    CV -->|"software, no video processor<br/>(CI runner, VM)"| CPU["read BGRA back,<br/>own::nv12 on the CPU"]
+    TX --> AS["async MFT<br/><small>unlock, D3D manager;<br/>NeedInput / HaveOutput events<br/>through mft::AsyncPump</small>"]
+    RB --> SY["sync MFT<br/><small>ProcessInput, then<br/>ProcessOutput until it wants more</small>"]
+    CPU --> SY
+    AS --> MX["own::mux"]
+    SY --> MX
+    PCM["each track's mix"] --> AAC["AAC MFT per track<br/><small>sync, 160 kbps, raw AAC</small>"]
+    AAC --> MX
+    MX --> WR["mp4::write::Writer"]
+```
+
+Both H.264 paths set CBR 8 Mbps, a GOP of 120, low latency and no B-frames
+through `ICodecAPI`, and read keyframes from `MFSampleExtension_CleanPoint`.
+`own::mux` creates the file at the first keyframe, whose SPS and PPS the
+`moov` needs (taken from `MF_MT_MPEG_SEQUENCE_HEADER` if an encoder does not
+put them in-band), converts 100 ns times to each track's timescale, and
+closes a fragment immediately before every keyframe after the first; each
+flush leaves a playable file on disk.
 
 ```mermaid
 flowchart LR

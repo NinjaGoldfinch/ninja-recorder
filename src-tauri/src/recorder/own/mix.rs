@@ -1,5 +1,5 @@
-//! Track 0: every source a preset names, summed on the video's timeline, with
-//! no Windows in it (#238).
+//! Every written track: each one's sources summed on the video's timeline,
+//! with no Windows in it (#238, and every track since #239).
 //!
 //! The libobs backend hands each source to libobs' mixer. The own backend
 //! captures each source itself (DEVELOPMENT.md §2.5, "The own backend
@@ -25,12 +25,19 @@
 //! - **#237's guarantees hold for the mix**: nothing is mixed past the end of
 //!   the video written so far, and at stop every source is padded, and the
 //!   mix written, to the last tick exactly.
+//! - **Every track is a mix, stems included** ([`TrackMix`], #239). Track 0
+//!   sums every source; a stem is a mix of one. Each track has its own
+//!   [`Mixdown`], and a source's packets are copied to every track that sums
+//!   it, so a stem goes through exactly the same alignment and watermark as
+//!   the mix it is part of, and is sample for sample what that source
+//!   contributed to it.
 
 use std::collections::VecDeque;
 
 use super::clock::{self, HNS_PER_SECOND};
 use super::feed::{Feed, Packet};
 use super::pcm;
+use crate::recorder::audio::AudioLayout;
 
 /// Blocks per second: a block is 10 ms, 480 frames at 48 kHz.
 pub const BLOCKS_PER_SECOND: u32 = 100;
@@ -294,9 +301,92 @@ impl Mixdown {
     }
 }
 
+/// Every track a layout writes, each a [`Mixdown`] of its own sources.
+/// Sources are the layout's; tracks are the layout's, in file order.
+pub struct TrackMix {
+    /// Per track, the layout sources it sums: lane `j` of track `t` is
+    /// source `sums[t][j]`.
+    sums: Vec<Vec<usize>>,
+    mixdowns: Vec<Mixdown>,
+}
+
+impl TrackMix {
+    /// Every track of `layout` at `rate`, whose tick 0 is `origin` on the
+    /// performance counter.
+    pub fn new(rate: u32, origin: i64, layout: &AudioLayout) -> Self {
+        let sums: Vec<Vec<usize>> = layout.tracks.iter().map(|t| t.sources.clone()).collect();
+        let mixdowns = sums.iter().map(|s| Mixdown::new(rate, origin, s.len())).collect();
+        TrackMix { sums, mixdowns }
+    }
+
+    pub fn tracks(&self) -> usize {
+        self.mixdowns.len()
+    }
+
+    pub fn track(&self, t: usize) -> &Mixdown {
+        &self.mixdowns[t]
+    }
+
+    /// The first track that sums `source`, and its lane there: where that
+    /// source's own story (its aligner, what the mixer did with it) is read
+    /// from, since every track's copy saw the same packets.
+    pub fn first_lane(&self, source: usize) -> Option<(usize, usize)> {
+        self.sums
+            .iter()
+            .enumerate()
+            .find_map(|(t, sums)| sums.iter().position(|&s| s == source).map(|lane| (t, lane)))
+    }
+
+    /// Source `source`'s feed in the first track that sums it.
+    pub fn feed(&self, source: usize) -> Option<&Feed> {
+        let (t, lane) = self.first_lane(source)?;
+        Some(self.mixdowns[t].feed(lane))
+    }
+
+    /// A packet from `source`, to every track that sums it.
+    pub fn push(&mut self, source: usize, packet: Packet) {
+        for (sums, mixdown) in self.sums.iter().zip(&mut self.mixdowns) {
+            if let Some(lane) = sums.iter().position(|&s| s == source) {
+                mixdown.push(lane, packet.clone());
+            }
+        }
+    }
+
+    /// One pass over every track ([`Mixdown::write`]), writing as
+    /// `write(track, pcm, position)`.
+    pub fn write<W>(&mut self, video_end_rel: i64, now_rel: i64, write: &mut W) -> Result<(), String>
+    where
+        W: FnMut(usize, &[i16], u64) -> Result<(), String>,
+    {
+        for (t, mixdown) in self.mixdowns.iter_mut().enumerate() {
+            mixdown.write(video_end_rel, now_rel, &mut |pcm: &[i16], position: u64| {
+                write(t, pcm, position)
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Ends every track at `end_rel` ([`Mixdown::finish`]). One result per
+    /// track, so one that fails does not stop the others ending: each
+    /// source's padding, in that track's lane order, or why it failed.
+    pub fn finish<W>(&mut self, end_rel: i64, write: &mut W) -> Vec<Result<Vec<u64>, String>>
+    where
+        W: FnMut(usize, &[i16], u64) -> Result<(), String>,
+    {
+        self.mixdowns
+            .iter_mut()
+            .enumerate()
+            .map(|(t, mixdown)| {
+                mixdown.finish(end_rel, &mut |pcm: &[i16], position: u64| write(t, pcm, position))
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::recorder::audio::AudioPreset;
     use crate::recorder::own::clock::AudioClock;
 
     const RATE: u32 = 48_000;
@@ -559,5 +649,63 @@ mod tests {
         mixdown.finish(hns_of(1_000), &mut out.writer()).unwrap();
         assert_eq!((out.at(0), out.at(480), out.at(999)), (level(0.5), level(-0.25), 0));
         assert_eq!(mixdown.mixer().stats.released, 0);
+    }
+
+    /// Game + mic + Discord: three sources, four tracks. The mix is the sum,
+    /// each stem is its source alone, sample for sample what that source put
+    /// into the mix, and every track ends with the video.
+    #[test]
+    fn every_track_of_a_layout_is_mixed_from_its_own_sources() {
+        let layout = AudioPreset::GameMicDiscord { mic_device_id: None }.layout();
+        let mut tracks = TrackMix::new(RATE, ORIGIN, &layout);
+        assert_eq!(tracks.tracks(), 4);
+        let mut outs: Vec<Out> = (0..4).map(|_| Out::default()).collect();
+        let levels = [0.25f32, 0.125, 0.0625];
+        for block in 0..100u64 {
+            for (source, &v) in levels.iter().enumerate() {
+                // Discord (source 2) only speaks for the second half.
+                if source == 2 && block < 50 {
+                    continue;
+                }
+                tracks.push(source, packet(block * BLOCK, BLOCK as u32, v));
+            }
+        }
+        let end = hns_of(100 * BLOCK);
+        let mut write = |t: usize, pcm: &[i16], position: u64| outs[t].writer()(pcm, position);
+        tracks.write(end, end, &mut write).unwrap();
+        let finished = tracks.finish(end, &mut write);
+        assert!(finished.iter().all(Result::is_ok), "{finished:?}");
+        for (t, out) in outs.iter().enumerate() {
+            assert_eq!(out.frames(), 100 * BLOCK, "track {t} ends with the video");
+        }
+        let early = 10 * BLOCK;
+        let late = 80 * BLOCK;
+        assert_eq!(outs[0].at(early), level(0.375), "the mix before Discord speaks");
+        assert_eq!(outs[0].at(late), level(0.4375), "the mix once it does");
+        assert_eq!((outs[1].at(early), outs[1].at(late)), (level(0.25), level(0.25)), "game");
+        assert_eq!((outs[2].at(early), outs[2].at(late)), (level(0.125), level(0.125)), "mic");
+        assert_eq!((outs[3].at(early), outs[3].at(late)), (0, level(0.0625)), "Discord");
+        // Each source's story is read from the mix, where every one appears.
+        assert_eq!(tracks.first_lane(0), Some((0, 0)));
+        assert_eq!(tracks.first_lane(2), Some((0, 2)));
+        assert_eq!(tracks.first_lane(3), None);
+        assert_eq!(tracks.feed(1).unwrap().aligner().written(), 100 * BLOCK);
+    }
+
+    /// The Desktop preset: the game feeds only its stem, and the mix is the
+    /// desktop alone, so the game is never in track 0 twice.
+    #[test]
+    fn a_source_in_one_track_only_goes_to_that_track() {
+        let layout = AudioPreset::Desktop.layout();
+        let mut tracks = TrackMix::new(RATE, ORIGIN, &layout);
+        let mut outs: Vec<Out> = (0..2).map(|_| Out::default()).collect();
+        tracks.push(0, packet(0, BLOCK as u32, 0.5));
+        tracks.push(1, packet(0, BLOCK as u32, 0.25));
+        let end = hns_of(BLOCK);
+        let mut write = |t: usize, pcm: &[i16], position: u64| outs[t].writer()(pcm, position);
+        tracks.write(end, end, &mut write).unwrap();
+        assert_eq!(outs[0].at(0), level(0.5), "System audio is the desktop alone");
+        assert_eq!(outs[1].at(0), level(0.25), "the Game stem is the game alone");
+        assert_eq!(tracks.first_lane(1), Some((1, 0)));
     }
 }

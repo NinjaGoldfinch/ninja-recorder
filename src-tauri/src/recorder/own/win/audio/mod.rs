@@ -6,10 +6,11 @@
 //! A source thread does nothing but capture. Each packet is converted to
 //! stereo f32, stamped by a [`Stamper`] (on QPC if the engine's stamps are
 //! real, on the sample count if not; the same decision for every kind of
-//! source), and sent to the session thread, which owns the sink writer and
-//! the [`crate::recorder::own::mix::Mixdown`] that places every source's
-//! packets on the video's clock and mixes them (`track`). One writer thread
-//! means no question about the sink writer's own locking.
+//! source), and sent to the session thread, which owns the encoders and a
+//! [`crate::recorder::own::mix::Mixdown`] per written track, placing every
+//! source's packets on the video's clock and mixing each track from them
+//! (`track`). One thread feeds every encoder and the file, so nothing about
+//! them needs a lock.
 //!
 //! **Every source is asked for the same format**, 48 kHz stereo float, so
 //! nothing downstream converts rates: process loopback has no mix format to
@@ -38,7 +39,7 @@ use crate::recorder::own::feed::Packet;
 use crate::recorder::own::pcm::{self, SampleFormat};
 use crate::{info, warn};
 
-pub use track::MixTrack;
+pub use track::AudioTracks;
 
 /// The rate every source is captured at, and the AAC track's: what the mix
 /// graph runs at natively, and a rate the AAC encoder takes.

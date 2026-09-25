@@ -18,6 +18,14 @@
 //! so without this it came back into the library playable but not
 //! scrubbable. What to do with each file is `recovery_action`'s decision,
 //! made from the file's own boxes (`mp4::read`) and nothing else.
+//!
+//! **A file the own backend wrote is repaired in Rust first** (#239):
+//! `mp4::write::repair` cuts it to its last whole fragment and appends the
+//! `mfra` the killed writer never did, which needs no ffmpeg. It refuses any
+//! file it did not write, so a libobs recording goes straight to the remux,
+//! as it always has. A repaired file is then remuxed like any other, because
+//! a clean stop remuxes too, until the review player is shown to seek an
+//! `mfra` file (DEVELOPMENT.md §2.5).
 
 use super::{Db, DbError, NewRecording};
 use crate::mp4::Summary;
@@ -157,9 +165,24 @@ pub fn recovery_action(summary: &Summary) -> RecoveryAction {
     RecoveryAction::Unplayable
 }
 
-/// The I/O half: reads the boxes, acts on `recovery_action`, and logs what
-/// it did. Every failure is logged and swallowed, leaving the file as it is.
+/// The I/O half: repairs a file our own writer made, reads the boxes, acts
+/// on `recovery_action`, and logs what it did. Every failure is logged and
+/// swallowed, leaving the file as it is.
 fn repair(path: &Path, ffmpeg: Option<&Path>, metadata: &std::fs::Metadata) {
+    // Ours (the own backend's), or not: `repair` answers by refusing a file
+    // it did not write, which is the libobs case and needs no log line.
+    if let Ok(r) = crate::mp4::write::repair(path)
+        && !r.already_complete
+    {
+        info!(
+            "db",
+            "repaired recovered {}: {} whole fragment(s) kept, {} torn byte(s) cut, mfra written",
+            path.display(),
+            r.fragments,
+            r.removed_bytes
+        );
+        restore_mtime(path, metadata);
+    }
     let summary = match std::fs::File::open(path).and_then(|mut f| crate::mp4::summarize(&mut f)) {
         Ok(summary) => summary,
         Err(e) => {
@@ -217,18 +240,7 @@ fn repair(path: &Path, ffmpeg: Option<&Path>, metadata: &std::fs::Metadata) {
                 audio_tracks,
                 started.elapsed().as_millis()
             );
-            // The remux wrote a new file, so its mtime is now. Put back the
-            // one the kill left, so that a recovery interrupted before the
-            // row is written still dates the recording correctly next time.
-            if let Ok(modified) = metadata.modified() {
-                let restored = std::fs::File::options()
-                    .write(true)
-                    .open(path)
-                    .and_then(|f| f.set_modified(modified));
-                if let Err(e) = restored {
-                    warn!("db", "could not restore the mtime of {}: {e}", path.display());
-                }
-            }
+            restore_mtime(path, metadata);
         }
         Err(e) => warn!(
             "db",
@@ -236,6 +248,19 @@ fn repair(path: &Path, ffmpeg: Option<&Path>, metadata: &std::fs::Metadata) {
             path.display(),
             started.elapsed().as_millis()
         ),
+    }
+}
+
+/// The repair and the remux both rewrite the file, so its mtime is now. Put
+/// back the one the kill left, so that a recovery interrupted before the row
+/// is written still dates the recording correctly next time.
+fn restore_mtime(path: &Path, metadata: &std::fs::Metadata) {
+    if let Ok(modified) = metadata.modified() {
+        let restored =
+            std::fs::File::options().write(true).open(path).and_then(|f| f.set_modified(modified));
+        if let Err(e) = restored {
+            warn!("db", "could not restore the mtime of {}: {e}", path.display());
+        }
     }
 }
 
@@ -503,6 +528,70 @@ mod tests {
             1,
             "the markers are what survived the kill; recovery must not touch them"
         );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A killed own-backend recording (#239): whole fragments, then a `moof`
+    /// the kill cut short, and no `mfra`. Recovery repairs it in Rust with no
+    /// ffmpeg at all: the torn tail goes, the `mfra` is written, every track
+    /// is still declared, and the file keeps the mtime the kill left.
+    #[test]
+    fn recovery_repairs_a_killed_own_recording_without_ffmpeg() {
+        use crate::mp4::write::{Track, Writer};
+        // libx264's 320x240 Constrained Baseline SPS, and a PPS.
+        const SPS: [u8; 23] = [
+            0x67, 0x42, 0xc0, 0x15, 0xd9, 0x01, 0x41, 0xfb, 0x01, 0x10, 0x00, 0x00, 0x03, 0x00,
+            0x10, 0x00, 0x00, 0x07, 0x80, 0xf1, 0x62, 0xe4, 0x80,
+        ];
+        const PPS: [u8; 4] = [0x68, 0xce, 0x38, 0x80];
+
+        let db = Db::open_temporary().unwrap();
+        let dir = temp_dir("recover-own");
+        let file = dir.join("recording-1.mp4");
+        let tracks = vec![
+            Track::h264(&SPS, &PPS).unwrap(),
+            Track::aac_lc(48_000, 2).unwrap(),
+            Track::aac_lc(48_000, 2).unwrap(),
+            Track::aac_lc(48_000, 2).unwrap(),
+        ];
+        let mut writer = Writer::create(&file, tracks).unwrap();
+        for fragment in 0..2u64 {
+            if fragment > 0 {
+                writer.flush_fragment().unwrap();
+            }
+            for frame in 0..10u64 {
+                let key = frame == 0;
+                let au = [0, 0, 0, 1, if key { 0x65 } else { 0x41 }, 0x88, frame as u8, 1];
+                writer.write_sample(0, (fragment * 10 + frame) * 1500, 1500, key, &au).unwrap();
+                for track in 1..4 {
+                    let pts = (fragment * 10 + frame) * 1024;
+                    writer.write_sample(track, pts, 1024, true, &[0x21, track as u8]).unwrap();
+                }
+            }
+        }
+        writer.flush_fragment().unwrap();
+        drop(writer);
+        // The kill: half a `moof` header after the last whole fragment.
+        let whole = std::fs::metadata(&file).unwrap().len();
+        let mut torn = std::fs::OpenOptions::new().append(true).open(&file).unwrap();
+        std::io::Write::write_all(&mut torn, &[0, 0, 1, 0, b'm', b'o', b'o', b'f', 0, 0]).unwrap();
+        drop(torn);
+        let killed_at = std::fs::metadata(&file).unwrap().modified().unwrap();
+        let id = db.begin_recording(&file.to_string_lossy(), 1_000).unwrap();
+
+        let report = recover_unfinished(&db, None).unwrap();
+        assert_eq!(report.recovered, 1);
+
+        let summary = crate::mp4::summarize(&mut std::fs::File::open(&file).unwrap()).unwrap();
+        assert!(summary.mfra && summary.structurally_playable(), "{summary:?}");
+        assert_eq!(summary.truncated, None, "{summary:?}");
+        assert_eq!((summary.tracks, summary.audio_tracks, summary.complete_fragments), (4, 3, 2));
+        assert!(summary.file_len > whole, "the mfra is appended after the whole fragments");
+        let rows = db.list_recordings().unwrap();
+        assert_eq!(rows[0].id, id);
+        assert_eq!(rows[0].size_bytes, summary.file_len as i64);
+        assert_eq!(std::fs::metadata(&file).unwrap().modified().unwrap(), killed_at);
 
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -1,16 +1,22 @@
-//! Track 0 while a recording runs: every source's thread, the packets each
-//! sends, and the [`Mixdown`] that aligns and mixes them once the origin is
-//! known. The session thread holds one of these and calls it on each pass of
-//! its loop; the decisions are all in `own::mix`, `own::feed` and
-//! `own::plan`, which are tested on any host.
+//! Every written audio track while a recording runs: each source's thread,
+//! the packets each sends, and the [`TrackMix`] that aligns and mixes each
+//! track from them once the origin is known. The session thread holds one of
+//! these and calls it on each pass of its loop; the decisions are all in
+//! `own::mix`, `own::feed` and `own::plan`, which are tested on any host.
+//!
+//! **Each source is captured once and fed to every track that sums it**
+//! (#239). Game + mic + Discord opens three sources and mixes four tracks:
+//! track 0 sums all three, and each stem is one of them alone
+//! (`own::mix::TrackMix`).
 //!
 //! **A source that cannot open costs itself, not the recording.** No
 //! microphone, Discord not running, a game tree that cannot be found: each is
-//! logged, left out, and dropped from the layout `stop` reports
-//! (`plan::realised_layout`). Only when nothing opens is the file video only.
-//! **A source that dies mid-recording** (a microphone unplugged) is logged
-//! once, with the reason its thread gave, and is silence from then on: the
-//! mixer's watermark is what stops it holding anything up.
+//! logged, left out, and dropped from the layout `stop` reports along with
+//! any stem it alone fed (`plan::realised_layout`). Only when nothing opens is
+//! the file video only. **A source that dies mid-recording** (a microphone
+//! unplugged) is logged once, with the reason its thread gave, and is silence
+//! from then on, in the mix and in its stem: the mixer's watermark is what
+//! stops it holding anything up.
 
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
@@ -22,8 +28,8 @@ use super::{SAMPLE_RATE, Source, Summary, Target};
 use crate::recorder::audio::{AudioLayout, AudioSourceKind};
 use crate::recorder::own::clock::{self, AudioClock};
 use crate::recorder::own::feed::{Feed, Packet};
-use crate::recorder::own::mix::Mixdown;
-use crate::recorder::own::plan::{self, CapturePlan};
+use crate::recorder::own::mix::TrackMix;
+use crate::recorder::own::plan::{self, CapturePlan, source_name};
 use crate::recorder::own::root::{self, Proc};
 use crate::{info, warn};
 
@@ -36,7 +42,7 @@ const TAIL_WAIT: Duration = Duration::from_millis(200);
 struct Input {
     /// `game`, `microphone`, `desktop`, or the application's executable.
     name: String,
-    /// `None` once stopped. Dropping a `MixTrack` stops every one.
+    /// `None` once stopped. Dropping the tracks stops every one.
     source: Option<Source>,
     packets: Receiver<Packet>,
     /// Set once the channel has closed, so a source that died is logged once.
@@ -53,21 +59,14 @@ impl Input {
     }
 }
 
-/// Track 0 of a recording.
-pub struct MixTrack {
+/// Every audio track of a recording.
+pub struct AudioTracks {
+    /// The sources that opened, in the realised layout's source order.
     inputs: Vec<Input>,
+    /// The realised layout: which of `inputs` each track sums, and its label.
+    layout: AudioLayout,
     /// Made when the origin arrives; until then packets wait in the channels.
-    mixdown: Option<Mixdown>,
-}
-
-/// What a source kind is called in the log and its thread's name.
-fn name_of(kind: &AudioSourceKind) -> String {
-    match kind {
-        AudioSourceKind::Game => "game".to_string(),
-        AudioSourceKind::Microphone { .. } => "microphone".to_string(),
-        AudioSourceKind::Desktop => "desktop".to_string(),
-        AudioSourceKind::Application { exe } => exe.clone(),
-    }
+    mix: Option<TrackMix>,
 }
 
 /// Resolves `kind` to what its thread captures. `procs` is the process
@@ -99,16 +98,16 @@ fn target(
     }
 }
 
-impl MixTrack {
+impl AudioTracks {
     /// Opens every source `plan` names, for the game window `hwnd`. Returns
-    /// the track, or `None` if no source opened, and the layout the file
+    /// the tracks, or `None` if no source opened, and the layout the file
     /// will hold: `plan`'s, less whatever did not open.
-    pub fn start(hwnd: HWND, plan: &CapturePlan) -> (Option<MixTrack>, AudioLayout) {
+    pub fn start(hwnd: HWND, plan: &CapturePlan) -> (Option<AudioTracks>, AudioLayout) {
         let mut procs = None;
         let mut inputs = Vec::new();
         let mut opened = Vec::with_capacity(plan.sources.len());
         for kind in &plan.sources {
-            let name = name_of(kind);
+            let name = source_name(kind);
             let (tx, packets) = channel();
             let source = target(kind, hwnd, &mut procs)
                 .and_then(|target| super::start(&name, target, tx));
@@ -133,34 +132,33 @@ impl MixTrack {
             }
         }
         let layout = plan::realised_layout(&plan.layout(), &opened);
-        // With track 0 the only one written, every source that opened feeds
-        // it, so the mixer's lanes are the inputs in order. #239 mixes each
-        // track from `layout.tracks[i].sources` instead.
-        let track = (!inputs.is_empty()).then_some(MixTrack { inputs, mixdown: None });
-        (track, layout)
-    }
-
-    /// The sources in the mix, by name, for the log.
-    pub fn names(&self) -> String {
-        let names: Vec<&str> = self.inputs.iter().map(|i| i.name.as_str()).collect();
-        names.join(" + ")
+        // The realised layout's sources are the ones that opened, in plan
+        // order, which is the order `inputs` was filled in: source `i` of the
+        // layout is `inputs[i]`.
+        let tracks = (!inputs.is_empty()).then(|| AudioTracks {
+            inputs,
+            layout: layout.clone(),
+            mix: None,
+        });
+        (tracks, layout)
     }
 
     /// The origin has arrived: packets can be placed from here on.
     pub fn begin(&mut self, origin: i64) {
-        self.mixdown = Some(Mixdown::new(SAMPLE_RATE, origin, self.inputs.len()));
+        self.mix = Some(TrackMix::new(SAMPLE_RATE, origin, &self.layout));
     }
 
-    /// Moves every packet that has arrived into the mixdown, and notices a
-    /// source that has stopped on its own.
+    /// Moves every packet that has arrived into the mixdown of each track
+    /// that sums its source, and notices a source that has stopped on its
+    /// own.
     fn receive(&mut self) {
-        let Some(mixdown) = self.mixdown.as_mut() else {
+        let Some(mix) = self.mix.as_mut() else {
             return;
         };
         for (i, input) in self.inputs.iter_mut().enumerate() {
             loop {
                 match input.packets.try_recv() {
-                    Ok(packet) => mixdown.push(i, packet),
+                    Ok(packet) => mix.push(i, packet),
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         if !input.ended {
@@ -175,7 +173,7 @@ impl MixTrack {
                             warn!(
                                 "recorder",
                                 "own backend: the {} audio capture ended before the recording \
-                                 did ({why}); it is silence in the mix from here",
+                                 did ({why}); it is silence in every track it feeds from here",
                                 input.name
                             );
                         }
@@ -186,43 +184,44 @@ impl MixTrack {
         }
     }
 
-    /// One pass: receives what has arrived and writes whatever the mix has
-    /// ready, never past `video_end_rel`. `now_rel` is the performance
-    /// counter now; both are relative to the origin.
+    /// One pass: receives what has arrived and writes whatever each track's
+    /// mix has ready, never past `video_end_rel`, as `write(track, pcm,
+    /// position)`. `now_rel` is the performance counter now; both are
+    /// relative to the origin.
     pub fn write<W>(&mut self, video_end_rel: i64, now_rel: i64, write: &mut W) -> Result<(), String>
     where
-        W: FnMut(&[i16], u64) -> Result<(), String>,
+        W: FnMut(usize, &[i16], u64) -> Result<(), String>,
     {
         self.receive();
-        match self.mixdown.as_mut() {
-            Some(mixdown) => mixdown.write(video_end_rel, now_rel, write),
+        match self.mix.as_mut() {
+            Some(mix) => mix.write(video_end_rel, now_rel, write),
             None => Ok(()),
         }
     }
 
-    /// Ends track 0 at `end_rel`, the end of the last video tick: waits
+    /// Ends every track at `end_rel`, the end of the last video tick: waits
     /// briefly for the packets still in flight, stops every source, writes
-    /// what came, pads each source and the mix to `end_rel`, and logs what
-    /// each source's clock did and what the mixer did. Errors are logged
-    /// rather than returned, because the file is finalized either way. A
-    /// recording with nothing to write to drops the track instead, which
+    /// what came, pads each source and each mix to `end_rel`, and logs what
+    /// each source's clock did and what each track's mixer did. Errors are
+    /// logged rather than returned, because the file is finalized either way.
+    /// A recording with nothing to write to drops the tracks instead, which
     /// stops the sources.
     pub fn finish<W>(mut self, end_rel: i64, write: &mut W)
     where
-        W: FnMut(&[i16], u64) -> Result<(), String>,
+        W: FnMut(usize, &[i16], u64) -> Result<(), String>,
     {
-        if self.mixdown.is_some() {
+        if self.mix.is_some() {
             let deadline = Instant::now() + TAIL_WAIT;
             loop {
                 self.receive();
-                let reached = match &self.mixdown {
-                    Some(mixdown) => self
-                        .inputs
-                        .iter()
-                        .enumerate()
-                        .all(|(i, input)| input.ended || mixdown.feed(i).reaches(end_rel)),
-                    None => true,
-                };
+                let reached = self.inputs.iter().enumerate().all(|(i, input)| {
+                    input.ended
+                        || self
+                            .mix
+                            .as_ref()
+                            .and_then(|mix| mix.feed(i))
+                            .is_none_or(|feed| feed.reaches(end_rel))
+                });
                 if reached || Instant::now() >= deadline {
                     break;
                 }
@@ -236,37 +235,51 @@ impl MixTrack {
             input.ended = true;
         }
         self.receive();
-
-        let Some(mut mixdown) = self.mixdown.take() else {
+        let Some(mut mix) = self.mix.take() else {
             return;
         };
-        let pads = match mixdown.finish(end_rel, write) {
-            Ok(pads) => pads,
-            Err(e) => {
-                warn!("recorder", "own backend: the end of the audio was not written: {e}");
-                Vec::new()
+
+        let finished = mix.finish(end_rel, write);
+        for (t, result) in finished.iter().enumerate() {
+            if let Err(e) = result {
+                warn!(
+                    "recorder",
+                    "own backend: the end of audio track {t} ({}) was not written: {e}",
+                    self.layout.tracks[t].label
+                );
             }
-        };
-        for (i, input) in self.inputs.iter_mut().enumerate() {
-            let pad = pads.get(i).copied().unwrap_or(0);
-            let mixer = mixdown.mixer();
-            log_source(input, mixdown.feed(i), pad, mixer.late(i), mixer.missing(i));
         }
-        let mixer = mixdown.mixer();
-        info!(
-            "recorder",
-            "own backend: track 0, the mix of {}: {} blocks, {} released by the watermark with a \
-             source short, {} samples clipped; {:.3} s written",
-            self.names(),
-            mixer.stats.blocks,
-            mixer.stats.released,
-            mixer.stats.clipped,
-            mixer.emitted() as f64 / f64::from(SAMPLE_RATE)
-        );
+        // Each source once, from the first track that sums it.
+        for (i, input) in self.inputs.iter_mut().enumerate() {
+            let Some((t, lane)) = mix.first_lane(i) else { continue };
+            let pad = finished[t].as_ref().ok().and_then(|p| p.get(lane)).copied().unwrap_or(0);
+            let mixdown = mix.track(t);
+            let (late, missing) = (mixdown.mixer().late(lane), mixdown.mixer().missing(lane));
+            log_source(input, mixdown.feed(lane), pad, late, missing);
+        }
+        for (t, track) in self.layout.tracks.iter().enumerate() {
+            let names: Vec<&str> = track
+                .sources
+                .iter()
+                .filter_map(|&s| self.inputs.get(s).map(|input| input.name.as_str()))
+                .collect();
+            let mixer = mix.track(t).mixer();
+            info!(
+                "recorder",
+                "own backend: audio track {t} ({}), {}: {} blocks, {} released by the watermark \
+                 with a source short, {} samples clipped; {:.3} s written",
+                track.label,
+                names.join(" + "),
+                mixer.stats.blocks,
+                mixer.stats.released,
+                mixer.stats.clipped,
+                mixer.emitted() as f64 / f64::from(SAMPLE_RATE)
+            );
+        }
     }
 }
 
-impl Drop for MixTrack {
+impl Drop for AudioTracks {
     fn drop(&mut self) {
         for input in &mut self.inputs {
             input.stop();

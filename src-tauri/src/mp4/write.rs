@@ -184,6 +184,9 @@ fn nal_type(nal: &[u8]) -> u8 {
     nal.first().map_or(0, |b| b & 0x1F)
 }
 
+// Only the tests ask whether an access unit is an IDR: the writer takes the
+// keyframe flag from its caller (the encoder's clean-point attribute).
+#[cfg(test)]
 const NAL_IDR: u8 = 5;
 const NAL_SPS: u8 = 7;
 const NAL_PPS: u8 = 8;

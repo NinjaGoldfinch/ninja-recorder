@@ -61,25 +61,26 @@ pub fn qpc_hns() -> i64 {
 
 /// Whether Media Foundation is installed, asked without calling into it.
 ///
-/// **Checked before the first MF call, every time.** `mfplat.dll` and
-/// `mfreadwrite.dll` are delay-loaded (`build.rs`), so a Windows N edition
-/// without the Media Feature Pack can still start the app and record on
-/// libobs. The price is that calling an MF function there would raise an
-/// exception from the delay-load helper instead of returning an error, so
-/// nothing may reach one until this has said yes.
+/// **Checked before the first MF call, every time.** `mfplat.dll` is
+/// delay-loaded (`build.rs`), so a Windows N edition without the Media
+/// Feature Pack can still start the app and record on libobs. The price is
+/// that calling an MF function there would raise an exception from the
+/// delay-load helper instead of returning an error, so nothing may reach one
+/// until this has said yes.
+///
+/// `mfplat.dll` is the only one: every Media Foundation function the own
+/// backend calls is in it since #239 retired the sink writer, which was
+/// `mfreadwrite.dll`'s. The encoders themselves are COM objects that
+/// `mfplat` activates, and a missing one is an error from that call.
 pub fn media_foundation() -> Result<(), String> {
-    for dll in [w!("mfplat.dll"), w!("mfreadwrite.dll")] {
-        // SAFETY: a static, NUL-terminated name; System32 only, so nothing on
-        // the search path can stand in for it. The module stays loaded for
-        // the process's life, which is what the delay-load helper would do.
-        if let Err(e) = unsafe { LoadLibraryExW(dll, None, LOAD_LIBRARY_SEARCH_SYSTEM32) } {
-            // SAFETY: `dll` is one of the static names above.
-            let name = unsafe { dll.to_string() }.unwrap_or_default();
-            return Err(format!(
-                "Media Foundation is not installed ({name}: {e}); a Windows N edition needs the \
-                 Media Feature Pack"
-            ));
-        }
+    // SAFETY: a static, NUL-terminated name; System32 only, so nothing on the
+    // search path can stand in for it. The module stays loaded for the
+    // process's life, which is what the delay-load helper would do.
+    if let Err(e) = unsafe { LoadLibraryExW(w!("mfplat.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32) } {
+        return Err(format!(
+            "Media Foundation is not installed (mfplat.dll: {e}); a Windows N edition needs the \
+             Media Feature Pack"
+        ));
     }
     Ok(())
 }
@@ -158,8 +159,9 @@ pub fn create_device(adapter: &IDXGIAdapter1) -> Result<Device, String> {
     create(
         Some(&adapter),
         D3D_DRIVER_TYPE_UNKNOWN,
-        // BGRA because WGC delivers it; VIDEO because the sink writer's video
-        // processor and a hardware encoder both run on this device.
+        // BGRA because WGC delivers it; VIDEO because the video processor
+        // (scaling, and BGRA to NV12) and a hardware encoder run on this
+        // device.
         D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
     )
 }

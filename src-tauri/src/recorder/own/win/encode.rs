@@ -13,8 +13,7 @@ use std::mem::ManuallyDrop;
 
 use windows::Win32::Media::MediaFoundation::{
     IMFActivate, IMFAttributes, IMFCollection, IMFMediaType, IMFSample, IMFTransform,
-    MF_E_TRANSFORM_NEED_MORE_INPUT, MF_E_TRANSFORM_STREAM_CHANGE, MFCreateAttributes,
-    MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFMediaType_Video,
+    MF_E_TRANSFORM_NEED_MORE_INPUT, MF_E_TRANSFORM_STREAM_CHANGE, MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFMediaType_Video,
     MFSampleExtension_CleanPoint, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG,
     MFT_ENUM_FLAG_ASYNCMFT, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_LOCALMFT,
     MFT_ENUM_FLAG_SORTANDFILTER, MFT_ENUM_FLAG_SYNCMFT, MFT_ENUM_HARDWARE_URL_Attribute,
@@ -72,14 +71,6 @@ pub(super) fn blob_attribute(attributes: &IMFAttributes, key: &GUID) -> Option<V
 
 pub(super) const fn pack(high: u32, low: u32) -> u64 {
     ((high as u64) << 32) | low as u64
-}
-
-pub(super) fn new_attributes(size: u32) -> Result<IMFAttributes, String> {
-    let mut attributes: Option<IMFAttributes> = None;
-    // SAFETY: `attributes` is a live out-parameter.
-    unsafe { MFCreateAttributes(&mut attributes, size) }
-        .map_err(|e| format!("MFCreateAttributes failed: {e}"))?;
-    attributes.ok_or_else(|| "MFCreateAttributes returned nothing".to_string())
 }
 
 pub(super) fn new_media_type() -> Result<IMFMediaType, String> {

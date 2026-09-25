@@ -629,6 +629,17 @@ ffmpeg, and a player, opening the file at all, and it carries no media. The
 remux is inline at startup, a copy of the whole file, so `daemon.log` records
 how long it took.
 
+**A file the own backend wrote is repaired in Rust before any of that**
+(#239). `mp4::write::repair` cuts it to its last whole fragment, appends the
+`mfra` the killed writer never wrote and fills in the `moov`'s duration, with
+no ffmpeg at all, so a machine without one still gets a finished, indexed file
+with every track. It understands only the files `mp4::write` makes and refuses
+anything else, which is how a libobs recording falls through to the path
+above unchanged. The repaired file is then remuxed like any other, as a clean
+own-backend stop is, until the review player is shown to seek an `mfra` file
+([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#decision-the-own-backend-writes-its-own-mp4)).
+Either rewrite puts the mtime the kill left back afterwards.
+
 ```mermaid
 flowchart TB
     START["recover_unfinished(db, ffmpeg)<br/><small>daemon startup only</small>"] --> OPEN["unfinished_recordings()<br/><small>finished_at IS NULL</small>"]
@@ -636,7 +647,10 @@ flowchart TB
     C0 -->|"no"| DROP0["Delete the row<br/><small>nothing to show, nothing to keep</small>"]
     C0 -->|"yes"| MTIME["Read the mtime<br/><small>before anything rewrites the file</small>"]
     MTIME --> STALE["Delete a stale *.faststart.tmp beside it<br/><small>a remux the dead daemon never finished</small>"]
-    STALE --> READ["mp4::summarize<br/><small>top-level boxes only, no ffmpeg</small>"]
+    STALE --> OWN{"mp4::write::repair<br/><small>ours? (the own backend's writer)</small>"}
+    OWN -->|"yes: torn tail cut,<br/>mfra and mehd written,<br/>mtime put back"| READ
+    OWN -->|"not ours (libobs), or<br/>already complete: untouched"| READ
+    READ["mp4::summarize<br/><small>top-level boxes only, no ffmpeg</small>"]
     READ --> ACT{"recovery_action"}
     ACT -->|"Remux<br/><small>fragmented, at least<br/>one whole fragment</small>"| CUT{"Kill landed in<br/>a box other<br/>than mdat?"}
     CUT -->|"yes"| TRUNC["Cut the file at that box<br/><small>a half moof stops ffmpeg opening it</small>"]

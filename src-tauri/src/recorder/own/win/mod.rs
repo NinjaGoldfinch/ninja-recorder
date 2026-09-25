@@ -13,9 +13,16 @@
 //!   `root` chooses the audio's process tree from.
 //! - `audio` — every audio source on its own thread (the game and
 //!   applications by process loopback, the microphone and the desktop from
-//!   their endpoints), and track 0, the mix of them.
-//! - `encode` — the H.264 encoders on offer, and the sink writer with its
-//!   AAC stream.
+//!   their endpoints), and every written track, the mix and the stems.
+//! - `encode` — the encoder MFTs on offer, and what driving one directly
+//!   takes: activation, media types, samples in and out.
+//! - `h264` — the H.264 encoder MFT, asynchronous (hardware) or synchronous
+//!   (software), with textures or system memory in.
+//! - `aac` — one AAC encoder MFT per written audio track.
+//! - `convert` — each tick's slot as NV12 for the encoder: the video
+//!   processor, or the CPU where there is none.
+//! - `output` — the frames, the encoders and the file together, which is
+//!   what replaced the sink writer (#239).
 //! - `session` — the thread that owns all of the above.
 //! - `host` — the session thread as the capture worker's [`Host`], driven
 //!   by the worker's pipe loop.
@@ -27,11 +34,15 @@
 //!
 //! [`Host`]: crate::recorder::own::worker::serve::Host
 
+mod aac;
 mod audio;
 mod capture;
+mod convert;
 mod device;
 mod encode;
+mod h264;
 pub(crate) mod host;
+mod output;
 mod process;
 mod scale;
 mod session;
@@ -83,8 +94,8 @@ const SHUTDOWN_WAIT: Duration = Duration::from_secs(30);
 /// spawns it, `release` ends it once nothing is recording, and a worker that
 /// dies mid-recording leaves a file that `stop` hands over anyway.
 ///
-/// Every audio preset since #238, mixed into track 0; the stems arrive with
-/// #239. Reachable only from a devtools build that selects it
+/// Every audio preset since #238, and every track of it since #239: the mix
+/// and each stem, in one file. Reachable only from a devtools build that selects it
 /// (DEVELOPMENT.md §16, "The switch, and when it applies").
 pub struct OwnRecorder {
     /// `ninja-recorder.exe` itself, or `None` if the process cannot name its
@@ -229,8 +240,7 @@ impl Recorder for OwnRecorder {
         }
         // Refused before anything comes up: a layout that is not one (a
         // hand-edited `Custom` row) records nothing rather than something.
-        // Until #239 the file holds track 0 only, the mix, so that is all the
-        // plan opens.
+        // Every track is written, so the plan opens every source it names.
         let layout = select::audio_layout(&config.audio).map_err(RecorderError::Backend)?;
         let plan = plan::plan(&layout, plan::TRACKS_WRITTEN);
         let planned = plan.sources.len();
@@ -270,16 +280,10 @@ impl Recorder for OwnRecorder {
         }
         info!(
             "recorder",
-            "own backend recording: {}; {}",
+            "own backend recording: {}; {} of the {planned} source(s) planned opened; {}",
             status.backend_name(),
-            match audio.tracks.first() {
-                Some(track) => format!(
-                    "track 0 ({}) mixes {} of the {planned} source(s) planned for it",
-                    track.label,
-                    track.sources.len()
-                ),
-                None => "no audio track".to_string(),
-            }
+            audio.sources.len(),
+            plan::describe(&audio)
         );
         self.status = status;
 
@@ -300,9 +304,11 @@ impl Recorder for OwnRecorder {
     /// **A worker that has died still hands over its file.** It is
     /// fragmented, so whatever reached the disk before the worker went is
     /// playable up to the last complete fragment; the death is logged with
-    /// the worker's exit code, the file gets the same faststart remux as a
-    /// clean stop, and this returns it rather than an error. Only a worker
-    /// that died before writing anything at all is an error.
+    /// the worker's exit code, `mp4::write::repair` cuts any torn tail and
+    /// writes the `mfra` the worker never did (#239), the file gets the same
+    /// faststart remux as a clean stop, and this returns it rather than an
+    /// error. Only a worker that died before writing anything at all is an
+    /// error.
     fn stop(&mut self) -> Result<RecordingOutput, RecorderError> {
         let action = self.decide(Call::Stop);
         let Active { path, audio } = self.active.take().ok_or(RecorderError::NotRecording)?;
@@ -328,6 +334,8 @@ impl Recorder for OwnRecorder {
             self.status = Status::Idle;
         }
         let has_bytes = path.metadata().is_ok_and(|m| m.len() > 0);
+        // The worker closed the file itself, `mfra` and all.
+        let finalized = matches!(answer, Some(Ok(_)));
         match answer {
             Some(Ok(None)) => {}
             Some(Ok(Some(problem))) => {
@@ -354,11 +362,28 @@ impl Recorder for OwnRecorder {
             }
         }
 
-        // The fragmented file has no `mfra`, so the review player cannot scrub
-        // it until faststart has rewritten the index; the same step, and the
-        // same function, as the libobs backend's stop and startup recovery.
-        // `audio.tracks.len()` sets track 0's default disposition when there
-        // is one.
+        // Not closed by the worker: finish it here, in Rust, as startup
+        // recovery does. `repair` cuts a fragment the worker died inside and
+        // appends the `mfra`, and refuses anything it did not write.
+        if !finalized {
+            match crate::mp4::write::repair(&path) {
+                Ok(r) => info!(
+                    "recorder",
+                    "own backend: repaired {}: {} whole fragment(s) kept, {} torn byte(s) cut",
+                    path.display(),
+                    r.fragments,
+                    r.removed_bytes
+                ),
+                Err(e) => warn!("recorder", "own backend: could not repair {}: {e}", path.display()),
+            }
+        }
+
+        // The file is fragmented with an `mfra` at the end, and whether the
+        // review player (WebView2) seeks such a file has not been verified, so
+        // it gets the faststart remux that moves the index to the front; the
+        // same step, and the same function, as the libobs backend's stop and
+        // startup recovery. `audio.tracks.len()` is every track the file
+        // holds, and sets track 0's default disposition when there is one.
         if let Some(ffmpeg_path) = &self.ffmpeg_path
             && let Err(e) =
                 crate::recorder::remux::remux_faststart(ffmpeg_path, &path, audio.tracks.len())
