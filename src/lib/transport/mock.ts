@@ -469,6 +469,21 @@ function reviewMock(
         game.takeaways = game.takeaways.filter((t) => t.id !== args.takeawayId);
       }
       return { value: null };
+    // Parsed rows arrive here; the mock counts them rather than inventing
+    // games for them, which is all the Objectives view reports.
+    case "import_review_rows": {
+      const rows = (args.rows as unknown[]) ?? [];
+      return {
+        value: {
+          rows: rows.length,
+          games_created: 0,
+          games_matched: rows.length,
+          objectives_created: 0,
+          takeaways_created: 0,
+          blocks_merged: 0,
+        },
+      };
+    }
     case "promote_takeaway": {
       const takeaway = [...GAMES.values()]
         .flatMap((g) => g.takeaways)

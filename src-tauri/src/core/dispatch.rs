@@ -447,6 +447,8 @@ dispatch_table! {
     ctx_result  split_block(game_id: i64) -> i64;
     /// Moves every game and takeaway from one block into another and deletes the emptied block.
     ctx_result  merge_blocks(into_block_id: i64, from_block_id: i64) -> ();
+    /// Imports rows of the review spreadsheet, as the Objectives view parsed them from a CSV, in one transaction. Safe to run twice: rows match existing games within five minutes, and only empty fields are filled.
+    ctx_result  import_review_rows(rows: Vec<crate::db::review_import::ImportRow>) -> crate::db::review_import::ImportReport;
 }
 
 #[cfg(test)]
@@ -772,6 +774,12 @@ mod tests {
             "delete_takeaway" => json!({ "takeawayId": 1 }),
             "promote_takeaway" => json!({ "takeawayId": 1, "category": "other" }),
             "merge_blocks" => json!({ "intoBlockId": 1, "fromBlockId": 2 }),
+            "import_review_rows" => json!({ "rows": [{
+                "line": 2, "started_at": 0, "block": "1", "champion": "Lee Sin", "matchup": "Vi",
+                "game": "win", "lane": "neutral", "mental": "good", "clear_ms": 178000,
+                "smites": 1, "deaths": 3, "objectives": ["ward"], "takeaways": [],
+                "block_takeaways": []
+            }] }),
             // The three update commands take no arguments and reach no
             // network here: the test `Ctx` leaves the update seam unset, so
             // `check_for_update` and `install_update` both refuse with "not

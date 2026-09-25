@@ -283,6 +283,22 @@ export type Takeaway = { id: number, game_id: number | null, block_id: number | 
 
 export type TakeawayOwner = { "kind": "game", "id": number } | { "kind": "block", "id": number };
 
+export type ImportReport = { rows: number, games_created: number, games_matched: number, objectives_created: number, takeaways_created: number, blocks_merged: number, };
+
+export type ImportRow = { 
+/**
+ * The CSV line the row came from, for the report.
+ */
+line: number, 
+/**
+ * Unix millis, from the `date` and `time` columns in local time.
+ */
+started_at: number, 
+/**
+ * The `block` column, as written. Rows sharing it share a block.
+ */
+block: string | null, champion: string | null, matchup: string | null, game: GameResult | null, lane: LaneRating | null, mental: MentalRating | null, clear_ms: number | null, smites: number | null, deaths: number | null, objectives: Array<string>, takeaways: Array<string>, block_takeaways: Array<string>, };
+
 export type IconRequest = { champions: Array<string>, items: Array<number>, spells: Array<string>, 
 /**
  * The same spells as ids, for a scoreboard rebuilt from match
