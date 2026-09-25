@@ -450,15 +450,27 @@ unavailable: string | null, };
 
 export type CaptureBackendStatus = { 
 /**
- * The saved choice, or the default if none was ever saved.
+ * The saved choice, or, when nothing is saved, the backend [`resolve`]
+ * picked for this machine (own where it can be built, else libobs).
  */
 configured: CaptureBackend, 
+/**
+ * Nothing is saved: `configured` is the app's pick, not the user's. The
+ * row says "Automatic" and why, and only a click writes the setting.
+ */
+automatic: boolean, 
 /**
  * What the live backend says it is (`Recorder::backend_name`), e.g.
  * `libobs (ready)` or `unavailable (…)`. The two differ when the
  * configured backend was refused, and this is how the row finds out.
  */
 active: string, 
+/**
+ * The live backend is encoding video in software
+ * (`Recorder::software_encoding`), so recording costs noticeably more
+ * CPU. The row shows a notice while it is true (DEVELOPMENT.md §2.4).
+ */
+software_encoding: boolean, 
 /**
  * Every backend this build knows about, available or not, in the order
  * the control lists them.

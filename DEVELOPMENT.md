@@ -72,9 +72,9 @@ trait Recorder {
 ```
 
 Backends:
-- `LibObsRecorder`: Windows, the real one.
+- `LibObsRecorder`: Windows. What every release before #243 recorded with, and since then the fallback, selectable for one release; WS8 deletes it.
 - `StubRecorder`: every non-Windows build. It sleeps, then copies a fixture MP4 into place. Keeps the entire app layer developable and testable without Windows. Nothing ships it; since the macOS bundle was dropped it exists purely for the dev loop and `cargo test` (§9).
-- `OwnRecorder` (Option B, `recorder/own/`): being built through WS1.6, and **constructible since #236** on Windows build 20348 or newer. It records the game window's video and every source the audio preset names, the game by process loopback since #237 and the microphone, the desktop and applications since #238, and since #239 every track of the preset in one file, the mix and each stem, with the encoder MFTs driven directly and the file written by our own muxer (§2.5). Only a devtools build can select it until the default flips (#243). Its pure core (the tick grid, the audio aligner and feed, the mixer of every track, the capture plan, the process-tree root, encoder ranking, the loaded-encoder check, the asynchronous encoder's bookkeeping, the mux, the CPU colour conversion) is compiled and tested on every platform. Which of it and libobs the daemon builds is the `capture_backend` setting, and what happens when the chosen one cannot be built is §16's "The switch, and when it applies".
+- `OwnRecorder` (Option B, `recorder/own/`): **the default since #243**, built through WS1.6, on Windows build 19041 or newer (§2.4). It records the game window's video and every source the audio preset names, the game by process loopback since #237 and the microphone, the desktop and applications since #238, and since #239 every track of the preset in one file, the mix and each stem, with the encoder MFTs driven directly and the file written by our own muxer (§2.5). A missing `capture_backend` setting means this backend; a stored `libobs` row keeps libobs. Its pure core (the tick grid, the audio aligner and feed, the mixer of every track, the capture plan, the process-tree root, encoder ranking, the loaded-encoder check, the asynchronous encoder's bookkeeping, the mux, the CPU colour conversion) is compiled and tested on every platform. Which of it and libobs the daemon builds is the `capture_backend` setting, and what happens when the chosen one cannot be built is §16's "The switch, and when it applies".
 
 **Decision: the own backend holds no COM object; a session thread does.**
 Every D3D11, Media Foundation and WinRT object lives on one thread
@@ -222,12 +222,20 @@ Implemented in `src-tauri/src/recorder/`: `Recorder`, `RecordConfig`, `RecorderE
     hardware adapter. It is **never silent**: `recorder::own::select::rank`
     returns it as a `SoftwareFallback` carrying the reason, and every caller
     has to put that reason in `daemon.log` and the recording's
-    `diagnostics_json` and show the UI a notice about the extra CPU. Since
-    #236 the first two are done: `OwnRecorder` writes a `warn` line naming
-    the encoder and the reason, and its `backend_name` (which is what
+    `diagnostics_json` and show the UI a notice about the extra CPU. All
+    three are done: `OwnRecorder` writes a `warn` line naming the encoder
+    and the reason, its `backend_name` (which is what
     `RecordingDiagnostics::backend` records) reads `own (software encoding:
-    <encoder>, because <reason>)`. The UI notice is still owed, and arrives
-    before the fallback can reach a release user (#243). The check is made
+    <encoder>, because <reason>)`, and since #243 Settings → Advanced shows
+    a notice about the extra CPU. The notice is driven by a flag, not by
+    parsing that name: `Recorder::software_encoding` (default `false`, and
+    only `OwnRecorder` overrides it) reaches the UI as
+    `CaptureBackendStatus::software_encoding`. It is sticky across the
+    client closing (`own::status::Status::software_encoding`), because the
+    worker's status goes back to idle then and Settings is usually opened
+    after a game; only a new encoder bring-up changes it. The UI re-reads the
+    status on each game-state edge, which is when the answer can move. The
+    check is made
     twice: once on the ranking, and again on what was actually activated
     (`own::status::check_loaded`). Until #239 that second check caught the
     sink writer loading the software MFT when asked for hardware; now the
@@ -236,8 +244,10 @@ Implemented in `src-tauri/src/recorder/`: `Recorder`, `RecordConfig`, `RecorderE
     turns a wrong vendor match (#224) or an unusual GPU into no recording at
     all, where a fallback turns it into a recording that costs CPU and says
     so. The software path's CPU cost on the gameplay machine is **measured
-    before own becomes the default (#243)**; the fallback does not ship as
-    the default path until that number exists.
+    before own becomes the default**, in the exit run
+    ([windows-verification.md §11.8](docs/windows-verification.md#118-the-exit-run-243));
+    the fallback does not ship as the default path until that number
+    exists.
   - **A devtools build can be made to take the fallback on purpose**, so it
     can be exercised and measured on a machine with a hardware encoder:
     started with `NINJA_OWN_FORCE_SOFTWARE_ENCODER=1`, the own backend picks
@@ -3240,33 +3250,71 @@ filled.
 the plan spells it. No migration: a missing key is the default, the same as
 every other key in that table ([data-model.md](docs/data-model.md#what-lives-in-settings_kv)).
 
-**The default is libobs, and WS1.6 flips it to `own` in its last piece
-(#243).** Not because libobs is the preferred answer; the plan's default is
-Option B. A default the build cannot construct would refuse every game for
-everyone who never opened Settings, and before #236 that is what `own` would
-have done. Since #236 `own` is constructible on Windows build 20348 or newer,
-since #237 it records the Game preset's audio, since #238 every source a
-preset names, mixed into track 0, and since #239 every track; the flip waits
-until it has been measured against libobs. The flip
-is a one-line change to `CaptureBackend`'s `#[default]`, pinned by a test so
-that it cannot happen by accident. It moves only the users who never chose.
-Someone who picked libobs explicitly has a stored row and keeps it.
+**The default was libobs until WS1.6's last piece (#243) flipped it to
+`own`.** Not because libobs was the preferred answer; the plan's default is
+Option B. A default the build cannot construct would have refused every game
+for everyone who never opened Settings, and before #236 that is what `own`
+would have done. #236 made `own` constructible (on Windows build 20348 or
+newer then; #291 lowered the floor to 19041), #237 gave it the Game preset's audio, #238 every source a preset
+names, mixed into track 0, and #239 every track; the flip waited until it had
+been measured against libobs (the exit run,
+[windows-verification.md §11.8](docs/windows-verification.md#118-the-exit-run-243)).
+The flip was a one-line change to `CaptureBackend`'s `#[default]`, pinned by
+a test so that it cannot happen again by accident. It moved only the users
+who never chose. Someone who picked libobs explicitly has a stored row and
+keeps it, with no migration; `a_stored_libobs_row_stays_on_libobs` pins that.
 
-**The Settings row is devtools-only until WS1.6 flips the default, and the
-flip (#243) un-hides it.** Until #236 the row could offer one backend, with
-the other disabled beside it, and a control that changes nothing is not worth
-a release user's attention; since #236 it offers a backend that records
-video, and since #237 one preset's audio, which is not worth it either. So the
-Advanced group, which holds only this row, renders only where the `dev_*`
-commands exist: the check the dev portal button already makes
-(`hasDevCommands`), rather than a second devtools flag. Everything behind the
-row is live in every build: the key, the daemon's choice at startup, the
-refusal, and both commands. #243 removes the gate in the same change that
-flips the default, which is the change that makes the other choice worth a
-release user's attention. Until then a release build has no way to show the "Nothing will be
-recorded" warning, which is acceptable because it has no way to save an
-unbuildable choice either: the only writer that bypasses the checks is
-`set_ui_pref`, and nothing in a release build calls it with this key.
+**With nothing saved, the default is own where own can be built, and
+libobs where it cannot.** The own backend's floor is Windows build 19041
+(§2.4, lowered from 20348 by #291), so every Windows 10 from 2004 on and
+Windows 11 get own. What is left below it is Windows 10 1903 and 1909
+(builds 18362 and 18363), both long out of support, so a machine that falls
+back is rare. It still matters: no release build before the flip had the
+Settings row, so no release user has a saved row, and resolving a missing
+key to `own` everywhere would have stopped such a machine recording on the
+day the flip shipped. It also covers any other reason own cannot be built.
+So
+`recorder::backend::resolve` takes the saved value as an `Option` beside
+what the build offers, and decides:
+
+| Saved | Own buildable | Libobs buildable | Builds |
+|---|---|---|---|
+| nothing | yes | either | own |
+| nothing | no | yes | libobs, logged once at startup as `capture_backend unset; own unavailable (<reason>), using libobs` |
+| nothing | no | no | nothing: refused with both reasons |
+| `own` or `libobs` | | | exactly that, or refused with its reason |
+
+This does not weaken "refused, never substituted", because that rule protects
+a choice the *user* made: a saved `own` below the floor is still refused,
+with the warning, and never quietly recorded on libobs. A missing key is not
+a choice anyone made. The default is ours to pick, and picking one that
+cannot record would be refusing on the user's behalf. The pick is still
+attributable: the startup log says it, `diagnostics_json.backend` names the
+backend that wrote each file, and Settings → Advanced says "Automatic:
+libobs, because <own's reason>". Only a click writes the row, so the app's
+pick never becomes the user's by itself. An unrecognised stored value, such
+as one written by a newer build, is treated as unset.
+
+**WS8 (#51) has to settle Windows 10 before libobs is deleted.** Once libobs
+is gone, there is nothing for an unset key to fall back to below the floor,
+and the 19041 floor is OBS's, not Microsoft's, and untested on Windows 10
+hardware (§2.4). #237's floor test decides which of two answers WS8 ships:
+Windows 10 22H2 (19045) works, and own records on Windows 10 from 2004 on, or
+it does not, and Windows 10 is dropped as a supported platform, said in the
+release notes. Builds below 19041 are dropped either way.
+
+**The Settings row was devtools-only until the flip, which un-hid it.** Until
+#236 the row could offer one backend, with the other disabled beside it, and
+a control that changes nothing is not worth a release user's attention; after
+#236 it offered a backend that recorded video, and after #237 one preset's
+audio, which was not worth it either. So the Advanced group, which holds only
+this row, rendered only where the `dev_*` commands existed (`hasDevCommands`).
+#243 removed that gate in the same change that flipped the default, which is
+the change that made the other choice worth a release user's attention: libobs
+is now the fallback a user can pick without a reinstall. Everything behind the
+row was already live in every build: the key, the daemon's choice at startup,
+the refusal, and both commands. The row also carries a one-line explanation of
+each backend, and the software-encoding notice (§2.4).
 
 **A backend that cannot be built is refused, never substituted.** The choice
 is `recorder::backend::choose`, a pure function of the setting and what this
@@ -3283,9 +3331,10 @@ disabled with that reason, and `set_capture_backend` refuses it again for any
 caller that got past the control. What remains is a row written some other
 way: a downgrade from a build that had the own backend, or a raw
 `set_ui_pref`, or a machine that was upgraded from and then back to a
-Windows below build 20348. The daemon then records nothing, and the settings
-row (in a devtools build, until the flip) says so in a warning rather than
-only through a disabled button.
+Windows below build 19041 with `own` saved. With nothing saved, a machine
+below that build records on libobs instead (above). The daemon then records
+nothing, and the settings row says so in a warning rather than only through
+a disabled button.
 
 **A change applies to the next recording, and never to the current one.**
 Two answers were available. "At the next daemon start" is simplest, but the
@@ -3322,12 +3371,11 @@ does not own the recorder, like `quit_recorder`.
 **What only Windows can confirm** is the row in
 [windows-verification.md §9](docs/windows-verification.md#9-the-capture-backend-switch-ws17-11):
 that switching in the client's lobby leaves one worker process rather than two,
-and that the next game records on the backend the row says is in use. Since
-#236 a devtools build can switch to a real own backend, so that row can be
-checked both ways. The comparison WS1.7's exit criterion asks for, both
-backends recording the same game with audio, can be run on the Game preset
-since #237, on every preset's track 0 since #238, and on every track since
-#239.
+and that the next game records on the backend the row says is in use, both
+ways. Since #243 a release build shows the row, so this is checked on a
+release installer. The comparison WS1.7's exit criterion asks for, both
+backends recording the same game with audio, is part of the exit run (§11.8
+there).
 
 ---
 

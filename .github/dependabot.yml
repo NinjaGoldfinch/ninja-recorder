@@ -40,9 +40,9 @@ updates:
       rust-minor:
         update-types: ["minor", "patch"]
     ignore:
-      # Pinned to a branch of a fork; Dependabot cannot reason about it and
-      # WS1.7 replaces the pin with a tag. Until then, updating it is a manual
-      # decision — see docs/provenance.md.
+      # Our fork of libobs-recorder, pinned by tag (`v2.0.0`). A new tag is
+      # cut by hand when the fork changes, so moving the pin is a manual
+      # decision, and WS8 deletes the dependency — see docs/provenance.md.
       - dependency-name: libobs-recorder
     commit-message:
       prefix: "deps"

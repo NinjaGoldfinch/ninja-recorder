@@ -1371,66 +1371,97 @@ beside the result rather than as one number.
 ## 9. The capture backend switch (WS1.7, #11)
 
 Settings → Advanced → **Capture backend** chooses what the daemon records
-with: `libobs`, or the own backend (Option B). Since #236 the own backend is
-in the build and constructible on Windows build 20348 or newer (Windows 11),
-recording video and, since #237, the Game preset's audio; §11 checks what it
-records. This section checks the
-switch: the row, the refusals, and that a switch reaches the *next* recording
-and never the current one.
+with: the own backend (Option B), which is the default since #243, or
+`libobs`, the fallback kept selectable for one release. The own backend is
+constructible on Windows build 19041 or newer (Windows 10 2004 and later, and
+Windows 11; #291); §11 checks what it records. This section checks the switch: the row, the refusals, and that a
+switch reaches the *next* recording and never the current one.
 
-**Use the devtools build.** The row is devtools-only until #243 un-hides it,
-and every step below also needs the dev portal. The release build is checked
-for one thing only, the first box. Why it works this way is
+**Use a release build for the row, and the devtools build for the dev-portal
+steps.** Since #243 the row is in every build; the steps that read
+`diagnostics_json` or write a raw row still need the dev portal. Why it works
+this way is
 [DEVELOPMENT.md §16, "The switch, and when it applies"](../DEVELOPMENT.md#the-switch-and-when-it-applies).
+The backend comparison WS1.7's exit criterion asks for, both backends
+recording the same game, is part of the exit run, §11.8.
 
-The backend-comparison table WS1.7's exit criterion asks for, both backends
-recording the same game, is not here yet. Since #237 it can be run on the Game
-preset, and since #238 on every preset's track 0; the stems wait on #239.
-
-- [ ] **A release build shows no Advanced group** in Settings at all.
-- [ ] **The row renders** in the devtools build. `libobs` is selected and
-      **Own** is enabled on Windows 11 (build 20348 or newer). On a Windows 10
-      box Own is disabled instead, and the row says "Own isn't available: the
-      own capture backend needs Windows build 20348 or newer …", naming the
-      box's build. "In use now" reads `libobs (idle)` with no client open.
+- [ ] **A release build shows the Advanced group**, with a line explaining
+      each backend: Own the default, libobs the fallback for one release.
+- [ ] **The row renders.** On a fresh install (no saved row) **Own** is
+      selected and enabled on build 19041 or newer (Windows 10 2004 and
+      later, or Windows 11), and the row says "Automatic: Own, the default." "In use now" reads `own (idle)` with
+      no client open.
 - [ ] **The daemon log names the setting.** `daemon.log`'s
       `[recorder] backend:` line reads
-      `libobs (idle) (capture_backend = libobs)`.
-- [ ] **Refused mid-game.** Start a Practice Tool game on libobs, and in the
-      game click **Own** in the row (or call `set_capture_backend` with `own`
-      from the dev portal's Commands panel). It is refused with "can't be
+      `own (idle) (capture_backend = unset)` on a fresh install.
+- [ ] **Refused mid-game.** Start a Practice Tool game on Own, and in the
+      game click **libobs** in the row (or call `set_capture_backend` with
+      `libobs` from the dev portal's Commands panel). It is refused with "can't be
       changed while a recording is in progress", the recording carries on on
-      libobs and finalizes normally, and `get_capture_backend` still reports
-      `libobs` as configured.
+      Own and finalizes normally, and `get_capture_backend` still reports
+      `own` as configured.
 - [ ] **Switch, and the next recording uses it.** Back in the lobby with the
       client open, make the same `set_capture_backend` call, or click
       `libobs` in the row. `daemon.log` gains a
       `[recorder] backend: … (capture_backend = libobs, changed in Settings)`
-      line, Task Manager shows **one** `extprocess_recorder.exe` rather than
-      two (the old worker was released before the new one came up), and the
-      next game records, with `diagnostics_json.backend` (dev portal →
-      Library) naming libobs. Then switch to **Own** the same way: the log line
-      names `own (…)`, no `extprocess_recorder.exe` is left running, and the
-      next game's `diagnostics_json.backend` starts with `own (`. Switch back
-      to libobs before the next section's games.
-- [ ] **A saved backend that cannot be built refuses, and says so.** Needs a
-      Windows 10 box, where the own backend is below its floor. Set the row to
-      `own` with `set_ui_pref` (`key` `capture_backend`, `value` `own`) and
-      restart the daemon (tray → Quit, then start the app). The log's backend
-      line reads `unavailable (the own capture backend needs Windows build
-      20348 or newer …)`, the Settings row shows the "Nothing will be
-      recorded" warning, a game produces **no** recording rather than one made
-      on libobs, and choosing `libobs` in the row puts recording back without a
-      restart. On a Windows 11 box this row cannot be reached; leave it empty
-      and say so.
+      line, Task Manager shows **one** `extprocess_recorder.exe` and no
+      `ninja-recorder.exe --capture-worker` (the own backend's worker was
+      released before libobs came up), and the next game records, with
+      `diagnostics_json.backend` (dev portal → Library) naming libobs. Then
+      switch to **Own** the same way: the log line names `own (…)`, no
+      `extprocess_recorder.exe` is left running, and the next game's
+      `diagnostics_json.backend` starts with `own (`.
+- [ ] **A saved backend that cannot be built refuses, and says so.** Uses an
+      unbuildable **libobs**, which any box can produce. Choose `libobs` in
+      the row, quit the app from the tray, and rename
+      `libobs\extprocess_recorder.exe` in the install folder. Start the app.
+      The log's backend line reads `unavailable (the libobs worker is not
+      beside the executable) (capture_backend = libobs)`, the row shows libobs
+      disabled with that reason and the "Nothing will be recorded" warning, a
+      game produces **no** recording rather than one made on Own, and
+      choosing **Own** in the row puts recording back without a restart. Put
+      the file's name back afterwards (a repair install does the same).
+- [ ] **Windows 10 2004 or later, nothing saved: own.** On a Windows 10
+      box at build 19041 or newer (22H2 is 19045), a fresh install behaves
+      as on Windows 11: Own selected, "Automatic: Own, the default.", and a
+      game recorded on own. This is also where the 19041 floor, which is
+      OBS's and untested here (DEVELOPMENT.md §2.4), meets real hardware:
+      §11.9's Windows 10 row says what to look for if game audio is missing.
+- [ ] **Below 19041, nothing saved: it records on libobs, and says why.**
+      Needs a box **below build 19041**: Windows 10 1903 or 1909 (18362,
+      18363). Both are long out of support, so such a machine is rare; if
+      none is to hand, leave the row empty and say so. On a fresh install
+      (no saved row) `daemon.log` has `capture_backend unset; own unavailable
+      (the own capture backend needs Windows build 19041 or newer (Windows 10
+      version 2004 or later) …), using libobs` once, then a backend line
+      ending `(capture_backend = unset)` naming libobs. The row has libobs
+      selected, Own disabled with its reason, and "Automatic: libobs, because
+      the own capture backend needs Windows build 19041 or newer …", with no
+      warning. A game records, and its `diagnostics_json.backend` names
+      libobs. Nothing has written the row: `settings_kv` has no
+      `capture_backend` key until a click.
+- [ ] **Below 19041, `own` saved: refused, with the warning.** On the same
+      box, save `own` with the `sqlite3` line from §11.8 and restart the app.
+      The log's backend line reads `unavailable (the own capture backend needs
+      Windows build 19041 or newer …) (capture_backend = own)`, the row shows
+      the "Nothing will be recorded" warning, a game produces **no**
+      recording rather than one made on libobs, and choosing libobs in the row
+      puts recording back without a restart.
+
+The last two rows need a build below 19041; on anything newer they cannot be
+reached, so leave them empty and say so.
 
 | What | Result | Notes |
 |---|---|---|
-| 9: a release build shows no Advanced group | | |
+| 9: a release build shows the Advanced group, a line per backend | | |
+| 9: a fresh install has Own selected and in use | | |
 | 9: switch the setting, and the next recording uses the chosen backend | | |
 | 9: refused mid-game; the recording in flight is unaffected | | |
-| 9: an unbuildable saved backend records nothing and says why | | |
+| 9: an unbuildable saved libobs records nothing and says why | | |
 | 9: switch to own, and the next recording is made by it | | |
+| 9: Windows 10 2004+, nothing saved: own, "Automatic: Own, the default." | | |
+| 9: below 19041, nothing saved: records on libobs, the log line, "Automatic: libobs, because …" | | |
+| 9: below 19041, `own` saved: refused, the warning, no recording | | |
 
 ## 10. Installing over a running app (#220)
 
@@ -1490,10 +1521,13 @@ uninstaller it runs is this one.
 
 ## 11. The own backend (WS1.6, #10)
 
-The own backend (Option B, `recorder/own/`) is built in pieces, and each adds
-its rows here. Every row runs on a **devtools build** with Settings → Advanced
-→ Capture backend set to **Own**, on Windows build 20348 or newer, except
-§11.3, which is the test of whether that floor can come down. Why the
+The own backend (Option B, `recorder/own/`) was built in pieces, and each
+added its rows here. Every row in §11.1 to §11.7 runs on a **devtools build**
+with Settings → Advanced → Capture backend set to **Own** (the default since
+#243), on Windows build 20348 or newer (the floor then; #291 lowered it to
+19041), except §11.3, which is the test of
+whether that floor can come down. §11.8, the exit run that gates the flip,
+runs on a **release** installer. Why the
 backend is shaped this way is
 [DEVELOPMENT.md §2.2](../DEVELOPMENT.md#22-the-recorder-trait) and §16.
 
@@ -1985,6 +2019,188 @@ restart the app when you are done.
 | 11.7: an NVENC session in `nvidia-smi` while recording (paste) | | |
 | 11.7: colour against libobs: not washed out, not crushed; `tv`/`bt709` (paste) | | |
 | 11.7: `hardware_encoder_writes_every_track` on the box (paste) | | |
+
+### 11.8 The exit run (#243)
+
+The run that gates making the own backend the default. It is #10's exit
+criterion, and every row runs on a **CI-built release installer of the commit
+before the flip** (the `ninja-recorder-windows-latest-<sha>` artifact of that
+commit's run on main), never a local build, and the devtools bundle only
+where a row says so (the forced software encoder is devtools-only). On that
+commit the default is still libobs and a release build has no Advanced row, so
+save the choice by hand once: quit the app from the tray, then
+
+```powershell
+sqlite3 "$env:APPDATA\com.ninjarecorder.app\library.sqlite3" `
+  "INSERT INTO settings_kv (key, value) VALUES ('capture_backend', 'own')
+   ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+```
+
+and start it again: `daemon.log`'s `[recorder] backend:` line ends
+`(capture_backend = own)`. The devtools build's data folder is a different
+one (§7.8), so setting it there does not reach the release build. The rows
+marked **(the flip's installer)** run on the flip's own installer instead.
+A pull request's CI runs the tests only, so that installer comes from a
+manual run of the CI workflow on the flip's branch (Actions → CI → Run
+workflow, `publish_release` off), which builds without publishing. Why the backend is built the way it is:
+[DEVELOPMENT.md §2.2](../DEVELOPMENT.md#22-the-recorder-trait), §2.4, §2.5 and
+§16.
+
+A release build logs to `daemon.log` and `worker.log` (not the `-devtools`
+names the earlier sections use), and its processes are `ninja-recorder.exe`.
+Keep Task Manager's **Details** tab open with the **Command line** column, as
+in §11.6. **Paste the summary lines** (`own: recording …`, `own: stopped …`,
+`own: remux …`) with every row that records. `diagnostics_json` is read with
+the dev portal from a devtools build pointed at the same library, or with
+`sqlite3` on `recordings.diagnostics_json`.
+
+**A full game.** One full-length game on the **Game** preset, not Practice
+Tool:
+
+- [ ] **It plays, seeks, and the markers land.** The recording is in the
+      library, plays to the end, seeks anywhere without a stall, and clicking
+      each kind of marker lands on the event it names.
+- [ ] **The diagnostics name the backend and the encoder.**
+      `diagnostics_json.backend` reads `own (ready: <encoder> [VEN_…])`, naming
+      the hardware encoder. Paste it.
+- [ ] **A/V end offset under one frame.** Over the whole game, the video and
+      audio streams end within one frame (16.7 ms at 60 fps) of each other:
+      `ffprobe -v error -show_entries stream=index,codec_type,start_time,duration
+      <file>`, and the difference between the H.264 stream's end
+      (`start_time + duration`) and each AAC stream's. Paste the output.
+
+**Isolated audio:**
+
+- [ ] **Game only on the Game preset.** In a Discord call with someone talking
+      through the game, Discord is audible on the headset and **absent** from
+      the file.
+- [ ] **Game + mic + Discord: four tracks, each isolated.** `ffprobe` shows one
+      H.264 stream and four AAC streams, `a:0` the only `default=1`; `a:1` the
+      game alone, `a:2` your voice alone, `a:3` Discord alone, `a:0` all three
+      (§11.7's extraction commands).
+- [ ] **Desktop: two tracks, the game not doubled.** `a:0` the desktop with
+      the game in it once, `a:1` the game alone.
+
+**Kill and recover:**
+
+- [ ] **Killed at minute five.** On Game + mic + Discord, end the
+      `--capture-worker` process five minutes into a game. The recording is
+      recovered (`own: remux <file>: repaired first …`), plays, scrubs to about
+      minute five, and has every stem. Then the same with the `--daemon`
+      process: recovered at startup, every stem.
+
+**Resilience and window modes:**
+
+- [ ] **§4 on own.** Alt-tab, a resolution change mid-recording, a mid-game
+      client reconnect, and the microphone unplugged mid-game: each recording
+      continues or recovers and plays.
+- [ ] **Each window mode.** Borderless, windowed (with a border dragged) and
+      exclusive fullscreen, one game each: §11.4's rows, and what WGC gets in
+      fullscreen.
+- [ ] **No yellow border** around the game window at any point, in any mode.
+
+**The encoder:**
+
+- [ ] **The hardware encoder is used.** `worker.log`'s warm line names the
+      hardware MFT, `nvidia-smi encodersessions` during the game shows one
+      H.264 session owned by the `--capture-worker` pid, and nothing says
+      `software`.
+- [ ] **The software fallback, once, and surfaced.** Forced on this machine
+      with the devtools override, exactly as §11.7's "The software fallback,
+      forced" block does it: a **devtools** daemon started with
+      `NINJA_OWN_FORCE_SOFTWARE_ENCODER=1`, from the devtools installer of
+      the same commit (the override is devtools-only, and a release build
+      never reads it). Record one Practice Tool game on Own and check all
+      three places:
+  - [ ] **the log**: `daemon-devtools.log` has `own backend: software H.264
+        encoding with <encoder>: forced by NINJA_OWN_FORCE_SOFTWARE_ENCODER
+        (devtools)` at the start, and the start summary line says
+        `software fallback: forced by …`;
+  - [ ] **the diagnostics**: `diagnostics_json.backend` reads
+        `own (software encoding: <encoder>, because forced by …)`;
+  - [ ] **the UI**: Settings → Advanced shows the notice that recording is
+        encoding in software and uses more CPU, both while the client is open
+        and after it has closed. The notice is in the flip's PR, not the
+        commit before it, so this box is checked on **the flip's**
+        devtools installer.
+
+**Resources.** Against libobs on the same machine, by
+[measurement.md](measurement.md) §1 for memory and §4 for CPU. Every cell stays
+empty until a run fills it:
+
+- [ ] **Idle and recording RAM**, with
+      [`scripts/measure.ps1`](../scripts/measure.ps1): the daemon
+      (`-ArgumentFilter '--daemon'`) idle with no client, and while recording
+      the daemon plus the capture worker (`-ArgumentFilter
+      '--capture-worker'`) for own, and the daemon plus
+      `-ProcessName extprocess_recorder` for libobs. Include the software
+      path's recording figure.
+- [ ] **Idle and recording CPU**, by
+      [measurement.md §4](measurement.md#4-cpu): `measure.ps1 -Cpu -Role
+      daemon,ui,worker,libobs -Label '<backend> - <state>'` in each of §4.4's
+      states, under §4.4's constant load. Compare the **totals** (own's
+      `daemon + worker` against libobs's `daemon + libobs`), alternating
+      backends in one sitting, **three or more runs each**, every row
+      recorded (§4.5). **The software path is a third arm**, `own (software)`,
+      on the forced devtools daemon above, alternated with the other two.
+- [ ] **The capture worker exists only while League does.** No
+      `--capture-worker` with no client; one within seconds of the client
+      opening; none within seconds of it closing (§11.6's first three rows).
+
+**The switch and the flip**, on the **flip's** CI-built installer:
+
+- [ ] **Switching own ↔ libobs in the lobby.** With the client open, switch in
+      Settings → Advanced: the next game records on the chosen backend, both
+      ways, with one worker process of the right kind (§9's switch row).
+- [ ] **A fresh install records on own.** On a machine with no
+      `%APPDATA%\com.ninjarecorder.app` folder (or with its `capture_backend`
+      row deleted), install and record a game: the row shows
+      Own selected and "Automatic: Own, the default.", `daemon.log` has
+      `(capture_backend = unset)`, and `diagnostics_json.backend` starts with
+      `own (`.
+- [ ] **Windows 10 2004+, nothing saved: own.** A fresh install of the
+      flip's build on a Windows 10 box at 19041 or newer records on own:
+      §9's row of the same name.
+- [ ] **Below 19041, nothing saved: records on libobs.** Only on a Windows 10
+      1903/1909 box, which is rare; empty and said so if there is none. §9's
+      row of the same name: a game records on libobs, and the row says
+      "Automatic: libobs, because …".
+- [ ] **Below 19041, `own` saved: refused.** The same box with `own` saved:
+      §9's row. No recording, and the warning.
+- [ ] **A stored `libobs` row stays on libobs.** On the pre-flip build, save
+      libobs with the `sqlite3` line above (`'libobs'` for `'own'`), then
+      install the flip's build over it: Settings shows libobs, the log line
+      says `(capture_backend = libobs)`, and the next game records on libobs.
+
+| What | Result | Notes |
+|---|---|---|
+| 11.8: the commit and CI run the installer came from | | |
+| 11.8: full game: plays, seeks, markers land | | |
+| 11.8: `diagnostics_json.backend` names own and the encoder (paste) | | |
+| 11.8: A/V end offset under one frame over the full game (paste) | | |
+| 11.8: Game preset: Discord audible, absent from the file | | |
+| 11.8: Game + mic + Discord: four tracks, each isolated, `a:0` default | | |
+| 11.8: Desktop: two tracks, the game not doubled | | |
+| 11.8: worker killed at minute five: recovered, scrubs, every stem | | |
+| 11.8: daemon killed: recovered at startup, every stem | | |
+| 11.8: §4 resilience on own | | |
+| 11.8: borderless / windowed / exclusive fullscreen | | |
+| 11.8: no yellow border | | |
+| 11.8: the hardware encoder used (paste `nvidia-smi`) | | |
+| 11.8: software fallback (forced, §11.7's override): in the log (paste) | | |
+| 11.8: software fallback (forced): in the diagnostics (paste) | | |
+| 11.8: software fallback (forced): the UI notice (the flip's devtools installer) | | |
+| 11.8: idle RAM, own vs libobs (`measure.ps1`) | | |
+| 11.8: recording RAM, own (hardware) vs own (software) vs libobs | | |
+| 11.8: idle CPU, own vs libobs (`measure.ps1 -Cpu`, totals, 3+ runs each) | | |
+| 11.8: recording CPU, own (hardware) vs own (software) vs libobs (totals, alternated, 3+ runs each) | | |
+| 11.8: the capture worker only while League runs | | |
+| 11.8: switching own ↔ libobs in the lobby, both ways (the flip's installer) | | |
+| 11.8: fresh install records on own (the flip's installer) | | |
+| 11.8: Windows 10 2004+, nothing saved: records on own (the flip's installer) | | |
+| 11.8: below 19041, nothing saved: records on libobs, the row says why (the flip's installer) | | |
+| 11.8: below 19041, `own` saved: refused with the warning (the flip's installer) | | |
+| 11.8: a stored `libobs` row stays on libobs (the flip's installer) | | |
 
 ### 11.9 Capture failures shown in the app (#10)
 
