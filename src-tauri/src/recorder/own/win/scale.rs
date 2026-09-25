@@ -6,8 +6,9 @@
 //! - [`Processor`] is the video processor and nothing else: one BGRA input
 //!   size, one output size and format, and a blit of a source rectangle into
 //!   a destination rectangle with everything outside it cleared to black. It
-//!   knows nothing about WGC. #239 reuses it for BGRA → NV12, which is the
-//!   same blit with an NV12 output format and an output colour space.
+//!   knows nothing about WGC. `convert.rs` (#239) reuses it for BGRA → NV12,
+//!   which is the same blit with an NV12 output format and BT.709 studio-range
+//!   colour spaces ([`Processor::new`] sets them for any YUV output).
 //! - [`Fitter`] is the capture's policy: [`fit::place`] decides, per frame,
 //!   whether it is a plain copy (the window is the size the encoder was set
 //!   up for), a scale (it is not), or nothing (a minimised window). It owns
@@ -29,12 +30,14 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
     D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_STREAM,
     D3D11_VIDEO_USAGE_PLAYBACK_NORMAL, D3D11_VPIV_DIMENSION_TEXTURE2D,
-    D3D11_VPOV_DIMENSION_TEXTURE2D, ID3D11RenderTargetView, ID3D11Texture2D,
-    ID3D11VideoContext, ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator,
-    ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView,
+    D3D11_VIDEO_PROCESSOR_COLOR_SPACE, D3D11_VPOV_DIMENSION_TEXTURE2D, ID3D11RenderTargetView,
+    ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoContext1, ID3D11VideoDevice,
+    ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator, ID3D11VideoProcessorInputView,
+    ID3D11VideoProcessorOutputView,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_RATIONAL, DXGI_SAMPLE_DESC,
+    DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709,
+    DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_RATIONAL, DXGI_SAMPLE_DESC,
 };
 use windows::core::Interface;
 
@@ -175,6 +178,9 @@ impl Processor {
         // background fills all of it the stream does not cover.
         // SAFETY: as above.
         unsafe { context.VideoProcessorSetOutputTargetRect(&processor, false, None) };
+        if format == DXGI_FORMAT_NV12 {
+            set_bt709(&context, &processor);
+        }
 
         Ok(Processor {
             video_device,
@@ -308,6 +314,46 @@ impl Processor {
         self.output_views.push((target.clone(), view.clone()));
         Ok(view)
     }
+}
+
+/// Tells `processor` that its input is full-range sRGB and its output
+/// BT.709 studio range (Y 16-235), the colour space an H.264 file is read as
+/// when it says nothing else, what libobs writes, and what the encoder's
+/// media types declare (`h264.rs`). Left to the driver, the output range is
+/// its choice, and a full-range picture read as studio range looks crushed,
+/// one the other way round washed out.
+///
+/// `ID3D11VideoContext1`'s DXGI colour spaces where the driver has it
+/// (Windows 10 on), the older bitfield otherwise: bit 2 selects the BT.709
+/// matrix and bits 4-5 the nominal range, 1 being 16-235.
+fn set_bt709(context: &ID3D11VideoContext, processor: &ID3D11VideoProcessor) {
+    if let Ok(context1) = context.cast::<ID3D11VideoContext1>() {
+        // SAFETY (both): `processor` is live and was made on this context's
+        // device; stream 0 is its only stream.
+        unsafe {
+            context1.VideoProcessorSetStreamColorSpace1(
+                processor,
+                0,
+                DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
+            )
+        };
+        // SAFETY: as above.
+        unsafe {
+            context1.VideoProcessorSetOutputColorSpace1(
+                processor,
+                DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709,
+            )
+        };
+        return;
+    }
+    // Usage 0 (playback), RGB_Range 0 (full), for the BGRA input.
+    let input = D3D11_VIDEO_PROCESSOR_COLOR_SPACE { _bitfield: 0 };
+    // YCbCr_Matrix 1 (BT.709) and Nominal_Range 1 (16-235).
+    let output = D3D11_VIDEO_PROCESSOR_COLOR_SPACE { _bitfield: (1 << 2) | (1 << 4) };
+    // SAFETY (both): as above; each colour space is live for its call.
+    unsafe { context.VideoProcessorSetStreamColorSpace(processor, 0, &input) };
+    // SAFETY: as above.
+    unsafe { context.VideoProcessorSetOutputColorSpace(processor, &output) };
 }
 
 // --- The capture's policy --------------------------------------------------

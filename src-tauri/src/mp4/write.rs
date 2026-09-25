@@ -84,10 +84,10 @@
 //! A file with no `mfra` still plays; it just seeks by scanning. [`repair`]
 //! truncates a killed file to its last complete fragment and appends one.
 
-// Nothing calls this until #239 wires the own backend's encoders to it, and
-// clippy runs without `--all-targets`, so outside the tests every item here
-// is dead code. Remove this when #239 lands.
-#![cfg_attr(not(test), allow(dead_code))]
+// The writer's caller is the own backend's mux (`recorder::own::mux`), which
+// runs on Windows only; everywhere else only `repair` has a caller
+// (`db::reconcile`'s recovery), and clippy runs without `--all-targets`.
+#![cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
