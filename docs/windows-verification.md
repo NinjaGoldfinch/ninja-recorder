@@ -1497,6 +1497,13 @@ its rows here. Every row runs on a **devtools build** with Settings → Advanced
 backend is shaped this way is
 [DEVELOPMENT.md §2.2](../DEVELOPMENT.md#22-the-recorder-trait) and §16.
 
+**Paste the summary lines with every row that records.** Since #242 each
+recording on Own writes `own: recording <file>: …` when it starts,
+`own: stopped <file>: …` when it stops, and `own: remux <file>: …` after
+([DEVELOPMENT.md §13](../DEVELOPMENT.md#the-own-backends-summary-lines) says
+what each field means). They sum up the detailed lines the rows below ask
+for, and do not replace them: paste both.
+
 ### 11.1 WGC video into a fragmented MP4 (#236)
 
 The first piece: the game window's video, through Media Foundation's sink

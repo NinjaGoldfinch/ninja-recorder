@@ -26,6 +26,7 @@ use crate::recorder::own::clock;
 use crate::recorder::own::fit::Size;
 use crate::recorder::own::plan::CapturePlan;
 use crate::recorder::own::select::{self, Choice};
+use crate::recorder::own::stats;
 use crate::recorder::own::status::{self, Status};
 use crate::recorder::window;
 use crate::{info, warn};
@@ -133,6 +134,8 @@ struct Warm {
     encoders: Vec<select::Encoder>,
     choice: Choice,
     device: Device,
+    /// The adapter the capture runs on, for the start line.
+    adapter: String,
 }
 
 struct Session {
@@ -218,7 +221,8 @@ impl Session {
             Status::from_choice(&choice, &encoders).backend_name(),
             offered(&encoders)
         );
-        Ok(Warm { adapters: infos, encoders, choice, device })
+        let adapter = adapter.info.name.clone();
+        Ok(Warm { adapters: infos, encoders, choice, device, adapter })
     }
 
     /// One recording, from `Start` to the command that ends it. Returns true
@@ -270,7 +274,9 @@ impl Session {
         // SAFETY: pairs timeBeginPeriod(1).
         unsafe { timeEndPeriod(1) };
 
-        let finalized = recording.finish();
+        let (finalized, summary) = recording.finish();
+        let bytes = std::fs::metadata(&path).ok().map(|m| m.len());
+        info!("recorder", "{}", stats::render_stop(&path, FPS, &summary, &finalized, bytes));
         // A lost device stays lost, and everything warm was made on it: the
         // next `start` warms up again from scratch, on whatever GPU is there.
         if self.warm.as_ref().is_some_and(|warm| device::removed(&warm.device).is_some()) {
@@ -359,6 +365,8 @@ struct Recording {
     layout: AudioLayout,
     /// Ticks written so far: tick `ticks` is the next one due.
     ticks: u64,
+    /// What the stop line sums up (`own::stats`).
+    summary: stats::Stop,
 }
 
 impl Recording {
@@ -426,7 +434,7 @@ impl Recording {
         // audio stream exists only if one of them did; a source that fails
         // costs itself, not the recording, and the reported layout says which
         // it was.
-        let (audio, layout) = MixTrack::start(hwnd, plan);
+        let (audio, layout, opened) = MixTrack::start(hwnd, plan);
         if audio.is_none() && !plan.sources.is_empty() {
             warn!("recorder", "own backend: no audio source opened, recording video only");
         }
@@ -472,6 +480,9 @@ impl Recording {
             },
             path.display()
         );
+        let started =
+            stats::render_start(path, (width, height), &warm.adapter, &status, &opened, &layout);
+        info!("recorder", "{started}");
         Ok(Recording {
             capture,
             sink: Some(sink),
@@ -485,6 +496,7 @@ impl Recording {
             audio,
             layout,
             ticks: 0,
+            summary: stats::Stop::default(),
         })
     }
 
@@ -580,6 +592,7 @@ impl Recording {
             if placed != scale::Placed::Skipped {
                 self.latest = i;
                 self.next_slot = i + 1;
+                self.summary.cadence.frame();
             }
         }
         Ok(())
@@ -606,6 +619,7 @@ impl Recording {
             Ok(()) => {
                 self.latest = i;
                 self.next_slot = i + 1;
+                self.summary.cadence.frame();
             }
             // Not worth ending a recording over: the last frame repeats.
             Err(e) => warn!("recorder", "own backend: could not write black ({e})"),
@@ -632,6 +646,7 @@ impl Recording {
                 let d = clock::tick_time(self.ticks + 1, FPS) - t;
                 sink.write(&self.slots[self.latest], t, d)?;
                 self.ticks += 1;
+                self.summary.cadence.tick(now - t);
             }
         }
         Ok(())
@@ -646,17 +661,20 @@ impl Recording {
     /// With the GPU device lost this still runs: the encoder's drain fails
     /// rather than waits, the sink writer returns that, and the fragments
     /// already on disk are the recording (`stop` bounds the wait regardless).
-    fn finish(mut self) -> Result<(), String> {
+    ///
+    /// Returns the finalize's result and the counters for the stop line.
+    fn finish(mut self) -> (Result<(), String>, stats::Stop) {
         drop(self.capture);
         let end = clock::tick_time(self.ticks, FPS);
         if let Some(audio) = self.audio.take()
             && let Some(sink) = self.sink.as_ref()
         {
-            audio.finish(end, &mut |pcm: &[i16], position: u64| sink.write_audio(pcm, position));
+            self.summary.audio = audio
+                .finish(end, &mut |pcm: &[i16], position: u64| sink.write_audio(pcm, position));
         }
         let result = self.sink.take().map_or(Ok(()), Sink::finalize);
         drop(self.slots);
-        result
+        (result, self.summary)
     }
 
 }

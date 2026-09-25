@@ -2193,6 +2193,63 @@ would show an empty view. Both costs are what a handler *inside* the worker
 would fix, and that is a change to the fork, worth making once a real
 capture shows it is needed (#69).
 
+### The own backend's summary lines
+
+The own backend (`recorder/own/`, §16) logs a great deal as it goes: the
+warm-up, the WGC border, each source's root and clock, and at stop each
+source's clock stats and the mix. Those detailed lines stay, because they are
+what the verification rows ask to have pasted. But judging a run from them
+means reading a dozen lines, so the session also writes **one line at start
+and one at stop** that sum it up (#242), and a third for the remux. That is
+what #11's comparison of the two backends can be filled in from, one recording
+per row. The rendering is pure (`own::stats`), and the session only fills its
+structs with counters it already had, plus two it did not. The values below
+show the shape and are not a measurement:
+
+```text
+[recorder] own: recording 2026-09-26_12-00-00.mp4: 1920x1080 from NVIDIA GeForce RTX 3070, encoder NVIDIA H.264 Encoder MFT [VEN_10DE] (hardware), sources: game=PID 4242 (the game window's owner, named League of Legends.exe), microphone=default, Discord.exe=failed (no Discord.exe process is running); tracks: Everything
+[recorder] own: stopped 2026-09-26_12-00-00.mp4: 1800.000 s, 108000 ticks, 0.41% repeated, worst tick 0.62 f late; per source: game clock=qpc raw=-12.35 ppm slips=7 gaps=0 holds=3, microphone clock=device slips=0 gaps=1 holds=0; mix clipped 0; 1836.0 MB; finalize ok
+[recorder] own: remux 2026-09-26_12-00-00.mp4: ok in 812 ms
+```
+
+**Start.** The file, the encoded size, the adapter the capture runs on, the
+encoder Media Foundation actually loaded (after `status::check_loaded`, so a
+substitution shows) and whether it is hardware or the **software fallback,
+with the reason**. Then every source the plan named: what it opened
+(`PID <n> (<how the root was chosen>)` for a process-loopback source,
+`default` or the configured device id for the microphone, `default output`
+for the desktop), or `failed (<why>)`; and the labels of the tracks the file
+holds, or `none (video only)`.
+
+**Stop.** The video first: its length (ticks over 60 fps), the ticks written,
+the share that **repeated** the tick before because no new picture had arrived
+(a static or minimised window, or capture falling behind), and the **worst
+lateness** of any tick, in frames: how long after its own time it was written.
+Those two are counted for this line (`stats::Cadence`); nothing counted them
+before. Then per source, from its aligner: the clock it ran on, the raw drift
+in ppm (QPC clock only: on the device clock the audio is stamped from its own
+sample count, so there is nothing to compare, and it is left out rather than
+printed as a meaningless number), slips (single frames dropped or repeated to
+hold it on QPC), gaps (holes over 50 ms filled with silence), holds (silence
+written because the source was quiet), and `ended early` for one whose capture
+died before the recording did. Then the samples the mix clipped, the file's
+size after the finalize, and whether the finalize succeeded. A video-only
+recording says `no audio`; one that wrote nothing says `no ticks written`.
+
+**Not in it, deliberately.** The number of fragments: the sink writer closes
+them itself and does not say, and #239's own MP4 writer is what will be able
+to count them. An estimate from the GOP would be a plausible number, not a
+measured one.
+
+**The remux is its own line** because it happens in a different place. The
+session thread finalizes the file; `OwnRecorder::stop` remuxes it afterwards,
+on the other side of the session's channel (and, once #241 lands, of a process
+boundary). Carrying the counters back across that to print one line would
+change the stop reply on both sides for the sake of formatting. The remux line
+says `ok in <ms> ms`, `failed in <ms> ms, kept unseekable` (the existing
+warning beside it carries ffmpeg's error), or `skipped` when there is no
+ffmpeg or the session never answered.
+
 ### Why not `tracing`
 
 `tracing`, and `log` + `fern`, both do this and more. What was needed was a timestamp, a level, a tag and a file that rotates; `tracing`'s value is spans and structured fields, and nothing in this app has asked for either. This project has kept its dependency tree deliberately small (§1.2), and a date crate would have been a second dependency purely to format a timestamp, so `log.rs` hand-rolls Howard Hinnant's `civil_from_days`, which is the same closed form a date crate would run, and pins it with tests for the leap-year and century rules. Revisit when something genuinely wants spans.

@@ -32,10 +32,10 @@ mod session;
 use std::path::PathBuf;
 use std::sync::mpsc::{RecvTimeoutError, Sender, channel};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::status::Status;
-use super::{plan, select};
+use super::{plan, select, stats};
 use crate::recorder::audio::AudioLayout;
 use crate::recorder::{RecordConfig, Recorder, RecorderError, RecordingOutput};
 use crate::{info, warn};
@@ -272,13 +272,15 @@ impl Recorder for OwnRecorder {
         // is one. Not while a session thread that never answered may still
         // be writing the file: that one is kept fragmented, playable but not
         // scrubbable, which is the price of not hanging.
-        if let Some(ffmpeg_path) = &self.ffmpeg_path
-            && self.session.is_some()
-            && let Err(e) =
-                crate::recorder::remux::remux_faststart(ffmpeg_path, &path, audio.tracks.len())
-        {
+        let remux = self.ffmpeg_path.as_ref().filter(|_| self.session.is_some()).map(|ffmpeg| {
+            let began = Instant::now();
+            let result = crate::recorder::remux::remux_faststart(ffmpeg, &path, audio.tracks.len());
+            (result, began.elapsed())
+        });
+        if let Some((Err(e), _)) = &remux {
             warn!("recorder", "faststart remux failed, keeping original (unseekable) file: {e}");
         }
+        info!("recorder", "{}", stats::render_remux(&path, remux.as_ref()));
 
         Ok(RecordingOutput { path, audio })
     }
