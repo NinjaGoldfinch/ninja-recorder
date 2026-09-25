@@ -358,6 +358,7 @@ scattering `??` through the row template:
 | Title (`vodTitle`) | `champion` → game mode → filename | Never empty. The filename is untrusted input, so the caller still escapes it |
 | Heading (`vodHeading`) | `vodTitle` + ` vs <opponent>` + the outcome word | The long form, for the review view's heading and the row's accessible name, where there is room for what actually identifies a game. Each half is added only when known, so it degrades through `Viego vs Darius`, `Viego` plus the outcome, and `Viego` alone, rather than emitting `vs undefined`. An undecided game says nothing about a result, exactly as the row's own outcome word does |
 | Queue (`queueOrModeLabel`) | `queue` id → `game_mode` | `CLASSIC` renders as "Summoner's Rift", the *map*: the mode string cannot tell blind from draft from ranked, and naming one would be a guess in a slot read as fact |
+| Patch (`patchLabel`) | stored build → its first two parts, a major from 16 on shown ten higher | The column keeps the whole build string the game reported, because the build is what tells two sides of a hotfix apart. Riot numbers patches by year from 2026 while the build kept its old sequence, so build 16.19 is patch 26.19 (#280); majors below 16 predate that and show as they are. The label is what the patch filter lists and sorts, and the mapping keeps it numerically ordered |
 | KDA (`formatKda`) | all three or nothing | A partial KDA reads as a real one. The ratio (`kdaRatio`) is a hover hint, not a fourth number in a column three numbers wide |
 | Role | Live Client Data's position → the LCU's inference → `Unknown` | The live value is what the game assigned; the LCU's `timeline.lane`/`role` is Riot working it out afterwards and confuses top with jungle, so it fills a gap rather than correcting one. `Unknown` is written out rather than left blank, because a row that hides an empty slot is a different shape per recording |
 | Outcome | the leading accent, plus the word on the left block's last line | Undecided rows are excluded from the win-rate tile too, so an unknown never reads as a loss; it gets the neutral edge, no wash and no word. A Win/Loss badge used to sit in its own column and was dropped as redundant with the edge; the word moved into the sub-line rather than being dropped with it, because the accent alone is colour only |
@@ -622,6 +623,12 @@ The spell-and-rune block fills **down each column** rather than across each row:
 spells on the left, runes on the right, which is how every scoreboard in the
 game arranges them. The markup order is therefore load-bearing: spell 1, spell
 2, keystone, secondary tree.
+
+**The rune column is the one exception to holding its place.** A game with no
+rune page, which is every augment mode such as ARAM Mayhem (#281), stores no
+`our_runes` at all, and two empty frames would draw a page that never existed.
+`Loadout` leaves the column out instead. The perks track in `.vod-row` is a
+fixed 38px, so the item strip beside it does not move.
 
 The team block fills the other way, across each row, for the same reason: a
 team is a line of five, so the line has to be what the eye picks up. Filling by
