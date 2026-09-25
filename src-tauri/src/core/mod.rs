@@ -28,6 +28,13 @@ pub mod dispatch;
 #[cfg_attr(not(feature = "devtools"), allow(unused_imports))]
 pub use dispatch::{command_names, dispatch, dispatch_blocking, is_async_command};
 
+mod review;
+pub use review::{
+    add_takeaway, create_objective, delete_takeaway, get_game_review, list_objectives,
+    merge_blocks, open_game_for_recording, promote_takeaway, save_game_review,
+    set_objective_status, set_objective_ticked, split_block, update_objective,
+};
+
 use crate::{info, warn};
 use crate::db;
 use crate::lcu;

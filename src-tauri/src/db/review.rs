@@ -24,7 +24,7 @@ pub const BLOCK_GAP_MS: i64 = 2 * 60 * 60 * 1000;
 macro_rules! text_enum {
     ($(#[$meta:meta])* $name:ident { $($variant:ident = $text:literal),+ $(,)? }) => {
         $(#[$meta])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
         #[serde(rename_all = "lowercase")]
         pub enum $name { $($variant),+ }
 
@@ -78,7 +78,7 @@ text_enum! {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 pub struct Objective {
     pub id: i64,
     pub body: String,
@@ -89,7 +89,7 @@ pub struct Objective {
 }
 
 /// One objective as a game was reviewed against it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 pub struct GameObjective {
     pub objective_id: i64,
     pub body: String,
@@ -98,7 +98,7 @@ pub struct GameObjective {
     pub ticked: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 pub struct Takeaway {
     pub id: i64,
     pub game_id: Option<i64>,
@@ -110,7 +110,7 @@ pub struct Takeaway {
 }
 
 /// Whose takeaway it is. Exactly one, which is what the table's CHECK says.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(tag = "kind", content = "id", rename_all = "lowercase")]
 pub enum TakeawayOwner {
     Game(i64),
@@ -120,7 +120,7 @@ pub enum TakeawayOwner {
 /// Everything the review form edits in one save. The form sends the whole
 /// thing each time rather than a field at a time, so an autosave that lands
 /// late cannot interleave with another and leave half of each.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 pub struct ReviewInput {
     pub game_rating: Option<GameResult>,
     pub lane_rating: Option<LaneRating>,
@@ -137,7 +137,7 @@ pub struct ReviewInput {
 /// While the recording exists its champion and result win over the game's
 /// own copies: the LCU corrects both on the recording after finalize, and
 /// the copy on `games` is what is left once the VOD is gone.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 pub struct GameSummary {
     pub id: i64,
     pub recording_id: Option<i64>,
@@ -151,7 +151,7 @@ pub struct GameSummary {
 }
 
 /// Everything the review form shows for one game.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 pub struct GameReview {
     pub game: GameSummary,
     /// `None` until the first save.

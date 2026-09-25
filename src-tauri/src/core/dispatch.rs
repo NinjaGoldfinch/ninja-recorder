@@ -421,6 +421,32 @@ dispatch_table! {
     ctx_result  install_update() -> ();
     /// Stops the recorder itself, so nothing records in the background afterwards. Answers `recordingInFlight` instead of stopping when a game is being recorded and `force` is false; call again with `force` once the person has agreed.
     ctx_result  quit_recorder(force: bool) -> crate::core::QuitOutcome;
+    /// The review's game for a recording, made from the recording if it has none: every recording from before VOD review, and anything reconcile imported. A game made this way has no objective snapshot.
+    ctx_result  open_game_for_recording(recording_id: i64) -> i64;
+    /// Everything the review form shows for one game: its header, the saved review (null until the first save), the death-marker count, the objectives it was played against, and its takeaways. null if there is no such game.
+    ctx_result  get_game_review(game_id: i64) -> Option<crate::db::review::GameReview>;
+    /// Saves the whole review for a game, replacing what was there. A null field is cleared, and a null deaths means 'use the death markers'. Refuses a negative count.
+    ctx_result  save_game_review(game_id: i64, review: crate::db::review::ReviewInput) -> ();
+    /// Ticks or unticks an objective for a game. Refuses one the game was not played against.
+    ctx_result  set_objective_ticked(game_id: i64, objective_id: i64, ticked: bool) -> ();
+    /// Objectives, newest first. null lists every status.
+    ctx_result  list_objectives(status: Option<crate::db::review::ObjectiveStatus>) -> Vec<crate::db::review::Objective>;
+    /// Adds an active objective. Games that start from now on are played against it. Refuses an empty body.
+    ctx_result  create_objective(body: String, category: crate::db::review::ObjectiveCategory) -> crate::db::review::Objective;
+    /// Rewrites an objective's text and category. Games already played against it see the new text.
+    ctx_result  update_objective(objective_id: i64, body: String, category: crate::db::review::ObjectiveCategory) -> crate::db::review::Objective;
+    /// Activates, pauses or retires an objective. Only active objectives are snapshotted into new games; past games keep theirs.
+    ctx_result  set_objective_status(objective_id: i64, status: crate::db::review::ObjectiveStatus) -> crate::db::review::Objective;
+    /// Adds a takeaway to a game or a block. Refuses an empty body.
+    ctx_result  add_takeaway(owner: crate::db::review::TakeawayOwner, body: String) -> crate::db::review::Takeaway;
+    /// Deletes a takeaway. An objective it was promoted to stays.
+    ctx_result  delete_takeaway(takeaway_id: i64) -> ();
+    /// Makes an active objective from a takeaway, in one transaction. A takeaway already promoted returns the objective it became rather than making a second.
+    ctx_result  promote_takeaway(takeaway_id: i64, category: crate::db::review::ObjectiveCategory) -> crate::db::review::Objective;
+    /// Starts a new block at a game: it and every later game in its block move to the new one. Returns the new block's id. Refuses the first game of a block.
+    ctx_result  split_block(game_id: i64) -> i64;
+    /// Moves every game and takeaway from one block into another and deletes the emptied block.
+    ctx_result  merge_blocks(into_block_id: i64, from_block_id: i64) -> ();
 }
 
 #[cfg(test)]
@@ -725,6 +751,27 @@ mod tests {
             // refuses before it can reach anything, which is the same reason
             // the update commands are safe to drive here.
             "quit_recorder" => json!({ "force": false }),
+            // The review commands mostly refuse here, on ids that do not
+            // exist; what the round trip checks is that they parsed.
+            "open_game_for_recording" => json!({ "recordingId": 1 }),
+            "get_game_review" | "split_block" => json!({ "gameId": 1 }),
+            "save_game_review" => json!({
+                "gameId": 1,
+                "review": {
+                    "game_rating": "win", "lane_rating": "neutral", "mental_rating": "good",
+                    "first_clear_ms": 178000, "smites_at_clear": 1, "deaths": null,
+                    "free_notes": ""
+                }
+            }),
+            "set_objective_ticked" => json!({ "gameId": 1, "objectiveId": 1, "ticked": true }),
+            "list_objectives" => json!({ "status": "active" }),
+            "create_objective" => json!({ "body": "ward at 2:45", "category": "macro" }),
+            "update_objective" => json!({ "objectiveId": 1, "body": "b", "category": "lane" }),
+            "set_objective_status" => json!({ "objectiveId": 1, "status": "retired" }),
+            "add_takeaway" => json!({ "owner": { "kind": "game", "id": 1 }, "body": "t" }),
+            "delete_takeaway" => json!({ "takeawayId": 1 }),
+            "promote_takeaway" => json!({ "takeawayId": 1, "category": "other" }),
+            "merge_blocks" => json!({ "intoBlockId": 1, "fromBlockId": 2 }),
             // The three update commands take no arguments and reach no
             // network here: the test `Ctx` leaves the update seam unset, so
             // `check_for_update` and `install_update` both refuse with "not
@@ -856,6 +903,58 @@ mod tests {
                 assert!(!e.starts_with("unknown command"), "{name}: not reachable");
             }
         }
+    }
+
+    /// WS9's review, driven the way the form drives it: over the wire, with
+    /// the argument and value spellings the generated client sends.
+    #[tokio::test]
+    async fn a_review_round_trips_through_dispatch() {
+        let ctx = ctx();
+        let objective = dispatch(&ctx, "create_objective", json!({ "body": "ward", "category": "macro" }))
+            .await
+            .unwrap();
+        assert_eq!(objective["status"], "active");
+        let recording = ctx.db.begin_recording("C:/vods/a.mp4", 1000).unwrap();
+        ctx.db.start_game(Some(recording), 1000).unwrap();
+
+        let game = dispatch(&ctx, "open_game_for_recording", json!({ "recordingId": recording }))
+            .await
+            .unwrap();
+        dispatch(&ctx, "save_game_review", json!({
+            "gameId": game,
+            "review": { "game_rating": "loss", "lane_rating": null, "mental_rating": "bad",
+                        "first_clear_ms": null, "smites_at_clear": null, "deaths": 4,
+                        "free_notes": "tilted" }
+        }))
+        .await
+        .unwrap();
+        dispatch(&ctx, "set_objective_ticked",
+            json!({ "gameId": game, "objectiveId": objective["id"], "ticked": true }))
+            .await
+            .unwrap();
+        let takeaway = dispatch(&ctx, "add_takeaway",
+            json!({ "owner": { "kind": "game", "id": game }, "body": "contest grubs" }))
+            .await
+            .unwrap();
+        let promoted = dispatch(&ctx, "promote_takeaway",
+            json!({ "takeawayId": takeaway["id"], "category": "macro" }))
+            .await
+            .unwrap();
+
+        let review = dispatch(&ctx, "get_game_review", json!({ "gameId": game })).await.unwrap();
+        assert_eq!(review["review"]["game_rating"], "loss");
+        assert_eq!(review["review"]["deaths"], 4);
+        assert_eq!(review["objectives"][0]["ticked"], true);
+        assert_eq!(review["takeaways"][0]["promoted_to_id"], promoted["id"]);
+        let active = dispatch(&ctx, "list_objectives", json!({ "status": "active" })).await.unwrap();
+        assert_eq!(active.as_array().unwrap().len(), 2);
+
+        let missing = dispatch(&ctx, "get_game_review", json!({ "gameId": 999 })).await.unwrap();
+        assert!(missing.is_null());
+        let refused = dispatch(&ctx, "create_objective", json!({ "body": " ", "category": "other" }))
+            .await
+            .unwrap_err();
+        assert_eq!(refused, "an objective cannot be empty");
     }
 
     #[tokio::test]
