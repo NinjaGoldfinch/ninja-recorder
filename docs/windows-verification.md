@@ -1704,20 +1704,33 @@ Play one Practice Tool game per row, or several rows in one game.
       `start` failed (`no frame from WGC for the game window` in the log).
       Then switch between fullscreen and borderless mid-game and record the
       same. If the log says `the game window closed` on a mode switch, League
-      recreated its window, and the rest of that recording is black: that is
-      a finding, file it.
+      recreated its window: the next line within a second or two should be
+      `the game window came back (PID …); capturing it again`, and the file
+      has a short black stretch there, not a black rest-of-recording. Note
+      which way it went.
 - [ ] **The game closing.** End a game normally: the log has `the game window
-      closed (the game ended or crashed); recording black until stop` once,
-      then the recording stops about five seconds later as usual, and the
+      closed (the game ended or crashed; …); recording black until stop, or
+      until a game window comes back` once, within a quarter second of the
+      window going (the part in brackets says whether the poll or WGC's
+      `Closed` noticed; #302 found `Closed` never fires), no `came back`
+      line, then the recording stops about five seconds later as usual, and the
       file ends with a few seconds of black, with the audio track running
       to the end under it (silent once the game has gone). `stop` does not
       warn. A `the game audio capture ended before the recording did` line
       here is expected if process loopback ends with the game's process:
       note which way it went.
 - [ ] **The game crashing.** Kill `League of Legends.exe` in Task Manager
-      mid-game: the same line, then the supervisor's stop, and the file plays
-      up to the kill and is black after it. No `ended early` warning, no
-      hang, and the next game records.
+      mid-game: the same line, and the file plays up to the kill and is black
+      after it, not frozen. No `ended early` warning, no hang, and the next
+      game records.
+- [ ] **The game reconnecting.** Kill `League of Legends.exe` mid-game and
+      press Reconnect in the client (#302). The log has the `window closed`
+      line, then, once the new game window is up, `the game window came back
+      (PID …); capturing it again` and `the game came back: its audio is
+      captured again from PID …`. The file is black from the kill to the
+      reconnect and shows the game again after it (letterboxed if the window
+      came back another size), with the game's audio back in the mix and its
+      stem, silent across the gap. One file, not two.
 - [ ] **A lost GPU device**, if it can be caused safely (a driver update
       mid-game, or `dxcap -forcetdr` from the Windows SDK's graphics tools):
       `worker-devtools.log` has `the recording ended early: the GPU device was lost
@@ -1739,6 +1752,7 @@ Play one Practice Tool game per row, or several rows in one game.
 | 11.4: fullscreen ↔ borderless mid-game: what WGC gets | | |
 | 11.4: game ends: black tail, one log line, no warning | | |
 | 11.4: game killed: plays to the kill, black after, next game records | | |
+| 11.4: game killed and reconnected: black gap, picture and game audio return | | |
 | 11.4: GPU device lost (only if it can be caused) | | |
 
 ### 11.5 Microphone, desktop and application sources, mixed into track 0 (#238)

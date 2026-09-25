@@ -281,10 +281,20 @@ and a frame with no content is skipped. A minimised window sends no frames,
 so the ticks repeat the last one; one being minimised or alt-tabbed out of
 fullscreen can first send a few whose content is 1x1, and anything under
 `fit::MIN_CONTENT` (64 px) on either side is skipped the same way rather than
-scaled into a box (#301). WGC's `Closed` (the game ended or crashed)
-does not end the loop: it writes black until the supervisor's `stop`, which
-comes when the Live Client API goes away, and the game audio carries on under
-it, held with silence once the game has gone. A lost GPU device
+scaled into a box (#301). A window that has gone (the game ended or
+crashed) does not end the loop: it writes black until the supervisor's `stop`,
+which comes when the Live Client API goes away, and the game audio carries on
+under it, held with silence once the game has gone. The loop learns of it by
+polling, every 250 ms, `IsWindow` and the window's owning process (a recycled
+handle names someone else's), because WGC's `Closed` never fired on the box
+(#302); `Closed` is kept as a second signal, and `own::watch` makes the
+decisions. While black it looks for a game window every second, by the lookup
+`start` used, and captures one that has a size and belongs to `League of
+Legends.exe`: that is a crashed game the player reconnected to, which the state
+machine keeps recording through. The picture comes back letterboxed if the new
+window is another size, and the game's process-loopback source is restarted on
+the new PID into the same tracks, which carried silence across the gap. A
+normal game end finds no window, and the black runs to `stop`. A lost GPU device
 (`DXGI_ERROR_DEVICE_REMOVED`, `_RESET`) does end it, with what was written
 finalized, and `stop` waits at most 20 s for the capture worker whatever
 happens: a worker wedged in a driver past that is killed and its file kept, so
@@ -292,8 +302,10 @@ it cannot hold the supervisor.
 
 ```mermaid
 flowchart LR
-    F["WGC frame"] --> C{"Closed?"}
-    C -->|yes| B["black slot<br/><small>every tick until stop</small>"]
+    F["WGC frame"] --> C{"window gone?<br/><small>IsWindow + owner, 250 ms;<br/>or WGC Closed</small>"}
+    C -->|yes| B["black slot<br/><small>every tick until stop,<br/>or a game window comes back</small>"]
+    B -.->|"new game window<br/>(searched each second)"| R["new WGC capture;<br/>game audio restarted<br/>on the new PID"]
+    R -.-> F
     C -->|no| P{"fit::place"}
     P -->|"content = output"| CP["copy into slot"]
     P -->|"other size"| VP["video processor:<br/>scale into letterbox,<br/>bars black"]
