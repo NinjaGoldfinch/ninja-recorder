@@ -57,6 +57,32 @@ function openDevPortal() {
 
     <button
       type="button"
+      class="icon-btn ghost"
+      aria-label="Objectives"
+      title="Objectives"
+      onclick={() => showView("objectives")}
+    >
+      <svg
+        viewBox="0 0 24 24"
+        width="18"
+        height="18"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.7"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M9 6h11" />
+        <path d="M9 12h11" />
+        <path d="M9 18h11" />
+        <path d="m3.5 6 1.5 1.5L7.5 5" />
+        <path d="m3.5 12 1.5 1.5L7.5 11" />
+        <path d="m3.5 18 1.5 1.5L7.5 17" />
+      </svg>
+    </button>
+
+    <button
+      type="button"
       class="icon-btn ghost has-badge"
       aria-label="Settings"
       title="Settings"

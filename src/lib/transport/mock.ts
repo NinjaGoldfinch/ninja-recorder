@@ -27,7 +27,16 @@ import type {
   SupervisorStatus,
   UpdateStatus,
 } from "../../types";
-import type { CaptureBackendStatus } from "../contract/types";
+import type {
+  CaptureBackendStatus,
+  GameReview,
+  Objective,
+  ObjectiveCategory,
+  ObjectiveStatus,
+  ReviewInput,
+  Takeaway,
+  TakeawayOwner,
+} from "../contract/types";
 import type { Transport } from "./index";
 
 function row(
@@ -340,6 +349,149 @@ const MOCKS: Record<string, unknown> = {
   check_for_update: null,
 };
 
+// --- The review (WS9) -----------------------------------------------------
+//
+// One game per recording, made the first time a review is opened, the way
+// `open_game_for_recording` makes one in the daemon. Two objectives to review
+// against, so the checklist has something in it.
+
+const OBJECTIVES: Objective[] = [
+  {
+    id: 2,
+    body: "Track the enemy jungler's first clear",
+    category: "lane",
+    status: "active",
+    created_at: 2,
+    retired_at: null,
+  },
+  {
+    id: 1,
+    body: "Ward river at 2:45",
+    category: "macro",
+    status: "active",
+    created_at: 1,
+    retired_at: null,
+  },
+];
+const GAMES = new Map<number, GameReview>();
+let nextId = 100;
+
+function reviewFor(gameId: number): GameReview {
+  const game = [...GAMES.values()].find((g) => g.game.id === gameId);
+  if (!game) throw new Error(`no game ${gameId}`);
+  return game;
+}
+
+function reviewMock(
+  command: string,
+  args: Record<string, unknown> = {},
+): { value: unknown } | null {
+  switch (command) {
+    case "open_game_for_recording": {
+      const recordingId = args.recordingId as number;
+      const row = FIXTURE_ROWS.find((r) => r.id === recordingId);
+      if (!row) throw new Error(`no recording ${recordingId}`);
+      if (!GAMES.has(recordingId)) {
+        GAMES.set(recordingId, {
+          game: {
+            id: nextId++,
+            recording_id: recordingId,
+            started_at: row.started_at,
+            ended_at: null,
+            block_id: 1,
+            champion: row.champion,
+            matchup: null,
+            result: row.win === null ? null : row.win ? "win" : "loss",
+          },
+          review: null,
+          death_markers: row.kda_d,
+          objectives: OBJECTIVES.filter((o) => o.status === "active").map((o) => ({
+            objective_id: o.id,
+            body: o.body,
+            category: o.category,
+            status: o.status,
+            ticked: false,
+          })),
+          takeaways: [],
+        });
+      }
+      return { value: GAMES.get(recordingId)?.game.id };
+    }
+    case "get_game_review":
+      return { value: structuredClone(reviewFor(args.gameId as number)) };
+    case "save_game_review":
+      reviewFor(args.gameId as number).review = args.review as ReviewInput;
+      return { value: null };
+    case "set_objective_ticked": {
+      const row = reviewFor(args.gameId as number).objectives.find(
+        (o) => o.objective_id === args.objectiveId,
+      );
+      if (row) row.ticked = Boolean(args.ticked);
+      return { value: null };
+    }
+    case "list_objectives":
+      return { value: OBJECTIVES.filter((o) => args.status == null || o.status === args.status) };
+    case "create_objective": {
+      const created: Objective = {
+        id: nextId++,
+        body: String(args.body).trim(),
+        category: args.category as ObjectiveCategory,
+        status: "active",
+        created_at: Date.now(),
+        retired_at: null,
+      };
+      OBJECTIVES.unshift(created);
+      return { value: created };
+    }
+    case "set_objective_status": {
+      const found = OBJECTIVES.find((o) => o.id === args.objectiveId);
+      if (!found) throw new Error(`no objective ${String(args.objectiveId)}`);
+      found.status = args.status as ObjectiveStatus;
+      found.retired_at = found.status === "retired" ? (found.retired_at ?? Date.now()) : null;
+      return { value: { ...found } };
+    }
+    case "add_takeaway": {
+      const owner = args.owner as TakeawayOwner;
+      const added: Takeaway = {
+        id: nextId++,
+        game_id: owner.kind === "game" ? owner.id : null,
+        block_id: owner.kind === "block" ? owner.id : null,
+        body: String(args.body).trim(),
+        objective_id: null,
+        promoted_to_id: null,
+        created_at: Date.now(),
+      };
+      if (owner.kind === "game") reviewFor(owner.id).takeaways.push(added);
+      return { value: added };
+    }
+    case "delete_takeaway":
+      for (const game of GAMES.values()) {
+        game.takeaways = game.takeaways.filter((t) => t.id !== args.takeawayId);
+      }
+      return { value: null };
+    case "promote_takeaway": {
+      const takeaway = [...GAMES.values()]
+        .flatMap((g) => g.takeaways)
+        .find((t) => t.id === args.takeawayId);
+      if (!takeaway) throw new Error(`no takeaway ${String(args.takeawayId)}`);
+      const existing = OBJECTIVES.find((o) => o.id === takeaway.promoted_to_id);
+      if (existing) return { value: existing };
+      const created: Objective = {
+        id: nextId++,
+        body: takeaway.body,
+        category: args.category as ObjectiveCategory,
+        status: "active",
+        created_at: Date.now(),
+        retired_at: null,
+      };
+      OBJECTIVES.unshift(created);
+      takeaway.promoted_to_id = created.id;
+      return { value: created };
+    }
+  }
+  return null;
+}
+
 // Writes mutate the fixture array rather than no-op'ing, so pin and delete
 // behave the way they will in the real app — a two-step delete that never
 // removes anything is not much of a test.
@@ -384,6 +536,8 @@ async function mock<T>(command: string, args?: Record<string, unknown>): Promise
     case "install_update":
       throw new Error("updates are not available in this build");
   }
+  const review = reviewMock(command, args);
+  if (review) return review.value as T;
   if (command in MOCKS) return MOCKS[command] as T;
   throw new Error(`No dev fixture for invoke("${command}")`);
 }
