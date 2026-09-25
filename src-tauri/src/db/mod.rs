@@ -7,6 +7,7 @@
 
 pub mod pool;
 pub mod reconcile;
+pub mod review;
 
 use crate::warn;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -318,6 +319,104 @@ static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
         -- NULL everywhere and the filter above empties every library that
         -- upgrades.
         UPDATE recordings SET finished_at = started_at WHERE finished_at IS NULL;
+        ",
+    ), M::up(
+        "
+        -- VOD review (WS9). docs/data-model.md has the diagram; the plan
+        -- repository's ws9.md §3 is the specification.
+        --
+        -- A review hangs off `games`, not `recordings`. A recording row is
+        -- deleted with its file (reconcile, retention, the user's Delete) and
+        -- a review has to outlive its VOD, so `games.recording_id` is
+        -- SET NULL rather than CASCADE. The spreadsheet importer also creates
+        -- games that were never recorded at all.
+        --
+        -- Events are not a new table: `markers` already holds them, with the
+        -- raw payload and the aligned seek position (#249).
+        --
+        -- Every enum is a CHECK. A NULL passes a CHECK, which is what lets a
+        -- rating be unset.
+        CREATE TABLE blocks (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_at  INTEGER NOT NULL, -- unix millis, first game's start
+            ended_at    INTEGER NOT NULL  -- unix millis, last game's end
+        );
+
+        CREATE TABLE games (
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            recording_id         INTEGER UNIQUE REFERENCES recordings(id) ON DELETE SET NULL,
+            riot_game_id         INTEGER UNIQUE,
+            started_at           INTEGER NOT NULL, -- unix millis
+            block_id             INTEGER REFERENCES blocks(id) ON DELETE SET NULL,
+            champion             TEXT,
+            matchup              TEXT,
+            result               TEXT CHECK (result IN ('win', 'loss')),
+            recording_offset_ms  INTEGER -- recording start relative to game clock zero; P1 fills it
+        );
+
+        CREATE INDEX idx_games_started_at ON games(started_at);
+        CREATE INDEX idx_games_block_id ON games(block_id);
+
+        CREATE TABLE game_reviews (
+            game_id          INTEGER PRIMARY KEY REFERENCES games(id) ON DELETE CASCADE,
+            game_rating      TEXT CHECK (game_rating IN ('win', 'loss')),
+            lane_rating      TEXT CHECK (lane_rating IN ('win', 'neutral', 'loss')),
+            mental_rating    TEXT CHECK (mental_rating IN ('good', 'neutral', 'bad')),
+            first_clear_ms   INTEGER,
+            smites_at_clear  INTEGER,
+            deaths           INTEGER, -- NULL: show the count of death markers instead
+            free_notes       TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE objectives (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            body        TEXT NOT NULL,
+            category    TEXT NOT NULL DEFAULT 'other'
+                        CHECK (category IN ('macro', 'lane', 'mental', 'mechanics', 'other')),
+            status      TEXT NOT NULL DEFAULT 'active'
+                        CHECK (status IN ('active', 'paused', 'retired')),
+            created_at  INTEGER NOT NULL, -- unix millis
+            retired_at  INTEGER           -- unix millis, set when status becomes 'retired'
+        );
+
+        CREATE INDEX idx_objectives_status ON objectives(status);
+
+        -- Which objectives were active when the game started. A snapshot, so
+        -- retiring an objective later does not rewrite what a game was
+        -- reviewed against.
+        CREATE TABLE game_objectives (
+            game_id       INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+            objective_id  INTEGER NOT NULL REFERENCES objectives(id) ON DELETE CASCADE,
+            ticked        INTEGER NOT NULL DEFAULT 0 CHECK (ticked IN (0, 1)),
+            PRIMARY KEY (game_id, objective_id)
+        );
+
+        CREATE TABLE notes (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id       INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+            ts_ms         INTEGER NOT NULL, -- game time
+            kind          TEXT NOT NULL CHECK (kind IN ('mistake', 'good', 'question', 'takeaway')),
+            body          TEXT NOT NULL,
+            objective_id  INTEGER REFERENCES objectives(id) ON DELETE SET NULL,
+            marker_id     INTEGER REFERENCES markers(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX idx_notes_game_id_ts_ms ON notes(game_id, ts_ms);
+
+        -- Exactly one owner: a game's takeaway or a block's.
+        CREATE TABLE takeaways (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id         INTEGER REFERENCES games(id) ON DELETE CASCADE,
+            block_id        INTEGER REFERENCES blocks(id) ON DELETE CASCADE,
+            body            TEXT NOT NULL,
+            objective_id    INTEGER REFERENCES objectives(id) ON DELETE SET NULL,
+            promoted_to_id  INTEGER REFERENCES objectives(id) ON DELETE SET NULL,
+            created_at      INTEGER NOT NULL, -- unix millis
+            CHECK ((game_id IS NULL) <> (block_id IS NULL))
+        );
+
+        CREATE INDEX idx_takeaways_game_id ON takeaways(game_id);
+        CREATE INDEX idx_takeaways_block_id ON takeaways(block_id);
         ",
     )];
     let count = migrations.len() as i64;
