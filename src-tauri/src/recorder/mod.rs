@@ -113,6 +113,27 @@ pub trait Recorder: Send {
     /// which is why this returns an owned `String`.
     fn backend_name(&self) -> String;
 
+    /// The file the recording in flight is being written to, or `None` when
+    /// nothing is. For diagnostics: the dev portal's Recorder panel shows it,
+    /// and nothing decides anything from it. The row's path comes from
+    /// `stop`, which is the fact; this is what `start` was told.
+    ///
+    /// Default `None`, which a backend that cannot say leaves in place.
+    fn current_file(&self) -> Option<PathBuf> {
+        None
+    }
+
+    /// Whether this backend's out-of-process capture worker is up: `None`
+    /// for a backend that has no worker (the stub, a `FailedRecorder`).
+    ///
+    /// As of the last call the backend handled. A worker that died since is
+    /// noticed on the next `prepare`, `start` or `stop`, not here, because
+    /// this takes `&self` and must not wait on anything: the dev portal
+    /// asks it once a second, under the recorder lock.
+    fn worker_running(&self) -> Option<bool> {
+        None
+    }
+
     /// Bring the backend up ahead of time, because a recording now looks
     /// plausible — the supervisor calls this on entering `ClientRunning`.
     ///

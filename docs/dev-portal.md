@@ -110,17 +110,46 @@ mounts.
 
 | Panel | Exists because |
 |---|---|
-| **Overview** | The state machine diagram with the live state lit, plus `dev_session_snapshot`: markers and samples accumulating *during* a recording were previously invisible, since `game_state_status` only carries the last finalized one |
+| **Overview** | The state machine diagram with the live state lit, the daemon's recorder (backend, capturing, current file, capture worker) from `dev_health`, plus `dev_session_snapshot`: markers and samples accumulating *during* a recording were previously invisible, since `game_state_status` only carries the last finalized one |
 | **Seed** | There was no seed script anywhere, so the library, its filters and sort, retention and the entire review player could only be exercised by finishing a real game on Windows. Writes real files, rows, markers with the payload shapes `classify_event` produces, and a 1 Hz advantage curve |
 | **Simulate** | The supervisor's async glue was only drivable by real League polling. Dispatches `StateEvent`s into the live supervisor (really starting and stopping the recorder), injects Live Client Data payloads through the real `MarkerTracker` (a mid-game payload injected as a recording's first poll adds no markers, because a recording does not inherit the events from before it began, and the report says so), and replays a scripted game at a speed multiplier until it finalizes into a real row. Its League API probes cover the paths that need a running client: `dev_lcu_get` for any raw endpoint, `dev_champion_name` for the asset-store lookup as the code actually performs it, `dev_fetch_match_summary` for one un-retried post-game fetch, and `dev_patch_match_summary` for the whole deferred patch: retry schedule, `UPDATE` and all: against a recording already in the library, without playing a game first |
 | **Retention** | `set_retention_policy` saves *and* enforces, with no preview. `select_for_deletion` is pure and takes an injected clock, so this panel dry-runs it: including at a fabricated "now", to test an age rule without waiting days |
 | **Database** | Schema browse, paged table reads, row insert/update/delete, raw SQL, full reset |
 | **Commands** | Every registered command, invocable by hand, with a drift banner (below). Also the only home of `dev_trim_lead_in` (below), which is a one-off per recording rather than a workflow worth a panel |
-| **Recorder** | `start_recording` / `stop_recording` / `is_recording` directly, without a game |
+| **Recorder** | The **daemon's** capture backend, which nothing else in the portal named: its `backend_name()` (`own (ready: <encoder>)`, `libobs (ready)`, or why it is unavailable), the `capture_backend` setting, whether it is capturing, the file it is writing, and whether its capture worker process is up. All of it from `dev_health`, answered by the daemon (#282). No manual start or stop; see below |
 | **Fixtures** | Read/write `fixtures/`, toggle live capture at runtime: the replay mode the fixture strategy always called for. Capture is **on by default until v1.0** (DEVELOPMENT.md §3.3), so this panel is now mostly for turning it *off*. Also home to the **LCU event recorder**: `dev_event_capture_start` writes every WebSocket frame the client emits to a JSONL file, unfiltered, and `dev_event_uris` says which endpoints appeared so a capture can be searched rather than read. Unfiltered is the point \u2014 a URI filter presupposes knowing which endpoint carries what you are hunting, and it was built for the opposite case: #149 needs an LP change that the end-of-game block does not carry and neither ranked endpoint reports, while the client plainly knows it. A listed fixture opens into a textarea, and from there into the OS's own editor \u2014 the captured `eog-stats-block` is 99 KB of nested JSON and a 16-row textarea is not a way to read it. Also home to `dev_shape_report`, which reads those captures back and says what the parser did *not* understand: event names with no `classify_event` arm, events it could not deserialize at all: reported with the JSON that broke them, which is the thing the `debug!` line used to throw away: fields that arrived as the wrong JSON type, keys on events that nothing reads, and files that are not JSON at all. The mistyped-field check earned itself on the first real capture: `Stolen` arrives as the string `"False"` six times, absorbed by `flexible_bool` and reported nowhere until now. Those first two are the whole diagnosis between them: an event that parsed and classified to nothing and an event that never parsed both show up as a missing marker and want opposite fixes. Capture had been write-only: every shape bug so far (`HordeKill`, the payload behind #74) was sitting in a captured file before anyone knew, because nothing ever looked. A **report, not a validator**: the parser's leniency is deliberate and nothing here changes what it accepts |
 | **Library** | One recording from every source that knows something about it (#99). The row including columns the UI never renders, **where each value came from**, marker and sample counts with gold counted apart, the alignment offset, and the scoreboard and diagnostics parsed. Also asks the client, on demand: `dev_recording_vs_lcu` runs the same one-shot `fetch_match_summary` the deferred patch uses and lays its answer beside the row, field by field, leading with a count of what disagrees. Two views of one match should never differ, so a disagreement almost always means the wrong `game_id` was matched: the thing that silently mislabels a library. It is fetched on demand rather than with the report because it needs a running client, and a panel that would not open without one is useless for the offline half of what it shows. **And it acts.** An Act-on-it block runs the deferred patch, the backfill against this row alone, the loading-screen trim, and opens the file or shows it in the file manager: every one an existing command pointed at the row in front of you, which is why #99 could describe this half as wiring. The report itself stays a pure read and lives in a separate module from the actions, so opening the inspector still cannot change what it describes; only a press can. Every action re-reads the report when it finishes, because an inspector showing pre-write values would be worse than one showing nothing. Also carries the ranked probes for #149: `dev_ranked_stats` for one player's standing and `dev_lobby_rank` for a whole lobby's median, both reading the same document the two ranked endpoints return. Reachable two ways: from the panel's own list, and from the 🔎 on any row in the main window, which opens the portal *on* that recording via `#/library/<id>`. That affordance is revealed by the same probe as the portal button (asked for, never configured) and re-applied after every grid render, since the library rebuilds on `library-changed` and the probe resolves once |
 | **Diagnostics** | A recording's card tells you what it contains; nothing told you what the finalize *observed*. Reads `recordings.diagnostics_json` (migration 7) for the 25 most recent and leads with what is wrong or missing, never matched in `allPlayers`, no game id, an alignment that was never proven, or polling that stopped well before the recorder did (the #74 fingerprint). A row of eleven numbers is not an answer |
 | **Log** | Two logs: the backend's own file (the one a release build writes too, since a shipped app has no console) and the portal's IPC calls. Filter by level and tag, search, switch between rotated files. `live-poll` and `libobs` are hidden by default: at 1 Hz they bury everything else. Filtering runs in Rust because the file is capped at 5 MiB. On Windows it also lists `libobs-devtools.log`, which this build's capture worker writes (a release build's worker writes `libobs.log`); those lines carry no level, so the level filter lets level-less lines through rather than emptying the view |
+
+## The Recorder panel has no manual controls
+
+It used to have Start and Stop buttons that called `start_recording` and
+`stop_recording`. Since WS3 those reach the **daemon's** recorder, over `rpc`,
+and they reach it **around the supervisor**: the state machine does not know
+about either call. With the recorder in the UI process that was a way to watch
+the stub write a file; with it in the daemon it is a way to break a recording:
+
+- **With no game running** both real backends fail the start, because each
+  records the game window and there is none. The stub is the only backend the
+  button ever worked on.
+- **During a game** the supervisor is already recording, so Start is refused
+  with `AlreadyRecording`, and Stop ends the supervisor's recording under it:
+  the finalize then finds nothing to stop, tells the user the recording could
+  not be finished, and never finishes its row.
+- **In between**, a manual start holds the recorder, so the game that follows
+  is refused by it and goes unrecorded.
+
+There is no path that starts a recording through the supervisor without the
+state machine, and inventing one would be a second way to record that the
+first does not know about. So the buttons are gone, and the panel sends you to
+**Simulate**, whose state events drive the live supervisor: the daemon's
+recorder is started and stopped by the path a real game takes, and the
+recording is finalized into a row.
+
+The two commands themselves are still production commands (DEVELOPMENT.md
+§5.1 says why they stay), so the Commands panel can still invoke them by hand,
+with that panel's usual lack of guard rails.
 
 ## What the portal drove back into the app
 
@@ -233,7 +262,7 @@ between them by what they need to reach.
 |---|---|---|---|
 | 40 `dev_*` commands | the daemon | `rpc` → `dev::dispatch` | They read the database, drive the state machine, ask the recorder, or read the log, and the daemon owns all four |
 | `dev_open_portal`, `dev_open_data_dir`, `dev_reveal_recording`, `dev_open_fixture` | the UI | a Tauri command | A window, or the OS file manager. An Explorer window opened by a background daemon can land behind the foreground app |
-| `dev_env_info` | the UI | a Tauri command | It reports *this* process's paths and build, which is a different answer in each and is meant to be |
+| `dev_env_info` | the UI | a Tauri command | It reports *this* process's paths and build, which is a different answer in each and is meant to be. It says nothing about the recorder, because the UI's records nothing: the daemon's is in `dev_health` (#282) |
 | `dev_registered_commands` | the UI | a Tauri command | Its rejection in a shipped build is how the portal decides it exists |
 
 The split lives in `contract::portal` as two tables, `dev_ui_command_table!`
@@ -244,7 +273,7 @@ entry `overRpc`.
 
 **The portal drives the daemon.** Its `invoke('rpc', ...)` reaches `lib.rs`'s
 `rpc`, which since WS3.4 forwards over the pipe rather than dispatching in the
-UI process. So Overview's counts, Database's tables, Simulate's state injection
+UI process. So Overview's counts and recorder, Recorder's backend, Database's tables, Simulate's state injection
 and Log's files all describe the daemon: the process that owns the library, the
 supervisor and the recorder. The Log panel's active file is
 `daemon-devtools.log`, because the portal only exists in a devtools build and

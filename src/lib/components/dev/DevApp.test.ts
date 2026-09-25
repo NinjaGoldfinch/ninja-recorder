@@ -37,6 +37,12 @@ const ANSWERS: Record<string, unknown> = {
     total_bytes: 0,
     free_bytes: 500 * 1024 ** 3,
     is_recording: false,
+    recorder: {
+      backend: "stub",
+      configured: "libobs",
+      current_file: null,
+      worker_running: null,
+    },
     replay_running: false,
     fixture_recording: false,
   },
@@ -554,5 +560,78 @@ describe("the panels that read something back", () => {
     expect(host.textContent).toContain("hidden by default");
     await press("Portal IPC");
     expect(host.textContent).toContain("No calls match.");
+  });
+});
+
+/**
+ * #282: the Overview and Recorder panels describe the **daemon's** recorder.
+ *
+ * They used to take the backend from `dev_env_info`, which runs in the UI
+ * process, whose recorder is a `FailedRecorder` that records nothing. Only
+ * `dev_health` is answered by the daemon, so it is the only thing these read.
+ */
+describe("the recorder the portal describes", () => {
+  const idle = ANSWERS.dev_health as Record<string, unknown>;
+  const capturing = {
+    ...idle,
+    supervisor: { state: "Recording", recording_elapsed_s: 12, last_finalized: null },
+    is_recording: true,
+    recorder: {
+      backend: "own (ready: NVIDIA H.264 Encoder MFT)",
+      configured: "own",
+      current_file: "C:\\Videos\\recording-20260924-201500.mp4",
+      worker_running: true,
+    },
+  };
+
+  afterEach(() => {
+    ANSWERS.dev_health = idle;
+  });
+
+  it.each(["overview", "recorder"])(
+    "shows the daemon's backend, capture and file on %s",
+    async (panel) => {
+      ANSWERS.dev_health = capturing;
+      await open(`#/${panel}`);
+      const text = host.querySelector(".dev-main")?.textContent ?? "";
+      expect(text).toContain("own (ready: NVIDIA H.264 Encoder MFT)");
+      expect(text).toContain("recording-20260924-201500.mp4");
+      expect(text).toMatch(/Capturing\s*yes/);
+      expect(text).toMatch(/Capture worker\s*up/);
+    },
+  );
+
+  it("never shows the UI process's recorder", async () => {
+    // The environment is still read, for the paths. A recorder field on it
+    // would be the UI's, which says "unavailable" while the daemon records.
+    const env = ANSWERS.dev_env_info;
+    ANSWERS.dev_env_info = {
+      ...(env as object),
+      recorder_backend: "unavailable (this process does not record; the daemon does)",
+    };
+    try {
+      for (const panel of ["overview", "recorder"]) {
+        await open(`#/${panel}`);
+        expect(host.textContent).not.toContain("this process does not record");
+      }
+    } finally {
+      ANSWERS.dev_env_info = env;
+    }
+  });
+
+  it("says a backend without a worker has none, rather than that it is down", async () => {
+    await open("#/recorder");
+    expect(host.textContent).toContain("none (this backend has no worker)");
+  });
+
+  it("offers no manual start or stop, and sends you to Simulate instead", async () => {
+    await open("#/recorder");
+    const labels = [...host.querySelectorAll("button")].map((b) => b.textContent?.trim() ?? "");
+    expect(labels.some((l) => /start recording|stop recording/i.test(l))).toBe(false);
+
+    await press("Open Simulate");
+    expect(location.hash).toBe("#/simulate");
+    expect(tryCall).not.toHaveBeenCalledWith("start_recording", expect.anything());
+    expect(call).not.toHaveBeenCalledWith("start_recording", expect.anything());
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bytes, clockTime, duration, MISSING, timestamp } from "./format";
+import { bytes, clockTime, duration, MISSING, timestamp, workerState } from "./format";
 
 /**
  * These were untested for as long as the portal was out of scope: WS4's plan
@@ -73,5 +73,17 @@ describe("timestamp", () => {
   it("carries the date as well as the time", () => {
     const at = timestamp(Date.UTC(2026, 0, 2, 13, 5, 9));
     expect(at.length).toBeGreaterThan(clockTime(Date.UTC(2026, 0, 2, 13, 5, 9)).length);
+  });
+});
+
+describe("workerState", () => {
+  it("tells a backend with no worker apart from a worker that is down", () => {
+    expect(workerState(true)).toBe("up");
+    expect(workerState(false)).toBe("not running");
+    expect(workerState(null)).toContain("no worker");
+  });
+
+  it("is missing before the first poll", () => {
+    expect(workerState(undefined)).toBe(MISSING);
   });
 });

@@ -51,3 +51,14 @@ export function timestamp(millis: number): string {
 export function clockTime(millis: number): string {
   return new Date(millis).toLocaleTimeString(undefined, { hour12: false });
 }
+
+/**
+ * The capture worker, said so that "this backend has none" cannot be read as
+ * "it is down". The stub and a refusing backend have no worker; libobs and the
+ * own backend spawn one while League runs and end it when it closes.
+ */
+export function workerState(running: boolean | null | undefined): string {
+  if (running === undefined) return MISSING;
+  if (running === null) return "none (this backend has no worker)";
+  return running ? "up" : "not running";
+}

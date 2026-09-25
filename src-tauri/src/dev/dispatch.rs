@@ -318,6 +318,32 @@ mod tests {
         }
     }
 
+    /// #282: the Overview and Recorder panels read the recorder from here,
+    /// so it has to be the recorder of the process answering, with the file
+    /// it is writing while it writes one.
+    #[tokio::test]
+    async fn health_reports_the_recorder_of_the_process_that_owns_it() {
+        let ctx = ctx();
+        let idle = dispatch_dev(&ctx, "dev_health", json!({})).await.unwrap();
+        assert_eq!(idle["is_recording"], json!(false));
+        assert_eq!(idle["recorder"]["backend"], json!("stub"));
+        assert_eq!(idle["recorder"]["configured"], json!("libobs"));
+        assert_eq!(idle["recorder"]["current_file"], Value::Null);
+        // The stub has no worker, which is not the same as a worker that is down.
+        assert_eq!(idle["recorder"]["worker_running"], Value::Null);
+
+        crate::core::start_recording(&ctx).unwrap();
+        let busy = dispatch_dev(&ctx, "dev_health", json!({})).await.unwrap();
+        assert_eq!(busy["is_recording"], json!(true));
+        let file = busy["recorder"]["current_file"].as_str().expect("a file while recording");
+        assert!(file.ends_with(".mp4"), "{file}");
+        assert!(file.starts_with(&ctx.recordings_dir.display().to_string()), "{file}");
+
+        let saved = crate::core::stop_recording(&ctx).unwrap();
+        assert_eq!(saved, file);
+        std::fs::remove_file(&saved).ok();
+    }
+
     /// The portal reaches these by name over `rpc`, so a name that is not
     /// prefixed would be routed to `core`'s table and reported as unknown.
     #[test]
