@@ -1,6 +1,7 @@
 //! Process loopback: an `IAudioClient` bound to one process tree. Ported
 //! from `spikes/p0c-audio`, which proved it against League on the box (#7,
-//! DEVELOPMENT.md §16).
+//! DEVELOPMENT.md §16). The game's tree since #237, and an application's
+//! (Discord's, rooted by `root::application_root`) since #238.
 //!
 //! **Nothing here touches the game process.** Process loopback is the audio
 //! engine handing over the mix of one process tree's streams; the target is
@@ -11,15 +12,13 @@ use std::mem::ManuallyDrop;
 
 use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
 use windows::Win32::Media::Audio::{
-    AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT,
-    AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR, AUDCLNT_SHAREMODE_SHARED,
-    AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK,
+    AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK,
     AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
     AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
     ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation,
     IActivateAudioInterfaceCompletionHandler, IActivateAudioInterfaceCompletionHandler_Impl,
     IAudioCaptureClient, IAudioClient, PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
-    VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, WAVEFORMATEX,
+    VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
 };
 use windows::Win32::System::Com::BLOB;
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
@@ -27,21 +26,8 @@ use windows::Win32::System::Threading::{CreateEventW, SetEvent, WaitForSingleObj
 use windows::Win32::System::Variant::VT_BLOB;
 use windows::core::{Interface, PCWSTR, Ref, implement};
 
-use super::super::device;
 use super::super::process::OwnedHandle;
-use crate::recorder::own::pcm::{self, SampleFormat};
-
-/// `WAVE_FORMAT_IEEE_FLOAT`, spelled out rather than pulling in the kernel
-/// streaming feature for one documented constant.
-const WAVE_FORMAT_IEEE_FLOAT: u16 = 3;
-
-/// The format asked for. **Process loopback has no `GetMixFormat`**: there
-/// is no device to ask, so the format is asserted and the engine converts
-/// into it. 48 kHz stereo float is what the mix graph runs at natively, and
-/// 48 kHz is a rate the AAC encoder takes.
-pub const SAMPLE_RATE: u32 = 48_000;
-const CHANNELS: u16 = 2;
-const BITS: u16 = 32;
+use super::{Capture, Raw, float_format, read_packet};
 
 /// How long the activation may take before it counts as hung.
 const ACTIVATION_TIMEOUT_MS: u32 = 5_000;
@@ -155,39 +141,6 @@ fn activate(pid: u32) -> Result<IAudioClient, String> {
         .map_err(|e| format!("the activated object is not an IAudioClient: {e}"))
 }
 
-fn float_format() -> WAVEFORMATEX {
-    let block_align = CHANNELS * BITS / 8;
-    WAVEFORMATEX {
-        wFormatTag: WAVE_FORMAT_IEEE_FLOAT,
-        nChannels: CHANNELS,
-        nSamplesPerSec: SAMPLE_RATE,
-        nAvgBytesPerSec: SAMPLE_RATE * u32::from(block_align),
-        nBlockAlign: block_align,
-        wBitsPerSample: BITS,
-        cbSize: 0,
-    }
-}
-
-/// One packet as `GetBuffer` handed it over.
-pub struct Raw {
-    pub frames: u32,
-    pub silent: bool,
-    pub discontinuity: bool,
-    /// `AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR`: the engine says its own stamp
-    /// for this packet is wrong, whatever it looks like.
-    pub timestamp_error: bool,
-    /// `pu64QPCPosition`, as the engine gave it: 100 ns units if it is the
-    /// performance counter, and the thing `clock::check_stamp` judges.
-    pub qpc: u64,
-    /// `pu64DevicePosition`, in frames. Logged for the first packet only,
-    /// alongside the QPC stamp, so a box run shows both.
-    pub device_position: u64,
-    /// The performance counter read just after `GetBuffer` returned.
-    pub arrival: i64,
-    /// Stereo i16, interleaved; zeros for a silent packet.
-    pub pcm: Vec<i16>,
-}
-
 /// An initialised, event-driven process-loopback capture.
 pub struct Loopback {
     client: IAudioClient,
@@ -199,7 +152,9 @@ pub struct Loopback {
 
 impl Loopback {
     /// Activates the tree rooted at `pid` and initialises it for 48 kHz
-    /// stereo float, event-driven.
+    /// stereo float, event-driven. **Process loopback has no
+    /// `GetMixFormat`**: there is no device to ask, so the format is asserted
+    /// and the engine converts into it.
     pub fn open(pid: u32) -> Result<Loopback, String> {
         let client = activate(pid)?;
         let format = float_format();
@@ -236,77 +191,24 @@ impl Loopback {
         // SAFETY: `client` is initialised with an event handle set.
         unsafe { self.client.Start() }.map_err(|e| format!("IAudioClient::Start failed: {e}"))
     }
+}
 
-    pub fn stop(&self) {
-        // SAFETY: `client` is live; stopping has no other precondition.
-        let _ = unsafe { self.client.Stop() };
-    }
-
+impl Capture for Loopback {
     /// Waits up to `ms` for the engine to signal a packet. A timeout is not
     /// an error: a process-loopback stream is not guaranteed to be fed while
     /// its target is silent.
-    pub fn wait(&self, ms: u32) -> bool {
+    fn wait(&self, ms: u32) -> bool {
         // SAFETY: `ready` is a live event.
         let wait = unsafe { WaitForSingleObject(self.ready.0, ms) };
         wait == WAIT_OBJECT_0
     }
 
-    /// The next packet, or `None` when the engine has none waiting. One
-    /// event can cover several packets, so the caller drains until `None`:
-    /// leaving one behind makes the next `GetBuffer` return it late.
-    pub fn next(&self) -> Result<Option<Raw>, String> {
-        // SAFETY: the client is started and live.
-        let available = unsafe { self.capture.GetNextPacketSize() }
-            .map_err(|e| format!("GetNextPacketSize failed: {e}"))?;
-        if available == 0 {
-            return Ok(None);
-        }
-        let mut data: *mut u8 = std::ptr::null_mut();
-        let mut frames = 0u32;
-        let mut flags = 0u32;
-        let mut device_position = 0u64;
-        let mut qpc = 0u64;
-        // **Both positions are asked for.** The spike asked for neither; the
-        // QPC one is what puts this source on the video's clock, if it is
-        // real, and `clock::Stamper` decides whether it is.
-        // SAFETY: every out-parameter is live; the buffer is released below
-        // before the next GetBuffer.
-        unsafe {
-            self.capture.GetBuffer(
-                &mut data,
-                &mut frames,
-                &mut flags,
-                Some(&mut device_position),
-                Some(&mut qpc),
-            )
-        }
-        .map_err(|e| format!("GetBuffer failed: {e}"))?;
-        let arrival = device::qpc_hns();
+    fn next(&self) -> Result<Option<Raw>, String> {
+        read_packet(&self.capture)
+    }
 
-        let silent = flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0;
-        let pcm = if silent || data.is_null() {
-            // A silent packet's buffer contents are undefined, not zero.
-            vec![0i16; frames as usize * 2]
-        } else {
-            let bytes = frames as usize * usize::from(CHANNELS) * SampleFormat::F32.bytes();
-            // SAFETY: the engine owns `bytes` bytes at `data` until
-            // ReleaseBuffer, in the format Initialize accepted.
-            let raw = unsafe { std::slice::from_raw_parts(data, bytes) };
-            pcm::to_stereo_i16(raw, SampleFormat::F32, CHANNELS, frames)
-        };
-        // SAFETY: releases exactly the packet GetBuffer handed out.
-        unsafe { self.capture.ReleaseBuffer(frames) }
-            .map_err(|e| format!("ReleaseBuffer failed: {e}"))?;
-
-        Ok(Some(Raw {
-            frames,
-            silent,
-            discontinuity: flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0 as u32 != 0,
-            timestamp_error: flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR.0 as u32 != 0,
-            qpc,
-            device_position,
-            arrival,
-            pcm,
-        }))
+    fn stop(&self) {
+        // SAFETY: `client` is live; stopping has no other precondition.
+        let _ = unsafe { self.client.Stop() };
     }
 }

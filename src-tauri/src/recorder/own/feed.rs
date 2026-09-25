@@ -1,10 +1,11 @@
-//! One audio source's packets, from the capture thread to the encoder, with
-//! no Windows in it.
+//! One audio source's packets, from the capture thread to the mixer, with no
+//! Windows in it.
 //!
 //! Ported from the loop in `spikes/p0c-video/src/win/mod.rs` that fed its
 //! sink writer, and pulled out of the session so the whole path, packets in
-//! and PCM out at a sample position, is a unit test. The session thread owns
-//! one [`Feed`] per source and hands it a writer that calls the encoder.
+//! and PCM out at a sample position, is a unit test. Since #238 every source
+//! has one [`Feed`], and `mix::Mixdown` hands each a writer into its lane of
+//! the mixer, which is what writes to the encoder.
 //!
 //! Three rules, all the spike's:
 //!
@@ -18,14 +19,14 @@
 //!
 //! And one the spike did not need, because it captured an endpoint with a
 //! keep-alive stream: a process-loopback source may deliver nothing while its
-//! target is silent, so [`Feed::hold`] writes silence a margin behind the
-//! video rather than leave one track of the file waiting on the other.
+//! target is silent, so [`Feed::hold`] writes silence up to the mixer's
+//! watermark rather than leave the source's aligner behind the mix.
 
 use std::collections::VecDeque;
 
 use super::clock::{self, Aligner, AudioClock};
 
-/// One packet, stereo i16, as the capture thread sends it.
+/// One packet, stereo f32, as the capture thread sends it.
 #[derive(Clone, Debug)]
 pub struct Packet {
     /// The time of its first frame on the performance counter, in 100 ns
@@ -35,8 +36,10 @@ pub struct Packet {
     pub frames: u32,
     /// WASAPI's `AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY`, or a re-anchor.
     pub discontinuity: bool,
-    /// Interleaved L R; zeros for a packet the engine marked silent.
-    pub pcm: Vec<i16>,
+    /// Interleaved L R, full scale -1.0..1.0 and unclamped (`pcm::to_stereo_f32`):
+    /// the mixer clamps once, after summing. Zeros for a packet the engine
+    /// marked silent.
+    pub pcm: Vec<f32>,
     /// Whose clock `hns` is on, decided by the source at its first packet.
     pub clock: AudioClock,
 }
@@ -71,11 +74,11 @@ impl Feed {
 
     /// Writes every queued packet that ends by `video_end_rel`, the end of
     /// the last video tick written, relative to the origin. `write` gets
-    /// stereo i16 and the sample position it starts at, and the positions it
+    /// stereo f32 and the sample position it starts at, and the positions it
     /// sees are contiguous from 0.
     pub fn write_ready<W>(&mut self, video_end_rel: i64, write: &mut W) -> Result<(), String>
     where
-        W: FnMut(&[i16], u64) -> Result<(), String>,
+        W: FnMut(&[f32], u64) -> Result<(), String>,
     {
         let rate = self.aligner.rate();
         let limit = clock::samples_at(video_end_rel, rate);
@@ -103,17 +106,18 @@ impl Feed {
         self.aligner.written() as i64 >= end || queued.is_some_and(|q| q >= end)
     }
 
-    /// When nothing is queued, writes silence up to `margin` behind
-    /// `video_end_rel`. Returns the frames written.
-    pub fn hold<W>(&mut self, video_end_rel: i64, margin: i64, write: &mut W) -> Result<u64, String>
+    /// When nothing is queued, writes silence up to `until_rel`, relative to
+    /// the origin. Returns the frames written. The mixer passes its
+    /// watermark, which is never past the video.
+    pub fn hold<W>(&mut self, until_rel: i64, write: &mut W) -> Result<u64, String>
     where
-        W: FnMut(&[i16], u64) -> Result<(), String>,
+        W: FnMut(&[f32], u64) -> Result<(), String>,
     {
         if !self.pending.is_empty() {
             return Ok(0);
         }
         let before = self.aligner.written();
-        let silence = self.aligner.hold(video_end_rel - margin);
+        let silence = self.aligner.hold(until_rel);
         write_silence(before, silence, write)?;
         Ok(silence)
     }
@@ -123,7 +127,7 @@ impl Feed {
     /// Returns the aligner's `(pad, overhang)`.
     pub fn finish<W>(&mut self, end_rel: i64, write: &mut W) -> Result<(u64, u64), String>
     where
-        W: FnMut(&[i16], u64) -> Result<(), String>,
+        W: FnMut(&[f32], u64) -> Result<(), String>,
     {
         let rate = self.aligner.rate();
         let end = clock::samples_at(end_rel, rate);
@@ -147,7 +151,7 @@ impl Feed {
     /// Places one packet and writes what the aligner decided.
     fn place<W>(&mut self, packet: &Packet, write: &mut W) -> Result<(), String>
     where
-        W: FnMut(&[i16], u64) -> Result<(), String>,
+        W: FnMut(&[f32], u64) -> Result<(), String>,
     {
         let before = self.aligner.written();
         let placement =
@@ -160,7 +164,7 @@ impl Feed {
         }
         // A short `pcm` is read as silence rather than past, as `pcm` does.
         let mut pcm = Vec::with_capacity((frames - skip + placement.repeat as usize) * 2);
-        let sample = |i: usize| packet.pcm.get(i).copied().unwrap_or(0);
+        let sample = |i: usize| packet.pcm.get(i).copied().unwrap_or(0.0);
         for _ in 0..placement.repeat {
             pcm.extend([sample(skip * 2), sample(skip * 2 + 1)]);
         }
@@ -174,13 +178,13 @@ impl Feed {
 /// `frames` of silence from sample `from`, in chunks.
 fn write_silence<W>(from: u64, frames: u64, write: &mut W) -> Result<(), String>
 where
-    W: FnMut(&[i16], u64) -> Result<(), String>,
+    W: FnMut(&[f32], u64) -> Result<(), String>,
 {
     let mut position = from;
     let mut left = frames;
     while left > 0 {
         let n = left.min(SILENCE_CHUNK);
-        write(&vec![0i16; n as usize * 2], position)?;
+        write(&vec![0.0f32; n as usize * 2], position)?;
         position += n;
         left -= n;
     }
@@ -203,14 +207,14 @@ mod tests {
     /// Everything written, checked for contiguity as it arrives.
     #[derive(Default)]
     struct Track {
-        samples: Vec<i16>,
+        samples: Vec<f32>,
     }
 
     impl Track {
         fn frames(&self) -> u64 {
             self.samples.len() as u64 / 2
         }
-        fn writer(&mut self) -> impl FnMut(&[i16], u64) -> Result<(), String> + '_ {
+        fn writer(&mut self) -> impl FnMut(&[f32], u64) -> Result<(), String> + '_ {
             move |pcm, position| {
                 assert_eq!(position, self.frames(), "writes must be contiguous");
                 assert_eq!(pcm.len() % 2, 0);
@@ -221,7 +225,7 @@ mod tests {
     }
 
     /// A packet whose every sample is `value`, stamped at `samples` after the origin.
-    fn packet(samples: i64, value: i16, clock: AudioClock) -> Packet {
+    fn packet(samples: i64, value: f32, clock: AudioClock) -> Packet {
         Packet {
             hns: ORIGIN + hns_of(samples),
             frames: PACKET,
@@ -236,7 +240,7 @@ mod tests {
         let mut feed = Feed::new(RATE, ORIGIN);
         let mut track = Track::default();
         for i in 0..10 {
-            feed.push(packet(i * 480, 1 + i as i16, AudioClock::Qpc));
+            feed.push(packet(i * 480, (1 + i) as f32, AudioClock::Qpc));
         }
         // Video written to 25 ms: two whole packets fit, the third waits.
         feed.write_ready(hns_of(1_200), &mut track.writer()).unwrap();
@@ -247,45 +251,44 @@ mod tests {
         let (pad, overhang) = feed.finish(hns_of(2_016), &mut track.writer()).unwrap();
         assert_eq!((pad, overhang), (0, 0));
         assert_eq!(track.frames(), 2_016);
-        assert_eq!(track.samples[2 * 1_920], 5);
-        assert_eq!(*track.samples.last().unwrap(), 5);
+        assert_eq!(track.samples[2 * 1_920], 5.0);
+        assert_eq!(*track.samples.last().unwrap(), 5.0);
     }
 
     #[test]
     fn a_quiet_source_is_held_behind_the_video_and_resumes_in_place() {
         let mut feed = Feed::new(RATE, ORIGIN);
         let mut track = Track::default();
-        feed.push(packet(0, 7, AudioClock::Qpc));
+        feed.push(packet(0, 7.0, AudioClock::Qpc));
         feed.write_ready(hns_of(480), &mut track.writer()).unwrap();
-        // Two seconds with no packets; held to half a second behind.
-        let margin = HNS_PER_SECOND / 2;
-        let held = feed.hold(hns_of(96_000), margin, &mut track.writer()).unwrap();
+        // Two seconds with no packets; held to a point half a second behind.
+        let held = feed.hold(hns_of(72_000), &mut track.writer()).unwrap();
         assert_eq!(track.frames(), 72_000);
         assert_eq!(held, 72_000 - 480);
         // The source resumes with a packet from just now: the gap between
         // the hold and it is silence, and it lands where it belongs.
-        feed.push(packet(96_000, 9, AudioClock::Qpc));
+        feed.push(packet(96_000, 9.0, AudioClock::Qpc));
         feed.write_ready(hns_of(96_480), &mut track.writer()).unwrap();
         assert_eq!(track.frames(), 96_480);
-        assert_eq!(track.samples[2 * 96_000], 9);
-        assert_eq!(track.samples[2 * 95_999], 0);
+        assert_eq!(track.samples[2 * 96_000], 9.0);
+        assert_eq!(track.samples[2 * 95_999], 0.0);
         assert_eq!(feed.aligner().stats.residual_last, 0);
         // Nothing is held while a packet waits.
-        feed.push(packet(96_480, 9, AudioClock::Qpc));
-        assert_eq!(feed.hold(hns_of(200_000), margin, &mut track.writer()).unwrap(), 0);
+        feed.push(packet(96_480, 9.0, AudioClock::Qpc));
+        assert_eq!(feed.hold(hns_of(200_000), &mut track.writer()).unwrap(), 0);
     }
 
     #[test]
     fn audio_that_starts_late_is_led_by_silence_and_padded_to_the_end() {
         let mut feed = Feed::new(RATE, ORIGIN);
         let mut track = Track::default();
-        feed.push(packet(4_800, 3, AudioClock::Qpc));
+        feed.push(packet(4_800, 3.0, AudioClock::Qpc));
         feed.write_ready(hns_of(10_000), &mut track.writer()).unwrap();
         let (pad, _) = feed.finish(hns_of(10_000), &mut track.writer()).unwrap();
         assert_eq!(track.frames(), 10_000);
         assert_eq!(pad, 10_000 - 5_280);
-        assert_eq!(track.samples[2 * 4_799], 0);
-        assert_eq!(track.samples[2 * 4_800], 3);
+        assert_eq!(track.samples[2 * 4_799], 0.0);
+        assert_eq!(track.samples[2 * 4_800], 3.0);
         assert_eq!(feed.aligner().stats.lead_silence, 4_800);
     }
 
@@ -293,15 +296,15 @@ mod tests {
     fn a_slip_repeats_the_first_kept_frame() {
         let mut feed = Feed::new(RATE, ORIGIN);
         let mut track = Track::default();
-        feed.push(packet(0, 1, AudioClock::Qpc));
+        feed.push(packet(0, 1.0, AudioClock::Qpc));
         // 1 ms late, which is past the slip threshold: one frame repeated.
-        let mut late = packet(480 + 48, 2, AudioClock::Qpc);
-        late.pcm[0] = 5;
-        late.pcm[1] = 6;
+        let mut late = packet(480 + 48, 2.0, AudioClock::Qpc);
+        late.pcm[0] = 5.0;
+        late.pcm[1] = 6.0;
         feed.push(late);
         feed.write_ready(hns_of(2_000), &mut track.writer()).unwrap();
         assert_eq!(track.frames(), 961);
-        assert_eq!(&track.samples[960..964], &[5, 6, 5, 6]);
+        assert_eq!(&track.samples[960..964], &[5.0, 6.0, 5.0, 6.0]);
         assert_eq!(feed.aligner().stats.slips_repeated, 1);
     }
 
@@ -319,14 +322,14 @@ mod tests {
                 hns,
                 frames: PACKET,
                 discontinuity,
-                pcm: vec![1; PACKET as usize * 2],
+                pcm: vec![1.0; PACKET as usize * 2],
                 clock: AudioClock::Device,
             });
             feed.write_ready(hns_of(480 * (i + 1)), &mut track.writer()).unwrap();
         }
         feed.finish(10 * HNS_PER_SECOND, &mut track.writer()).unwrap();
         assert_eq!(track.frames(), 480_000);
-        assert!(track.samples.iter().all(|&s| s == 1));
+        assert!(track.samples.iter().all(|&s| s == 1.0));
         let stats = &feed.aligner().stats;
         assert_eq!(stats.slips_dropped + stats.slips_repeated + stats.gaps, 0);
         assert_eq!(feed.aligner().clock(), AudioClock::Device);
@@ -336,12 +339,12 @@ mod tests {
     fn a_short_packet_body_is_read_as_silence() {
         let mut feed = Feed::new(RATE, ORIGIN);
         let mut track = Track::default();
-        let mut short = packet(0, 4, AudioClock::Qpc);
+        let mut short = packet(0, 4.0, AudioClock::Qpc);
         short.pcm.truncate(10);
         feed.push(short);
         feed.write_ready(hns_of(480), &mut track.writer()).unwrap();
         assert_eq!(track.frames(), 480);
-        assert_eq!(track.samples[9], 4);
-        assert_eq!(track.samples[10], 0);
+        assert_eq!(track.samples[9], 4.0);
+        assert_eq!(track.samples[10], 0.0);
     }
 }

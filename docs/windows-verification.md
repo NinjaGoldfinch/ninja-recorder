@@ -1385,7 +1385,7 @@ for one thing only, the first box. Why it works this way is
 
 The backend-comparison table WS1.7's exit criterion asks for, both backends
 recording the same game, is not here yet. Since #237 it can be run on the Game
-preset; the presets with more sources wait on #238 and #239.
+preset, and since #238 on every preset's track 0; the stems wait on #239.
 
 - [ ] **A release build shows no Advanced group** in Settings at all.
 - [ ] **The row renders** in the devtools build. `libobs` is selected and
@@ -1549,7 +1549,7 @@ minutes, then end it.
 
 The game's own audio, captured by process loopback on the game's process
 tree and written as one AAC track at 160 kbps on the video's clock: the
-**Game** preset, and the only preset the own backend records until #238. This
+**Game** preset, and the only preset the own backend recorded until #238. This
 is §16's P0c-1 check (game audible, Discord absent) on the shipping path, and
 it answers the question the spike never asked: whether process-loopback
 packets carry real QPC stamps
@@ -1583,9 +1583,11 @@ cast, attack a dummy), then end it.
       stream, 48000 Hz stereo, and the audio ends within a frame of the video.
       The library row's audio layout (dev portal → Library,
       `audio_tracks_json`) is one track, `Game`.
-- [ ] **Another preset is refused.** Switch Settings → Audio to **Game +
-      mic** and start a game: nothing is recorded, and `daemon.log` says the
-      own backend records the Game preset only (#238). Switch back to Game.
+- [ ] **Another preset is refused** (a build before #238 only). Switch
+      Settings → Audio to **Game + mic** and start a game: nothing is
+      recorded, and `daemon.log` says the own backend records the Game preset
+      only. Switch back to Game. From #238 on this row does not apply: every
+      preset records, and §11.5 checks them.
 
 | What | Result | Notes |
 |---|---|---|
@@ -1595,7 +1597,7 @@ cast, attack a dummy), then end it.
 | 11.2: game audible, Discord absent | | |
 | 11.2: in sync at start, middle and end | | |
 | 11.2: one H.264 and one AAC stream; the row says `Game` | | |
-| 11.2: another preset is refused with the reason | | |
+| 11.2: another preset is refused with the reason (before #238 only) | | |
 
 ### 11.3 The Windows 10 floor test (#237)
 
@@ -1665,7 +1667,7 @@ Play one Practice Tool game per row, or several rows in one game.
       then the recording stops about five seconds later as usual, and the
       file ends with a few seconds of black, with the audio track running
       to the end under it (silent once the game has gone). `stop` does not
-      warn. A `game audio capture stopped before the recording did` line
+      warn. A `the game audio capture ended before the recording did` line
       here is expected if process loopback ends with the game's process:
       note which way it went.
 - [ ] **The game crashing.** Kill `League of Legends.exe` in Task Manager
@@ -1694,6 +1696,98 @@ Play one Practice Tool game per row, or several rows in one game.
 | 11.4: game ends: black tail, one log line, no warning | | |
 | 11.4: game killed: plays to the kill, black after, next game records | | |
 | 11.4: GPU device lost (only if it can be caused) | | |
+
+### 11.5 Microphone, desktop and application sources, mixed into track 0 (#238)
+
+Every preset now records, and every source it names is mixed into **one AAC
+track**, track 0: the stems after it arrive with #239. Each source is placed
+on the video's clock by its own QPC stamps before the mix
+([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#the-own-backend-captures-each-source-itself)),
+and each writes its own clock lines to `daemon.log`, named for it
+(`microphone audio clock …`, `desktop audio clock …`,
+`Discord.exe audio clock …`). **Paste those lines whichever way they went**:
+the microphone's drift and stamps have never been measured.
+
+A Practice Tool game of five minutes or more for each block below.
+
+**Game + mic.** Settings → Audio → **Game + mic**, with the microphone left
+on "Windows default".
+
+- [ ] **The microphone is the one the picker means.** `daemon.log` has
+      `own backend: microphone audio from the default communications
+      microphone, <name> (<id>)`, and `<name>` is the device the Settings
+      picker marks as the Windows default. Repeat once with a specific
+      microphone chosen in the picker: the line then says `the configured
+      microphone` and names that one.
+- [ ] **Speak, and check track 0.** Count aloud at the start, the middle and
+      the end, over game sound. In the review player both your voice and the
+      game are audible throughout, and your voice is in sync with you (clap
+      once on camera if you have one, or speak as you click an ability).
+- [ ] **One audio track, labelled as the mix.** `ffprobe` shows one H.264 and
+      one AAC stream, 48000 Hz stereo; the library row's `audio_tracks_json`
+      (dev portal → Library) is one track, `Everything`, over two sources.
+- [ ] **The clock lines.** At the first packet, one `microphone audio clock
+      qpc` or `clock device` line; at stop, a `microphone audio …` line and a
+      `game audio …` line, and one `track 0, the mix of game + microphone`
+      line with the blocks, the watermark releases and the clipped samples.
+      Paste all of them.
+
+**Desktop.** Settings → Audio → **Desktop**. Play something outside the game
+(a video in a browser) for part of it.
+
+- [ ] **The desktop is captured, the game once.** `daemon.log` has `own
+      backend: desktop audio from the default output, in loopback, <name>
+      (<id>), kept running by a silent stream`, and **no** `game audio from
+      PID` line: until #239 the Desktop preset opens the desktop only. The
+      recording has the game and the browser, and the game is not doubled
+      (no echo, no louder than on the Game preset).
+- [ ] **Quiet stretches.** Mute everything for thirty seconds mid-game: the
+      recording is silent there, in sync after, and the stop line shows no
+      large gap count for the desktop (the keep-alive kept packets coming).
+- [ ] **One track, `System audio`,** in `audio_tracks_json`, over one source.
+
+**Discord via an application source.** Settings → Audio → **Game + mic +
+Discord**, in a voice channel with someone talking.
+
+- [ ] **The root is Discord's own tree.** `daemon.log` has `own backend:
+      Discord.exe audio from PID <n>, the top of Discord.exe's tree (<k>
+      processes)`. Paste it with the Task Manager Details view of the
+      Discord processes.
+- [ ] **Discord is in track 0**, alongside the game and your voice, and in
+      sync.
+- [ ] **Discord not running.** Quit Discord fully (tray → Quit) and record
+      another game: it records, `daemon.log` has `no Discord.exe audio; it is
+      left out of the recording: no Discord.exe process is running`, and
+      `audio_tracks_json` is one track, `Everything`, over two sources (game
+      and microphone), not three.
+
+**A microphone unplugged mid-game** (the own-backend half of §4's row). On
+Game + mic with a USB microphone:
+
+- [ ] **Nothing stalls.** Unplug it a minute in. The game keeps recording, the
+      recording stops normally at the end of the game, and it plays to the
+      end with the game audible throughout and your voice up to the unplug.
+- [ ] **Logged once.** `daemon.log` has exactly one `the microphone audio
+      capture ended before the recording did (…); it is silence in the mix
+      from here` line, with the reason (expect `AUDCLNT_E_DEVICE_INVALIDATED`,
+      0x88890004), and the stop line for the microphone says the capture ended
+      with an error. Paste both.
+- [ ] **The layout still names the microphone**: it was in the mix until it
+      went, so `audio_tracks_json` is unchanged (`Everything`, two sources).
+
+| What | Result | Notes |
+|---|---|---|
+| 11.5: the default microphone is the picker's Windows default; a chosen one is that one | | |
+| 11.5: Game + mic: voice and game on track 0, in sync | | |
+| 11.5: Game + mic: one AAC stream; the row says `Everything` over two sources | | |
+| 11.5: the microphone's clock lines and the mix line (paste) | | |
+| 11.5: Desktop: desktop captured, game not doubled, no game source opened | | |
+| 11.5: Desktop: silent stretch in sync, keep-alive held packets | | |
+| 11.5: Discord's root line (paste) | | |
+| 11.5: Discord in track 0, in sync | | |
+| 11.5: Discord not running: recorded, left out, logged, row over two sources | | |
+| 11.5: microphone unplugged: no stall, plays to the end | | |
+| 11.5: microphone unplugged: one line with the reason (paste) | | |
 
 ## Outcome
 
