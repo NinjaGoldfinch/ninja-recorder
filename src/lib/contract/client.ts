@@ -8,7 +8,7 @@
 //   events    src-tauri/src/contract/events.rs (contract_events!)
 //   types     src-tauri/src/contract/types.rs  (the boundary list)
 
-import type { AudioInputDevice, AudioPreset, AutostartStatus, BackfillReport, CaptureBackend, CaptureBackendStatus, DiskUsage, EnforcementReport, GameReview, IconRequest, IconSet, LcuStatus, MarkerRow, Objective, ObjectiveCategory, ObjectiveStatus, QuitOutcome, ReconcileReport, RecordingRow, RetentionPolicy, ReviewInput, SampleRow, SupervisorStatus, Takeaway, TakeawayOwner, UpdateStatus } from "./types";
+import type { AudioInputDevice, AudioPreset, AutostartStatus, BackfillReport, CaptureBackend, CaptureBackendStatus, DiskUsage, EnforcementReport, GameReview, IconRequest, IconSet, ImportReport, ImportRow, LcuStatus, MarkerRow, Objective, ObjectiveCategory, ObjectiveStatus, QuitOutcome, ReconcileReport, RecordingRow, RetentionPolicy, ReviewInput, SampleRow, SupervisorStatus, Takeaway, TakeawayOwner, UpdateStatus } from "./types";
 
 /**
  * How a command reaches the backend. Supplied by the caller rather
@@ -110,5 +110,7 @@ export function createClient(invoke: Invoke) {
       invoke("split_block", { gameId }) as Promise<number>,
     merge_blocks: (intoBlockId: number, fromBlockId: number): Promise<null> =>
       invoke("merge_blocks", { intoBlockId, fromBlockId }) as Promise<null>,
+    import_review_rows: (rows: Array<ImportRow>): Promise<ImportReport> =>
+      invoke("import_review_rows", { rows }) as Promise<ImportReport>,
   };
 }

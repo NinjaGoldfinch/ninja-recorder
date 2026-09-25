@@ -231,6 +231,17 @@ export const COMMANDS: PortalCommand[] = [
     args: [],
   },
   {
+    name: "import_review_rows",
+    group: "Review",
+    dev: false,
+    overRpc: true,
+    danger: true,
+    description: "Imports rows of the review spreadsheet, as the Objectives view parsed them from a CSV, in one transaction. Safe to run twice: rows match existing games within five minutes, and only empty fields are filled.",
+    args: [
+      { name: "rows", kind: "json", default: "[]", help: "ImportRow objects; the Objectives view builds them from a CSV", optional: false },
+    ],
+  },
+  {
     name: "install_update",
     group: "Updates",
     dev: false,

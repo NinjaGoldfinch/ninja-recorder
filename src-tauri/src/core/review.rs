@@ -92,6 +92,13 @@ pub fn split_block(ctx: &Ctx, game_id: i64) -> Result<i64, String> {
     ctx.db.split_block(game_id).map_err(|e| e.to_string())
 }
 
+pub fn import_review_rows(
+    ctx: &Ctx,
+    rows: Vec<crate::db::review_import::ImportRow>,
+) -> Result<crate::db::review_import::ImportReport, String> {
+    ctx.db.import_review_rows(&rows).map_err(|e| e.to_string())
+}
+
 pub fn merge_blocks(ctx: &Ctx, into_block_id: i64, from_block_id: i64) -> Result<(), String> {
     ctx.db.merge_blocks(into_block_id, from_block_id).map_err(|e| e.to_string())
 }
