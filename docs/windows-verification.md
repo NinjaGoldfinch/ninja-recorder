@@ -1965,7 +1965,7 @@ Tool game of five minutes or more:
 The run that gates making the own backend the default. It is #10's exit
 criterion, and every row runs on a **CI-built release installer of the commit
 before the flip** (the `ninja-recorder-windows-latest-<sha>` artifact of that
-commit's CI run), never a local build and never the devtools bundle. On that
+commit's run on main), never a local build and never the devtools bundle. On that
 commit the default is still libobs and a release build has no Advanced row, so
 save the choice by hand once: quit the app from the tray, then
 
@@ -1978,8 +1978,10 @@ sqlite3 "$env:APPDATA\com.ninjarecorder.app\library.sqlite3" `
 and start it again: `daemon.log`'s `[recorder] backend:` line ends
 `(capture_backend = own)`. The devtools build's data folder is a different
 one (§7.8), so setting it there does not reach the release build. The rows
-marked **(the flip's installer)** run on the flip's own CI-built installer
-instead. Why the backend is built the way it is:
+marked **(the flip's installer)** run on the flip's own installer instead.
+A pull request's CI runs the tests only, so that installer comes from a
+manual run of the CI workflow on the flip's branch (Actions → CI → Run
+workflow, `publish_release` off), which builds without publishing. Why the backend is built the way it is:
 [DEVELOPMENT.md §2.2](../DEVELOPMENT.md#22-the-recorder-trait), §2.4, §2.5 and
 §16.
 
@@ -2057,8 +2059,8 @@ Tool:
   - [ ] **the UI**: Settings → Advanced shows the notice that recording is
         encoding in software and uses more CPU, both while the client is open
         and after it has closed. The notice is in the flip's PR, not the
-        commit before it, so this box is checked on **that PR's** CI-built
-        installer.
+        commit before it, so this box is checked on **the flip's
+        installer**.
 
 **Resources.** Against libobs on the same machine, the same game mode, each
 state sampled for 60 s:
