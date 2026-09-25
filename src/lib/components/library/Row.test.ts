@@ -263,15 +263,50 @@ describe("a row with a full scoreboard", () => {
     expect(slots[3].getAttribute("title")).toBe("Secondary tree");
   });
 
-  it("pads the perks when there is no rune page", () => {
-    const el = render(
-      row({
-        scoreboard_json: JSON.stringify({ players: board.players }),
-      }),
-    );
-    const perks = el.querySelector(".vod-perks");
-    expect(perks?.querySelectorAll(".vod-slot")).toHaveLength(4);
-    expect(perks?.querySelectorAll(".vod-slot-empty")).toHaveLength(2);
+  it("draws no rune slots when there is no rune page (#281)", () => {
+    // ARAM Mayhem (queue 2400) plays with augments, not runes. The live
+    // poller drops a page with no keystone and the match-history rebuild a
+    // participant with no perk0, so the stored board has no `our_runes` at
+    // all. Two empty frames would draw a page that never existed.
+    const mayhem = {
+      players: [
+        {
+          champion: "Jinx",
+          team: "ORDER",
+          is_us: true,
+          level: 18,
+          kills: 14,
+          deaths: 9,
+          assists: 31,
+          cs: 88,
+          items: [3031, 3094, 3006, 3036],
+          spells: ["Flash", "Mark"],
+        },
+        {
+          champion: "Lux",
+          team: "CHAOS",
+          level: 18,
+          kills: 11,
+          deaths: 12,
+          assists: 27,
+          cs: 41,
+          items: [6655, 3020],
+          spells: ["Flash", "Mark"],
+        },
+      ],
+      our_team: "ORDER",
+    };
+    const el = render(row({ queue: 2400, scoreboard_json: JSON.stringify(mayhem) }));
+    const slots = el.querySelector(".vod-perks")?.querySelectorAll(".vod-slot") ?? [];
+    expect(slots).toHaveLength(2);
+    expect(slots[0].getAttribute("title")).toBe("Flash");
+    expect(slots[1].getAttribute("title")).toBe("Mark");
+    expect(el.querySelector(".vod-perks .vod-slot-empty")).toBeNull();
+  });
+
+  it("draws no rune slots when there is no scoreboard at all", () => {
+    const perks = render(row()).querySelector(".vod-perks");
+    expect(perks?.querySelectorAll(".vod-slot")).toHaveLength(2);
   });
 
   it("uses spell ids when the board was rebuilt from match history", () => {

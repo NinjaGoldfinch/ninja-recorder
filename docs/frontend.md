@@ -623,6 +623,12 @@ spells on the left, runes on the right, which is how every scoreboard in the
 game arranges them. The markup order is therefore load-bearing: spell 1, spell
 2, keystone, secondary tree.
 
+**The rune column is the one exception to holding its place.** A game with no
+rune page, which is every augment mode such as ARAM Mayhem (#281), stores no
+`our_runes` at all, and two empty frames would draw a page that never existed.
+`Loadout` leaves the column out instead. The perks track in `.vod-row` is a
+fixed 38px, so the item strip beside it does not move.
+
 The team block fills the other way, across each row, for the same reason: a
 team is a line of five, so the line has to be what the eye picks up. Filling by
 column there would interleave the two sides.
