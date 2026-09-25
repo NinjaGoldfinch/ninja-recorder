@@ -44,6 +44,11 @@ pub enum DbError {
     /// worth an `unwrap` on the write path for a user preference.
     #[error("could not encode a setting: {0}")]
     Encode(String),
+    /// A request the data refuses rather than a failure of the database: a
+    /// missing row, an empty body, a split at a block's first game. The
+    /// message is the user's answer, so it says what was wrong, not where.
+    #[error("{0}")]
+    Refused(String),
 }
 
 /// The migration list, paired with its own length. Bundled rather than
