@@ -77,19 +77,20 @@ Backends:
 - `OwnRecorder` (Option B, `recorder/own/`): being built through WS1.6, and **constructible since #236** on Windows build 20348 or newer. It records the game window's video and, since #237, the game's own audio by process loopback, through Media Foundation's sink writer: the Game audio preset, and only that one until #238 and #239. Only a devtools build can select it until the default flips (#243). Its pure core (the tick grid, the audio aligner and feed, the process-tree root, encoder ranking, the loaded-encoder check) is compiled and tested on every platform. Which of it and libobs the daemon builds is the `capture_backend` setting, and what happens when the chosen one cannot be built is §16's "The switch, and when it applies".
 
 **Decision: the own backend holds no COM object; a session thread does.**
-`OwnRecorder` is a channel sender and a join handle. Every D3D11, Media
-Foundation and WinRT object lives on one thread it spawns (`own/win/session.rs`),
-initialised for the MTA, and every `Recorder` call is a command sent there and
-an answer waited on. The supervisor holds the recorder in a
-`Mutex<Box<dyn Recorder>>` and calls it from whatever thread it is on, which a
-`Send` handle survives and an apartment-bound COM pointer does not. It is also
-the boundary WS1.6.9 (#241) moves into the capture worker, where the channel
-becomes a pipe and nothing on this side changes. `prepare` is the same
+Every D3D11, Media Foundation and WinRT object lives on one thread
+(`own/win/session.rs`), initialised for the MTA, and every `Recorder` call is a
+command sent there and an answer waited on. The supervisor holds the recorder in
+a `Mutex<Box<dyn Recorder>>` and calls it from whatever thread it is on, which a
+`Send` handle survives and an apartment-bound COM pointer does not. Since #241
+that thread runs in the **capture worker**, a separate process spawned only
+while League runs, so a driver fault in an encoder ends the worker and not the
+daemon; `OwnRecorder` is the worker's client, and the channel's far end is the
+worker's pipe loop (§12, "The capture worker"). `prepare` is the same
 pre-warm libobs has: COM, `MFStartup`, the adapters and encoders,
 `select::rank`, the D3D11 device. `start` finds the game window by class, waits
 about three seconds at most for a real size and WGC's first frame, and brings
 the sink writer up; `stop` drains, finalizes and runs the shared faststart
-remux; `release` tears the thread down unless a recording is in flight.
+remux; `release` ends the worker, or, during a recording, does so after `stop`.
 
 **Video time zero is the last act of `start`.** The tick grid's origin is a
 QPC read `OwnRecorder::start` takes after the session thread has said
@@ -2007,6 +2008,104 @@ What stayed in `tray.rs` is what the window still needs: showing itself, and the
 close button's Quit. Those are still the tray's requests, they just arrive from
 another process now as an `Event::ShowUi` off the pipe.
 
+### The capture worker: a third mode, and only while League runs (#241)
+
+The own backend's capture does not run in the daemon. `ninja-recorder.exe
+--capture-worker` is a third mode of the same binary, and the session thread
+that holds every D3D11, Media Foundation and WinRT object (§2.2) runs in it.
+`OwnRecorder`, in the daemon, is a thin client: the child process, the job
+object it sits in, and its stdin and stdout.
+
+**Why a process.** Not responsiveness: capture was already on threads of its
+own, so it never blocked the daemon, and the owner's condition was that
+in-process capture was acceptable only if it never did. The reason is **crash
+isolation**. A driver fault inside an encoder MFT (the class of crash #218 fixed
+in the spike) takes down whatever process the MFT is loaded in, and that
+process should not be the one holding the supervisor, the library and a game's
+markers. In the worker it costs the worker. The recording it was writing is
+fragmented, so it plays up to its last complete fragment, and the daemon keeps
+it.
+
+**Why a flag and not a bin target.** Tauri's bundler installs every bin target
+the package builds, which is how `gen-contract.exe` once ended up behind the
+Start Menu shortcut (CLAUDE.md, "The emitter is not built by default"). A second
+binary would be a second executable in every install, with its own installer
+and updater story. A flag on the one binary has neither: `main.rs` dispatches
+`--capture-worker` before anything else is built, and the worker takes no
+single-instance lock, builds no tray, opens no database and binds no pipe. It
+writes `worker.log` (`worker-devtools.log` in a devtools build) beside the
+other two.
+
+**Only while League runs.** The owner's other condition was that a worker is
+fine only if it is spawned when needed and never permanently running. So it
+follows §2.2's pre-warm exactly (`recorder::own::worker::lifetime`, pure and
+unit-tested):
+
+- `prepare`, which the supervisor calls when the League client opens, spawns
+  it; `start` spawns it if it is not up.
+- `release`, which the supervisor calls when the client closes, ends it. During
+  a recording the release is remembered and carried out after `stop` has
+  finalized. A `prepare` or `start` in between (the client came back) forgets
+  it.
+- With no League client there is no worker, and idle RAM is what it was.
+
+**The protocol** is the session thread's own `Command`s and their answers, one
+JSON value per line on the worker's stdin and stdout, after a `Hello` that
+carries a protocol version (`own::worker::protocol`, shared by both sides). The
+session thread did not change: it still receives `Command`s on a channel, and
+the worker's loop (`own::worker::serve`) holds the other end. `Start` takes two
+lines from the daemon, the path and then the origin, because the file's t = 0
+is still the last thing the daemon's `start` reads: QPC is one clock for the
+whole machine, so the instant the daemon reads is the one the worker places
+tick 0 at.
+
+**Nothing else may write to the worker's stdout.** The worker takes the handle
+for itself before it does anything else and points the process's standard
+output at stderr, so a stray `println!` or a library that logs to stdout lands
+in stderr instead of in the channel. That is the bug #221 found in the libobs
+worker. The daemon drains the worker's stderr into `daemon.log` on a thread,
+which is where a panic's report ends up too. So `collect_output` has nothing to
+do for this backend: nothing waits in a pipe for a command to fetch it.
+
+**EOF is a shutdown, never a panic.** The worker's loop treats the end of stdin
+as `Release`: a recording in flight is finalized, and the worker exits 0. The
+lesson of libobs-recorder's PR #1, where an `unwrap` on a closed pipe took the
+worker down mid-file.
+
+**A dead daemon leaves no worker.** The daemon puts each worker in a job object
+with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and holds the only handle, so however
+the daemon ends (a crash, Task Manager, the installer), the handle closes and
+Windows ends the worker. There is a moment between the spawn and the assignment
+when the worker is not yet in the job; EOF covers it, because a dead daemon's
+end of the stdin pipe closes too. The worker is spawned with `CREATE_NO_WINDOW`.
+
+**A dead worker never takes the daemon with it.** Every call has a timeout
+(replies are read on a thread and handed over on a channel), and every failure
+ends the same way: the worker is killed if it is still there, reaped, and
+logged with its exit code. Then:
+
+- mid-recording, `stop` hands over the file on disk rather than an error, with
+  a warning, and runs the same faststart remux a clean stop does. Only a worker
+  that died before writing a byte is an error;
+- the next `prepare` or `start` spawns a fresh worker. A worker found dead
+  between calls is noticed at the next one and replaced, so a worker that died
+  idle does not cost the next game.
+
+**The installer and the updater.** The worker's image name is the main
+executable's, so Tauri's template, which kills `${MAINBINARYNAME}.exe` by name
+before it replaces anything, ends it with the app and the daemon; the devtools
+build's worker is `ninja-recorder-dev.exe`, so the kill cannot reach across
+builds. The updater's `Recorder::release` before install (§14) sends it
+`Release` and waits for it. The libobs worker needed the hook in
+`installer-hooks.nsh` because it is a different executable (§14); this one does
+not.
+
+**Not verified on hardware.** CI spawns the real binary in this mode on
+`windows-latest` (`tests/capture_worker.rs`): the handshake, a `prepare`, a
+clean exit on `Release` and on EOF. The rest, the worker appearing and going
+with the client, a killed worker mid-game, a killed daemon, is
+`windows-verification.md` §11.4.
+
 ---
 
 ## 13. Logging
@@ -2238,7 +2337,9 @@ that surfaces later as a capture failure with no obvious cause.
 NSIS's own "close the running app" check cannot help. It keys off
 `mainBinaryName`, and the worker is a different executable it has never heard
 of. The same property that lets the production and devtools bundles coexist
-(§10) is what makes the worker invisible to it here.
+(§10) is what makes the worker invisible to it here. The own backend's capture
+worker (§12, #241) is the opposite case: it *is* the main executable, run with a
+flag, so this check is exactly what ends it.
 
 So `daemon::update::install` calls `Recorder::release` after the finalize
 and before handing over. `release` is a no-op while recording, which is fine

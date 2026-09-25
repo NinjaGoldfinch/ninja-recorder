@@ -60,7 +60,10 @@ impl Loaded {
 
 /// Where the own backend stands, which is what `backend_name` says and so
 /// what `RecordingDiagnostics::backend` records for every file.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// Serialized because the capture worker reports it over its pipe
+/// (`worker::protocol`). That pipe is not the UI contract, so no `TS`.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Status {
     /// Nothing brought up yet, or released.
     Idle,

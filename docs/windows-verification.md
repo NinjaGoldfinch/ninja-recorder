@@ -1506,12 +1506,12 @@ minutes, then end it.
 
 - [ ] **The pre-warm names the encoder.** Opening the client writes an
       `own backend warm: capture on <GPU>; encoder own (ready: <encoder>);
-      offered: …` line to `daemon.log`. On a machine with an NVIDIA, AMD or
+      offered: …` line to `worker-devtools.log` (§11.4). On a machine with an NVIDIA, AMD or
       Intel GPU the encoder is that vendor's hardware MFT. A
       `software encoding` line here instead is §2.4's fallback, and the
       reason on the line says why: paste it.
 - [ ] **No border on screen.** No yellow WGC border around the game window at
-      any point in the game. `daemon.log` has
+      any point in the game. `worker-devtools.log` has
       `own backend: WGC border off (borderless access …)`; paste the line
       whichever way it went.
 - [ ] **The encoder is named where the file is.** The log's `recording started:
@@ -1531,8 +1531,8 @@ minutes, then end it.
 - [ ] **Markers land where they happened.** A kill's marker seeks to the
       kill, as on libobs: video time zero is the moment `start` returned.
 - [ ] **Several games in one session.** A second game in the same client
-      session records too, and the Task Manager thread count of the daemon does
-      not keep growing between games.
+      session records too, and the Task Manager thread count of the daemon,
+      and of the capture worker (§11.4), does not keep growing between games.
 
 | What | Result | Notes |
 |---|---|---|
@@ -1561,17 +1561,17 @@ or a Soundboard sound played every few seconds), as for the #7 run. Play a
 Practice Tool game for five minutes or more, making noise throughout (walk,
 cast, attack a dummy), then end it.
 
-- [ ] **The root is the game.** `daemon.log` has `own backend: game audio
+- [ ] **The root is the game.** `worker-devtools.log` has `own backend: game audio
       from PID <n>, the game window's owner, named League of Legends.exe`.
       Paste it. Any other wording (by name, the newest of several, a window
       owned by something else) is a finding: paste it with the Task Manager
       Details view of the League processes.
-- [ ] **The QPC answer.** At the first packet `daemon.log` has either
+- [ ] **The QPC answer.** At the first packet `worker-devtools.log` has either
       `game audio clock qpc: the first packet's QPC stamp is real, <x> ms
       before it was taken (QPC position …, device position …, taken at …)`,
       or `game audio clock device: …` saying why. **Paste it whichever way it
       went**: this line is what §16 is waiting on.
-- [ ] **The clock at stop.** `daemon.log` has one `own backend: game audio
+- [ ] **The clock at stop.** `worker-devtools.log` has one `own backend: game audio
       clock …` line at the end of the game with the raw drift in ppm (QPC mode
       only), the slips, gaps, overlaps and holds, the padding, and the capture's
       packet counts. Paste it. Do not round or summarise the numbers.
@@ -1616,6 +1616,65 @@ backend itself below the floor.
 | 11.3: `p0c-audio` include on 19045: the game only | | |
 | 11.3: `p0c-audio` exclude on 19045: Discord, no game | | |
 | 11.3 (optional): §11.2 on 19045 with the override | | |
+
+### 11.4 The capture worker (#241)
+
+The own backend's capture runs in a separate process,
+`ninja-recorder-dev.exe --capture-worker` in a devtools build, spawned when the
+League client opens and ended when it closes
+([DEVELOPMENT.md §12](../DEVELOPMENT.md#the-capture-worker-a-third-mode-and-only-while-league-runs-241)).
+Its log is `worker-devtools.log`, beside `daemon-devtools.log`. Keep Task
+Manager's **Details** tab open with the **Command line** column added
+(right-click a column header → Select columns), sorted by name, so the daemon
+and the worker can be told apart: they have the same image name.
+
+- [ ] **No League, no worker.** With the daemon running and no League client,
+      there is exactly one `ninja-recorder-dev.exe` with `--daemon` and none
+      with `--capture-worker`. Note the daemon's memory (Details, "Memory
+      (active private working set)") with `scripts/measure.ps1` if the figure
+      is wanted: it is the idle figure, and no worker adds to it.
+- [ ] **It appears when the client opens.** Open the League client: within a
+      few seconds a `--capture-worker` process appears. `daemon-devtools.log`
+      has `own backend: capture worker up, pid <n>`, and `worker-devtools.log`
+      starts with `capture worker, pid <n>` and then the `own backend warm`
+      line. Paste both.
+- [ ] **It is gone when the client closes.** Close the League client with no
+      game running: the worker process disappears, and `daemon-devtools.log`
+      has `own backend: capture worker pid <n> exited cleanly (code 0)`.
+- [ ] **The client going away mid-game waits for the recording.** Start a
+      Practice Tool game, then end the League client's processes
+      (`LeagueClient.exe` and `LeagueClientUx.exe`) from Task Manager, leaving
+      the game itself running, and then end the game. Whatever the state
+      machine does with the recording, the worker must not exit before it is
+      finalized: the recording plays, and the worker's `exited cleanly` line in
+      `daemon-devtools.log` comes after the recording's finish line. Paste the
+      lines from the kill to the exit.
+- [ ] **Killing the worker mid-game.** Start a Practice Tool game, play for a
+      minute, then end the `--capture-worker` process from Task Manager (End
+      task on it, not on the daemon). The daemon stays up: the tray icon is
+      still there and the UI stays connected. End the game. The recording
+      appears in the library and plays up to about where the worker was
+      killed, and scrubs. `daemon-devtools.log` has a line naming the worker's
+      pid and its exit code, and `own backend: the capture worker died
+      mid-recording; keeping what reached the disk`. Paste both.
+- [ ] **The next game gets a fresh worker.** After that, start another game
+      without restarting anything: a new `--capture-worker` process (a new
+      pid) appears and the game records normally.
+- [ ] **Killing the daemon leaves no worker.** With the client open (so a
+      worker is running), end the `--daemon` process from Task Manager: the
+      `--capture-worker` process disappears with it, within a second or two.
+      Then do it mid-game: the same, and after restarting the app the
+      recording is recovered at startup (it appears in the library and plays).
+
+| What | Result | Notes |
+|---|---|---|
+| 11.4: no League, no worker process | | |
+| 11.4: the worker appears when the client opens (paste both lines) | | |
+| 11.4: the worker exits when the client closes | | |
+| 11.4: a client closing mid-game: the worker exits after the finalize | | |
+| 11.4: worker killed mid-game: daemon alive, recording kept, plays and scrubs (paste the lines) | | |
+| 11.4: the next game spawns a fresh worker | | |
+| 11.4: daemon killed: no orphan worker, idle and mid-game | | |
 
 ## Outcome
 
