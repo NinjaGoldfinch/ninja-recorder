@@ -14,8 +14,9 @@ use windows::Win32::Graphics::Direct3D11::{
     ID3D11DeviceContext, ID3D11Multithread,
 };
 use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIAdapter, IDXGIAdapter1, IDXGIDevice,
-    IDXGIFactory1,
+    CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, DXGI_ERROR_DEVICE_HUNG,
+    DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET, DXGI_ERROR_DRIVER_INTERNAL_ERROR,
+    IDXGIAdapter, IDXGIAdapter1, IDXGIDevice, IDXGIFactory1,
 };
 use windows::Win32::System::LibraryLoader::{LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
@@ -127,6 +128,27 @@ pub struct Device {
     pub device: ID3D11Device,
     pub context: ID3D11DeviceContext,
     pub winrt: IDirect3DDevice,
+}
+
+/// Why the device has gone, or `None` while it is healthy.
+///
+/// A driver update, a TDR (the GPU hung and Windows reset it), the GPU being
+/// removed, or a laptop switching the adapter it renders on all remove the
+/// device: every object made from it stops working for good, and D3D says so
+/// as `DXGI_ERROR_DEVICE_REMOVED`, `_RESET` or `_HUNG` from whichever call
+/// next checks. The session's loop asks this every pass, so the recording
+/// ends with what it has rather than failing one call at a time.
+pub fn removed(device: &Device) -> Option<String> {
+    // SAFETY: `device` is live; the call only reads its removal state.
+    let reason = unsafe { device.device.GetDeviceRemovedReason() }.err()?;
+    let name = match reason.code() {
+        DXGI_ERROR_DEVICE_REMOVED => "DXGI_ERROR_DEVICE_REMOVED",
+        DXGI_ERROR_DEVICE_RESET => "DXGI_ERROR_DEVICE_RESET",
+        DXGI_ERROR_DEVICE_HUNG => "DXGI_ERROR_DEVICE_HUNG",
+        DXGI_ERROR_DRIVER_INTERNAL_ERROR => "DXGI_ERROR_DRIVER_INTERNAL_ERROR",
+        _ => "an unrecognised removal reason",
+    };
+    Some(format!("{name}: {reason}"))
 }
 
 /// A device on `adapter`.

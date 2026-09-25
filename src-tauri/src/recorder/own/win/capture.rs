@@ -20,8 +20,8 @@ use windows::Graphics::SizeInt32;
 use windows::Security::Authorization::AppCapabilityAccess::AppCapabilityAccessStatus;
 use windows::Win32::Foundation::{E_NOTIMPL, HWND};
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_TEXTURE2D_DESC,
-    D3D11_USAGE_DEFAULT, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
+    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_TEXTURE2D_DESC,
+    D3D11_USAGE_DEFAULT, ID3D11Device, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Media::MediaFoundation::{
@@ -119,23 +119,6 @@ pub fn create_slots(
         .collect()
 }
 
-/// Copies the top-left `width` x `height` of `source` into `slot`. The
-/// caller clamps the box to the smaller of the two textures. A window that
-/// has grown is cropped and one that has shrunk leaves the rest of the slot
-/// stale; following a resize properly is WS1.6.8 (#240).
-pub fn copy_into(
-    context: &ID3D11DeviceContext,
-    slot: &Slot,
-    source: &ID3D11Texture2D,
-    width: u32,
-    height: u32,
-) {
-    let region = D3D11_BOX { left: 0, top: 0, front: 0, right: width, bottom: height, back: 1 };
-    // SAFETY: both textures are live on the same device, share a format, and
-    // the box lies within both (the caller clamps it to the smaller).
-    unsafe { context.CopySubresourceRegion(&slot.texture, 0, 0, 0, 0, source, 0, Some(&region)) };
-}
-
 // --- The capture -----------------------------------------------------------
 
 /// A WGC capture of one window: the item, a free-threaded frame pool on the
@@ -202,7 +185,8 @@ impl Capture {
         self.pool_size
     }
 
-    /// Whether the window has gone. WGC raises `Closed` for it.
+    /// Whether the window has gone: WGC raises `Closed` when the game ends
+    /// or crashes. No frame comes after it.
     pub fn closed(&self) -> bool {
         self.closed.load(Ordering::Acquire)
     }
@@ -217,10 +201,12 @@ impl Capture {
         newest
     }
 
-    /// The frame's texture, and the size of the content in it. A content size
-    /// that differs from the pool's recreates the pool, so the next frame
-    /// arrives whole; the copy is clamped to the slot either way (#240 makes
-    /// the encoder follow).
+    /// The frame's texture, and the size of the content in it: the window's
+    /// size when WGC took the frame, which after a resize is not the size of
+    /// the texture it came in. A content size that differs from the pool's
+    /// recreates the pool at the new size, as the spike did, so the frames
+    /// after this one arrive whole. The encoder does not follow: `scale`
+    /// fits whatever size this is into the one the recording started at.
     pub fn texture(
         &mut self,
         device: &Device,

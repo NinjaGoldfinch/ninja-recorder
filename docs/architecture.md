@@ -82,11 +82,12 @@ flowchart TB
 | `recorder/own/` | Option B, the target backend (WGC → D3D11 → Media Foundation), being built through WS1.6. Constructible since #236 on Windows build 20348+: the game window's video and, since #237, the game's audio by process loopback, through Media Foundation's sink writer. The Game audio preset only until #238/#239; selected only by a devtools build until #243 | `OwnRecorder` |
 | `recorder/own/clock.rs` | The video tick grid on QPC, and placing audio packets on it: drift measured, corrected by slipping frames, or trusted from the device count when a source has no QPC stamps. Which of the two a source gets is decided from its first packet's stamp | `tick_time`, `ticks_due`, `Aligner`, `check_stamp`, `Stamper`, `DeviceTimeline` |
 | `recorder/own/feed.rs` | One audio source's packets through its `Aligner` to the encoder: never past the video, held with silence while the source is quiet, padded to the last tick at stop | `Feed`, `Packet` |
+| `recorder/own/fit.rs` | Where a frame from a resized game window goes in the fixed-size output: scaled with its aspect kept, centred, black around it, even dimensions and offsets; and whether a frame is copied, scaled or skipped | `letterbox`, `place`, `Placement` |
 | `recorder/own/pcm.rs` | Endpoint sample formats to stereo i16 for an encoder, or f32 for the mixer | `to_stereo_i16`, `to_stereo_f32`, `f32_to_i16` |
 | `recorder/own/root.rs` | Which process tree a process-loopback capture targets, from a process snapshot: the game (the window's owner, checked against `League of Legends.exe`), or the top of an application's tree (Discord, #238). Reused parent PIDs are caught by creation time | `game_root`, `application_root` |
 | `recorder/own/select.rs` | Which H.264 encoder: hardware by adapter vendor (NVIDIA → AMD → Intel), the software MFT only as a marked fallback; the Windows build floor (20348) and its devtools-only override; which audio presets the backend records yet | `rank`, `Choice`, `availability`, `floor_ignored`, `audio_layout` |
 | `recorder/own/status.rs` | The even frame size, whether the encoder Media Foundation loaded is the one `rank` chose, and the backend's name (`own (ready: …)`, `own (software encoding: …)`, `own (unavailable: …)`) | `even_size`, `check_loaded`, `Status` |
-| `recorder/own/win/` | Everything that calls Windows, and the only part of `own/` gated to it: the adapters and D3D11 device, the WGC capture with its border off, the process table, the game-audio thread (process loopback, include mode, 48 kHz stereo float), the sink writer (H.264 8 Mbps CBR, GOP 120, AAC 160 kbps, fragmented MP4), and the session thread that owns them | `OwnRecorder`, `session::run`, `audio::start_game` |
+| `recorder/own/win/` | Everything that calls Windows, and the only part of `own/` gated to it: the adapters and D3D11 device, the WGC capture with its border off, `scale` (frames into the fixed-size slots: a copy, or the D3D11 video processor when the window has been resized; the processor is shared with #239's BGRA → NV12), the process table, the game-audio thread (process loopback, include mode, 48 kHz stereo float), the sink writer (H.264 8 Mbps CBR, GOP 120, AAC 160 kbps, fragmented MP4), and the session thread that owns them | `OwnRecorder`, `session::run`, `audio::start_game`, `scale::Processor`, `scale::Fitter` |
 | `recorder/stub.rs` | Non-Windows dev backend that copies a fixture MP4 | `StubRecorder` |
 | `recorder/remux.rs` | The faststart remux, a `-c copy` through `ffmpeg_command` that moves the index to the front so a fragmented file scrubs. Shared by both Windows backends' `stop` and startup recovery; the argument list is pure | `faststart_args`, `remux_faststart` |
 | `mp4/read.rs` | Reading an MP4's top-level boxes directly, no ffmpeg: fragmented or not, how many whole fragments, how many audio tracks, and what a kill cut short | `summarize`, `Summary` |
@@ -229,6 +230,34 @@ sequenceDiagram
     T-->>R: finalized
     R->>R: faststart remux (1 audio track)
     R-->>S: RecordingOutput (Game track, or none)
+```
+
+The output size is fixed at `start` and the game window is not (#240). Each
+WGC frame goes through `scale::Fitter`, which asks `fit::place` what to do
+with it: the recording's own size (give or take the pixel an odd window was
+rounded down by) is a plain GPU copy, any other size is scaled by the D3D11
+video processor into `fit::letterbox`'s rectangle with black bars around it,
+and a frame with no content is skipped. A minimised window sends no frames,
+so the ticks repeat the last one. WGC's `Closed` (the game ended or crashed)
+does not end the loop: it writes black until the supervisor's `stop`, which
+comes when the Live Client API goes away, and the game audio carries on under
+it, held with silence once the game has gone. A lost GPU device
+(`DXGI_ERROR_DEVICE_REMOVED`, `_RESET`) does end it, with what was written
+finalized, and `stop` waits at most 20 s for the session thread whatever
+happens, so a wedged driver cannot hold the supervisor.
+
+```mermaid
+flowchart LR
+    F["WGC frame"] --> C{"Closed?"}
+    C -->|yes| B["black slot<br/><small>every tick until stop</small>"]
+    C -->|no| P{"fit::place"}
+    P -->|"content = output"| CP["copy into slot"]
+    P -->|"other size"| VP["video processor:<br/>scale into letterbox,<br/>bars black"]
+    P -->|"no content"| SK["skip: tick repeats<br/>the last slot"]
+    CP --> W["WriteSample"]
+    VP --> W
+    B --> W
+    SK --> W
 ```
 
 `collect_output` is the third default no-op, and the supervisor calls it every

@@ -7,6 +7,8 @@
 //! - `device` — the Windows build, the adapters, the D3D11 device, QPC.
 //! - `capture` — the WGC capture of the game window, and the slots its
 //!   frames are copied into.
+//! - `scale` — frames into the fixed-size slots: a copy, or the D3D11 video
+//!   processor scaling a resized window into them, letterboxed.
 //! - `process` — the process table and the game window's owner, which
 //!   `root` chooses the audio's process tree from.
 //! - `audio` — the game's audio by process loopback, on its own thread.
@@ -22,11 +24,13 @@ mod capture;
 mod device;
 mod encode;
 mod process;
+mod scale;
 mod session;
 
 use std::path::PathBuf;
-use std::sync::mpsc::{Sender, channel};
+use std::sync::mpsc::{RecvTimeoutError, Sender, channel};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use super::select;
 use super::status::Status;
@@ -36,6 +40,11 @@ use crate::{info, warn};
 use session::{Command, Started};
 
 pub use device::windows_build;
+
+/// How long `stop` waits for the session thread to finalize. A clean
+/// finalize drains a few frames and writes one fragment, well under a second;
+/// this is for one that never returns.
+const STOP_WAIT: Duration = Duration::from_secs(20);
 
 /// The own capture backend (Option B): WGC → D3D11 → Media Foundation.
 ///
@@ -88,6 +97,17 @@ impl OwnRecorder {
         &mut self,
         make: impl FnOnce(Sender<T>) -> Command,
     ) -> Result<T, RecorderError> {
+        self.ask_within(None, make)
+    }
+
+    /// [`OwnRecorder::ask`], giving up after `wait` if there is one. A thread
+    /// that has not answered by then is left behind, still running, and the
+    /// next command starts a new one.
+    fn ask_within<T>(
+        &mut self,
+        wait: Option<Duration>,
+        make: impl FnOnce(Sender<T>) -> Command,
+    ) -> Result<T, RecorderError> {
         if self.session.is_none() {
             let (commands, receiver) = channel();
             let thread = std::thread::Builder::new()
@@ -104,9 +124,21 @@ impl OwnRecorder {
             self.session = None;
             return Err(RecorderError::Backend("the capture thread has exited".to_string()));
         }
-        answer.recv().map_err(|_| {
+        let answered = match wait {
+            None => answer.recv().map_err(|_| RecvTimeoutError::Disconnected),
+            Some(wait) => answer.recv_timeout(wait),
+        };
+        answered.map_err(|e| {
             self.session = None;
-            RecorderError::Backend("the capture thread exited before answering".to_string())
+            RecorderError::Backend(match e {
+                RecvTimeoutError::Disconnected => {
+                    "the capture thread exited before answering".to_string()
+                }
+                RecvTimeoutError::Timeout => format!(
+                    "the capture thread did not answer within {} s, and was left behind",
+                    wait.unwrap_or_default().as_secs()
+                ),
+            })
         })
     }
 
@@ -203,7 +235,12 @@ impl Recorder for OwnRecorder {
 
     fn stop(&mut self) -> Result<RecordingOutput, RecorderError> {
         let Active { path, audio } = self.active.take().ok_or(RecorderError::NotRecording)?;
-        match self.ask(Command::Stop)? {
+        // Bounded, so a finalize that never returns (a driver wedged by a
+        // lost GPU, say) cannot hold the supervisor with it.
+        let answer = self.ask_within(Some(STOP_WAIT), Command::Stop).and_then(|answer| {
+            answer.map_err(RecorderError::Backend)
+        });
+        match answer {
             Ok(None) => {}
             Ok(Some(problem)) => {
                 warn!("recorder", "own backend: the recording ended before stop: {problem}");
@@ -213,15 +250,18 @@ impl Recorder for OwnRecorder {
             Err(e) if path.metadata().is_ok_and(|m| m.len() > 0) => {
                 warn!("recorder", "own backend: finalize failed, keeping what was written: {e}");
             }
-            Err(e) => return Err(RecorderError::Backend(e)),
+            Err(e) => return Err(e),
         }
 
         // The sink writer's fragmented file has no `mfra`, so the review
         // player cannot scrub it until faststart has rewritten the index; the
         // same step, and the same function, as the libobs backend's stop.
         // `audio.tracks.len()` sets track 0's default disposition when there
-        // is one.
+        // is one. Not while a session thread that never answered may still
+        // be writing the file: that one is kept fragmented, playable but not
+        // scrubbable, which is the price of not hanging.
         if let Some(ffmpeg_path) = &self.ffmpeg_path
+            && self.session.is_some()
             && let Err(e) =
                 crate::recorder::remux::remux_faststart(ffmpeg_path, &path, audio.tracks.len())
         {

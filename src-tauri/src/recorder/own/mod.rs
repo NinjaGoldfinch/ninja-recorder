@@ -22,6 +22,8 @@
 //!   packets on it, and whether a packet's stamp is QPC at all.
 //! - `feed` — one audio source's packets, through the aligner, to the
 //!   encoder, never past the video.
+//! - `fit` — where a frame from a resized window goes in the fixed-size
+//!   output: scaled, aspect kept, centred, black around it.
 //! - `pcm` — endpoint sample formats to stereo i16 for an encoder, or f32 for
 //!   the mixer.
 //! - `root` — which process tree a process-loopback capture targets: the
@@ -55,6 +57,8 @@
 pub mod clock;
 #[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
 pub mod feed;
+#[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
+pub mod fit;
 #[cfg_attr(not(test), allow(dead_code))]
 pub mod pcm;
 #[cfg_attr(not(test), allow(dead_code))]
