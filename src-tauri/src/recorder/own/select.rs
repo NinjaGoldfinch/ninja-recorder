@@ -10,6 +10,12 @@
 //! NVIDIA → AMD → Intel; Microsoft's software H.264 MFT only when no usable
 //! hardware encoder exists, and then as a [`Choice::SoftwareFallback`] that
 //! says why, so no caller can use it without knowing.
+//!
+//! It also answers the two other "can it record this" questions: the Windows
+//! build floor ([`availability`]), and which audio presets the backend can
+//! record yet ([`audio_layout`]).
+
+use crate::recorder::audio::{AudioLayout, AudioPreset, AudioSourceKind};
 
 /// PCI vendor ids, as DXGI reports them and as `VEN_xxxx` in an MFT's
 /// `MFT_ENUM_HARDWARE_VENDOR_ID_Attribute`.
@@ -171,6 +177,45 @@ pub fn availability(build: u32) -> Option<String> {
     })
 }
 
+/// The environment variable that lets a **devtools** build construct the own
+/// backend below [`MIN_BUILD`], so it can be tried on Windows 10 before the
+/// floor moves (#237). A release build never reads it.
+pub const IGNORE_FLOOR_ENV: &str = "NINJA_OWN_IGNORE_OS_FLOOR";
+
+/// Whether the floor override is in force: only in a devtools build, and
+/// only for the value `1`. Pure, so the release half is a test; the daemon
+/// passes `cfg!(feature = "devtools")` and the variable's value.
+pub fn floor_ignored(devtools: bool, value: Option<&str>) -> bool {
+    devtools && value == Some("1")
+}
+
+/// The audio layout the own backend can record for `preset`, or why not.
+///
+/// **Only the Game preset until #238 and #239.** The sink writer this piece
+/// records through holds one audio stream, and the only source captured so
+/// far is the game's, by process loopback. Every other preset names a second
+/// source (a microphone, Discord, the desktop) and two to four tracks, so it
+/// is refused with the reason rather than recorded as game audio alone: a
+/// file that quietly left out a source the preset names is the bug §2.5
+/// warns about. A `Custom` layout that is exactly one game track is the Game
+/// preset by another name, and is accepted.
+pub fn audio_layout(preset: &AudioPreset) -> Result<AudioLayout, String> {
+    let layout = preset.layout();
+    let game_only = layout.sources == [AudioSourceKind::Game]
+        && layout.tracks.len() == 1
+        && layout.tracks[0].sources == [0];
+    if game_only {
+        return Ok(layout);
+    }
+    Err(format!(
+        "the own capture backend records the Game audio preset only, until the microphone, \
+         desktop and application sources (#238) and multi-track files (#239) arrive; this \
+         preset has {} source(s) on {} track(s). Choose the Game preset, or the libobs backend",
+        layout.sources.len(),
+        layout.tracks.len()
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,5 +366,46 @@ mod tests {
         }
         let reason = availability(19_045).unwrap();
         assert!(reason.contains("20348") && reason.contains("19045"), "{reason}");
+    }
+
+    #[test]
+    fn the_floor_override_is_devtools_only_and_needs_exactly_1() {
+        assert_eq!(IGNORE_FLOOR_ENV, "NINJA_OWN_IGNORE_OS_FLOOR");
+        assert!(floor_ignored(true, Some("1")));
+        for value in [None, Some(""), Some("0"), Some("true"), Some("yes")] {
+            assert!(!floor_ignored(true, value), "{value:?}");
+        }
+        assert!(!floor_ignored(false, Some("1")), "a release build never honours it");
+    }
+
+    #[test]
+    fn only_the_game_preset_is_recorded_until_238() {
+        assert_eq!(audio_layout(&AudioPreset::Game).unwrap(), AudioPreset::Game.layout());
+        assert_eq!(audio_layout(&AudioPreset::Unknown).unwrap(), AudioPreset::Game.layout());
+        for preset in [
+            AudioPreset::GameMic { mic_device_id: None },
+            AudioPreset::GameMicDiscord { mic_device_id: None },
+            AudioPreset::Desktop,
+        ] {
+            let reason = audio_layout(&preset).unwrap_err();
+            assert!(reason.contains("#238") && reason.contains("Game preset"), "{reason}");
+        }
+        // A custom layout that is one game track is the Game preset.
+        let custom = AudioPreset::Custom {
+            sources: vec![AudioSourceKind::Game],
+            tracks: vec![crate::recorder::audio::AudioTrackSpec {
+                label: "Just the game".into(),
+                sources: vec![0],
+            }],
+        };
+        assert_eq!(audio_layout(&custom).unwrap().tracks[0].label, "Just the game");
+        let desktop_only = AudioPreset::Custom {
+            sources: vec![AudioSourceKind::Desktop],
+            tracks: vec![crate::recorder::audio::AudioTrackSpec {
+                label: "Desktop".into(),
+                sources: vec![0],
+            }],
+        };
+        assert!(audio_layout(&desktop_only).is_err());
     }
 }

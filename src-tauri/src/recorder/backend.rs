@@ -30,10 +30,10 @@ use super::{FailedRecorder, Recorder};
 /// The two capture backends, as `settings_kv` stores them.
 ///
 /// **The default is libobs, and WS1.6's last piece (#243) flips it to
-/// `Own`.** `Own` is constructible since #236, but it records video only, so
-/// until it carries audio (#237, #238) and every track through its own
-/// writer (#239) a default of `Own` would make worse recordings for everyone
-/// who never opened Settings. Flipping this `#[default]` is #243's change, not
+/// `Own`.** `Own` is constructible since #236 and records the Game audio
+/// preset since #237, but until it carries every other source (#238) and
+/// every track through its own writer (#239) a default of `Own` would make
+/// worse recordings for everyone who never opened Settings. Flipping this `#[default]` is #243's change, not
 /// a separate decision: the plan has Option B as the default once it is whole
 /// (§4.5). A user who picked libobs explicitly keeps it across that flip,
 /// because the flip only changes what a *missing* key means. The same change
@@ -49,8 +49,8 @@ pub enum CaptureBackend {
     #[default]
     Libobs,
     /// Option B: WGC → D3D11 → Media Foundation, in `recorder/own/`.
-    /// Constructible on Windows build 20348 or newer since #236; video only
-    /// until #237.
+    /// Constructible on Windows build 20348 or newer since #236; the Game
+    /// audio preset only, since #237, until #238 and #239.
     Own,
 }
 

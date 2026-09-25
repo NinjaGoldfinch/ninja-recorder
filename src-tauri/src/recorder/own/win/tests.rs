@@ -9,12 +9,21 @@
 //! went on every run.
 //!
 //! The video processor that scales a resized window into the recording's
-//! size runs on WARP as well, with a read-back of the pixels it wrote; it
-//! skips the same way if WARP offers no video processor.
+//! size runs on the runner too, with a read-back of the pixels it wrote, on
+//! WARP or the Basic Render Driver; it skips the same way if neither offers
+//! a video processor.
 //!
 //! A WGC capture needs a desktop to composite a window on; that test is
 //! `#[ignore]`d until it proves stable on the runner, and runs by hand with
 //! `cargo test own_backend_records_a_window -- --ignored`.
+//!
+//! Process loopback needs an audio engine and a render endpoint, which a
+//! runner does not have, so the game-audio track is tested from the feed
+//! onwards with synthetic PCM, and the capture itself only by hand:
+//! `cargo test process_loopback_activates -- --ignored` activates it on this
+//! test's own process tree and reports what the stamps were. On a Windows 10
+//! box that is the quickest check of whether the API exists there at all
+//! (#237's floor test; `spikes/p0c-audio/README.md` has the full one).
 
 use std::fs::File;
 use std::io::Write as _;
@@ -28,10 +37,10 @@ use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SA
 use windows::Win32::Media::MediaFoundation::{MFSTARTUP_FULL, MFShutdown, MFStartup};
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 
-use super::{capture, device, encode, scale, session};
+use super::{audio, capture, device, encode, scale, session};
 use crate::mp4;
-use crate::recorder::own::clock;
 use crate::recorder::own::fit::Size;
+use crate::recorder::own::{clock, feed};
 
 /// Straight to the process's stderr, past the harness's capture.
 fn report(line: &str) {
@@ -82,9 +91,38 @@ fn paint(device: &device::Device, slot: &capture::Slot) {
     };
 }
 
-/// The sink-writer path, fed `TICKS` ticks of one synthetic frame. Media
-/// Foundation must already be started.
-fn write_synthetic(out: &Path) -> Result<Outcome, String> {
+/// Two seconds of a 440 Hz tone as 10 ms packets on the QPC clock, from
+/// tick 0: what the game audio thread would send, with the stamps it would
+/// carry if the engine's were real.
+fn tone_packets(origin: i64) -> Vec<feed::Packet> {
+    let rate = i64::from(audio::SAMPLE_RATE);
+    let seconds = (TICKS / u64::from(session::FPS)) as i64;
+    (0..seconds * 100)
+        .map(|p| {
+            let first = p * rate / 100;
+            let pcm: Vec<i16> = (first..first + rate / 100)
+                .flat_map(|n| {
+                    let v = (n as f64 * 440.0 * std::f64::consts::TAU / rate as f64).sin();
+                    let s = (v * 8_000.0) as i16;
+                    [s, s]
+                })
+                .collect();
+            feed::Packet {
+                hns: origin + first * clock::HNS_PER_SECOND / rate,
+                frames: (rate / 100) as u32,
+                discontinuity: false,
+                pcm,
+                clock: clock::AudioClock::Qpc,
+            }
+        })
+        .collect()
+}
+
+/// The sink-writer path, fed `TICKS` ticks of one synthetic frame, and with
+/// `with_audio` two seconds of tone through a [`feed::Feed`] into the AAC
+/// stream, interleaved tick by tick as the session does it. Media Foundation
+/// must already be started.
+fn write_synthetic(out: &Path, with_audio: bool) -> Result<Outcome, String> {
     let encoders = match encode::h264_encoders() {
         Ok(encoders) => encoders,
         Err(e) => return Ok(Outcome::Skipped(format!("no encoder list: {e}"))),
@@ -99,13 +137,32 @@ fn write_synthetic(out: &Path) -> Result<Outcome, String> {
     let slots = capture::create_slots(&device.device, W, H, 2)?;
     paint(&device, &slots[0]);
 
-    let sink = encode::Sink::create(out, W, H, session::FPS, &device.device, false)?;
+    let audio_rate = with_audio.then_some(audio::SAMPLE_RATE);
+    let sink = encode::Sink::create(out, W, H, session::FPS, &device.device, false, audio_rate)?;
     sink.begin()?;
     let loaded = sink.loaded()?;
+    let origin = 1_000 * clock::HNS_PER_SECOND;
+    let mut feed = feed::Feed::new(audio::SAMPLE_RATE, origin);
+    if with_audio {
+        for packet in tone_packets(origin) {
+            feed.push(packet);
+        }
+    }
+    let mut write = |pcm: &[i16], position: u64| sink.write_audio(pcm, position);
     for k in 0..TICKS {
         let t = clock::tick_time(k, session::FPS);
         let d = clock::tick_time(k + 1, session::FPS) - t;
         sink.write(&slots[0], t, d).map_err(|e| format!("{e} (at tick {k})"))?;
+        if with_audio {
+            feed.write_ready(t + d, &mut write)?;
+        }
+    }
+    if with_audio {
+        feed.finish(clock::tick_time(TICKS, session::FPS), &mut write)?;
+        let written = feed.aligner().written();
+        if written != u64::from(audio::SAMPLE_RATE) * TICKS / u64::from(session::FPS) {
+            return Err(format!("the feed wrote {written} audio frames"));
+        }
     }
     sink.finalize()?;
     drop(slots);
@@ -120,11 +177,23 @@ fn write_synthetic(out: &Path) -> Result<Outcome, String> {
 
 /// A WARP device, a synthetic BGRA texture and the software MFT write 120
 /// ticks through the sink writer, and the file is a fragmented MP4 with
-/// complete fragments.
+/// complete fragments and nothing but the video track.
 #[test]
 fn the_sink_writer_writes_a_fragmented_mp4_from_a_warp_device() {
-    let dir = scratch_dir("warp");
-    let out = dir.join("warp.mp4");
+    sink_writer_test("warp", false);
+}
+
+/// The same, with the Game preset's one AAC track fed synthetic PCM through
+/// the feed the session uses (#237). Process loopback itself cannot run on
+/// a runner, with no game and no audio engine; this is everything after it.
+#[test]
+fn the_sink_writer_writes_the_game_audio_track() {
+    sink_writer_test("warp-aac", true);
+}
+
+fn sink_writer_test(name: &str, with_audio: bool) {
+    let dir = scratch_dir(name);
+    let out = dir.join(format!("{name}.mp4"));
 
     // SAFETY: once on this test's thread, before any COM use; paired below.
     let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok();
@@ -136,7 +205,7 @@ fn the_sink_writer_writes_a_fragmented_mp4_from_a_warp_device() {
         Ok(()) => match unsafe { MFStartup(session::mf_version(), MFSTARTUP_FULL) } {
             Err(e) => Ok(Outcome::Skipped(format!("MFStartup failed: {e}"))),
             Ok(()) => {
-                let outcome = write_synthetic(&out);
+                let outcome = write_synthetic(&out, with_audio);
                 // SAFETY: pairs MFStartup; every MF object above is dropped.
                 let _ = unsafe { MFShutdown() };
                 outcome
@@ -148,28 +217,30 @@ fn the_sink_writer_writes_a_fragmented_mp4_from_a_warp_device() {
 
     match outcome {
         Ok(Outcome::Skipped(why)) => {
-            report(&format!("SKIPPED the WARP sink-writer test: {why}"));
+            report(&format!("SKIPPED the WARP sink-writer test ({name}): {why}"));
         }
         Ok(Outcome::Written { encoder }) => {
             let mut file = File::open(&out).expect("the sink writer left no file");
             let summary = mp4::summarize(&mut file).expect("summarize");
             report(&format!(
-                "RAN the WARP sink-writer test: {TICKS} ticks via {encoder}; {} bytes, layout {}",
+                "RAN the WARP sink-writer test ({name}): {TICKS} ticks via {encoder}; {} bytes, \
+                 layout {}",
                 summary.file_len, summary.layout
             ));
             assert!(summary.structurally_playable(), "{summary:?}");
             assert!(summary.mvex, "not fragmented: {summary:?}");
             assert!(summary.complete_fragments > 0, "{summary:?}");
             assert_eq!(summary.truncated, None, "{summary:?}");
-            assert_eq!(summary.tracks, 1, "one video track and nothing else: {summary:?}");
-            assert_eq!(summary.audio_tracks, 0, "{summary:?}");
+            let audio = u32::from(with_audio);
+            assert_eq!(summary.tracks, 1 + audio, "video and {audio} audio: {summary:?}");
+            assert_eq!(summary.audio_tracks, audio, "{summary:?}");
         }
         Err(e) => panic!("the sink-writer path failed: {e}"),
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// --- The video processor on WARP (#240) ------------------------------------
+// --- The video processor, on the runner (#240) -----------------------------
 
 /// Fills a `size` BGRA texture with one colour, `[b, g, r, a]`.
 fn fill(device: &device::Device, texture: &ID3D11Texture2D, size: Size, bgra: [u8; 4]) {
@@ -261,22 +332,18 @@ fn fit_one(device: &device::Device, content: Size) -> Result<(scale::Placed, Vec
     Ok((placed, read_back(device, &slots[0].texture, OUTPUT)))
 }
 
-/// The video processor on WARP scales a 1280x720 frame to fill a 1920x1080
-/// slot, pillarboxes a 1280x1024 one with black bars, and a 1920x1080 frame
-/// is a plain copy. Skips, and says why, where WARP has no video processor.
+/// The video processor scales a 1280x720 frame to fill a 1920x1080 slot,
+/// pillarboxes a 1280x1024 one with black bars, and a 1920x1080 frame is a
+/// plain copy. Skips, and says why, where no device has a video processor.
 #[test]
-fn the_video_processor_letterboxes_on_warp() {
-    let device = device::create_warp_device().expect("a WARP device");
-    let probe = scale::Processor::new(
-        &device,
-        Size::new(1280, 1024),
-        OUTPUT,
-        DXGI_FORMAT_B8G8R8A8_UNORM,
-    );
-    if let Err(e) = probe {
-        report(&format!("SKIPPED the WARP video-processor test: {e}"));
-        return;
-    }
+fn the_video_processor_letterboxes_a_resized_frame() {
+    let (device, name) = match video_processor_device() {
+        Ok(found) => found,
+        Err(why) => {
+            report(&format!("SKIPPED the video-processor test: {why}"));
+            return;
+        }
+    };
 
     // The same aspect: scaled up to fill the frame, no bars.
     let (placed, px) = fit_one(&device, Size::new(1280, 720)).expect("1280x720");
@@ -309,7 +376,35 @@ fn the_video_processor_letterboxes_on_warp() {
     let px = read_back(&device, &slots[0].texture, OUTPUT);
     assert_near(pixel(&px, OUTPUT, 960, 540), BLACK, "after fill_black");
 
-    report("RAN the WARP video-processor test: scaled, letterboxed, copied, blacked");
+    report(&format!("RAN the video-processor test on {name}: scaled, letterboxed, copied, blacked"));
+}
+
+/// A device with a video processor that reads and writes BGRA: WARP first,
+/// then each adapter DXGI lists. A GPU-less runner lists the Microsoft Basic
+/// Render Driver, WARP behind a driver interface, which may offer the video
+/// DDI where a WARP device made directly does not. The error names why each
+/// candidate was refused.
+fn video_processor_device() -> Result<(device::Device, String), String> {
+    let mut candidates: Vec<(String, Result<device::Device, String>)> =
+        vec![("WARP".to_string(), device::create_warp_device())];
+    match device::adapters() {
+        Ok(adapters) => candidates.extend(
+            adapters.iter().map(|a| (a.info.name.clone(), device::create_device(&a.adapter))),
+        ),
+        Err(e) => candidates.push(("the adapter list".to_string(), Err(e))),
+    }
+    let mut refused = Vec::new();
+    for (name, device) in candidates {
+        let probe = device.and_then(|device| {
+            scale::Processor::new(&device, Size::new(1280, 1024), OUTPUT, DXGI_FORMAT_B8G8R8A8_UNORM)
+                .map(|_| device)
+        });
+        match probe {
+            Ok(device) => return Ok((device, name)),
+            Err(e) => refused.push(format!("{name}: {e}")),
+        }
+    }
+    Err(refused.join("; "))
 }
 
 /// The whole backend against a window of the game's class: prepare, start,
@@ -399,6 +494,36 @@ fn own_backend_records_a_window() {
     let summary = mp4::summarize(&mut file).expect("summarize");
     report(&format!("WGC run: {} bytes, layout {}", summary.file_len, summary.layout));
     assert!(summary.structurally_playable(), "{summary:?}");
+    // The window is this test's, owned by no `League of Legends.exe`, so
+    // there is no game audio to capture: video only, and reported as such.
     assert!(output.audio.tracks.is_empty());
+    assert_eq!(summary.audio_tracks, 0, "{summary:?}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Process loopback activates and starts on this build of Windows, on this
+/// test's own process tree. Nothing in the tree plays anything, so packets
+/// may not come at all (a silent target is not guaranteed to be fed); what
+/// passes is the activation, the format and the start, which is the part
+/// that does not exist below the OS floor. Needs an audio engine and a
+/// render endpoint, so it is ignored on the runner.
+#[test]
+#[ignore = "needs an audio engine and a render endpoint; run by hand on a Windows box"]
+fn process_loopback_activates() {
+    report(&format!("Windows build {:?}", device::windows_build()));
+    let (tx, rx) = std::sync::mpsc::channel();
+    // The source thread initialises its own COM; this one needs none.
+    let outcome = audio::start_game(std::process::id(), tx).map(|source| {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        source.stop()
+    });
+    let received = rx.try_iter().count();
+    match outcome {
+        Ok(Ok(summary)) => report(&format!(
+            "process loopback ran: {} packets ({received} received), clock {:?}",
+            summary.packets, summary.clock
+        )),
+        Ok(Err(e)) => panic!("process loopback started, then failed: {e}"),
+        Err(e) => panic!("process loopback did not start: {e}"),
+    }
 }

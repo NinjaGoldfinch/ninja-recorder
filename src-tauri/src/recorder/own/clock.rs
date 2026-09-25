@@ -18,11 +18,14 @@
 //! [`Aligner`] measures the gap between those clocks (the *raw* drift, what a
 //! pipeline that trusted the sample count would put in the file) and, in
 //! [`AudioClock::Qpc`] mode, corrects it by slipping single frames so the
-//! audio stays on the video's clock. [`AudioClock::Device`] is kept as the
-//! fallback for #237: process-loopback streams have never been shown to carry
-//! QPC stamps, and if they come back 0 the audio is anchored once at its first
-//! packet and then trusted. The endpoint the spike measured drifted -0.2 ppm
-//! raw (DEVELOPMENT.md §16), which is what makes trusting it tolerable.
+//! audio stays on the video's clock. [`AudioClock::Device`] is the fallback
+//! for a source whose packets carry no usable QPC stamp: process loopback had
+//! never been shown to, so the capture checks its first packet with
+//! [`check_stamp`] before choosing. In that mode [`DeviceTimeline`] stamps the
+//! packets from the sample count, anchored once at the first packet's
+//! arrival, and the audio is then trusted. The endpoint the spike measured
+//! drifted -0.2 ppm raw (DEVELOPMENT.md §16), which is what makes trusting it
+//! tolerable.
 
 /// Media Foundation's unit, 100 ns, and also the unit WASAPI's QPC positions
 /// and WGC's `SystemRelativeTime` are reported in.
@@ -85,10 +88,11 @@ pub enum AudioClock {
     /// then trusted, so the file's end offset is the raw drift itself.
     ///
     /// The fallback for a source whose packets carry no QPC stamp (#237):
-    /// only the first packet's position is used for placement, so a caller
-    /// that anchors that one packet against its own QPC read can drive the
-    /// rest from the sample count. The raw-drift figures are then meaningless
-    /// and should not be reported.
+    /// no frame is slipped, so a caller that stamps packets from the sample
+    /// count ([`DeviceTimeline`]) gets them appended back to back. Only a
+    /// hole or an overlap wider than 50 ms moves the audio, because that is a
+    /// stream that stopped delivering, not drift. The raw-drift figures are
+    /// then meaningless and should not be reported.
     Device,
 }
 
@@ -155,6 +159,11 @@ pub struct AlignStats {
     pub lead_dropped: u64,
     /// Silence written at the start because audio began after the video.
     pub lead_silence: u64,
+    /// Times [`Aligner::hold`] wrote silence because no packet had come, and
+    /// how much. A process-loopback stream is not guaranteed to be fed while
+    /// its target is silent.
+    pub holds: u64,
+    pub held_samples: u64,
 }
 
 /// Places audio packets on the video's timeline and measures the clocks.
@@ -237,8 +246,12 @@ impl Aligner {
                 placement.silence = position as u64;
                 self.stats.lead_silence = placement.silence;
             }
-        } else if self.clock == AudioClock::Qpc {
+        } else {
+            // Holes and overlaps are handled in either mode: past the gap
+            // threshold the stream stopped delivering or restarted, which is
+            // not drift. Slips below it are the QPC mode's alone.
             let error = self.written as i64 - position;
+            let qpc = self.clock == AudioClock::Qpc;
             if error < -self.gap_threshold() {
                 placement.silence = (-error) as u64;
                 self.stats.gaps += 1;
@@ -247,10 +260,10 @@ impl Aligner {
                 placement.skip = error.min(i64::from(frames)) as u32;
                 self.stats.overlaps += 1;
                 self.stats.overlap_samples += u64::from(placement.skip);
-            } else if error > self.slip_threshold() && frames > 1 {
+            } else if qpc && error > self.slip_threshold() && frames > 1 {
                 placement.skip = 1;
                 self.stats.slips_dropped += 1;
-            } else if error < -self.slip_threshold() && frames > 0 {
+            } else if qpc && error < -self.slip_threshold() && frames > 0 {
                 placement.repeat = 1;
                 self.stats.slips_repeated += 1;
             }
@@ -315,6 +328,41 @@ impl Aligner {
         }
     }
 
+    /// Writes silence up to `until_rel_hns` if the audio has fallen behind
+    /// it, and returns how many frames to append. The caller holds audio this
+    /// way when no packet has come for a while, with `until` a margin behind
+    /// the video, so a quiet source does not leave the muxer waiting on one
+    /// track while the other runs ahead. A packet that turns up later for
+    /// time already filled is an overlap, and [`Aligner::place`] drops that
+    /// part of it.
+    pub fn hold(&mut self, until_rel_hns: i64) -> u64 {
+        let target = samples_at(until_rel_hns, self.rate).max(0) as u64;
+        if self.written >= target {
+            return 0;
+        }
+        let silence = target - self.written;
+        if self.written == 0 {
+            // Audio that has not begun by now began after the video: the
+            // same lead silence the first packet would have written.
+            self.stats.lead_silence = silence;
+        }
+        self.written = target;
+        self.stats.holds += 1;
+        self.stats.held_samples += silence;
+        silence
+    }
+
+    pub fn clock(&self) -> AudioClock {
+        self.clock
+    }
+
+    /// Changes whose clock placement follows. The source decides on its
+    /// first packet ([`check_stamp`]), which can be after the aligner was
+    /// made.
+    pub fn set_clock(&mut self, clock: AudioClock) {
+        self.clock = clock;
+    }
+
     /// The raw drift as a rate, in parts per million, over the span the
     /// packets covered. `None` until there is a span to divide by.
     pub fn raw_ppm(&self) -> Option<f64> {
@@ -325,6 +373,207 @@ impl Aligner {
         }
         let span_samples = span as f64 * f64::from(self.rate) / HNS_PER_SECOND as f64;
         Some(self.stats.raw_drift_last as f64 / span_samples * 1e6)
+    }
+}
+
+/// What a packet's QPC stamp turned out to be.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stamp {
+    /// A QPC time plausibly the packet's first frame: at or before the
+    /// moment the packet was taken, and not long before. `lag` is how long
+    /// before, in 100 ns units.
+    Qpc { lag: i64 },
+    /// No stamp at all. What the plan feared process loopback would give.
+    Zero,
+    /// Non-zero, but not the performance counter this process reads: in the
+    /// future, or older than [`STAMP_MAX_LAG`].
+    Implausible { lag: i64 },
+}
+
+/// How old a stamp may be when its packet is taken and still count as QPC.
+/// A shared-mode packet is about 10 ms, and the engine hands it over within
+/// a period or two; a second allows for a thread that was descheduled, and
+/// is far closer than any other clock's zero would land.
+pub const STAMP_MAX_LAG: i64 = HNS_PER_SECOND;
+
+/// A stamp a little after the moment it was read is rounding between two
+/// conversions of the same counter, not the future.
+const STAMP_TOLERANCE: i64 = 10_000; // 1 ms
+
+/// Whether `stamp_hns`, from `GetBuffer`'s `pu64QPCPosition`, is on the
+/// performance counter, judged against `arrival_hns`, the counter read just
+/// after `GetBuffer` returned.
+pub fn check_stamp(stamp_hns: u64, arrival_hns: i64) -> Stamp {
+    if stamp_hns == 0 {
+        return Stamp::Zero;
+    }
+    let lag = arrival_hns.saturating_sub(i64::try_from(stamp_hns).unwrap_or(i64::MAX));
+    if (-STAMP_TOLERANCE..=STAMP_MAX_LAG).contains(&lag) {
+        Stamp::Qpc { lag }
+    } else {
+        Stamp::Implausible { lag }
+    }
+}
+
+/// Past this, a packet arriving later than the sample count says it should
+/// is a stream that stopped and restarted, not jitter. Twice the aligner's
+/// gap threshold, because arrival times jitter by a period or two where a
+/// real stamp does not.
+pub const DEVICE_HOLE: i64 = HNS_PER_SECOND / 10; // 100 ms
+
+/// Stamps packets from the device's sample count, for a source whose own
+/// stamps are not QPC ([`AudioClock::Device`]).
+///
+/// The first packet is anchored where its arrival says it began: the QPC
+/// read when it was taken, less its own length. Every later packet is placed
+/// that anchor plus the frames counted since, so the device's clock is
+/// trusted and nothing is slipped. The one exception is a packet that
+/// arrives more than [`DEVICE_HOLE`] later than that: the stream stopped
+/// delivering (process loopback may go quiet while its target is silent),
+/// so the timeline re-anchors at the packet and reports a discontinuity,
+/// which the aligner fills with silence.
+pub struct DeviceTimeline {
+    rate: u32,
+    anchor: Option<i64>,
+    counted: i64,
+    /// How many times the timeline re-anchored across a hole.
+    pub reanchors: u64,
+}
+
+impl DeviceTimeline {
+    pub fn new(rate: u32) -> Self {
+        DeviceTimeline { rate, anchor: None, counted: 0, reanchors: 0 }
+    }
+
+    fn span(&self, frames: i64) -> i64 {
+        (i128::from(frames) * i128::from(HNS_PER_SECOND) / i128::from(self.rate)) as i64
+    }
+
+    /// The stamp for a packet of `frames` taken at `arrival_hns`, and
+    /// whether it follows a hole.
+    pub fn stamp(&mut self, frames: u32, arrival_hns: i64) -> (i64, bool) {
+        let began = arrival_hns - self.span(i64::from(frames));
+        let Some(anchor) = self.anchor else {
+            self.anchor = Some(began);
+            self.counted = i64::from(frames);
+            return (began, false);
+        };
+        let expected = anchor + self.span(self.counted);
+        if began - expected > DEVICE_HOLE {
+            self.anchor = Some(began);
+            self.counted = i64::from(frames);
+            self.reanchors += 1;
+            return (began, true);
+        }
+        self.counted += i64::from(frames);
+        (expected, false)
+    }
+}
+
+/// Chooses a source's clock from its first packet, and stamps every packet
+/// on it: what a capture thread runs each packet through before sending it.
+///
+/// **The question is answered at runtime, per source, per recording.** If
+/// the first packet's `pu64QPCPosition` passes [`check_stamp`], the source
+/// is on QPC and the aligner holds it to the video by slipping frames. If it
+/// is 0, or not this process's counter, the source goes to
+/// [`AudioClock::Device`] and [`DeviceTimeline`] stamps it from the sample
+/// count. The choice is made once: a stream whose clock changed halfway
+/// would move its audio by however far apart the two had drifted.
+///
+/// In QPC mode a later packet whose stamp fails the check is stamped from
+/// its arrival instead, and counted in [`Stamper::substituted`]: one bad
+/// stamp should cost that packet's placement, not the recording's clock.
+pub struct Stamper {
+    rate: u32,
+    clock: Option<AudioClock>,
+    timeline: DeviceTimeline,
+    /// What the first packet's stamp was: the answer to the question.
+    pub first: Option<Stamp>,
+    /// QPC-mode packets whose own stamp failed the check.
+    pub substituted: u64,
+}
+
+impl Stamper {
+    pub fn new(rate: u32) -> Self {
+        Stamper {
+            rate,
+            clock: None,
+            timeline: DeviceTimeline::new(rate),
+            first: None,
+            substituted: 0,
+        }
+    }
+
+    /// The clock chosen, once the first packet has been seen.
+    pub fn clock(&self) -> Option<AudioClock> {
+        self.clock
+    }
+
+    pub fn reanchors(&self) -> u64 {
+        self.timeline.reanchors
+    }
+
+    fn began_at(&self, frames: u32, arrival_hns: i64) -> i64 {
+        let span = i128::from(frames) * i128::from(HNS_PER_SECOND) / i128::from(self.rate);
+        arrival_hns - span as i64
+    }
+
+    /// The stamp for a packet of `frames` whose `GetBuffer` gave `qpc_stamp`,
+    /// taken at `arrival_hns`; whether it follows a hole in device time; and
+    /// the clock it is on.
+    ///
+    /// `qpc_stamp` is `None` for a packet the engine flagged
+    /// `AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR`, which WASAPI documents for the
+    /// first packet after a start among others. Such a packet is stamped from
+    /// its arrival (or the count, in device mode), counted as substituted,
+    /// and never decides the clock: the first unflagged packet does.
+    pub fn stamp(
+        &mut self,
+        frames: u32,
+        qpc_stamp: Option<u64>,
+        arrival_hns: i64,
+    ) -> (i64, bool, AudioClock) {
+        let Some(qpc_stamp) = qpc_stamp else {
+            self.substituted += 1;
+            return match self.clock {
+                Some(AudioClock::Device) => {
+                    let (hns, hole) = self.timeline.stamp(frames, arrival_hns);
+                    (hns, hole, AudioClock::Device)
+                }
+                // Undecided, the aligner places a first packet the same way
+                // in either mode, so QPC is as good a label as any.
+                Some(AudioClock::Qpc) | None => {
+                    (self.began_at(frames, arrival_hns), false, AudioClock::Qpc)
+                }
+            };
+        };
+        let check = check_stamp(qpc_stamp, arrival_hns);
+        let clock = match self.clock {
+            Some(clock) => clock,
+            None => {
+                let clock = match check {
+                    Stamp::Qpc { .. } => AudioClock::Qpc,
+                    Stamp::Zero | Stamp::Implausible { .. } => AudioClock::Device,
+                };
+                self.first = Some(check);
+                self.clock = Some(clock);
+                clock
+            }
+        };
+        match clock {
+            AudioClock::Qpc => match check {
+                Stamp::Qpc { .. } => (qpc_stamp as i64, false, clock),
+                Stamp::Zero | Stamp::Implausible { .. } => {
+                    self.substituted += 1;
+                    (self.began_at(frames, arrival_hns), false, clock)
+                }
+            },
+            AudioClock::Device => {
+                let (hns, hole) = self.timeline.stamp(frames, arrival_hns);
+                (hns, hole, clock)
+            }
+        }
     }
 }
 
@@ -485,5 +734,145 @@ mod tests {
         assert_eq!(a.finish(hns_of(1_000)), (520, 0));
         assert_eq!(a.written(), 1_000);
         assert_eq!(a.finish(hns_of(900)), (0, 100));
+    }
+
+    #[test]
+    fn the_device_clock_fills_a_hole_but_never_slips() {
+        let mut a = Aligner::new(RATE, AudioClock::Device);
+        a.place(PACKET, 0, false);
+        // 30 ms late: under the gap threshold, so trusted as it is.
+        assert_eq!(a.place(PACKET, hns_of(480 + 1_440), false), Placement::default());
+        // 200 ms late: a stream that stopped, filled with silence.
+        let p = a.place(PACKET, hns_of(960 + 9_600), true);
+        assert_eq!(p.silence, 9_600);
+        assert_eq!((a.stats.gaps, a.stats.slips_dropped + a.stats.slips_repeated), (1, 0));
+    }
+
+    #[test]
+    fn hold_fills_a_quiet_source_and_a_late_packet_overlaps_it() {
+        let mut a = Aligner::new(RATE, AudioClock::Qpc);
+        // Nothing yet at 100 ms: hold to 100 ms, counted as the lead.
+        assert_eq!(a.hold(hns_of(4_800)), 4_800);
+        assert_eq!(a.stats.lead_silence, 4_800);
+        assert_eq!(a.hold(hns_of(4_000)), 0, "never backwards");
+        // A packet from 90 ms: within the gap threshold of what was held,
+        // so it is slipped rather than cut.
+        let p = a.place(PACKET, hns_of(4_320), false);
+        assert_eq!((p.skip, p.silence), (1, 0));
+        // Hold again past a long quiet stretch, then a packet from inside it:
+        // the part already filled is dropped as an overlap.
+        a.hold(hns_of(48_000));
+        let p = a.place(PACKET, hns_of(48_000 - 4_800), false);
+        assert_eq!(p.skip, PACKET);
+        assert_eq!(a.stats.overlaps, 1);
+        assert_eq!((a.stats.holds, a.stats.held_samples), (2, 4_800 + 48_000 - 5_279));
+    }
+
+    #[test]
+    fn stamps_are_checked_against_the_moment_the_packet_was_taken() {
+        let now = 1_000 * HNS_PER_SECOND;
+        assert_eq!(check_stamp(0, now), Stamp::Zero);
+        assert_eq!(check_stamp((now - 100_000) as u64, now), Stamp::Qpc { lag: 100_000 });
+        // Rounding between two conversions of the counter is not the future.
+        assert_eq!(check_stamp((now + 5_000) as u64, now), Stamp::Qpc { lag: -5_000 });
+        assert_eq!(
+            check_stamp((now + HNS_PER_SECOND) as u64, now),
+            Stamp::Implausible { lag: -HNS_PER_SECOND }
+        );
+        assert_eq!(
+            check_stamp((now - 5 * HNS_PER_SECOND) as u64, now),
+            Stamp::Implausible { lag: 5 * HNS_PER_SECOND }
+        );
+        // A device position in frames is not a QPC time.
+        assert!(matches!(check_stamp(96_000, now), Stamp::Implausible { .. }));
+        assert!(matches!(check_stamp(u64::MAX, now), Stamp::Implausible { .. }));
+    }
+
+    #[test]
+    fn the_device_timeline_counts_from_the_first_arrival_and_reanchors_across_a_hole() {
+        let mut t = DeviceTimeline::new(RATE);
+        let t0 = 50 * HNS_PER_SECOND;
+        // The first packet began one packet before it was taken.
+        assert_eq!(t.stamp(PACKET, t0), (t0 - hns_of(480), false));
+        // Arrival jitter does not move the count.
+        assert_eq!(t.stamp(PACKET, t0 + hns_of(480) + 300_000), (t0, false));
+        assert_eq!(t.stamp(PACKET, t0 + hns_of(960)), (t0 + hns_of(480), false));
+        // A second of nothing, then packets again: re-anchored.
+        let back = t0 + hns_of(960) + HNS_PER_SECOND + hns_of(480);
+        assert_eq!(t.stamp(PACKET, back), (back - hns_of(480), true));
+        assert_eq!(t.reanchors, 1);
+        assert_eq!(t.stamp(PACKET, back + hns_of(480)), (back, false));
+    }
+
+    #[test]
+    fn a_device_timeline_through_the_aligner_is_seamless_and_fills_the_hole() {
+        let mut t = DeviceTimeline::new(RATE);
+        let mut a = Aligner::new(RATE, AudioClock::Device);
+        let origin = 10 * HNS_PER_SECOND;
+        for i in 0..100i64 {
+            // Arrivals jitter by up to 4 ms, one way only.
+            let arrival = origin + hns_of(480 * (i + 1)) + (i % 3) * 20_000;
+            let (stamp, hole) = t.stamp(PACKET, arrival);
+            assert_eq!(a.place(PACKET, stamp - origin, hole), Placement::default(), "{i}");
+        }
+        assert_eq!(a.written(), 100 * 480);
+        // Half a second with no packets, then the stream resumes.
+        let arrival = origin + hns_of(480 * 101) + HNS_PER_SECOND / 2;
+        let (stamp, hole) = t.stamp(PACKET, arrival);
+        let p = a.place(PACKET, stamp - origin, hole);
+        assert!(hole && p.silence > 20_000, "{p:?}");
+        assert_eq!(a.stats.residual_last, 0);
+    }
+
+    #[test]
+    fn real_stamps_put_the_source_on_qpc_and_a_bad_one_is_substituted() {
+        let mut s = Stamper::new(RATE);
+        assert_eq!(s.clock(), None);
+        let now = 500 * HNS_PER_SECOND;
+        let stamp = (now - 150_000) as u64;
+        assert_eq!(s.stamp(PACKET, Some(stamp), now), (stamp as i64, false, AudioClock::Qpc));
+        assert_eq!(s.first, Some(Stamp::Qpc { lag: 150_000 }));
+        // One zero stamp later on costs that packet only.
+        let later = now + hns_of(480);
+        let from_arrival = (later - hns_of(480), false, AudioClock::Qpc);
+        assert_eq!(s.stamp(PACKET, Some(0), later), from_arrival);
+        assert_eq!(s.substituted, 1);
+        assert_eq!(s.clock(), Some(AudioClock::Qpc));
+    }
+
+    #[test]
+    fn zero_stamps_put_the_source_on_device_time_for_good() {
+        let mut s = Stamper::new(RATE);
+        let now = 500 * HNS_PER_SECOND;
+        let first = (now - hns_of(480), false, AudioClock::Device);
+        assert_eq!(s.stamp(PACKET, Some(0), now), first);
+        assert_eq!(s.first, Some(Stamp::Zero));
+        // A real-looking stamp later does not switch the clock back.
+        let later = now + hns_of(480);
+        let (hns, _, clock) = s.stamp(PACKET, Some(later as u64), later);
+        assert_eq!((hns, clock), (now, AudioClock::Device));
+        // A flagged one in device mode is still counted into the timeline.
+        let (hns, _, clock) = s.stamp(PACKET, None, later + hns_of(480));
+        assert_eq!((hns, clock), (later, AudioClock::Device));
+        assert_eq!((s.substituted, s.reanchors()), (1, 0));
+        // And a stamp on some other clock is treated as none.
+        let mut s = Stamper::new(RATE);
+        s.stamp(PACKET, Some(12_345), now);
+        assert!(matches!(s.first, Some(Stamp::Implausible { .. })));
+        assert_eq!(s.clock(), Some(AudioClock::Device));
+    }
+
+    #[test]
+    fn a_flagged_first_packet_does_not_decide_the_clock() {
+        let mut s = Stamper::new(RATE);
+        let now = 500 * HNS_PER_SECOND;
+        // WASAPI may flag the first packet after a start as a timestamp
+        // error: it is placed from its arrival and the question stays open.
+        assert_eq!(s.stamp(PACKET, None, now), (now - hns_of(480), false, AudioClock::Qpc));
+        assert_eq!((s.clock(), s.first, s.substituted), (None, None, 1));
+        let later = now + hns_of(480);
+        let stamp = (later - hns_of(480) - 20_000) as u64;
+        assert_eq!(s.stamp(PACKET, Some(stamp), later).2, AudioClock::Qpc);
+        assert_eq!(s.first, Some(Stamp::Qpc { lag: hns_of(480) + 20_000 }));
     }
 }

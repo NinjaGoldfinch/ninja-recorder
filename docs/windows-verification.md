@@ -1373,7 +1373,8 @@ beside the result rather than as one number.
 Settings → Advanced → **Capture backend** chooses what the daemon records
 with: `libobs`, or the own backend (Option B). Since #236 the own backend is
 in the build and constructible on Windows build 20348 or newer (Windows 11),
-recording video only; §11 checks what it records. This section checks the
+recording video and, since #237, the Game preset's audio; §11 checks what it
+records. This section checks the
 switch: the row, the refusals, and that a switch reaches the *next* recording
 and never the current one.
 
@@ -1383,8 +1384,8 @@ for one thing only, the first box. Why it works this way is
 [DEVELOPMENT.md §16, "The switch, and when it applies"](../DEVELOPMENT.md#the-switch-and-when-it-applies).
 
 The backend-comparison table WS1.7's exit criterion asks for, both backends
-recording the same game, needs the own backend's audio (#237) and is not here
-yet.
+recording the same game, is not here yet. Since #237 it can be run on the Game
+preset; the presets with more sources wait on #238 and #239.
 
 - [ ] **A release build shows no Advanced group** in Settings at all.
 - [ ] **The row renders** in the devtools build. `libobs` is selected and
@@ -1491,7 +1492,8 @@ uninstaller it runs is this one.
 
 The own backend (Option B, `recorder/own/`) is built in pieces, and each adds
 its rows here. Every row runs on a **devtools build** with Settings → Advanced
-→ Capture backend set to **Own**, on Windows build 20348 or newer. Why the
+→ Capture backend set to **Own**, on Windows build 20348 or newer, except
+§11.3, which is the test of whether that floor can come down. Why the
 backend is shaped this way is
 [DEVELOPMENT.md §2.2](../DEVELOPMENT.md#22-the-recorder-trait) and §16.
 
@@ -1524,7 +1526,8 @@ minutes, then end it.
       end: it seeks. `daemon.log` has no `faststart remux failed` line.
 - [ ] **Video only, as expected.** `ffprobe` on the file shows one H.264
       stream and no audio stream; the review player's track menu offers
-      nothing. That is correct until #237.
+      nothing. That is correct for a build before #237; from #237 on, the Game
+      preset adds one AAC stream, which is §11.2's check.
 - [ ] **Markers land where they happened.** A kill's marker seeks to the
       kill, as on libobs: video time zero is the moment `start` returned.
 - [ ] **Several games in one session.** A second game in the same client
@@ -1542,7 +1545,79 @@ minutes, then end it.
 | 11.1: markers land where they happened | | |
 | 11.1: a second game in the same session records | | |
 
-### 11.2 Resize, minimise, and the game window closing (#240)
+### 11.2 Game audio by process loopback (#237)
+
+The game's own audio, captured by process loopback on the game's process
+tree and written as one AAC track at 160 kbps on the video's clock: the
+**Game** preset, and the only preset the own backend records until #238. This
+is §16's P0c-1 check (game audible, Discord absent) on the shipping path, and
+it answers the question the spike never asked: whether process-loopback
+packets carry real QPC stamps
+([DEVELOPMENT.md §16](../DEVELOPMENT.md#the-qpc-question-and-how-a-recording-answers-it)).
+
+Settings → Audio → **Game**. Open Discord and keep it audible through the same
+speakers or headset for the whole game (a voice channel with someone talking,
+or a Soundboard sound played every few seconds), as for the #7 run. Play a
+Practice Tool game for five minutes or more, making noise throughout (walk,
+cast, attack a dummy), then end it.
+
+- [ ] **The root is the game.** `daemon.log` has `own backend: game audio
+      from PID <n>, the game window's owner, named League of Legends.exe`.
+      Paste it. Any other wording (by name, the newest of several, a window
+      owned by something else) is a finding: paste it with the Task Manager
+      Details view of the League processes.
+- [ ] **The QPC answer.** At the first packet `daemon.log` has either
+      `game audio clock qpc: the first packet's QPC stamp is real, <x> ms
+      before it was taken (QPC position …, device position …, taken at …)`,
+      or `game audio clock device: …` saying why. **Paste it whichever way it
+      went**: this line is what §16 is waiting on.
+- [ ] **The clock at stop.** `daemon.log` has one `own backend: game audio
+      clock …` line at the end of the game with the raw drift in ppm (QPC mode
+      only), the slips, gaps, overlaps and holds, the padding, and the capture's
+      packet counts. Paste it. Do not round or summarise the numbers.
+- [ ] **The game is audible and Discord is absent.** Play the recording in
+      the review player: game sounds throughout, and none of Discord's.
+- [ ] **In sync.** An ability's sound lands on its animation near the start,
+      in the middle and at the end of the recording.
+- [ ] **One audio track.** `ffprobe` shows one H.264 stream and one AAC
+      stream, 48000 Hz stereo, and the audio ends within a frame of the video.
+      The library row's audio layout (dev portal → Library,
+      `audio_tracks_json`) is one track, `Game`.
+- [ ] **Another preset is refused.** Switch Settings → Audio to **Game +
+      mic** and start a game: nothing is recorded, and `daemon.log` says the
+      own backend records the Game preset only (#238). Switch back to Game.
+
+| What | Result | Notes |
+|---|---|---|
+| 11.2: the root line names `League of Legends.exe` as the window's owner | | |
+| 11.2: the QPC answer (`clock qpc` or `clock device`, with the positions) | | |
+| 11.2: the stop line: raw ppm, slips, gaps, holds | | |
+| 11.2: game audible, Discord absent | | |
+| 11.2: in sync at start, middle and end | | |
+| 11.2: one H.264 and one AAC stream; the row says `Game` | | |
+| 11.2: another preset is refused with the reason | | |
+
+### 11.3 The Windows 10 floor test (#237)
+
+Whether process loopback works on Windows 10 22H2 (build 19045), which
+decides whether `select::MIN_BUILD` moves from 20348 to OBS's 19041 (the
+decision comment on #237,
+[DEVELOPMENT.md §2.4](../DEVELOPMENT.md#24-encoding-defaults)). On a Windows 10
+22H2 machine, run the procedure in
+[`spikes/p0c-audio/README.md`](../spikes/p0c-audio/README.md#windows-10-floor-test-237)
+and paste what it asks for into #237.
+
+Optionally, then run §11.2 on the same machine with a devtools build started
+with `NINJA_OWN_IGNORE_OS_FLOOR=1` (the README says how): that tries the own
+backend itself below the floor.
+
+| What | Result | Notes |
+|---|---|---|
+| 11.3: `p0c-audio` include on 19045: the game only | | |
+| 11.3: `p0c-audio` exclude on 19045: Discord, no game | | |
+| 11.3 (optional): §11.2 on 19045 with the override | | |
+
+### 11.4 Resize, minimise, and the game window closing (#240)
 
 §4's resilience cases on the own backend. The recording's size is fixed when
 it starts; a window of any other size is **scaled** into it, aspect kept,
@@ -1582,7 +1657,11 @@ Play one Practice Tool game per row, or several rows in one game.
 - [ ] **The game closing.** End a game normally: the log has `the game window
       closed (the game ended or crashed); recording black until stop` once,
       then the recording stops about five seconds later as usual, and the
-      file ends with a few seconds of black. `stop` does not warn.
+      file ends with a few seconds of black, with the audio track running
+      to the end under it (silent once the game has gone). `stop` does not
+      warn. A `game audio capture stopped before the recording did` line
+      here is expected if process loopback ends with the game's process:
+      note which way it went.
 - [ ] **The game crashing.** Kill `League of Legends.exe` in Task Manager
       mid-game: the same line, then the supervisor's stop, and the file plays
       up to the kill and is black after it. No `ended early` warning, no
@@ -1597,17 +1676,17 @@ Play one Practice Tool game per row, or several rows in one game.
 
 | What | Result | Notes |
 |---|---|---|
-| 11.2: alt-tab, twice | | |
-| 11.2: resolution change to another aspect: black bars, not cropped | | |
-| 11.2: resolution change to the same aspect, smaller: fills the frame | | |
-| 11.2: minimise: last frame held, recording continues | | |
-| 11.2: borderless | | |
-| 11.2: windowed, with a border drag | | |
-| 11.2: exclusive fullscreen: what WGC gets | | |
-| 11.2: fullscreen ↔ borderless mid-game: what WGC gets | | |
-| 11.2: game ends: black tail, one log line, no warning | | |
-| 11.2: game killed: plays to the kill, black after, next game records | | |
-| 11.2: GPU device lost (only if it can be caused) | | |
+| 11.4: alt-tab, twice | | |
+| 11.4: resolution change to another aspect: black bars, not cropped | | |
+| 11.4: resolution change to the same aspect, smaller: fills the frame | | |
+| 11.4: minimise: last frame held, recording continues | | |
+| 11.4: borderless | | |
+| 11.4: windowed, with a border drag | | |
+| 11.4: exclusive fullscreen: what WGC gets | | |
+| 11.4: fullscreen ↔ borderless mid-game: what WGC gets | | |
+| 11.4: game ends: black tail, one log line, no warning | | |
+| 11.4: game killed: plays to the kill, black after, next game records | | |
+| 11.4: GPU device lost (only if it can be caused) | | |
 
 ## Outcome
 

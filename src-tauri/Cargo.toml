@@ -259,6 +259,9 @@ windows = { version = "0.62", features = [
     "Security_Authorization_AppCapabilityAccess",
     # `WNDCLASSW`, for the window the own backend's WGC test captures.
     "Win32_Graphics_Gdi",
+    # The process table the own backend's process-loopback root is chosen
+    # from (`recorder/own/win/process.rs`, #237), as `spikes/p0c-audio` reads it.
+    "Win32_System_Diagnostics_ToolHelp",
 ] }
 # `#[implement]` (the own backend's sample-release callback) expands to
 # `windows_core::` paths, so the crate it names has to be a direct
