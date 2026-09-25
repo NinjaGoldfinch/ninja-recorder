@@ -323,7 +323,7 @@ only the reference goes.
         names Riot's game gives its window and process, facts that anyone can
         read with Spy++ or Task Manager, and they are not anyone's expression.
 
-      **`client_size`: done in #274.** It was deleted by line range without
+      **`client_size`: done in #275.** It was deleted by line range without
       its body or doc comment being read, and written again from Microsoft
       Learn's `GetClientRect`, `IsIconic`, `IsWindow` and high-DPI pages,
       which its doc comment cites. It now checks `IsIconic` first, returns
