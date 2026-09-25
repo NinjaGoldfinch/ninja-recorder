@@ -25,7 +25,7 @@ flowchart TB
     THEME["theme.ts<br/><small>owns: html[data-theme]</small>"]
     PREFS["prefs.ts<br/><small>owns: the preference cache</small>"]
     DESK["desktop.ts<br/><small>owns: the browser behaviours we suppress</small>"]
-    APP["lib/App.svelte<br/><small>the root: app bar, strip, three views,<br/>quit dialog, toast</small>"]
+    APP["lib/App.svelte<br/><small>the root: app bar, strip, five views,<br/>quit dialog, toast</small>"]
     SHELL["lib/components/shell/<br/><small>AppBar, DaemonStrip, QuitDialog, Toast</small>"]
     STATUS["lib/stores/status.svelte.ts<br/><small>owns: the poll timer</small>"]
     DAEMONS["lib/stores/daemon.svelte.ts<br/><small>owns: whether the recorder is there</small>"]
@@ -44,6 +44,11 @@ flowchart TB
     LIBP["lib/library/<br/><small>filters, sort, stats, scoreboard<br/>pure, tested</small>"]
     SETP["lib/settings/<br/><small>notes, backfill, retention, audio,<br/>capture, update, about · pure, tested</small>"]
     REVP["lib/review/<br/><small>hotkeys, playback<br/>pure, tested</small>"]
+    RFV["lib/components/reviewform/<br/><small>ReviewForm, RatingControl</small>"]
+    RFS["lib/stores/gameReview.svelte.ts<br/><small>owns: the open game, its draft review,<br/>the autosave queue</small>"]
+    OBV["lib/components/objectives/<br/><small>Objectives</small>"]
+    OBS["lib/stores/objectives.svelte.ts<br/><small>owns: the objectives list and its tab</small>"]
+    RFP["lib/reviewform/<br/><small>fields, ratings, autosave<br/>pure, tested</small>"]
     BRIDGE["bridge.ts<br/><small>composition root: picks a transport,<br/>exposes the generated client</small>"]
     TRANSPORT["lib/transport/<br/><small>pipe.ts (live) · mock.ts<br/>invoke.ts kept for the dev portal</small>"]
     CONTRACT["lib/contract/<br/><small>GENERATED from Rust</small>"]
@@ -72,6 +77,18 @@ flowchart TB
     APP --> LIBV
     APP --> REVV
     APP --> SETV
+    APP --> RFV
+    APP --> OBV
+    LIBV --> RFS
+    RFV --> RFS
+    RFV --> RFP
+    RFV --> FMT
+    RFS --> RFP
+    RFS --> BRIDGE
+    RFS --> TOASTS
+    OBV --> OBS
+    OBS --> BRIDGE
+    OBS --> TOASTS
     SHELL --> DAEMONS
     SHELL --> QUITS
     SHELL --> TOASTS
@@ -122,6 +139,11 @@ flowchart TB
     style LIBP fill:#e8f5e9,stroke:#2e7d32
     style SETP fill:#e8f5e9,stroke:#2e7d32
     style REVP fill:#e8f5e9,stroke:#2e7d32
+    style RFV fill:#fff3e0,stroke:#ef6c00
+    style RFS fill:#fff3e0,stroke:#ef6c00
+    style OBV fill:#fff3e0,stroke:#ef6c00
+    style OBS fill:#fff3e0,stroke:#ef6c00
+    style RFP fill:#e8f5e9,stroke:#2e7d32
 ```
 
 Orange is a component or the store that feeds it, green is pure and directly
@@ -433,7 +455,7 @@ would throw away an order the user chose.
 
 ## Views
 
-Three top-level sections in one document, toggled by `router.ts`. Before it
+Five top-level sections in one document, toggled by `router.ts`. Before it
 existed, each view flipped its own and its sibling's `hidden` attribute from
 two files that knew nothing about each other.
 
@@ -442,10 +464,36 @@ stateDiagram-v2
     [*] --> library
     library --> review: click a VOD card
     review --> library: back
+    library --> game: 📝 on a VOD card
+    game --> library: back (saves first)
+    library --> objectives: objectives button
+    objectives --> library: back
     library --> settings: settings button
     review --> settings: settings button
     settings --> library: close (always returns to library)
 ```
+
+### The review form (WS9)
+
+`game` is the review form for one game and `objectives` the list it reviews
+against. **The form is its own view in P0, not a rail beside the player.** P0
+builds nothing video-related, and a separate view keeps the form clear of the
+player's document-level hotkeys, which only answer while `review` is showing.
+P1 moves it next to the player.
+
+- **The whole review is saved at once.** The form edits a draft, and
+  `reviewform/autosave.ts` writes all of it 600 ms after the last change. It
+  never runs two saves at once, and the last value typed is always the last
+  value written. The header shows Saved, Unsaved changes, Saving… or Not
+  saved. Leaving the form, or opening another game, flushes first.
+- **Ticks and takeaways save as they happen.** A tick is optimistic and
+  reverts if the save fails.
+- **A blank box means "not entered", never zero.** For deaths, that is what
+  lets the form fall back to the death markers the recording counted.
+  `reviewform/fields.ts` holds those rules, and the clear time's `m:ss` shape.
+- **Both stores move on command results, not events.** No review event exists
+  yet, because this form is the only writer. When P1 or P2 adds a second one,
+  the stores should move to an event like everything else.
 
 ### The timeline stays above the fold
 
@@ -1004,7 +1052,8 @@ above records.
 tray needs: a `#settings` URL fragment read once at startup, for a window the
 tray has just created, and a `navigate` event for a window that already exists.
 A `#review` fragment is ignored, because the review view with no recording
-loaded is not a state worth restoring into.
+loaded is not a state worth restoring into. `#game` is ignored for the same
+reason; `#objectives` opens that list.
 
 ## The root, and how it mounts
 
