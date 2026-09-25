@@ -322,6 +322,52 @@ jobs:
         shell: powershell
         run: ./scripts/smoke-ui.ps1
 
+  # The notices gate. THIRD_PARTY_NOTICES.txt ships in the installer, and
+  # `scripts/notices.mjs --check` regenerates it from Cargo.lock (cargo-about)
+  # and the production frontend bundle (Vite, in memory) and fails if the
+  # committed copy differs. So a dependency added, removed or bumped without
+  # regenerating cannot merge, the same way `gen-contract --check` works for
+  # the contract. It also fails on an npm package whose licence is not on
+  # deny.toml's allow list, which nothing else checks.
+  #
+  # Its own job, on Linux, because nothing in it needs Windows: cargo-about
+  # reads `cargo metadata` filtered to the Windows target (about.toml) and
+  # compiles nothing, and the frontend build is platform-independent. It runs
+  # beside `test` rather than inside it, so a stale file fails in a minute
+  # instead of after the Windows compile. See docs/licensing.md §5.
+  notices:
+    name: Third-party notices
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      # No version argument: reads src-tauri/rust-toolchain.toml, same as
+      # `test`. cargo-about only runs `cargo metadata`, but the toolchain
+      # decides how Cargo.lock is read, so it should be the pinned one.
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Pinned, unlike cargo-deny above: cargo-about's output is committed, so
+      # a new version that words a licence differently would fail the check on
+      # a commit that changed nothing. Bump it in its own PR, with the
+      # regenerated file.
+      - name: Install cargo-about
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9.2
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Third-party notices are current
+        run: node scripts/notices.mjs --check
+
   # Pull requests do not build at all. Three Tauri bundles — two of them
   # Windows, each ~6min — are the overwhelming majority of this workflow's
   # minute spend and its artifact storage, and nothing consumes a PR's
@@ -660,6 +706,14 @@ jobs:
           $nsi = Get-ChildItem src-tauri/target/release -Recurse -Filter installer.nsi -EA SilentlyContinue |
                  Select-Object -First 1
           if (-not $nsi) { throw "no generated installer.nsi under src-tauri/target/release" }
+
+          # The third-party notices (#85), named in tauri.windows.conf.json's
+          # resources. Checked against the generated script because the
+          # devtools config is merged over that file.
+          if (-not (Select-String -Path $nsi.FullName -Pattern 'THIRD_PARTY_NOTICES\.txt' -Quiet)) {
+            throw "installer.nsi does not install THIRD_PARTY_NOTICES.txt"
+          }
+          Write-Host "the installer ships THIRD_PARTY_NOTICES.txt"
           $m = [regex]::Match((Get-Content $nsi.FullName -Raw), '!define\s+MAINBINARYNAME\s+"([^"]+)"')
           if (-not $m.Success) {
             Select-String -Path $nsi.FullName -Pattern '^!define' | ForEach-Object { $_.Line }
@@ -694,10 +748,11 @@ jobs:
   # Publishes a release for every commit that lands on main, from the
   # bundles the matrix above just produced. Nothing is rebuilt.
   #
-  # `needs: [version, test, build]` is the gate that makes this safe to
-  # publish unattended rather than leave as a draft: it cannot start until
-  # tsc, cargo test and clippy have all gone green on the same commit, so
-  # "published" already means "tested". Publishing creates the tag, which
+  # `needs: [version, test, notices, build]` is the gate that makes this safe
+  # to publish unattended rather than leave as a draft: it cannot start until
+  # tsc, cargo test and clippy have all gone green on the same commit, and the
+  # notices the installer carries match what it links, so "published" already
+  # means "tested". Publishing creates the tag, which
   # becomes the base `version` counts from next time.
   #
   # This replaces the old release.yml, which triggered on a manually pushed
@@ -724,7 +779,7 @@ jobs:
     # publishes — the pair is the same one v1 ships with, because the public
     # half is baked into every installer already in the field.
     if: needs.version.outputs.release == 'true' && needs.version.outputs.can_publish == 'true'
-    needs: [version, test, build]
+    needs: [version, test, notices, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write

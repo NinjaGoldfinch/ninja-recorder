@@ -331,4 +331,12 @@ describe("about", () => {
     await settle();
     expect(el.textContent).toContain(__APP_VERSION__);
   });
+
+  // The installer ships the file under exactly this name
+  // (tauri.windows.conf.json), so the panel must name the same one.
+  it("says where the third-party notices are", async () => {
+    const el = render();
+    await settle();
+    expect(el.textContent).toContain("THIRD_PARTY_NOTICES.txt");
+  });
 });

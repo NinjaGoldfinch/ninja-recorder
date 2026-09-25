@@ -3299,6 +3299,24 @@ cannot stay as its source. `recorder/window.rs` is the one place the audit
 found that fell on the wrong side of this line; docs/licensing.md has the
 evidence and the fix.
 
+### Notices are generated from what ships, and checked
+
+A permissive licence still has a condition: the notice travels with the binary.
+`THIRD_PARTY_NOTICES.txt` carries those notices, and it is generated rather
+than written, because a hand-kept list is stale by the next dependency bump.
+CI regenerates it and fails on a difference (docs/licensing.md §5).
+
+Two choices in it are deliberate. **The Rust half runs offline** after a
+`cargo fetch`, so the file is a function of `Cargo.lock` and nothing a network
+lookup could change between two runs of the same commit. **The npm half reads
+the production bundle, not `package.json`.** Svelte's runtime ships while Svelte
+is a devDependency, so "production dependencies only" would miss the largest
+JavaScript component in the app and list nothing in its place. The two
+off-the-shelf tools considered were rejected for reasons of their own.
+`license-checker-rseidelsohn` needs Node 24 and CI runs 22.
+`generate-license-file` prints a dual licence as its expression, with no text.
+Both read the manifest, which is the wrong source here anyway.
+
 ### What survives, and what does not change
 
 **ffmpeg survives** because it is a separate, unmodified LGPL executable that

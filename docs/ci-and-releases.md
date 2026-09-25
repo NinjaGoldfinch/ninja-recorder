@@ -1,11 +1,11 @@
 # CI and releases
 
-One workflow, [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), four
+One workflow, [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), five
 jobs. Installers are produced by CI, never built locally, and never
 cross-compiled.
 
-**Pull requests run `test` and nothing else.** Everything below the test job
-is skipped until a commit reaches `main`.
+**Pull requests run `test` and `notices` and nothing else.** Everything
+below them is skipped until a commit reaches `main`.
 
 ---
 
@@ -15,19 +15,24 @@ is skipped until a commit reaches `main`.
 flowchart TB
     subgraph PR["Pull request"]
         T1["<b>Test</b> (windows-latest)<br/>biome ci · typecheck · check:svelte · vitest<br/>cargo deny check · gen-contract --check<br/>cargo test ×2<br/>cargo clippy ×2<br/>smoke-daemon.ps1<br/><small>±devtools, no --all-targets</small>"]
+        N1["<b>Notices</b> (ubuntu)<br/>notices.mjs --check<br/><small>cargo-about + the Vite bundle</small>"]
     end
     subgraph MAIN["Push to main / manual dispatch"]
         T["<b>Test</b> (windows-latest)"]
+        N["<b>Notices</b> (ubuntu)"]
         V["<b>Version</b> (ubuntu)<br/>commit distance from<br/>the newest real tag"]
         B["<b>Build</b> (windows ×2)<br/>native bundles:<br/>NSIS · devtools NSIS<br/><small>devtools libobs trim: manual, opt-in</small>"]
         R["<b>Release</b> (ubuntu)<br/>publishes from the bundles<br/>the run just produced"]
         V --> B
         V --> R
         T --> R
+        N --> R
         B --> R
     end
     style T1 fill:#e8f5e9,stroke:#2e7d32
     style T fill:#e8f5e9,stroke:#2e7d32
+    style N1 fill:#e8f5e9,stroke:#2e7d32
+    style N fill:#e8f5e9,stroke:#2e7d32
     style R fill:#ede7f6,stroke:#5e35b1
 ```
 
@@ -224,6 +229,25 @@ Without that pin a developer on macOS and a CI run on Windows resolve different
 dependency graphs, and "cargo deny is green" would mean two different things
 depending on who said it.
 
+### Third-party notices
+
+The `notices` job runs `node scripts/notices.mjs --check` on `ubuntu-latest`.
+It regenerates `THIRD_PARTY_NOTICES.txt` from `Cargo.lock` (cargo-about 0.9.2,
+pinned, reading the Windows target) and from the production frontend bundle
+(Vite, built in memory), and fails if the committed file differs. It also
+fails when `about.toml`'s accepted licences are not the same set as
+`deny.toml`'s allow list, and when a bundled npm package's licence is not on
+that list. Adding a dependency therefore means regenerating and committing the
+file in the same change, the same rule `gen-contract --check` applies to the
+contract.
+
+It is a job of its own rather than a step in `test` because nothing in it needs
+Windows, and it finishes long before the Windows compile. `release` needs it.
+The build job checks that the generated `installer.nsi` installs the file,
+which `tauri.windows.conf.json` names as a resource.
+[licensing.md §5](licensing.md#5-third-party-notices-85) is what it covers
+and why the JavaScript half reads the bundle rather than `package.json`.
+
 See [docs/provenance.md](provenance.md) for the debt the exceptions record
 including that the fork is pinned to a *branch*, because it has no tags, which
 is why `[bans] wildcards` is `warn` rather than `deny` until WS1.7.
@@ -246,7 +270,7 @@ gh workflow run ci.yml --ref <branch>
 `build` deliberately does **not** `needs: test`. The two share no output, and
 gating cost the whole test job in latency on every push to main before the
 slow Windows bundle even started. Nothing unreviewed escapes, because
-`release` needs both.
+`release` needs both, and `notices` too.
 
 ## Test
 
