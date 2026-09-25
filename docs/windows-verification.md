@@ -1960,6 +1960,169 @@ Tool game of five minutes or more:
 | 11.7: colour against libobs: not washed out, not crushed; `tv`/`bt709` (paste) | | |
 | 11.7: `hardware_encoder_writes_every_track` on the box (paste) | | |
 
+### 11.8 The exit run (#243)
+
+The run that gates making the own backend the default. It is #10's exit
+criterion, and every row runs on a **CI-built release installer of the commit
+before the flip** (the `ninja-recorder-windows-latest-<sha>` artifact of that
+commit's CI run), never a local build and never the devtools bundle. On that
+commit the default is still libobs and a release build has no Advanced row, so
+save the choice by hand once: quit the app from the tray, then
+
+```powershell
+sqlite3 "$env:APPDATA\com.ninjarecorder.app\library.sqlite3" `
+  "INSERT INTO settings_kv (key, value) VALUES ('capture_backend', 'own')
+   ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+```
+
+and start it again: `daemon.log`'s `[recorder] backend:` line ends
+`(capture_backend = own)`. The devtools build's data folder is a different
+one (§7.8), so setting it there does not reach the release build. The rows
+marked **(the flip's installer)** run on the flip's own CI-built installer
+instead. Why the backend is built the way it is:
+[DEVELOPMENT.md §2.2](../DEVELOPMENT.md#22-the-recorder-trait), §2.4, §2.5 and
+§16.
+
+A release build logs to `daemon.log` and `worker.log` (not the `-devtools`
+names the earlier sections use), and its processes are `ninja-recorder.exe`.
+Keep Task Manager's **Details** tab open with the **Command line** column, as
+in §11.6. **Paste the summary lines** (`own: recording …`, `own: stopped …`,
+`own: remux …`) with every row that records. `diagnostics_json` is read with
+the dev portal from a devtools build pointed at the same library, or with
+`sqlite3` on `recordings.diagnostics_json`.
+
+**A full game.** One full-length game on the **Game** preset, not Practice
+Tool:
+
+- [ ] **It plays, seeks, and the markers land.** The recording is in the
+      library, plays to the end, seeks anywhere without a stall, and clicking
+      each kind of marker lands on the event it names.
+- [ ] **The diagnostics name the backend and the encoder.**
+      `diagnostics_json.backend` reads `own (ready: <encoder> [VEN_…])`, naming
+      the hardware encoder. Paste it.
+- [ ] **A/V end offset under one frame.** Over the whole game, the video and
+      audio streams end within one frame (16.7 ms at 60 fps) of each other:
+      `ffprobe -v error -show_entries stream=index,codec_type,start_time,duration
+      <file>`, and the difference between the H.264 stream's end
+      (`start_time + duration`) and each AAC stream's. Paste the output.
+
+**Isolated audio:**
+
+- [ ] **Game only on the Game preset.** In a Discord call with someone talking
+      through the game, Discord is audible on the headset and **absent** from
+      the file.
+- [ ] **Game + mic + Discord: four tracks, each isolated.** `ffprobe` shows one
+      H.264 stream and four AAC streams, `a:0` the only `default=1`; `a:1` the
+      game alone, `a:2` your voice alone, `a:3` Discord alone, `a:0` all three
+      (§11.7's extraction commands).
+- [ ] **Desktop: two tracks, the game not doubled.** `a:0` the desktop with
+      the game in it once, `a:1` the game alone.
+
+**Kill and recover:**
+
+- [ ] **Killed at minute five.** On Game + mic + Discord, end the
+      `--capture-worker` process five minutes into a game. The recording is
+      recovered (`own: remux <file>: repaired first …`), plays, scrubs to about
+      minute five, and has every stem. Then the same with the `--daemon`
+      process: recovered at startup, every stem.
+
+**Resilience and window modes:**
+
+- [ ] **§4 on own.** Alt-tab, a resolution change mid-recording, a mid-game
+      client reconnect, and the microphone unplugged mid-game: each recording
+      continues or recovers and plays.
+- [ ] **Each window mode.** Borderless, windowed (with a border dragged) and
+      exclusive fullscreen, one game each: §11.4's rows, and what WGC gets in
+      fullscreen.
+- [ ] **No yellow border** around the game window at any point, in any mode.
+
+**The encoder:**
+
+- [ ] **The hardware encoder is used.** `worker.log`'s warm line names the
+      hardware MFT, `nvidia-smi encodersessions` during the game shows one
+      H.264 session owned by the `--capture-worker` pid, and nothing says
+      `software`.
+- [ ] **The software fallback, once, and surfaced.** On a machine with no
+      usable hardware encoder, record one game. Nothing here forces the
+      fallback on a machine that has one, so it takes a box whose GPU driver
+      is disabled in Device Manager (the game then renders on the Microsoft
+      Basic Display Adapter, so a Practice Tool minute is enough) or a second
+      machine without a hardware H.264 encoder. League will not run in a VM
+      (Vanguard). Check all three places:
+  - [ ] **the log**: `daemon.log` has `own backend: will encode in software
+        with <encoder>: <reason>` and the start summary line says
+        `software fallback: <reason>`;
+  - [ ] **the diagnostics**: `diagnostics_json.backend` reads
+        `own (software encoding: <encoder>, because <reason>)`;
+  - [ ] **the UI**: Settings → Advanced shows the notice that recording is
+        encoding in software and uses more CPU, both while the client is open
+        and after it has closed. The notice is in the flip's PR, not the
+        commit before it, so this box is checked on **that PR's** CI-built
+        installer.
+
+**Resources.** Against libobs on the same machine, the same game mode, each
+state sampled for 60 s:
+
+- [ ] **Idle and recording RAM**, with
+      [`scripts/measure.ps1`](../scripts/measure.ps1): the daemon
+      (`-ArgumentFilter '--daemon'`) idle with no client, and while recording
+      the daemon plus the capture worker (`-ArgumentFilter
+      '--capture-worker'`) for own, and the daemon plus
+      `-ProcessName extprocess_recorder` for libobs. Include the software
+      path's recording figure.
+- [ ] **Idle and recording CPU**, the same states and processes. `measure.ps1`
+      samples memory only, and
+      [measurement.md](measurement.md) has no CPU method yet: agree one before
+      filling a cell (a candidate is
+      `Get-Counter '\Process(ninja-recorder*)\% Processor Time' -SampleInterval 1 -MaxSamples 60`,
+      divided by the logical processor count), and add it to measurement.md
+      in the same change as the figures. An empty cell is a true statement.
+- [ ] **The capture worker exists only while League does.** No
+      `--capture-worker` with no client; one within seconds of the client
+      opening; none within seconds of it closing (§11.6's first three rows).
+
+**The switch and the flip**, on the **flip's** CI-built installer:
+
+- [ ] **Switching own ↔ libobs in the lobby.** With the client open, switch in
+      Settings → Advanced: the next game records on the chosen backend, both
+      ways, with one worker process of the right kind (§9's switch row).
+- [ ] **A fresh install records on own.** On a machine with no
+      `%APPDATA%\com.ninjarecorder.app` folder (or with its `capture_backend`
+      row deleted), install and record a game: the row shows
+      Own selected, `daemon.log` has `(capture_backend = own)`, and
+      `diagnostics_json.backend` starts with `own (`.
+- [ ] **A stored `libobs` row stays on libobs.** On the pre-flip build, save
+      libobs with the `sqlite3` line above (`'libobs'` for `'own'`), then
+      install the flip's build over it: Settings shows libobs, the log line
+      says `(capture_backend = libobs)`, and the next game records on libobs.
+
+| What | Result | Notes |
+|---|---|---|
+| 11.8: the commit and CI run the installer came from | | |
+| 11.8: full game: plays, seeks, markers land | | |
+| 11.8: `diagnostics_json.backend` names own and the encoder (paste) | | |
+| 11.8: A/V end offset under one frame over the full game (paste) | | |
+| 11.8: Game preset: Discord audible, absent from the file | | |
+| 11.8: Game + mic + Discord: four tracks, each isolated, `a:0` default | | |
+| 11.8: Desktop: two tracks, the game not doubled | | |
+| 11.8: worker killed at minute five: recovered, scrubs, every stem | | |
+| 11.8: daemon killed: recovered at startup, every stem | | |
+| 11.8: §4 resilience on own | | |
+| 11.8: borderless / windowed / exclusive fullscreen | | |
+| 11.8: no yellow border | | |
+| 11.8: the hardware encoder used (paste `nvidia-smi`) | | |
+| 11.8: software fallback: in the log (paste) | | |
+| 11.8: software fallback: in the diagnostics (paste) | | |
+| 11.8: software fallback: the UI notice (the flip's installer) | | |
+| 11.8: idle RAM, own vs libobs (`measure.ps1`) | | |
+| 11.8: recording RAM, own (hardware) vs own (software) vs libobs | | |
+| 11.8: idle CPU, own vs libobs | | |
+| 11.8: recording CPU, own (hardware) vs own (software) vs libobs | | |
+| 11.8: the capture worker only while League runs | | |
+| 11.8: switching own ↔ libobs in the lobby, both ways (the flip's installer) | | |
+| 11.8: fresh install records on own (the flip's installer) | | |
+| 11.8: a stored `libobs` row stays on libobs (the flip's installer) | | |
+
 ## Outcome
 
 - [ ] All boxes above checked
