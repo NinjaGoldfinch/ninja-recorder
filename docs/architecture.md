@@ -88,13 +88,15 @@ flowchart TB
 | `recorder/own/mux.rs` | Encoded samples into the file through `mp4::write`: created at the first keyframe (whose SPS and PPS the `moov` needs), 100 ns times to 90 kHz and to each AAC track's rate, a video frame held until the next gives its duration, and a fragment closed before every keyframe after the first | `Mux`, `to_timescale`, `flush_before` |
 | `recorder/own/nv12.rs` | BGRA to NV12 on the CPU, BT.709 studio range, for a device with no video processor (the CI runner, a GPU-less VM) | `bgra_to_nv12`, `frame_len` |
 | `recorder/own/pcm.rs` | Endpoint sample formats to stereo f32 for the mixer (or i16), and the mix back to i16 | `to_stereo_f32`, `f32_to_i16` |
+| `recorder/own/problem.rs` | Which capture outcomes are failures to tell the user about (#10): a source lost while *finding* what to capture is an absence (Discord not running, no microphone), except the game; one lost while *opening* it, or that stops part-way, is a failure; so is an early end of the whole recording. `SourceError` carries the stage from `own/win/audio` | `is_failure`, `not_opened`, `ended`, `stop_problem`, `SourceError`, `Stage` |
 | `recorder/own/plan.rs` | A preset's `AudioLayout` to a `CapturePlan`: the sources to open, each once, and what each written track sums (every track since #239; the Desktop mix is the desktop alone, and the game feeds only its stem). `realised_layout` drops a source that failed to open with its stem and reindexes, so `stop` reports the file that exists; `describe` is how the log names each track (`a:0 "Everything" (game + microphone)`) | `plan`, `CapturePlan`, `realised_layout`, `describe`, `TRACKS_WRITTEN` |
 | `recorder/own/root.rs` | Which process tree a process-loopback capture targets, from a process snapshot: the game (the window's owner, checked against `League of Legends.exe`), or the top of an application's tree (Discord, since #238). Reused parent PIDs are caught by creation time | `game_root`, `application_root` |
-| `recorder/own/select.rs` | Which H.264 encoder: hardware by adapter vendor (NVIDIA → AMD → Intel), the software MFT only as a marked fallback; the Windows build floor (20348) and its devtools-only override; a preset's checked audio layout (every preset since #238) | `rank`, `Choice`, `availability`, `floor_ignored`, `audio_layout` |
+| `recorder/own/select.rs` | Which H.264 encoder: hardware by adapter vendor (NVIDIA → AMD → Intel), the software MFT only as a marked fallback; the Windows build floor (19041, OBS's, untested on Windows 10) and its devtools-only override; a preset's checked audio layout (every preset since #238) | `rank`, `Choice`, `availability`, `floor_ignored`, `audio_layout` |
 | `recorder/own/stats.rs` | The session summary, logged by the worker in `worker.log` and copied into `daemon.log` from its `Started`/`Stopped` replies: one line at start (size, adapter, encoder and whether it is the software fallback, each source's root or why it failed, the tracks), one at stop (ticks, repeated ticks, the worst late tick, each source's clock, raw ppm, slips, gaps and holds, clipping, size, fragments, finalize), and one for the repair and the remux, rendered from plain counters (DEVELOPMENT.md §13) | `render_start`, `render_stop`, `render_remux`, `Cadence` |
 | `recorder/own/status.rs` | The even frame size, whether the encoder that was activated is the one `rank` chose, and the backend's name (`own (ready: …)`, `own (software encoding: …)`, `own (unavailable: …)`) | `even_size`, `check_loaded`, `Status` |
 | `recorder/own/win/` | Everything that calls Windows, and the only part of `own/` gated to it: the adapters and D3D11 device, the WGC capture with its border off, `scale` (frames into the fixed-size slots: a copy, or the D3D11 video processor when the window has been resized; the same processor, told BT.709 studio range, does `convert`'s BGRA → NV12), the process table, one thread per audio source (the game and applications by process loopback, include mode; the microphone and the desktop from their endpoints, the desktop with a silent keep-alive; all 48 kHz stereo float), every track's mix (`audio::AudioTracks`), the encoders driven directly (`h264`: the H.264 MFT, asynchronous or synchronous as it declares, 8 Mbps CBR, GOP 120, low latency, no B-frames, textures in where it is D3D11-aware; `aac`: an AAC MFT per track, 160 kbps), `output` (frames, encoders and the `own::mux` file together), and the session thread that owns them, which runs in the capture worker (`host`: the session as the worker's `Host`). `OwnRecorder` is the daemon's thin client of that worker, and repairs the file of a worker that died | `OwnRecorder`, `session::run`, `host::SessionHost`, `audio::start`, `audio::AudioTracks`, `h264::VideoEncoder`, `aac::AacEncoder`, `convert::Frames`, `output::Output`, `scale::Processor`, `scale::Fitter` |
 | `recorder/own/worker/` | The capture worker, `ninja-recorder --capture-worker` (#241): the process the session thread runs in, spawned only while League runs. The line protocol both sides share, the worker's loop (EOF is a shutdown), the pure lifetime rule, and the daemon's client with its timeouts and its kill-on-close job object | `run`, `protocol::{Request, Reply}`, `serve::serve`, `lifetime::Lifetime`, `client::Worker` |
+| `recorder/problem.rs` | What a recording lost to a capture failure, backend-agnostic: the `CaptureProblem` enum that crosses the worker's pipe, `RecordingOutput`, the `captureProblems` event and `diagnostics_json`, and the words of the daemon's notification for it (DEVELOPMENT.md §2.6) | `CaptureProblem`, `notification`, `refused_message`, `windows_build` |
 | `recorder/stub.rs` | Non-Windows dev backend that copies a fixture MP4 | `StubRecorder` |
 | `recorder/remux.rs` | The faststart remux, a `-c copy` through `ffmpeg_command` that moves the index to the front so a fragmented file scrubs. Shared by both Windows backends' `stop` and startup recovery; the argument list is pure | `faststart_args`, `remux_faststart` |
 | `mp4/read.rs` | Reading an MP4's top-level boxes directly, no ffmpeg: fragmented or not, how many whole fragments, how many audio tracks, and what a kill cut short | `summarize`, `Summary` |
@@ -236,9 +238,9 @@ sequenceDiagram
     R->>T: Start { path, plan }
     Note over T: find window, WGC first frame
     T->>A: start each source (the game: root::game_root)
-    A-->>T: captures running (or left out)
+    A-->>T: captures running (or left out: a failure, or only absent)
     Note over T: H.264 MFT activated (async or sync),<br/>one AAC MFT per track,<br/>activated encoder checked
-    T-->>R: status (activated encoder), realised layout
+    T-->>R: status (activated encoder), realised layout,<br/>sources that failed to open
     R->>T: origin = QPC now (last act of start)
     R-->>S: Ok, record_started_at stamped
     loop every tick due on the 60 fps grid
@@ -251,9 +253,9 @@ sequenceDiagram
     R->>T: Stop
     T->>A: stop (after the last tick's packets, 200 ms at most)
     Note over T: every track padded to the last tick,<br/>encoders drained, mfra written
-    T-->>R: finalized
+    T-->>R: finalized, sources that stopped part-way
     R->>R: faststart remux (every audio track)
-    R-->>S: RecordingOutput (every track, labelled, or none)
+    R-->>S: RecordingOutput (every track, labelled, or none;<br/>what it lost to a failure)
     S->>R: release() (the client closed)
     R->>W: Release
     W->>T: Release: finalize anything in flight, tear down

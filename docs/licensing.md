@@ -379,6 +379,12 @@ only the reference goes.
       and gives the
       [`AUDIOCLIENT_ACTIVATION_TYPE`](https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ne-audioclientactivationparams-audioclient_activation_type)
       page's URL.
+
+      **Since #291 the constant is 19041**, on the owner's decision to follow
+      OBS's floor without a Windows 10 run (DEVELOPMENT.md §2.4). The comment
+      still describes OBS's behaviour without quoting it, and the number is a
+      behaviour observed in another program, which is not code taken from it.
+      The test's `(19_041, true)` row replaces the old `false` one.
 - [x] **Not derived, re-cite: `own/win/audio/loopback.rs`**, ported from
       `spikes/p0c-audio`. It says process loopback is "the same API the libobs
       fork's process-output source calls". That sentence is about the fork, not

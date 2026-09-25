@@ -1465,6 +1465,18 @@ button.armed {
   white-space: nowrap;
 }
 
+/* "Recorded without game audio" (#10), in the slack column that is otherwise
+ * empty, so the row keeps its shape. Truncated rather than wrapped: the
+ * tooltip carries every reason. */
+.vod-without {
+  font-size: var(--fs-xs);
+  color: var(--warn-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
 /* Holds its space before the portrait arrives, so a row does not reflow
  * when the icon lands a moment after the list. Empty until then, and empty
  * forever for a champion the CDN never answered for — the name beside it
@@ -1818,6 +1830,41 @@ button.small {
 .daemon-strip[data-kind="error"] {
   background-color: color-mix(in srgb, var(--loss-fg) 14%, var(--bg-surface));
   border-bottom-color: color-mix(in srgb, var(--loss-fg) 50%, transparent);
+}
+
+/* What the last recording lost to a capture failure (#10). The recorder
+ * strip's shape, with a dismiss button, because it does not clear itself. */
+.capture-strip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid color-mix(in srgb, var(--warn-fg) 50%, transparent);
+  background-color: color-mix(in srgb, var(--warn-fg) 12%, var(--bg-surface));
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+}
+
+.capture-strip[data-kind="error"] {
+  background-color: color-mix(in srgb, var(--loss-fg) 14%, var(--bg-surface));
+  border-bottom-color: color-mix(in srgb, var(--loss-fg) 50%, transparent);
+}
+
+.capture-strip-text {
+  overflow-wrap: anywhere;
+}
+
+.capture-strip-dismiss {
+  flex: none;
+}
+
+/* The same fact on the review page, under the heading. */
+.review-without {
+  margin: 0 0 var(--sp-2);
+  color: var(--warn-fg);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
 }
 
 /* The close button's "quit anyway?" question (#136). A <dialog> rather than

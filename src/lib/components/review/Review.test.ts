@@ -107,6 +107,30 @@ describe("loading a recording", () => {
     await Promise.resolve();
     expect(el.querySelector("h2")?.textContent).toContain("Ahri");
   });
+
+  it("says nothing about capture for a clean recording", async () => {
+    const el = render();
+    await open();
+    await Promise.resolve();
+    expect(el.querySelector(".review-without")).toBeNull();
+  });
+
+  /** What the recording lost (#10), stored with it, in full and as text. */
+  it("says what the recording is without, with the reason, as text", async () => {
+    const el = render();
+    const reason = "<i>refused</i> (0x80070005)";
+    call.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    await store.openRecording({
+      ...row,
+      diagnostics_json: JSON.stringify({
+        capture_problems: [{ kind: "sourceFailed", source: "game", reason }],
+      }),
+    } as never);
+    await Promise.resolve();
+    const line = el.querySelector(".review-without");
+    expect(line?.textContent).toBe(`Recorded without game audio (${reason}).`);
+    expect(line?.querySelector("i")).toBeNull();
+  });
 });
 
 describe("the hotkeys", () => {

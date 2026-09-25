@@ -232,7 +232,7 @@ impl DaemonBackends {
 }
 
 impl DaemonBackends {
-    /// Whether the own backend can run here: Windows build 20348 or newer
+    /// Whether the own backend can run here: Windows build 19041 or newer
     /// (`recorder::own::select::availability`). Whether this machine has an
     /// encoder is `prepare`'s question, and its answer is the backend's name
     /// rather than this list: a refusal here is for what cannot change
@@ -240,9 +240,9 @@ impl DaemonBackends {
     ///
     /// **A devtools build can be told to ignore the floor**, with
     /// `NINJA_OWN_IGNORE_OS_FLOOR=1` (`select::floor_ignored`), so the own
-    /// backend can be tried on Windows 10 before #237's floor test has
-    /// decided whether the floor moves. A release build never reads it. It
-    /// is logged every time it lifts a refusal, and again at every start.
+    /// backend can be tried below it, on Windows 10 1903 or 1909. A release
+    /// build never reads it. It is logged every time it lifts a refusal, and
+    /// again at every start.
     #[cfg(target_os = "windows")]
     fn own_unavailable() -> Option<String> {
         use crate::recorder::own::select;

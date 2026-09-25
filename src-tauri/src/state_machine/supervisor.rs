@@ -186,8 +186,10 @@ pub enum SupervisorEvent {
     /// Capture began.
     RecordingStarted,
     /// A recording was finalized. Carries what was written so a notification
-    /// can describe it without going back to the database.
-    Finalized(FinalizedRecording),
+    /// can describe it without going back to the database, and what it lost
+    /// to a failure (`RecordingOutput::problems`), so that one notification
+    /// can say both.
+    Finalized(FinalizedRecording, Vec<crate::recorder::CaptureProblem>),
     /// A recording could not be started or could not be finished. Carries a
     /// message fit to show the user — they are in a game and cannot see the
     /// window.
@@ -261,6 +263,18 @@ pub struct RecordingDiagnostics {
     /// `markers`/`samples` tables means an insert failed.
     pub markers: usize,
     pub samples: usize,
+
+    /// What the recording lost to a failure (#10): a source that should have
+    /// opened and did not, one that stopped part-way, an early end. The
+    /// library row and the review page show it as "Recorded without …".
+    /// Left out when empty, so a clean recording's JSON is what it always
+    /// was, and read as empty from a row written before it existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capture_problems: Vec<crate::recorder::CaptureProblem>,
+    /// The Windows build this was recorded on, which a capture problem is
+    /// not diagnosable without. `None` off Windows, and on older rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows_build: Option<u32>,
 }
 
 struct RecordingSession {
@@ -1303,15 +1317,26 @@ impl Supervisor {
             Err(e) => {
                 error!("state_machine", "failed to start recording: {e}");
                 // Silence here means the user finds out after the game, when
-                // the VOD isn't in the library.
-                self.emit(SupervisorEvent::RecordingFailed(format!(
-                    "the recording could not be started: {e}"
-                )));
+                // the VOD isn't in the library. The build goes in the message
+                // because a refusal on a machine nobody here has is only a
+                // bug report if it says which Windows it was.
+                let windows_build = crate::recorder::problem::windows_build();
+                self.emit(SupervisorEvent::RecordingFailed(
+                    crate::recorder::problem::refused_message(&e.to_string(), windows_build),
+                ));
                 // `Crashed`, not `Refused`: the recorder was asked and failed.
                 // A refusal is this module deciding not to record at all.
                 self.publish(crate::contract::events::Event::RecordingStopped {
                     recording_id: None,
                     outcome: crate::contract::events::StopOutcome::Crashed,
+                });
+                // And said in the window too, which a toast is not (#10).
+                self.publish(crate::contract::events::Event::CaptureProblems {
+                    recording_id: None,
+                    windows_build,
+                    problems: vec![crate::recorder::CaptureProblem::NotStarted {
+                        reason: e.to_string(),
+                    }],
                 });
             }
         }
@@ -1355,6 +1380,18 @@ impl Supervisor {
         match self.recorder.lock().unwrap().stop() {
             Ok(output) => {
                 let path = output.path;
+                // What the recording lost to a failure, stored with the row
+                // and said once the row is written (#10).
+                let problems = output.problems;
+                let windows_build = crate::recorder::problem::windows_build();
+                for problem in &problems {
+                    warn!(
+                        "state_machine",
+                        "the recording lost something: {}: {}",
+                        problem.headline(),
+                        problem.reason()
+                    );
+                }
                 // Video positions are computed here, not at ingest: the
                 // alignment is only fully known once the game is over.
                 let markers = session
@@ -1414,6 +1451,8 @@ impl Supervisor {
                     backend,
                     markers: markers.len(),
                     samples: samples.len(),
+                    capture_problems: problems.clone(),
+                    windows_build,
                 };
                 let diagnostics_json = match serde_json::to_string(&diagnostics) {
                     Ok(json) => Some(json),
@@ -1600,12 +1639,22 @@ impl Supervisor {
                 // Whatever is behind this notifier must stay quick; it is not
                 // the place to do work.
                 if let Some(finalized) = self.last_finalized.lock().unwrap().clone() {
-                    self.emit(SupervisorEvent::Finalized(finalized));
+                    self.emit(SupervisorEvent::Finalized(finalized, problems.clone()));
                 }
                 self.publish(crate::contract::events::Event::RecordingStopped {
                     recording_id,
                     outcome: crate::contract::events::StopOutcome::Clean,
                 });
+                // After the stop, so a client that correlates on the id has
+                // already heard the recording ended. Once per recording, with
+                // everything it lost, and only when it lost something.
+                if !problems.is_empty() {
+                    self.publish(crate::contract::events::Event::CaptureProblems {
+                        recording_id,
+                        windows_build,
+                        problems,
+                    });
+                }
 
                 // Last, and deliberately after retention: the LCU still
                 // has no stats for this game — it is in `WaitingForStats`
@@ -1633,6 +1682,13 @@ impl Supervisor {
                 self.publish(crate::contract::events::Event::RecordingStopped {
                     recording_id: None,
                     outcome: crate::contract::events::StopOutcome::Crashed,
+                });
+                self.publish(crate::contract::events::Event::CaptureProblems {
+                    recording_id: None,
+                    windows_build: crate::recorder::problem::windows_build(),
+                    problems: vec![crate::recorder::CaptureProblem::NotSaved {
+                        reason: e.to_string(),
+                    }],
                 });
             }
         }
@@ -2384,6 +2440,167 @@ mod tests {
             other => panic!("no such fixture: {other}"),
         };
         serde_json::from_str(json).unwrap()
+    }
+
+    // --- capture problems (#10) -------------------------------------------
+
+    /// Records into a real file and reports that it lost the game's audio:
+    /// the own backend's shape when process loopback is refused.
+    struct LossyRecorder {
+        dir: PathBuf,
+        recording: bool,
+    }
+
+    fn refused_game_audio() -> crate::recorder::CaptureProblem {
+        crate::recorder::CaptureProblem::SourceFailed {
+            source: "game".into(),
+            reason: "process-loopback activation for PID 9 was refused: (0x80070005)".into(),
+        }
+    }
+
+    impl Recorder for LossyRecorder {
+        fn start(&mut self, _config: crate::recorder::RecordConfig) -> Result<(), RecorderError> {
+            self.recording = true;
+            Ok(())
+        }
+
+        fn stop(&mut self) -> Result<crate::recorder::RecordingOutput, RecorderError> {
+            self.recording = false;
+            let path = self.dir.join("lossy.mp4");
+            std::fs::create_dir_all(&self.dir)?;
+            std::fs::write(&path, b"not really an mp4")?;
+            Ok(crate::recorder::RecordingOutput {
+                path,
+                audio: crate::recorder::audio::AudioLayout { sources: vec![], tracks: vec![] },
+                problems: vec![refused_game_audio()],
+            })
+        }
+
+        fn is_recording(&self) -> bool {
+            self.recording
+        }
+
+        fn backend_name(&self) -> String {
+            "lossy".to_string()
+        }
+    }
+
+    fn supervisor_recording_with(
+        recorder: Box<dyn Recorder>,
+    ) -> (Arc<Supervisor>, Arc<Mutex<Vec<ContractEvent>>>, Arc<Mutex<Vec<SupervisorEvent>>>) {
+        let recorder: Arc<Mutex<Box<dyn Recorder>>> = Arc::new(Mutex::new(recorder));
+        let db = Arc::new(Db::open_temporary().unwrap());
+        let sup = Supervisor::new(recorder, std::env::temp_dir(), db);
+        let seen: Arc<Mutex<Vec<ContractEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        sup.set_event_sink(Box::new(move |event| sink.lock().unwrap().push(event)));
+        let told: Arc<Mutex<Vec<SupervisorEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let notifier = Arc::clone(&told);
+        sup.set_event_notifier(Box::new(move |event| notifier.lock().unwrap().push(event)));
+        (sup, seen, told)
+    }
+
+    fn capture_problems(seen: &Arc<Mutex<Vec<ContractEvent>>>) -> Vec<ContractEvent> {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(e, ContractEvent::CaptureProblems { .. }))
+            .cloned()
+            .collect()
+    }
+
+    /// What the recording lost is stored with it, published once with its
+    /// id after the stop, and handed to the notifier with the finalize.
+    #[test]
+    fn a_recording_that_lost_a_source_stores_publishes_and_tells_it_once() {
+        let dir = std::env::temp_dir().join(format!("ninja-lossy-{}", timestamp_millis()));
+        let (sup, seen, told) =
+            supervisor_recording_with(Box::new(LossyRecorder { dir: dir.clone(), recording: false }));
+        sup.start_recording();
+        sup.stop_recording();
+
+        let d = diagnostics_of(&sup);
+        assert_eq!(d.capture_problems, vec![refused_game_audio()]);
+        assert_eq!(d.windows_build, crate::recorder::problem::windows_build());
+
+        let id = sup.db.list_recordings().unwrap()[0].id;
+        let published = capture_problems(&seen);
+        assert_eq!(published.len(), 1, "once per recording");
+        let ContractEvent::CaptureProblems { recording_id, problems, .. } = &published[0] else {
+            unreachable!()
+        };
+        assert_eq!((*recording_id, problems.clone()), (Some(id), vec![refused_game_audio()]));
+        let events = seen.lock().unwrap();
+        let stopped = events.iter().position(|e| matches!(e, ContractEvent::RecordingStopped { .. }));
+        let problem = events.iter().position(|e| matches!(e, ContractEvent::CaptureProblems { .. }));
+        assert!(stopped < problem, "the stop first, so the id is already known");
+        drop(events);
+
+        let told = told.lock().unwrap();
+        let finalized: Vec<&Vec<crate::recorder::CaptureProblem>> = told
+            .iter()
+            .filter_map(|e| match e {
+                SupervisorEvent::Finalized(_, problems) => Some(problems),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(finalized, vec![&vec![refused_game_audio()]]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A clean recording says nothing, and its diagnostics keep the shape
+    /// they always had: no empty list, no build.
+    #[test]
+    fn a_clean_recording_publishes_no_problems_and_stores_none() {
+        let (sup, seen, _dir) = supervisor_with_sink();
+        sup.start_recording();
+        sup.stop_recording();
+        assert!(capture_problems(&seen).is_empty());
+        let json = sup.db.list_recordings().unwrap()[0].diagnostics_json.clone().unwrap();
+        assert!(!json.contains("capture_problems"), "{json}");
+        assert!(diagnostics_of(&sup).capture_problems.is_empty());
+    }
+
+    /// A row written before #10 has neither field, and still reads.
+    #[test]
+    fn diagnostics_from_before_capture_problems_still_read() {
+        let old = r#"{"game_id":null,"queue_id":null,"is_custom":false,"polls":0,
+            "first_game_time_s":null,"last_game_time_s":null,"ever_matched":false,
+            "alignment_offset_s":null,"backend":"libobs","markers":0,"samples":0}"#;
+        let d: RecordingDiagnostics = serde_json::from_str(old).unwrap();
+        assert!(d.capture_problems.is_empty());
+        assert_eq!(d.windows_build, None);
+    }
+
+    /// A start the backend refuses is a toast naming the build, and a
+    /// `NotStarted` problem in the window, not only a line in the log.
+    #[test]
+    fn a_refused_start_is_told_and_published() {
+        let (sup, seen, told) = supervisor_recording_with(Box::new(crate::recorder::FailedRecorder(
+            "no frame from WGC for the game window".into(),
+        )));
+        sup.start_recording();
+
+        let published = capture_problems(&seen);
+        assert_eq!(published.len(), 1);
+        let ContractEvent::CaptureProblems { recording_id: None, problems, .. } = &published[0] else {
+            panic!("{published:?}")
+        };
+        let [crate::recorder::CaptureProblem::NotStarted { reason }] = problems.as_slice() else {
+            panic!("{problems:?}")
+        };
+        assert!(reason.contains("no frame from WGC"), "{reason}");
+
+        let told = told.lock().unwrap();
+        let message = told
+            .iter()
+            .find_map(|e| match e {
+                SupervisorEvent::RecordingFailed(message) => Some(message.clone()),
+                _ => None,
+            })
+            .expect("a refused start is a notification");
+        assert!(message.contains("no frame from WGC"), "{message}");
+        assert!(message.contains("Windows build"), "the build is in it: {message}");
     }
 
     /// The end-to-end shape of the live metadata path: polls arrive, the

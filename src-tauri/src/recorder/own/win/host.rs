@@ -17,7 +17,7 @@ use crate::recorder::audio::AudioLayout;
 use crate::recorder::own::plan::CapturePlan;
 use crate::recorder::own::status::Status;
 use crate::recorder::own::worker::protocol::Started;
-use crate::recorder::own::worker::serve::Host;
+use crate::recorder::own::worker::serve::{Host, Stopped};
 use crate::warn;
 
 /// The session thread, started on the first request and ended by `release`.
@@ -74,7 +74,8 @@ impl Host for SessionHost {
         let started = self.ask(|reply| Command::Start { path, plan, reply, origin: receiver })??;
         self.origin = Some(origin);
         let summary = Some(started.summary);
-        Ok(Started { status: started.status, audio: started.audio, summary })
+        let problems = started.problems;
+        Ok(Started { status: started.status, audio: started.audio, summary, problems })
     }
 
     fn origin(&mut self, qpc_hns: i64) {
@@ -84,13 +85,17 @@ impl Host for SessionHost {
         }
     }
 
-    fn stop(&mut self) -> (Result<Option<String>, String>, Option<String>) {
+    fn stop(&mut self) -> Stopped {
         // A start whose origin never came is abandoned by the session when
         // this sender goes: it finds the channel closed.
         self.origin = None;
         match self.ask(Command::Stop) {
-            Ok(stopped) => (stopped.result, stopped.summary),
-            Err(e) => (Err(e), None),
+            Ok(stopped) => Stopped {
+                result: stopped.result,
+                summary: stopped.summary,
+                problems: stopped.problems,
+            },
+            Err(e) => Stopped::failed(e),
         }
     }
 

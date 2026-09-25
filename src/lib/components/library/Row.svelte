@@ -30,6 +30,7 @@ import {
   vodTitle,
 } from "../../../format";
 import type { RecordingRow } from "../../../types";
+import { recordedWithout } from "../../library/problems";
 import { csPerMinute, laneOpponent, outcomeAttr } from "../../library/scoreboard";
 import Loadout from "./Loadout.svelte";
 import Matchup from "./Matchup.svelte";
@@ -67,6 +68,12 @@ const length = $derived(row.duration_s === null ? null : formatClock(row.duratio
 // Absent when the result is unknown, which is unambiguous rather than a gap:
 // a word is on every decided row, so no word means undecided.
 const outcomeWord = $derived(row.win === null ? null : row.win ? "Win" : "Loss");
+
+// What a capture failure cost this recording (#10), from its diagnostics:
+// short in the row, every reason in the tooltip. In the slack column, which is
+// otherwise empty, so a row that says it is still the same shape as one that
+// does not.
+const without = $derived(recordedWithout(row.diagnostics_json));
 
 function onCardKey(e: KeyboardEvent) {
   if (e.key !== "Enter" && e.key !== " ") return;
@@ -195,7 +202,11 @@ function onCardKey(e: KeyboardEvent) {
 
   <Matchup {row} />
 
-  <span class="vod-slack" aria-hidden="true"></span>
+  {#if without}
+    <span class="vod-slack vod-without" title={without.full}>{without.short}</span>
+  {:else}
+    <span class="vod-slack" aria-hidden="true"></span>
+  {/if}
 
   <span class="vod-sub vod-size">{formatBytes(row.size_bytes)}</span>
 
