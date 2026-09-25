@@ -9,17 +9,22 @@
 //! worker process, where the channel becomes a pipe.
 
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
+use windows::Win32::Foundation::HWND;
 use windows::Win32::Media::MediaFoundation::{MFSTARTUP_FULL, MFShutdown, MFStartup};
 use windows::Win32::Media::{timeBeginPeriod, timeEndPeriod};
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 
+use super::audio;
 use super::capture::{self, Capture, Slot};
 use super::device::{self, Device};
 use super::encode::{self, Sink};
-use crate::recorder::own::clock;
+use super::process;
+use crate::recorder::own::clock::{self, AudioClock, HNS_PER_SECOND};
+use crate::recorder::own::feed::{self, Feed};
+use crate::recorder::own::root;
 use crate::recorder::own::select::{self, Choice};
 use crate::recorder::own::status::{self, Status};
 use crate::recorder::window;
@@ -43,17 +48,38 @@ const START_WAIT: Duration = Duration::from_secs(3);
 /// it has gone.
 const ORIGIN_WAIT: Duration = Duration::from_secs(5);
 
+/// How far behind the video a quiet audio source is held with silence
+/// (`feed::Feed::hold`). Far more than a packet's delivery latency, so a
+/// packet is never cut for arriving a little late, and short enough that
+/// the muxer is never left waiting long on the audio track.
+const HOLD_MARGIN: i64 = HNS_PER_SECOND / 2;
+
+/// How long a stop waits for the audio packets of the last video tick,
+/// which are still in flight when the stop arrives. Whatever has not come
+/// by then is padded with silence.
+const TAIL_WAIT: Duration = Duration::from_millis(200);
+
+/// What a start answers with.
+pub struct Started {
+    /// The status for the encoder that actually loaded.
+    pub status: Status,
+    /// Whether the file has the game's audio track. `false` when process
+    /// loopback could not start, in which case the recording is video only
+    /// and says so, rather than no recording at all: the same trade the
+    /// libobs fork makes ("lose per-app audio, not all recording").
+    pub game_audio: bool,
+}
+
 /// What `OwnRecorder` asks of the session thread. Every variant that expects
 /// an answer carries the channel to send it on.
 pub enum Command {
     /// The pre-warm: COM, Media Foundation, the adapters and encoders, the
     /// ranking, the device. Answers with the ranked status.
     Prepare(Sender<Result<Status, String>>),
-    /// Start recording to `path`. Answers once the window, the first frame
-    /// and the encoder are all up, with the status for the encoder that
-    /// actually loaded, and then waits on `origin` for the QPC instant that
-    /// is the file's t = 0.
-    Start { path: PathBuf, reply: Sender<Result<Status, String>>, origin: Receiver<i64> },
+    /// Start recording to `path`. Answers once the window, the first frame,
+    /// the game audio and the encoder are all up, and then waits on `origin`
+    /// for the QPC instant that is the file's t = 0.
+    Start { path: PathBuf, reply: Sender<Result<Started, String>>, origin: Receiver<i64> },
     /// Stop and finalize. Answers `Ok(None)` for a clean stop, `Ok(Some(_))`
     /// for a recording that ended early but was finalized, and `Err` when the
     /// finalize itself failed.
@@ -66,9 +92,9 @@ pub enum Command {
 /// is dropped. Spawned by `OwnRecorder`; everything it creates is dropped
 /// here, on this thread, before COM is uninitialised.
 pub fn run(commands: Receiver<Command>) {
-    // MTA for the thread's life: WGC's free-threaded pool, Media Foundation
-    // and (from #237) WASAPI all accept it, and this thread has no window to
-    // need an STA.
+    // MTA for the thread's life: WGC's free-threaded pool and Media
+    // Foundation both accept it, and this thread has no window to need an
+    // STA. WASAPI runs on each audio source's own thread, also MTA.
     // SAFETY: once, on this thread, before any COM use; paired below.
     let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok();
     let mut session = Session { warm: None, mf_started: false, ended: None };
@@ -91,7 +117,10 @@ pub fn run(commands: Receiver<Command>) {
 fn refuse_all(commands: &Receiver<Command>, why: &str) {
     while let Ok(command) = commands.recv() {
         match command {
-            Command::Prepare(reply) | Command::Start { reply, .. } => {
+            Command::Prepare(reply) => {
+                let _ = reply.send(Err(why.to_string()));
+            }
+            Command::Start { reply, .. } => {
                 let _ = reply.send(Err(why.to_string()));
             }
             Command::Stop(reply) => {
@@ -200,7 +229,7 @@ impl Session {
     fn record(
         &mut self,
         path: PathBuf,
-        reply: Sender<Result<Status, String>>,
+        reply: Sender<Result<Started, String>>,
         origin: Receiver<i64>,
         commands: &Receiver<Command>,
     ) -> bool {
@@ -218,8 +247,11 @@ impl Session {
                 return false;
             }
         };
-        let status = recording.status.clone();
-        if reply.send(Ok(status)).is_err() {
+        let started = Started {
+            status: recording.status.clone(),
+            game_audio: recording.audio.is_some(),
+        };
+        if reply.send(Ok(started)).is_err() {
             // `start`'s caller has gone. Nothing will ever stop this, so do
             // not begin.
             recording.abandon(&path);
@@ -289,6 +321,69 @@ fn offered(encoders: &[select::Encoder]) -> String {
     names.join("; ")
 }
 
+/// The game's audio while a recording runs: the source thread, the packets
+/// it sends, and the feed that places them once the origin is known.
+struct GameAudio {
+    /// `None` once stopped. Dropping a `GameAudio` stops it, so every early
+    /// return in `Recording::begin` ends the thread.
+    source: Option<audio::Source>,
+    packets: Receiver<feed::Packet>,
+    /// Made when the origin arrives; until then packets wait in the channel.
+    feed: Option<Feed>,
+    /// Set once the source thread has been seen to end mid-recording, so
+    /// that is logged once. The track carries on as held silence.
+    ended: bool,
+}
+
+impl GameAudio {
+    /// Resolves the game's process tree from the window being recorded and
+    /// starts process loopback on it.
+    fn start(hwnd: HWND) -> Result<GameAudio, String> {
+        let procs = process::snapshot()?;
+        let root = root::game_root(&procs, process::window_owner(hwnd))?;
+        info!("recorder", "own backend: game audio from PID {}, {}", root.pid, root.how);
+        let (tx, packets) = channel();
+        let source = audio::start_game(root.pid, tx)?;
+        Ok(GameAudio { source: Some(source), packets, feed: None, ended: false })
+    }
+
+    /// Moves every packet that has arrived into the feed.
+    fn receive(&mut self) {
+        let Some(feed) = self.feed.as_mut() else {
+            return;
+        };
+        loop {
+            match self.packets.try_recv() {
+                Ok(packet) => feed.push(packet),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    if !self.ended {
+                        self.ended = true;
+                        warn!(
+                            "recorder",
+                            "own backend: the game audio capture stopped before the recording \
+                             did; the rest of the track is silence"
+                        );
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    fn stop_source(&mut self) -> Option<Result<audio::Summary, String>> {
+        self.source.take().map(audio::Source::stop)
+    }
+}
+
+impl Drop for GameAudio {
+    fn drop(&mut self) {
+        if let Some(Err(e)) = self.stop_source() {
+            warn!("recorder", "own backend: the game audio capture ended with an error: {e}");
+        }
+    }
+}
+
 /// One recording in flight.
 struct Recording {
     capture: Capture,
@@ -301,6 +396,10 @@ struct Recording {
     latest: usize,
     next_slot: usize,
     status: Status,
+    /// The game's audio, or `None` for a video-only recording.
+    audio: Option<GameAudio>,
+    /// Ticks written so far: tick `ticks` is the next one due.
+    ticks: u64,
 }
 
 impl Recording {
@@ -359,9 +458,23 @@ impl Recording {
         );
         drop(first);
 
+        // The game's audio, from the process that owns the window being
+        // recorded. Started before the sink, because the sink's audio stream
+        // exists only if this did; a failure costs the audio track, not the
+        // recording, and the reported layout says which it was.
+        let audio = match GameAudio::start(hwnd) {
+            Ok(audio) => Some(audio),
+            Err(e) => {
+                warn!("recorder", "own backend: no game audio, recording video only: {e}");
+                None
+            }
+        };
+
         let hardware = matches!(warm.choice, Choice::Hardware { .. });
-        let sink = Sink::create(path, width, height, FPS, &warm.device.device, hardware)
-            .and_then(|sink| sink.begin().map(|()| sink));
+        let audio_rate = audio.as_ref().map(|_| audio::SAMPLE_RATE);
+        let sink =
+            Sink::create(path, width, height, FPS, &warm.device.device, hardware, audio_rate)
+                .and_then(|sink| sink.begin().map(|()| sink));
         let sink = match sink {
             Ok(sink) => sink,
             Err(e) => {
@@ -385,9 +498,17 @@ impl Recording {
         }
         info!(
             "recorder",
-            "own backend: {width}x{height} at {FPS} fps, H.264 {} Mbps CBR, GOP {}, into {}",
+            "own backend: {width}x{height} at {FPS} fps, H.264 {} Mbps CBR, GOP {}, {}, into {}",
             encode::VIDEO_BITRATE / 1_000_000,
             encode::GOP_FRAMES,
+            if sink.has_audio() {
+                format!(
+                    "AAC {} kbps (game, process loopback)",
+                    encode::AAC_BYTES_PER_SECOND * 8 / 1000
+                )
+            } else {
+                "no audio".to_string()
+            },
             path.display()
         );
         Ok(Recording {
@@ -399,6 +520,8 @@ impl Recording {
             latest: 0,
             next_slot: 1,
             status,
+            audio,
+            ticks: 0,
         })
     }
 
@@ -406,12 +529,14 @@ impl Recording {
     /// that is due on the 60 fps grid laid from `origin`. A tick with no new
     /// frame repeats the last one, which is what holds the file at CFR.
     fn run(&mut self, device: &Device, origin: i64, commands: &Receiver<Command>) -> Ended {
-        let mut k: u64 = 0;
+        if let Some(audio) = self.audio.as_mut() {
+            audio.feed = Some(Feed::new(audio::SAMPLE_RATE, origin));
+        }
         loop {
             match commands.try_recv() {
                 Ok(Command::Stop(reply)) => {
                     // Whatever is due up to now goes in before the finalize.
-                    if let Err(e) = self.write_due(origin, &mut k) {
+                    if let Err(e) = self.write_due(origin) {
                         warn!("recorder", "own backend: the last ticks were not written: {e}");
                     }
                     return Ended::Stop(reply);
@@ -431,11 +556,31 @@ impl Recording {
             if let Err(e) = self.take_frame(device) {
                 return Ended::Problem(e);
             }
-            if let Err(e) = self.write_due(origin, &mut k) {
-                return Ended::Problem(format!("{e} (at tick {k})"));
+            if let Err(e) = self.write_due(origin) {
+                return Ended::Problem(format!("{e} (at tick {})", self.ticks));
+            }
+            if let Err(e) = self.write_audio() {
+                return Ended::Problem(format!("{e} (audio, at tick {})", self.ticks));
             }
             std::thread::sleep(Duration::from_millis(1));
         }
+    }
+
+    /// Writes the game audio that has arrived, as far as the video has been
+    /// written, and holds a quiet source with silence a margin behind it.
+    fn write_audio(&mut self) -> Result<(), String> {
+        let (Some(sink), Some(audio)) = (&self.sink, self.audio.as_mut()) else {
+            return Ok(());
+        };
+        audio.receive();
+        let Some(feed) = audio.feed.as_mut() else {
+            return Ok(());
+        };
+        let video_end = clock::tick_time(self.ticks, FPS);
+        let mut write = |pcm: &[i16], position: u64| sink.write_audio(pcm, position);
+        feed.write_ready(video_end, &mut write)?;
+        feed.hold(video_end, HOLD_MARGIN, &mut write)?;
+        Ok(())
     }
 
     /// Copies WGC's newest frame, if there is one, into a free slot.
@@ -459,33 +604,121 @@ impl Recording {
         Ok(())
     }
 
-    /// Writes every tick from `k` up to the one due now.
-    fn write_due(&self, origin: i64, k: &mut u64) -> Result<(), String> {
+    /// Writes every tick from the next one up to the one due now.
+    fn write_due(&mut self, origin: i64) -> Result<(), String> {
         let Some(sink) = &self.sink else {
             return Ok(());
         };
         let now = device::qpc_hns() - origin;
         if let Some(due) = clock::ticks_due(now, FPS) {
-            while *k <= due {
-                let t = clock::tick_time(*k, FPS);
-                let d = clock::tick_time(*k + 1, FPS) - t;
+            while self.ticks <= due {
+                let t = clock::tick_time(self.ticks, FPS);
+                let d = clock::tick_time(self.ticks + 1, FPS) - t;
                 sink.write(&self.slots[self.latest], t, d)?;
-                *k += 1;
+                self.ticks += 1;
             }
         }
         Ok(())
     }
 
-    /// Finalizes the file. The capture stops first, then the sink drains,
-    /// and only then do the slots go: every sample written from a slot has to
-    /// be released before its callback is.
+    /// Finalizes the file. The capture stops first; the audio is written up
+    /// to the last video tick and padded to it exactly, as the spike did, so
+    /// any A/V offset in the file was added downstream of here; then the sink
+    /// drains, and only then do the slots go: every sample written from a
+    /// slot has to be released before its callback is.
     fn finish(mut self) -> Result<(), String> {
         drop(self.capture);
+        let end = clock::tick_time(self.ticks, FPS);
+        if let Some(audio) = self.audio.take() {
+            finish_audio(self.sink.as_ref(), audio, end);
+        }
         let result = self.sink.take().map_or(Ok(()), Sink::finalize);
         drop(self.slots);
         result
     }
 
+}
+
+/// Ends the game audio track at `end`, the end of the last video tick: waits
+/// briefly for the packets still in flight, stops the source, writes what
+/// came, pads to `end`, and logs what the clocks did. Errors are logged
+/// rather than returned, because the file is finalized either way.
+fn finish_audio(sink: Option<&Sink>, mut audio: GameAudio, end: i64) {
+    if audio.feed.is_some() {
+        let deadline = Instant::now() + TAIL_WAIT;
+        loop {
+            audio.receive();
+            let reached = audio.feed.as_ref().is_some_and(|f| f.reaches(end));
+            if reached || audio.ended || Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    let summary = audio.stop_source();
+    // Stopped on purpose: the channel closing now is not the source dying.
+    audio.ended = true;
+    audio.receive();
+
+    let (Some(sink), Some(feed)) = (sink, audio.feed.as_mut()) else {
+        return;
+    };
+    let mut write = |pcm: &[i16], position: u64| sink.write_audio(pcm, position);
+    let padded = match feed.finish(end, &mut write) {
+        Ok((pad, _)) => pad,
+        Err(e) => {
+            warn!("recorder", "own backend: the end of the game audio was not written: {e}");
+            0
+        }
+    };
+
+    let a = feed.aligner();
+    let s = &a.stats;
+    let rate = a.rate();
+    let ms = |samples: i64| clock::samples_to_ms(samples, rate);
+    let clock_line = match a.clock() {
+        AudioClock::Qpc => format!(
+            "clock qpc: raw drift {} ({:.2} ms at the end, worst {:.2} ms); written residual worst \
+             {:.2} ms; slips {} dropped, {} repeated",
+            a.raw_ppm().map_or_else(|| "not measured".to_string(), |ppm| format!("{ppm:+.2} ppm")),
+            ms(s.raw_drift_last),
+            ms(s.raw_drift_worst),
+            ms(s.residual_worst),
+            s.slips_dropped,
+            s.slips_repeated
+        ),
+        AudioClock::Device => {
+            "clock device: stamped from the sample count, so raw drift is not measured".to_string()
+        }
+    };
+    let source_line = match summary {
+        Some(Ok(sum)) => format!(
+            "{} packets, {} flagged silent, {} discontinuities, {} stamps substituted, {} \
+             re-anchors",
+            sum.packets, sum.silent_packets, sum.discontinuities, sum.substituted, sum.reanchors
+        ),
+        Some(Err(e)) => format!("the capture ended with an error: {e}"),
+        None => "the capture had already stopped".to_string(),
+    };
+    info!(
+        "recorder",
+        "own backend: game audio {clock_line}; gaps {} ({:.1} ms), overlaps {} ({:.1} ms), held \
+         {} times ({:.1} ms); lead silence {:.1} ms, lead dropped {:.1} ms; padded {:.1} ms at the \
+         end; {:.3} s written; {source_line}",
+        s.gaps,
+        ms(s.gap_samples as i64),
+        s.overlaps,
+        ms(s.overlap_samples as i64),
+        s.holds,
+        ms(s.held_samples as i64),
+        ms(s.lead_silence as i64),
+        ms(s.lead_dropped as i64),
+        ms(padded as i64),
+        a.written() as f64 / f64::from(rate)
+    );
+}
+
+impl Recording {
     /// A recording that never got its origin: nothing was written but the
     /// header, so the file goes too.
     fn abandon(self, path: &std::path::Path) {

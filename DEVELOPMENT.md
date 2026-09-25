@@ -74,7 +74,7 @@ trait Recorder {
 Backends:
 - `LibObsRecorder`: Windows, the real one.
 - `StubRecorder`: every non-Windows build. It sleeps, then copies a fixture MP4 into place. Keeps the entire app layer developable and testable without Windows. Nothing ships it; since the macOS bundle was dropped it exists purely for the dev loop and `cargo test` (§9).
-- `OwnRecorder` (Option B, `recorder/own/`): being built through WS1.6, and **constructible since #236** on Windows build 20348 or newer. It records the game window's video through Media Foundation's sink writer, with no audio until #237, and only a devtools build can select it until the default flips (#243). Its pure core (the tick grid, the audio aligner, encoder ranking, the loaded-encoder check) is compiled and tested on every platform. Which of it and libobs the daemon builds is the `capture_backend` setting, and what happens when the chosen one cannot be built is §16's "The switch, and when it applies".
+- `OwnRecorder` (Option B, `recorder/own/`): being built through WS1.6, and **constructible since #236** on Windows build 20348 or newer. It records the game window's video and, since #237, the game's own audio by process loopback, through Media Foundation's sink writer: the Game audio preset, and only that one until #238 and #239. Only a devtools build can select it until the default flips (#243). Its pure core (the tick grid, the audio aligner and feed, the process-tree root, encoder ranking, the loaded-encoder check) is compiled and tested on every platform. Which of it and libobs the daemon builds is the `capture_backend` setting, and what happens when the chosen one cannot be built is §16's "The switch, and when it applies".
 
 **Decision: the own backend holds no COM object; a session thread does.**
 `OwnRecorder` is a channel sender and a join handle. Every D3D11, Media
@@ -207,7 +207,14 @@ Implemented in `src-tauri/src/recorder/`: `Recorder`, `RecordConfig`, `RecorderE
   In practice it excludes every Windows 10 client (the last is 19045) and
   admits Windows 11. OBS enables its process-output source from 19041 on the
   grounds that it "seems to work earlier"; that is unverified here, and
-  lowering the floor is a measurement on a Windows 10 box, not an edit.
+  lowering the floor is a measurement on a Windows 10 box, not an edit. The
+  owner's decision on #237 is to aim for 19041 if a Windows 10 22H2 (19045)
+  run passes. #237 sets that run up: the procedure is
+  [`spikes/p0c-audio/README.md`](spikes/p0c-audio/README.md#windows-10-floor-test-237),
+  and a **devtools** build started with `NINJA_OWN_IGNORE_OS_FLOOR=1` offers
+  the own backend below the floor, logging a warning each time, so the backend
+  itself can be tried there too (`select::floor_ignored`; a release build never
+  reads the variable). Neither moves `MIN_BUILD`: only the run's result does.
 - 1080p60, H.264, ~8 Mbps CBR as defaults; resolution follows the game window.
 - H.264 + AAC specifically: WebView2's `<video>` decodes it natively, which is what makes the review player trivial (§5).
 - Audio is one AAC track per captured source at 160 kbps, track 0 being the combined mix (§2.5). MP4 rather than MKV even though OBS recommends MKV for multi-track: §2.2's crash-safety rule is already satisfied by fragmented MP4, and MKV would cost the review player its native `<video>` playback for no gain.
@@ -339,6 +346,39 @@ the encoders are driven directly (#239).
   MSE stream; `mp4-atom` (MIT/Apache) and `shiguredo_mp4`
   (Apache-2.0) encode boxes or segments but leave the muxer, the `mfra` and
   repair to the caller, which is most of the work.
+
+#### The own backend captures each source itself
+
+The libobs backend hands libobs a source object per `AudioSourceKind` and lets
+its mixer place them. The own backend (Option B) has no mixer to hand them to,
+so it **captures every source itself, one thread per source**, and places each
+source's packets on the video's clock with its own `clock::Aligner`
+(`own::feed`). #237 builds the first source, the game, which is all the
+**Game** preset needs:
+
+- **Process loopback, include mode, on the game's process tree.** The same
+  Windows API the libobs fork's process-output source calls, so nothing about
+  isolation changes between the backends (§16). The capture asks for 48 kHz
+  stereo float, event-driven, and goes to one AAC track at 160 kbps (§2.4).
+- **The root comes from `own::root`, not from a guess.** A wrong root records
+  silence, not an error, so the choice is a pure function of a process
+  snapshot, unit-tested against the tree §16 measured. `game_root` prefers the
+  process that owns the game window being recorded, cross-checked against the
+  name `League of Legends.exe`, and falls back to the name alone (the newest,
+  if a stale game is still running). `application_root` is the top of an
+  application's own tree, which is what Discord needs in #238: its audio plays
+  in a helper process under the one the user started. Both keep the spike's
+  creation-time check, so a parent PID Windows has since reused is not taken
+  for a parent.
+- **A capture that cannot start costs the track, not the recording.** If the
+  root cannot be found or the activation is refused, the file is video only,
+  `daemon.log` says why, and `stop` reports no audio tracks, so the library
+  row describes the file that exists. That is the trade the libobs fork makes
+  too ("lose per-app audio, not all recording").
+- **Every other preset is refused until #238 and #239**, with the reason, by
+  `own::select::audio_layout`. The sink writer holds one audio stream, and a
+  file that quietly left out a source the preset names would be the bug this
+  section warns about.
 
 ---
 
@@ -2674,7 +2714,8 @@ What the run leaves for WS1.6, none of which reopens the gate:
 - **The activation `PROPVARIANT` must not be dropped.** windows-rs 0.62 gives
   it a `Drop` that calls `PropVariantClear`, which frees a `VT_BLOB` pointing
   at the stack. The spike crashed with 0xC0000374 until #218 wrapped it in
-  `ManuallyDrop`, and WS1.6's port of that code needs the same.
+  `ManuallyDrop`, and WS1.6's port of that code needs the same. #237's port,
+  `own/win/audio/loopback.rs`, keeps it and the comment.
 - **WGC's yellow border has to be turned off**, as libobs turns it off; the
   spike asked for it, and #219 tracks the change. `OwnRecorder` does it from
   #236 (`own/win/capture.rs::hide_border`) and logs which way it went;
@@ -2692,6 +2733,51 @@ What the run leaves for WS1.6, none of which reopens the gate:
 - **The resampler has little to correct.** Raw drift was −0.2 ppm, at worst
   −0.27 ms over ten minutes, and the spike's single-sample slips held the
   written figure at 0.016 frames.
+
+### The QPC question, and how a recording answers it
+
+The drift figures above came from a render endpoint in loopback, whose
+packets carry a QPC stamp (`GetBuffer`'s `pu64QPCPosition`). `p0c-audio`, the
+process-loopback spike, never asked for one, so **whether process-loopback
+packets carry real QPC stamps was unproven** when #237 put that capture on the
+shipping path, and it cannot be settled on a Linux box or a CI runner.
+
+So it is not settled in advance. **Each recording answers it for itself, from
+its first packet**, and says which way it went:
+
+- The capture asks `GetBuffer` for both positions. `clock::check_stamp` judges
+  the QPC one against the counter read the moment `GetBuffer` returned: zero is
+  no stamp; one in the future, or more than a second old, is not this
+  process's counter; anything else is QPC. A packet the engine itself flags
+  `AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR` (WASAPI documents it for the first
+  packet after a start) is placed from its arrival and does not get to
+  decide: the first unflagged packet does.
+- **A real stamp puts the source on QPC**, the video's clock, and the aligner
+  holds it there by slipping single frames, as the spike did. One bad stamp
+  later on costs that packet's placement, stamped from its arrival instead,
+  and is counted, not the recording's clock.
+- **Otherwise the source goes to device time** for the rest of the recording
+  (`clock::DeviceTimeline`): anchored once, at the first packet's arrival less
+  its own length, and then stamped from the sample count. Nothing is slipped,
+  so the file carries the device's raw drift, which for the endpoint measured
+  above was −0.2 ppm, a quarter of a millisecond over ten minutes. A packet
+  arriving more than 100 ms after the count says it should is a stream that
+  stopped, not drift: the timeline re-anchors there and the gap is silence.
+- `daemon.log` has one line at the first packet, `game audio clock qpc` or
+  `game audio clock device` with both raw positions, and one at stop with the
+  raw ppm (QPC mode only, since device mode has nothing to measure against),
+  the slips, the gaps and the holds. Those two lines are what the box reads
+  ([windows-verification.md §11.2](docs/windows-verification.md#112-game-audio-by-process-loopback-237)),
+  and what this paragraph is updated from once it has.
+
+**One more difference from the spike's endpoint: a silent target may send
+nothing.** A render endpoint in loopback delivers continuously once something
+keeps it running, which is what the spike's keep-alive stream did; a
+process-loopback stream is not guaranteed to be fed while the game is quiet.
+The feed therefore holds the track with silence half a second behind the
+video when no packet is waiting (`feed::Feed::hold`), so the muxer is never
+left waiting on the audio, and a packet that resumes after it lands where its
+stamp says, with the gap filled.
 
 ### The switch, and when it applies
 
@@ -2712,8 +2798,9 @@ every other key in that table ([data-model.md](docs/data-model.md#what-lives-in-
 Option B. A default the build cannot construct would refuse every game for
 everyone who never opened Settings, and before #236 that is what `own` would
 have done. Since #236 `own` is constructible on Windows build 20348 or newer,
-but it records video only, so the flip waits until it carries audio (#237,
-#238) and every track (#239) and has been measured against libobs. The flip
+and since #237 it records the Game preset's audio, but the flip waits until it
+carries every source (#238) and every track (#239) and has been measured
+against libobs. The flip
 is a one-line change to `CaptureBackend`'s `#[default]`, pinned by a test so
 that it cannot happen by accident. It moves only the users who never chose.
 Someone who picked libobs explicitly has a stored row and keeps it.
@@ -2721,8 +2808,8 @@ Someone who picked libobs explicitly has a stored row and keeps it.
 **The Settings row is devtools-only until WS1.6 flips the default, and the
 flip (#243) un-hides it.** Until #236 the row could offer one backend, with
 the other disabled beside it, and a control that changes nothing is not worth
-a release user's attention; since #236 it offers a video-only backend, which
-is not worth it either. So the
+a release user's attention; since #236 it offers a backend that records
+video, and since #237 one preset's audio, which is not worth it either. So the
 Advanced group, which holds only this row, renders only where the `dev_*`
 commands exist: the check the dev portal button already makes
 (`hasDevCommands`), rather than a second devtools flag. Everything behind the
@@ -2790,8 +2877,9 @@ does not own the recorder, like `quit_recorder`.
 that switching in the client's lobby leaves one worker process rather than two,
 and that the next game records on the backend the row says is in use. Since
 #236 a devtools build can switch to a real own backend, so that row can be
-checked both ways; the comparison WS1.7's exit criterion asks for, both
-backends recording the same game with audio, waits on #237.
+checked both ways. The comparison WS1.7's exit criterion asks for, both
+backends recording the same game with audio, can be run on the Game preset
+since #237; the other presets wait on #238 and #239.
 
 ---
 

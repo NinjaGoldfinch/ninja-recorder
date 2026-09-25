@@ -79,12 +79,14 @@ flowchart TB
 | `recorder/backend.rs` | The `capture_backend` setting, and the pure choice of which backend to build from it | `CaptureBackend`, `choose`, `construct`, `Backends` |
 | `recorder/libobs/` | Windows capture backend (WGC + hardware encode) | `LibObsRecorder` |
 | `recorder/window.rs` | Finding the League game window and its client size, for both Windows backends | `find_window`, `find_by_class`, `client_size` |
-| `recorder/own/` | Option B, the target backend (WGC → D3D11 → Media Foundation), being built through WS1.6. Constructible since #236 on Windows build 20348+: video only, through Media Foundation's sink writer, selected only by a devtools build until #243 | `OwnRecorder` |
-| `recorder/own/clock.rs` | The video tick grid on QPC, and placing audio packets on it: drift measured, corrected by slipping frames, or trusted from the device count when a source has no QPC stamps | `tick_time`, `ticks_due`, `Aligner` |
+| `recorder/own/` | Option B, the target backend (WGC → D3D11 → Media Foundation), being built through WS1.6. Constructible since #236 on Windows build 20348+: the game window's video and, since #237, the game's audio by process loopback, through Media Foundation's sink writer. The Game audio preset only until #238/#239; selected only by a devtools build until #243 | `OwnRecorder` |
+| `recorder/own/clock.rs` | The video tick grid on QPC, and placing audio packets on it: drift measured, corrected by slipping frames, or trusted from the device count when a source has no QPC stamps. Which of the two a source gets is decided from its first packet's stamp | `tick_time`, `ticks_due`, `Aligner`, `check_stamp`, `Stamper`, `DeviceTimeline` |
+| `recorder/own/feed.rs` | One audio source's packets through its `Aligner` to the encoder: never past the video, held with silence while the source is quiet, padded to the last tick at stop | `Feed`, `Packet` |
 | `recorder/own/pcm.rs` | Endpoint sample formats to stereo i16 for an encoder, or f32 for the mixer | `to_stereo_i16`, `to_stereo_f32`, `f32_to_i16` |
-| `recorder/own/select.rs` | Which H.264 encoder: hardware by adapter vendor (NVIDIA → AMD → Intel), the software MFT only as a marked fallback; and the Windows build floor (20348) | `rank`, `Choice`, `availability` |
+| `recorder/own/root.rs` | Which process tree a process-loopback capture targets, from a process snapshot: the game (the window's owner, checked against `League of Legends.exe`), or the top of an application's tree (Discord, #238). Reused parent PIDs are caught by creation time | `game_root`, `application_root` |
+| `recorder/own/select.rs` | Which H.264 encoder: hardware by adapter vendor (NVIDIA → AMD → Intel), the software MFT only as a marked fallback; the Windows build floor (20348) and its devtools-only override; which audio presets the backend records yet | `rank`, `Choice`, `availability`, `floor_ignored`, `audio_layout` |
 | `recorder/own/status.rs` | The even frame size, whether the encoder Media Foundation loaded is the one `rank` chose, and the backend's name (`own (ready: …)`, `own (software encoding: …)`, `own (unavailable: …)`) | `even_size`, `check_loaded`, `Status` |
-| `recorder/own/win/` | Everything that calls Windows, and the only part of `own/` gated to it: the adapters and D3D11 device, the WGC capture with its border off, the sink writer (H.264 8 Mbps CBR, GOP 120, fragmented MP4), and the session thread that owns them all | `OwnRecorder`, `session::run` |
+| `recorder/own/win/` | Everything that calls Windows, and the only part of `own/` gated to it: the adapters and D3D11 device, the WGC capture with its border off, the process table, the game-audio thread (process loopback, include mode, 48 kHz stereo float), the sink writer (H.264 8 Mbps CBR, GOP 120, AAC 160 kbps, fragmented MP4), and the session thread that owns them | `OwnRecorder`, `session::run`, `audio::start_game` |
 | `recorder/stub.rs` | Non-Windows dev backend that copies a fixture MP4 | `StubRecorder` |
 | `recorder/remux.rs` | The faststart remux, a `-c copy` through `ffmpeg_command` that moves the index to the front so a fragmented file scrubs. Shared by both Windows backends' `stop` and startup recovery; the argument list is pure | `faststart_args`, `remux_faststart` |
 | `mp4/read.rs` | Reading an MP4's top-level boxes directly, no ffmpeg: fragmented or not, how many whole fragments, how many audio tracks, and what a kill cut short | `summarize`, `Summary` |
@@ -154,8 +156,9 @@ behind a three-method trait and nothing above it knows libobs exists.
 flowchart TB
     SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release · collect_output"}
     T -->|"libobs, #[cfg(windows)]"| L["LibObsRecorder<br/><small>WGC window capture,<br/>NVENC/AMF/QSV H.264,<br/>one AAC track per audio source,<br/>fragmented MP4 + faststart remux</small>"]
-    T -->|"own, #[cfg(windows)], build 20348+"| O["OwnRecorder<br/><small>Option B: WGC → D3D11 →<br/>Media Foundation sink writer,<br/>video only until #237,<br/>fragmented MP4 + faststart remux</small>"]
+    T -->|"own, #[cfg(windows)], build 20348+"| O["OwnRecorder<br/><small>Option B: WGC → D3D11 →<br/>Media Foundation sink writer,<br/>Game audio preset only until #238,<br/>fragmented MP4 + faststart remux</small>"]
     O -.->|"channel"| SES["session thread<br/><small>owns every COM object:<br/>device, WGC, sink writer</small>"]
+    AUD["game audio thread<br/><small>process loopback on<br/>root::game_root's tree</small>"] -.->|"stamped packets"| SES
     T -->|"libobs, everything else"| S["StubRecorder<br/><small>copies fixtures/sample.mp4</small>"]
     T -->|"chosen but not buildable"| F["FailedRecorder<br/><small>refuses every start,<br/>with the reason</small>"]
     style T fill:#ede7f6,stroke:#5e35b1
@@ -178,32 +181,54 @@ The own backend keeps the same shape in one process. `OwnRecorder` holds a
 channel and a join handle and nothing else; the session thread it spawns owns
 the D3D11 device, the WGC capture and the sink writer, so the recorder stays
 `Send` under the supervisor's mutex. `prepare` warms that thread (COM, Media
-Foundation, `select::rank`, the device), `start` waits at most about three
-seconds for the game window's first frame and then takes the file's t = 0 as
-its last act, `stop` finalizes and remuxes, and `release` ends the thread.
+Foundation, `select::rank`, the device), `start` refuses any audio preset but
+Game (`select::audio_layout`), waits at most about three seconds for the game
+window's first frame, starts the game's audio, and then takes the file's
+t = 0 as its last act, `stop` finalizes and remuxes, and `release` ends the
+thread.
+
+The game's audio has a thread of its own, started for each recording. It
+finds the process tree to capture from the window being recorded
+(`root::game_root` over a Toolhelp snapshot), captures it by process loopback,
+stamps each packet (`clock::Stamper`: QPC if the first packet's stamp is real,
+the sample count if not, logged either way), and sends it to the session
+thread, whose `feed::Feed` writes it into the sink writer's AAC stream no
+further than the video has got. A capture that cannot start leaves the
+recording video only, and `stop` reports no audio track
+([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#the-own-backend-captures-each-source-itself),
+[§16](../DEVELOPMENT.md#the-qpc-question-and-how-a-recording-answers-it)).
 
 ```mermaid
 sequenceDiagram
     participant S as Supervisor
     participant R as OwnRecorder
     participant T as session thread
+    participant A as game audio thread
     S->>R: prepare()
     R->>T: Prepare
     T-->>R: status (ranked encoder)
     S->>R: start(config)
+    Note over R: preset must be Game
     R->>T: Start { path }
-    Note over T: find window, WGC first frame,<br/>sink writer up, loaded encoder checked
-    T-->>R: status (loaded encoder)
+    Note over T: find window, WGC first frame
+    T->>A: start (root::game_root of the window's owner)
+    A-->>T: process loopback running
+    Note over T: sink writer up (H.264 + AAC),<br/>loaded encoder checked
+    T-->>R: status (loaded encoder), game audio on
     R->>T: origin = QPC now (last act of start)
     R-->>S: Ok, record_started_at stamped
     loop every tick due on the 60 fps grid
         T->>T: newest WGC frame → slot → WriteSample
+        A-->>T: packets, stamped qpc or device
+        T->>T: Feed: packets up to the last tick → AAC
     end
     S->>R: stop()
     R->>T: Stop
+    T->>A: stop (after the last tick's packets, 200 ms at most)
+    Note over T: audio padded to the last tick,<br/>clock line logged, finalized
     T-->>R: finalized
-    R->>R: faststart remux
-    R-->>S: RecordingOutput (no audio tracks)
+    R->>R: faststart remux (1 audio track)
+    R-->>S: RecordingOutput (Game track, or none)
 ```
 
 `collect_output` is the third default no-op, and the supervisor calls it every
@@ -231,7 +256,7 @@ is that it does not record.
 ```mermaid
 flowchart LR
     KV[("settings_kv<br/>capture_backend")] --> C{"backend::choose<br/><small>pure</small>"}
-    OPT["DaemonBackends::options<br/><small>libobs: worker staged?<br/>own: Windows build 20348+?</small>"] --> C
+    OPT["DaemonBackends::options<br/><small>libobs: worker staged?<br/>own: Windows build 20348+?<br/>(devtools: floor override)</small>"] --> C
     C -->|"buildable"| B["DaemonBackends::build"]
     C -->|"not buildable: the reason"| F["FailedRecorder(reason)"]
     B --> BOX["the recorder box<br/><small>one Arc · Mutex · Box dyn Recorder,<br/>shared by the supervisor and Ctx</small>"]
@@ -251,7 +276,10 @@ flowchart LR
   `select::availability` passes (Windows build 20348 or newer) and builds an
   `OwnRecorder` for it; off Windows it is listed as unavailable, with the
   reason. Whether the machine has an encoder is the backend's own answer, in
-  its name, once `prepare` has run.
+  its name, once `prepare` has run. A **devtools** build started with
+  `NINJA_OWN_IGNORE_OS_FLOOR=1` offers `own` below the floor too, with a
+  warning in `daemon.log`, for #237's Windows 10 test; a release build never
+  reads the variable.
 - **A chosen backend that cannot be built is refused, never replaced by the
   other one.** The UI shows it disabled with the daemon's reason, so in
   practice this is only reached by a row written some other way.

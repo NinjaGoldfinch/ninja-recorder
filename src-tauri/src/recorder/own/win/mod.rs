@@ -1,32 +1,39 @@
 //! Everything in the own backend that calls Windows: WGC capture, the D3D11
-//! texture path, and Media Foundation encoding. WASAPI audio arrives with
-//! #237. Only this module is gated to Windows; the decisions it acts on live
-//! beside it in `clock`, `select` and `status`, which compile and are tested
-//! everywhere.
+//! texture path, process-loopback audio, and Media Foundation encoding. Only
+//! this module is gated to Windows; the decisions it acts on live beside it
+//! in `clock`, `feed`, `root`, `select` and `status`, which compile and are
+//! tested everywhere.
 //!
 //! - `device` — the Windows build, the adapters, the D3D11 device, QPC.
 //! - `capture` — the WGC capture of the game window, and the slots its
 //!   frames are copied into.
-//! - `encode` — the H.264 encoders on offer, and the sink writer.
+//! - `process` — the process table and the game window's owner, which
+//!   `root` chooses the audio's process tree from.
+//! - `audio` — the game's audio by process loopback, on its own thread.
+//! - `encode` — the H.264 encoders on offer, and the sink writer with its
+//!   AAC stream.
 //! - `session` — the thread that owns all of the above.
 //!
 //! [`OwnRecorder`] is the `Recorder` the daemon builds. It owns no COM object:
 //! it drives the session thread over a channel.
 
+mod audio;
 mod capture;
 mod device;
 mod encode;
+mod process;
 mod session;
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Sender, channel};
 use std::thread::JoinHandle;
 
+use super::select;
 use super::status::Status;
 use crate::recorder::audio::AudioLayout;
 use crate::recorder::{RecordConfig, Recorder, RecorderError, RecordingOutput};
 use crate::{info, warn};
-use session::Command;
+use session::{Command, Started};
 
 pub use device::windows_build;
 
@@ -40,15 +47,27 @@ pub use device::windows_build;
 /// for an apartment-bound COM pointer. The same boundary becomes the capture
 /// worker's pipe in WS1.6.9 (#241).
 ///
-/// Video only until #237, reachable only from a devtools build that selects
-/// it (DEVELOPMENT.md §16, "The switch, and when it applies").
+/// The Game audio preset only until #238 and #239, and reachable only from a
+/// devtools build that selects it (DEVELOPMENT.md §16, "The switch, and when
+/// it applies").
 pub struct OwnRecorder {
     session: Option<SessionThread>,
     status: Status,
-    /// The file being written, while recording.
-    active: Option<PathBuf>,
+    /// The recording in flight.
+    active: Option<Active>,
     /// For the faststart remux on stop; `None` skips it, as for libobs.
     ffmpeg_path: Option<PathBuf>,
+}
+
+/// What `stop` reports, fixed when the recording starts: the file, and the
+/// audio layout that made it into it.
+struct Active {
+    path: PathBuf,
+    /// The preset's layout if the game's audio track exists, or no tracks if
+    /// process loopback could not start. The track exists from `start` to
+    /// the finalize either way: a source that dies mid-recording leaves it
+    /// padded with silence, not missing.
+    audio: AudioLayout,
 }
 
 struct SessionThread {
@@ -119,9 +138,26 @@ impl Recorder for OwnRecorder {
     /// supervisor places against `record_started_at` lands where it
     /// happened, with no offset for this backend. Move any work after the
     /// origin read and that stops being true.
+    ///
+    /// The game's audio is started inside that wait, before the origin, so
+    /// its first packets are already flowing when tick 0 is taken; the ones
+    /// captured before it are dropped by the aligner.
     fn start(&mut self, config: RecordConfig) -> Result<(), RecorderError> {
         if self.active.is_some() {
             return Err(RecorderError::AlreadyRecording);
+        }
+        // Refused before anything comes up: a preset naming a source this
+        // backend cannot capture yet records nothing rather than less.
+        let layout = select::audio_layout(&config.audio).map_err(RecorderError::Backend)?;
+        if let Some(build) = windows_build()
+            && let Some(floor) = select::availability(build)
+        {
+            // Only reachable through the devtools override (daemon/mod.rs).
+            warn!(
+                "recorder",
+                "own backend: RECORDING BELOW THE OS FLOOR because {} is set: {floor}",
+                select::IGNORE_FLOOR_ENV
+            );
         }
         std::fs::create_dir_all(&config.output_dir)?;
         let path = config.expected_output_path();
@@ -132,8 +168,8 @@ impl Recorder for OwnRecorder {
             reply,
             origin: origin_rx,
         })?;
-        let status = match started {
-            Ok(status) => status,
+        let Started { status, game_audio } = match started {
+            Ok(started) => started,
             Err(e) => {
                 if self.status == Status::Idle {
                     self.status = Status::Unavailable { reason: e.clone() };
@@ -144,9 +180,16 @@ impl Recorder for OwnRecorder {
         if let Status::Software { encoder, reason } = &status {
             warn!("recorder", "own backend: software H.264 encoding with {encoder}: {reason}");
         }
-        info!("recorder", "own backend recording: {}", status.backend_name());
+        info!(
+            "recorder",
+            "own backend recording: {}; {}",
+            status.backend_name(),
+            if game_audio { "game audio on track 0" } else { "no audio track" }
+        );
         self.status = status;
-        self.active = Some(path);
+        let audio =
+            if game_audio { layout } else { AudioLayout { sources: Vec::new(), tracks: Vec::new() } };
+        self.active = Some(Active { path, audio });
 
         // The origin, last: see the doc comment above.
         if origin_tx.send(device::qpc_hns()).is_err() {
@@ -159,7 +202,7 @@ impl Recorder for OwnRecorder {
     }
 
     fn stop(&mut self) -> Result<RecordingOutput, RecorderError> {
-        let path = self.active.take().ok_or(RecorderError::NotRecording)?;
+        let Active { path, audio } = self.active.take().ok_or(RecorderError::NotRecording)?;
         match self.ask(Command::Stop)? {
             Ok(None) => {}
             Ok(Some(problem)) => {
@@ -176,14 +219,16 @@ impl Recorder for OwnRecorder {
         // The sink writer's fragmented file has no `mfra`, so the review
         // player cannot scrub it until faststart has rewritten the index; the
         // same step, and the same function, as the libobs backend's stop.
+        // `audio.tracks.len()` sets track 0's default disposition when there
+        // is one.
         if let Some(ffmpeg_path) = &self.ffmpeg_path
-            && let Err(e) = crate::recorder::remux::remux_faststart(ffmpeg_path, &path, 0)
+            && let Err(e) =
+                crate::recorder::remux::remux_faststart(ffmpeg_path, &path, audio.tracks.len())
         {
             warn!("recorder", "faststart remux failed, keeping original (unseekable) file: {e}");
         }
 
-        // No audio until #237: the file has one video track and nothing else.
-        Ok(RecordingOutput { path, audio: AudioLayout { sources: Vec::new(), tracks: Vec::new() } })
+        Ok(RecordingOutput { path, audio })
     }
 
     fn is_recording(&self) -> bool {
