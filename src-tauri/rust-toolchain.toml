@@ -6,9 +6,11 @@
 # every new lint and every behaviour change into a dated, reviewable diff of
 # its own.
 #
-# CI uses `dtolnay/rust-toolchain` with **no version argument** so it reads this
-# file. Passing `@stable` there would silently win and put the pin back to
-# floating without changing anything visible in this file.
+# This file is the only place the version is written. CI's
+# `dtolnay/rust-toolchain@stable` steps only set rustup's default; every cargo
+# command runs in this directory, where rustup reads this file and uses the
+# pinned version instead. Cargo run from anywhere else would get the floating
+# stable, which is why CI keeps its cargo steps here.
 #
 # Bump in its own PR. New lints are the expected content of that diff —
 # `-D warnings` means they are errors, so a bump that also carried a feature
