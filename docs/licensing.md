@@ -188,7 +188,7 @@ allowed to name it, and it leaves out `Cargo.lock`, which regenerates.
 #277 then added `about.toml`'s notice entries for the fork's crates and
 `scripts/notices.mjs`'s note about the libobs runtime (six lines),
 #269 added `own/worker/serve.rs`'s mention of a libobs-recorder PR (one), and
-PR-CITATIONS re-cited the own backend's four comments that leaned on libobs or
+#286 re-cited the own backend's four comments that leaned on libobs or
 OBS (six lines, five files: 140 before it, 134 after):
 
 | Lines | File |
@@ -355,7 +355,7 @@ only the reference goes.
       the border off because libobs did is a behavioural parity goal, and it
       can stay in the comment as the reason.
 
-      **Done in PR-CITATIONS.** Both copies now cite the `IsBorderRequired`,
+      **Done in #286.** Both copies now cite the `IsBorderRequired`,
       [`RequestAccessAsync`](https://learn.microsoft.com/en-us/uwp/api/windows.graphics.capture.graphicscaptureaccess.requestaccessasync)
       and [`IsPropertyPresent`](https://learn.microsoft.com/en-us/uwp/api/windows.foundation.metadata.apiinformation.ispropertypresent)
       pages, step by step. The `IsBorderRequired` page is also where the
@@ -372,7 +372,7 @@ only the reference goes.
       comment is better off saying "some capture software enables it from
       19041" without the file name. The test's `(19_041, false)` row stays.
 
-      **Done in PR-CITATIONS.** The comment now says, without quoting, that
+      **Done in #286.** The comment now says, without quoting, that
       OBS enables its process audio capture from build 19041, earlier than
       Microsoft documents. It cites
       [#237's decision](https://github.com/NinjaGoldfinch/ninja-recorder/issues/237#issuecomment-5822380979)
@@ -388,7 +388,7 @@ only the reference goes.
       the spike hit (DEVELOPMENT.md §16), not from the fork. Once the fork is
       gone, drop the comparison.
 
-      **Done in PR-CITATIONS.** The comparison is gone. The header now
+      **Done in #286.** The comparison is gone. The header now
       describes the activation sequence against
       [`ActivateAudioInterfaceAsync`](https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-activateaudiointerfaceasync),
       [`AUDIOCLIENT_ACTIVATION_PARAMS`](https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ns-audioclientactivationparams-audioclient_activation_params),
@@ -403,7 +403,7 @@ only the reference goes.
       supports. The same file's comments describing how "the backend hands every
       source to libobs" go with it.
 
-      **The constant: done in PR-CITATIONS.** Its doc comment now justifies
+      **The constant: done in #286.** Its doc comment now justifies
       six in this project's terms. The format has no such limit (a 32-bit
       `track_ID`, and 255 in `mp4/write.rs` because of `tfra`'s one-byte
       traf number), so the limit is a product choice about how many stems a
@@ -417,7 +417,7 @@ only the reference goes.
       returns in terms of what OBS's `wasapi_input_capture` expects. After #51
       the consumer is the own backend, so explain it in those terms.
 
-      **Done in PR-CITATIONS.** The id is now explained as Microsoft
+      **Done in #286.** The id is now explained as Microsoft
       documents it:
       [`IMMDevice::GetId`](https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdevice-getid)'s
       opaque endpoint ID string, reopened in another process through
