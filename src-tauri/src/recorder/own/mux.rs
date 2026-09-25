@@ -31,7 +31,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::mp4::write::{Track, VIDEO_TIMESCALE, Writer};
+use crate::mp4::write::{Track, VIDEO_TIMESCALE, Writer, annex_b_nals};
 use crate::recorder::own::clock::HNS_PER_SECOND;
 
 /// Samples in one AAC-LC frame.
@@ -55,6 +55,14 @@ pub fn to_timescale(hns: i64, timescale: u32) -> u64 {
     ((scaled + i128::from(HNS_PER_SECOND / 2)) / i128::from(HNS_PER_SECOND)) as u64
 }
 
+/// Whether an Annex B access unit carries a picture: a coded slice, IDR or
+/// not (NAL types 1 to 5). An encoder may hand over its parameter sets, or an
+/// SEI, as a sample of their own; those are not a frame, and the writer would
+/// refuse one as empty once the parameter sets were dropped from it.
+pub fn has_picture(access_unit: &[u8]) -> bool {
+    annex_b_nals(access_unit).iter().any(|nal| (1..=5).contains(&nal.first().map_or(0, |b| b & 0x1F)))
+}
+
 /// Whether the fragment is closed before a video frame: before every
 /// keyframe but the file's first, and after [`MAX_FRAGMENT_FRAMES`] frames
 /// regardless. `in_fragment` is the video frames already in the fragment.
@@ -69,6 +77,9 @@ pub struct MuxStats {
     pub keyframes: u64,
     /// Frames before the first keyframe, which nothing could decode.
     pub dropped_before_keyframe: u64,
+    /// Samples with no picture (parameter sets or SEI alone), or AAC samples
+    /// with no bytes, which are not frames and are not written.
+    pub empty: u64,
     /// AAC frames written, per audio track.
     pub audio_frames: Vec<u64>,
     /// Fragments closed, the last one by `finish`.
@@ -91,6 +102,9 @@ pub struct Mux {
     /// AAC frames that came before the file existed: (track, pts, bytes).
     early_audio: Vec<(usize, u64, Vec<u8>)>,
     video: Option<PendingVideo>,
+    /// Parameter sets an encoder handed over on their own, kept for the
+    /// frame they belong in front of.
+    headers: Vec<u8>,
     in_fragment: u32,
     /// The next AAC frame's time, per track, once its first has come.
     audio_next: Vec<Option<u64>>,
@@ -111,6 +125,7 @@ impl Mux {
             writer: None,
             early_audio: Vec::new(),
             video: None,
+            headers: Vec::new(),
             in_fragment: 0,
             audio_next: vec![None; audio_tracks],
             stats: MuxStats { audio_frames: vec![0; audio_tracks], ..MuxStats::default() },
@@ -130,6 +145,22 @@ impl Mux {
         keyframe: bool,
         bytes: Vec<u8>,
     ) -> io::Result<()> {
+        if !has_picture(&bytes) {
+            // Kept for the next frame until the file exists, which is when
+            // the SPS and PPS are needed; after that the writer has them.
+            if self.writer.is_none() {
+                self.headers.extend_from_slice(&bytes);
+            }
+            self.stats.empty += 1;
+            return Ok(());
+        }
+        let bytes = if self.headers.is_empty() {
+            bytes
+        } else {
+            let mut joined = std::mem::take(&mut self.headers);
+            joined.extend_from_slice(&bytes);
+            joined
+        };
         if self.writer.is_none() {
             if !keyframe {
                 self.stats.dropped_before_keyframe += 1;
@@ -158,6 +189,10 @@ impl Mux {
         let Some(next) = self.audio_next.get_mut(track) else {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("no audio track {track}")));
         };
+        if bytes.is_empty() {
+            self.stats.empty += 1;
+            return Ok(());
+        }
         let rate = self.audio[track].timescale();
         let pts = next.unwrap_or_else(|| to_timescale(time_hns, rate));
         *next = Some(pts + u64::from(AAC_FRAME));
@@ -354,6 +389,35 @@ mod tests {
         assert_eq!(stats.dropped_before_keyframe, 1);
         assert_eq!(stats.video_frames, 2);
         assert_eq!(stats.audio_frames, vec![2]);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// Parameter sets on their own are not a frame: before the file exists
+    /// they go in front of the first keyframe, and an empty AAC sample is
+    /// skipped rather than refused.
+    #[test]
+    fn samples_with_no_picture_are_not_frames() {
+        let mut headers = Vec::new();
+        for nal in [&SPS[..], &PPS[..]] {
+            headers.extend_from_slice(&[0, 0, 0, 1]);
+            headers.extend_from_slice(nal);
+        }
+        assert!(!has_picture(&headers));
+        assert!(has_picture(&access_unit(true, 0)));
+        assert!(has_picture(&access_unit(false, 0)));
+
+        let path = scratch("headers");
+        let mut mux = Mux::new(&path, 1, 48_000).unwrap();
+        mux.video(0, 0, false, headers).unwrap();
+        // A keyframe with no parameter sets of its own.
+        let bare_idr = vec![0, 0, 0, 1, 0x65, 0x88, 0, 1];
+        mux.video(tick(0), tick(1), true, bare_idr).unwrap();
+        assert!(mux.is_open(), "the held parameter sets made the track");
+        mux.audio(0, 0, Vec::new()).unwrap();
+        mux.audio(0, 0, vec![1]).unwrap();
+        let stats = mux.finish().unwrap();
+        assert_eq!((stats.video_frames, stats.empty), (1, 2));
+        assert_eq!(stats.audio_frames, vec![1]);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
