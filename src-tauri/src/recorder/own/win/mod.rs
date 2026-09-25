@@ -455,7 +455,7 @@ impl Recorder for OwnRecorder {
                 if let Status::Software { encoder, reason } = &status {
                     warn!(
                         "recorder",
-                        "own backend: will encode in software with {encoder}: {reason}"
+                        "own backend: software H.264 encoding with {encoder}: {reason}"
                     );
                 }
                 self.software = status.software_encoding(self.software);

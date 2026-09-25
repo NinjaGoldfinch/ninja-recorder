@@ -2012,7 +2012,8 @@ restart the app when you are done.
 The run that gates making the own backend the default. It is #10's exit
 criterion, and every row runs on a **CI-built release installer of the commit
 before the flip** (the `ninja-recorder-windows-latest-<sha>` artifact of that
-commit's run on main), never a local build and never the devtools bundle. On that
+commit's run on main), never a local build, and the devtools bundle only
+where a row says so (the forced software encoder is devtools-only). On that
 commit the default is still libobs and a release build has no Advanced row, so
 save the choice by hand once: quit the app from the tray, then
 
@@ -2091,26 +2092,28 @@ Tool:
       hardware MFT, `nvidia-smi encodersessions` during the game shows one
       H.264 session owned by the `--capture-worker` pid, and nothing says
       `software`.
-- [ ] **The software fallback, once, and surfaced.** On a machine with no
-      usable hardware encoder, record one game. Nothing here forces the
-      fallback on a machine that has one, so it takes a box whose GPU driver
-      is disabled in Device Manager (the game then renders on the Microsoft
-      Basic Display Adapter, so a Practice Tool minute is enough) or a second
-      machine without a hardware H.264 encoder. League will not run in a VM
-      (Vanguard). Check all three places:
-  - [ ] **the log**: `daemon.log` has `own backend: will encode in software
-        with <encoder>: <reason>` and the start summary line says
-        `software fallback: <reason>`;
+- [ ] **The software fallback, once, and surfaced.** Forced on this machine
+      with the devtools override, exactly as §11.7's "The software fallback,
+      forced" block does it: a **devtools** daemon started with
+      `NINJA_OWN_FORCE_SOFTWARE_ENCODER=1`, from the devtools installer of
+      the same commit (the override is devtools-only, and a release build
+      never reads it). Record one Practice Tool game on Own and check all
+      three places:
+  - [ ] **the log**: `daemon-devtools.log` has `own backend: software H.264
+        encoding with <encoder>: forced by NINJA_OWN_FORCE_SOFTWARE_ENCODER
+        (devtools)` at the start, and the start summary line says
+        `software fallback: forced by …`;
   - [ ] **the diagnostics**: `diagnostics_json.backend` reads
-        `own (software encoding: <encoder>, because <reason>)`;
+        `own (software encoding: <encoder>, because forced by …)`;
   - [ ] **the UI**: Settings → Advanced shows the notice that recording is
         encoding in software and uses more CPU, both while the client is open
         and after it has closed. The notice is in the flip's PR, not the
-        commit before it, so this box is checked on **the flip's
-        installer**.
+        commit before it, so this box is checked on **the flip's**
+        devtools installer.
 
-**Resources.** Against libobs on the same machine, the same game mode, each
-state sampled for 60 s:
+**Resources.** Against libobs on the same machine, by
+[measurement.md](measurement.md) §1 for memory and §4 for CPU. Every cell stays
+empty until a run fills it:
 
 - [ ] **Idle and recording RAM**, with
       [`scripts/measure.ps1`](../scripts/measure.ps1): the daemon
@@ -2119,13 +2122,14 @@ state sampled for 60 s:
       '--capture-worker'`) for own, and the daemon plus
       `-ProcessName extprocess_recorder` for libobs. Include the software
       path's recording figure.
-- [ ] **Idle and recording CPU**, the same states and processes. `measure.ps1`
-      samples memory only, and
-      [measurement.md](measurement.md) has no CPU method yet: agree one before
-      filling a cell (a candidate is
-      `Get-Counter '\Process(ninja-recorder*)\% Processor Time' -SampleInterval 1 -MaxSamples 60`,
-      divided by the logical processor count), and add it to measurement.md
-      in the same change as the figures. An empty cell is a true statement.
+- [ ] **Idle and recording CPU**, by
+      [measurement.md §4](measurement.md#4-cpu): `measure.ps1 -Cpu -Role
+      daemon,ui,worker,libobs -Label '<backend> - <state>'` in each of §4.4's
+      states, under §4.4's constant load. Compare the **totals** (own's
+      `daemon + worker` against libobs's `daemon + libobs`), alternating
+      backends in one sitting, **three or more runs each**, every row
+      recorded (§4.5). **The software path is a third arm**, `own (software)`,
+      on the forced devtools daemon above, alternated with the other two.
 - [ ] **The capture worker exists only while League does.** No
       `--capture-worker` with no client; one within seconds of the client
       opening; none within seconds of it closing (§11.6's first three rows).
@@ -2166,13 +2170,13 @@ state sampled for 60 s:
 | 11.8: borderless / windowed / exclusive fullscreen | | |
 | 11.8: no yellow border | | |
 | 11.8: the hardware encoder used (paste `nvidia-smi`) | | |
-| 11.8: software fallback: in the log (paste) | | |
-| 11.8: software fallback: in the diagnostics (paste) | | |
-| 11.8: software fallback: the UI notice (the flip's installer) | | |
+| 11.8: software fallback (forced, §11.7's override): in the log (paste) | | |
+| 11.8: software fallback (forced): in the diagnostics (paste) | | |
+| 11.8: software fallback (forced): the UI notice (the flip's devtools installer) | | |
 | 11.8: idle RAM, own vs libobs (`measure.ps1`) | | |
 | 11.8: recording RAM, own (hardware) vs own (software) vs libobs | | |
-| 11.8: idle CPU, own vs libobs | | |
-| 11.8: recording CPU, own (hardware) vs own (software) vs libobs | | |
+| 11.8: idle CPU, own vs libobs (`measure.ps1 -Cpu`, totals, 3+ runs each) | | |
+| 11.8: recording CPU, own (hardware) vs own (software) vs libobs (totals, alternated, 3+ runs each) | | |
 | 11.8: the capture worker only while League runs | | |
 | 11.8: switching own ↔ libobs in the lobby, both ways (the flip's installer) | | |
 | 11.8: fresh install records on own (the flip's installer) | | |
