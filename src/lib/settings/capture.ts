@@ -22,7 +22,7 @@ export const BACKEND_LABELS: Record<CaptureBackend, string> = {
 export const APPLIES_WHEN =
   "Applies from the next recording. It can't be changed while a game is in progress.";
 
-/** "Own isn't available: the own capture backend is not in this build yet." */
+/** "Own isn't available: the own capture backend records on Windows only." */
 export function unavailableNotes(status: CaptureBackendStatus): string[] {
   return status.options
     .filter((option) => option.unavailable !== null)

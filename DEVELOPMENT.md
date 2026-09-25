@@ -74,7 +74,39 @@ trait Recorder {
 Backends:
 - `LibObsRecorder`: Windows, the real one.
 - `StubRecorder`: every non-Windows build. It sleeps, then copies a fixture MP4 into place. Keeps the entire app layer developable and testable without Windows. Nothing ships it; since the macOS bundle was dropped it exists purely for the dev loop and `cargo test` (§9).
-- The own backend (Option B, `recorder/own/`): being built through WS1.6, and not constructible until it is; its pure core (the tick grid, the audio aligner, encoder ranking) is compiled and tested on every platform. Which of it and libobs the daemon builds is the `capture_backend` setting, and what happens when the chosen one cannot be built is §16's "The switch, and when it applies".
+- `OwnRecorder` (Option B, `recorder/own/`): being built through WS1.6, and **constructible since #236** on Windows build 20348 or newer. It records the game window's video through Media Foundation's sink writer, with no audio until #237, and only a devtools build can select it until the default flips (#243). Its pure core (the tick grid, the audio aligner, encoder ranking, the loaded-encoder check) is compiled and tested on every platform. Which of it and libobs the daemon builds is the `capture_backend` setting, and what happens when the chosen one cannot be built is §16's "The switch, and when it applies".
+
+**Decision: the own backend holds no COM object; a session thread does.**
+`OwnRecorder` is a channel sender and a join handle. Every D3D11, Media
+Foundation and WinRT object lives on one thread it spawns (`own/win/session.rs`),
+initialised for the MTA, and every `Recorder` call is a command sent there and
+an answer waited on. The supervisor holds the recorder in a
+`Mutex<Box<dyn Recorder>>` and calls it from whatever thread it is on, which a
+`Send` handle survives and an apartment-bound COM pointer does not. It is also
+the boundary WS1.6.9 (#241) moves into the capture worker, where the channel
+becomes a pipe and nothing on this side changes. `prepare` is the same
+pre-warm libobs has: COM, `MFStartup`, the adapters and encoders,
+`select::rank`, the D3D11 device. `start` finds the game window by class, waits
+about three seconds at most for a real size and WGC's first frame, and brings
+the sink writer up; `stop` drains, finalizes and runs the shared faststart
+remux; `release` tears the thread down unless a recording is in flight.
+
+**Video time zero is the last act of `start`.** The tick grid's origin is a
+QPC read `OwnRecorder::start` takes after the session thread has said
+everything is up, and hands over as the last thing before it returns. The
+supervisor stamps `record_started_at` the moment `start` returns, so the file's
+t = 0 and the clock every marker is placed against agree to within a return,
+and the own backend needs no marker offset of its own. The doc comment on
+`start` pins it.
+
+**Decision: Media Foundation is delay-loaded.** `build.rs` passes
+`/DELAYLOAD` for `mfplat.dll` and `mfreadwrite.dll`. An ordinary import would
+stop Windows starting the executable at all where they are missing, which is a
+Windows N edition without the Media Feature Pack, taking the daemon, the
+library and the libobs backend with it. Delay-loaded, the executable starts
+everywhere, and `own::win::device::media_foundation` loads both from System32
+before the first MF call, turning their absence into the own backend's
+`unavailable` reason instead of the delay-load helper's exception.
 
 **Decision: the backend is warm only while the League client is.** Bringing
 `LibObs` up spawns the out-of-process worker *and* sends it `Init`, which runs
@@ -152,8 +184,15 @@ Implemented in `src-tauri/src/recorder/`: `Recorder`, `RecordConfig`, `RecorderE
     hardware adapter. It is **never silent**: `recorder::own::select::rank`
     returns it as a `SoftwareFallback` carrying the reason, and every caller
     has to put that reason in `daemon.log` and the recording's
-    `diagnostics_json` and show the UI a notice about the extra CPU (the
-    callers arrive from #236). The reason for the change is that refusing
+    `diagnostics_json` and show the UI a notice about the extra CPU. Since
+    #236 the first two are done: `OwnRecorder` writes a `warn` line naming
+    the encoder and the reason, and its `backend_name` (which is what
+    `RecordingDiagnostics::backend` records) reads `own (software encoding:
+    <encoder>, because <reason>)`. The UI notice is still owed, and arrives
+    before the fallback can reach a release user (#243). The check is made
+    twice: once on the ranking, and again on what the sink writer actually
+    loaded, because a sink writer asked for hardware can still load the
+    software MFT (`own::status::check_loaded`). The reason for the change is that refusing
     turns a wrong vendor match (#224) or an unusual GPU into no recording at
     all, where a fallback turns it into a recording that costs CPU and says
     so. The software path's CPU cost on the gameplay machine is **measured
@@ -2637,7 +2676,10 @@ What the run leaves for WS1.6, none of which reopens the gate:
   at the stack. The spike crashed with 0xC0000374 until #218 wrapped it in
   `ManuallyDrop`, and WS1.6's port of that code needs the same.
 - **WGC's yellow border has to be turned off**, as libobs turns it off; the
-  spike asked for it, and #219 tracks the change.
+  spike asked for it, and #219 tracks the change. `OwnRecorder` does it from
+  #236 (`own/win/capture.rs::hide_border`) and logs which way it went;
+  whether it took on the box is a row in
+  [windows-verification.md §11](docs/windows-verification.md#11-the-own-backend-ws16-10).
 - **A crashed recording needs the remux before it can be scrubbed.** The killed
   file plays, but with no `mfra` it has no scrub bar until faststart has run.
   **Addressed by #233**, for both backends: startup recovery
@@ -2665,25 +2707,29 @@ filled.
 the plan spells it. No migration: a missing key is the default, the same as
 every other key in that table ([data-model.md](docs/data-model.md#what-lives-in-settings_kv)).
 
-**The default is libobs, and WS1.6 flips it to `own`.** Not because libobs is
-the preferred answer; the plan's default is Option B. A default the build
-cannot construct would refuse every game for everyone who never opened
-Settings, and until `recorder/own/` exists that is what `own` would do. The
-flip is a one-line change to `CaptureBackend`'s `#[default]`, pinned by a test
-so that it cannot happen by accident, and it belongs in WS1.6's own change:
-the same change that makes `own` constructible. It moves only the users who
-never chose. Someone who picked libobs explicitly has a stored row and keeps it.
+**The default is libobs, and WS1.6 flips it to `own` in its last piece
+(#243).** Not because libobs is the preferred answer; the plan's default is
+Option B. A default the build cannot construct would refuse every game for
+everyone who never opened Settings, and before #236 that is what `own` would
+have done. Since #236 `own` is constructible on Windows build 20348 or newer,
+but it records video only, so the flip waits until it carries audio (#237,
+#238) and every track (#239) and has been measured against libobs. The flip
+is a one-line change to `CaptureBackend`'s `#[default]`, pinned by a test so
+that it cannot happen by accident. It moves only the users who never chose.
+Someone who picked libobs explicitly has a stored row and keeps it.
 
-**The Settings row is devtools-only until WS1.6, and WS1.6 un-hides it.**
-Today the row can offer one backend, with the other disabled beside it, and a
-control that changes nothing is not worth a release user's attention. So the
+**The Settings row is devtools-only until WS1.6 flips the default, and the
+flip (#243) un-hides it.** Until #236 the row could offer one backend, with
+the other disabled beside it, and a control that changes nothing is not worth
+a release user's attention; since #236 it offers a video-only backend, which
+is not worth it either. So the
 Advanced group, which holds only this row, renders only where the `dev_*`
 commands exist: the check the dev portal button already makes
 (`hasDevCommands`), rather than a second devtools flag. Everything behind the
 row is live in every build: the key, the daemon's choice at startup, the
-refusal, and both commands. WS1.6 removes the gate in the same change that
-flips the default, which is the change that gives the row something to switch
-to. Until then a release build has no way to show the "Nothing will be
+refusal, and both commands. #243 removes the gate in the same change that
+flips the default, which is the change that makes the other choice worth a
+release user's attention. Until then a release build has no way to show the "Nothing will be
 recorded" warning, which is acceptable because it has no way to save an
 unbuildable choice either: the only writer that bypasses the checks is
 `set_ui_pref`, and nothing in a release build calls it with this key.
@@ -2702,9 +2748,10 @@ beside the ones it cannot build, the settings row shows the unbuildable one
 disabled with that reason, and `set_capture_backend` refuses it again for any
 caller that got past the control. What remains is a row written some other
 way: a downgrade from a build that had the own backend, or a raw
-`set_ui_pref`. The daemon then records nothing, and the settings row (in a
-devtools build, until WS1.6) says so in a warning rather than only through a
-disabled button.
+`set_ui_pref`, or a machine that was upgraded from and then back to a
+Windows below build 20348. The daemon then records nothing, and the settings
+row (in a devtools build, until the flip) says so in a warning rather than
+only through a disabled button.
 
 **A change applies to the next recording, and never to the current one.**
 Two answers were available. "At the next daemon start" is simplest, but the
@@ -2741,9 +2788,10 @@ does not own the recorder, like `quit_recorder`.
 **What only Windows can confirm** is the row in
 [windows-verification.md §9](docs/windows-verification.md#9-the-capture-backend-switch-ws17-11):
 that switching in the client's lobby leaves one worker process rather than two,
-and that the next game records on the backend the row says is in use. The
-comparison WS1.7's exit criterion asks for, both backends recording the same
-game, waits on WS1.6.
+and that the next game records on the backend the row says is in use. Since
+#236 a devtools build can switch to a real own backend, so that row can be
+checked both ways; the comparison WS1.7's exit criterion asks for, both
+backends recording the same game with audio, waits on #237.
 
 ---
 

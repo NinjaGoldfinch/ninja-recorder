@@ -231,6 +231,27 @@ impl DaemonBackends {
     }
 }
 
+impl DaemonBackends {
+    /// Whether the own backend can run here: Windows build 20348 or newer
+    /// (`recorder::own::select::availability`). Whether this machine has an
+    /// encoder is `prepare`'s question, and its answer is the backend's name
+    /// rather than this list: a refusal here is for what cannot change
+    /// without a new Windows.
+    #[cfg(target_os = "windows")]
+    fn own_unavailable() -> Option<String> {
+        match crate::recorder::own::windows_build() {
+            Some(build) => crate::recorder::own::select::availability(build),
+            None => Some("could not read the Windows build number".to_string()),
+        }
+    }
+
+    /// Off Windows there is nothing for it to capture with.
+    #[cfg(not(target_os = "windows"))]
+    fn own_unavailable() -> Option<String> {
+        Some("the own capture backend records on Windows only".to_string())
+    }
+}
+
 impl crate::recorder::backend::Backends for DaemonBackends {
     fn options(&self) -> Vec<CaptureBackendOption> {
         vec![
@@ -238,13 +259,7 @@ impl crate::recorder::backend::Backends for DaemonBackends {
                 backend: CaptureBackend::Libobs,
                 unavailable: Self::libobs_worker().err(),
             },
-            // **WS1.6 replaces this entry** with a real availability check, in
-            // the same change that fills `recorder/own/` and flips
-            // `CaptureBackend`'s default.
-            CaptureBackendOption {
-                backend: CaptureBackend::Own,
-                unavailable: Some(capture::OWN_NOT_BUILT.to_string()),
-            },
+            CaptureBackendOption { backend: CaptureBackend::Own, unavailable: Self::own_unavailable() },
         ]
     }
 
@@ -259,12 +274,18 @@ impl crate::recorder::backend::Backends for DaemonBackends {
             },
             #[cfg(not(target_os = "windows"))]
             CaptureBackend::Libobs => Box::new(crate::recorder::stub::StubRecorder::new()),
-            // `choose` never lets this through while the option above says
-            // unavailable, so this arm is the refusal said twice rather than a
-            // path anything takes. WS1.6 constructs the own backend here.
-            CaptureBackend::Own => Box::new(crate::recorder::FailedRecorder(
-                capture::OWN_NOT_BUILT.to_string(),
-            )),
+            // `choose` only lets this through when `own_unavailable` said
+            // nothing; asking again costs a syscall and keeps this arm a
+            // refusal rather than a construction on an OS below the floor.
+            CaptureBackend::Own => match Self::own_unavailable() {
+                #[cfg(target_os = "windows")]
+                None => Box::new(crate::recorder::own::OwnRecorder::new(ffmpeg())),
+                #[cfg(not(target_os = "windows"))]
+                None => Box::new(crate::recorder::FailedRecorder(
+                    "the own capture backend records on Windows only".to_string(),
+                )),
+                Some(why) => Box::new(crate::recorder::FailedRecorder(why)),
+            },
         }
     }
 }

@@ -549,11 +549,13 @@ mod tests {
     mod capture_backend {
         use super::*;
         use crate::core::{get_capture_backend, set_capture_backend};
-        use crate::recorder::backend::{
-            Backends, CaptureBackend, CaptureBackendOption, OWN_NOT_BUILT,
-        };
+        use crate::recorder::backend::{Backends, CaptureBackend, CaptureBackendOption};
         use crate::recorder::{RecordConfig, RecorderError, RecordingOutput};
         use std::sync::atomic::{AtomicUsize, Ordering};
+
+        /// Why the own backend cannot be built, in the fake below: the
+        /// shape of a refusal below its OS floor.
+        const OWN_UNAVAILABLE: &str = "the own capture backend needs Windows build 20348 or newer";
 
         /// A recorder that is only a name, and optionally mid-game.
         struct Named(&'static str, bool);
@@ -586,7 +588,7 @@ mod tests {
                     CaptureBackendOption { backend: CaptureBackend::Libobs, unavailable: None },
                     CaptureBackendOption {
                         backend: CaptureBackend::Own,
-                        unavailable: (!self.own_built).then(|| OWN_NOT_BUILT.to_string()),
+                        unavailable: (!self.own_built).then(|| OWN_UNAVAILABLE.to_string()),
                     },
                 ]
             }
@@ -623,18 +625,18 @@ mod tests {
             assert_eq!(status.options.len(), 2);
             assert_eq!(
                 status.options[1].unavailable.as_deref(),
-                Some(OWN_NOT_BUILT),
+                Some(OWN_UNAVAILABLE),
                 "the unbuilt backend is listed, with its reason, not left out"
             );
         }
 
-        /// **Before WS1.6 this is the whole feature's safety property**: the
+        /// **The whole feature's safety property**: an unbuildable
         /// own backend cannot be chosen, and trying writes nothing.
         #[test]
         fn an_unbuilt_backend_cannot_be_chosen() {
             let (ctx, builds) = ctx_with(false);
             let err = set_capture_backend(&ctx, CaptureBackend::Own).expect_err("unbuilt");
-            assert!(err.contains(OWN_NOT_BUILT), "{err}");
+            assert!(err.contains(OWN_UNAVAILABLE), "{err}");
             assert_eq!(ctx.db.get_capture_backend().unwrap(), CaptureBackend::Libobs);
             assert_eq!(builds.load(Ordering::SeqCst), 0);
             assert_eq!(ctx.recorder.lock().unwrap().backend_name(), "stub");
