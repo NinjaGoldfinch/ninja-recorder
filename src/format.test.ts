@@ -163,6 +163,23 @@ describe("patchLabel", () => {
     expect(patchLabel("15")).toBe("15");
     expect(patchLabel(null)).toBeNull();
   });
+
+  // #280: a game played on patch 26.19 reported build 16.19. Riot numbers
+  // patches by year from 2026, and the build kept its old sequence.
+  it("names a build from 16 on by its year-numbered patch", () => {
+    expect(patchLabel("16.19.715.2204")).toBe("26.19");
+    expect(patchLabel("16.1")).toBe("26.1");
+    expect(patchLabel("17.3.1.1")).toBe("27.3");
+  });
+
+  it("leaves a build from before the renumbering alone", () => {
+    expect(patchLabel("15.24.1.1")).toBe("15.24");
+    expect(patchLabel("14.1")).toBe("14.1");
+  });
+
+  it("does not renumber a major that is not a number", () => {
+    expect(patchLabel("x.19.1")).toBe("x.19");
+  });
 });
 
 describe("titles and headings", () => {
