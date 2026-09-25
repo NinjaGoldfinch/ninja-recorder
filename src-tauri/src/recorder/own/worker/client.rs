@@ -26,6 +26,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::time::{Duration, Instant};
 
 use super::protocol::{self, Line, PROTOCOL_VERSION, Reply, Request};
+use crate::recorder::own::select;
 use crate::warn;
 
 /// How long a fresh worker has to answer the handshake. It has loaded the
@@ -58,6 +59,15 @@ impl Worker {
         if let Some(dir) = log_dir {
             command.env(super::LOG_DIR_ENV, dir);
         }
+        let forced = select::software_forced_in_this_build(|name| std::env::var(name).ok());
+        if forced {
+            warn!(
+                "recorder",
+                "{}=1: the capture worker will encode in SOFTWARE, for testing only",
+                select::FORCE_SOFTWARE_ENV
+            );
+        }
+        pass_software_override(&mut command, forced);
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
@@ -248,6 +258,21 @@ impl Drop for Worker {
     }
 }
 
+/// Hands the daemon's decision about the software-encoder override
+/// (`select::FORCE_SOFTWARE_ENV`) to the worker explicitly, rather than
+/// leaving it to whatever environment the worker happens to inherit: set to
+/// `1` when the daemon honours it, removed when it does not. So a release
+/// build's worker never sees the variable at all, and a devtools worker sees
+/// it exactly when its daemon logged that it would. The worker checks it
+/// again with the same gate before acting on it.
+fn pass_software_override(command: &mut Command, forced: bool) {
+    if forced {
+        command.env(select::FORCE_SOFTWARE_ENV, "1");
+    } else {
+        command.env_remove(select::FORCE_SOFTWARE_ENV);
+    }
+}
+
 /// `exited with code 3`, `exited with exit code: 0xc0000005`, `was killed by
 /// signal 9`: whatever the platform can say.
 fn ended(status: ExitStatus) -> String {
@@ -331,5 +356,33 @@ mod tests {
             panic!("spawned");
         };
         assert!(why.contains("could not start"), "{why}");
+    }
+
+    /// A stand-in worker that completes the handshake only if it was started
+    /// with the software override set to exactly `1`, and exits 5 otherwise.
+    fn needs_override() -> Command {
+        let var = select::FORCE_SOFTWARE_ENV;
+        fake(&format!(r#"read l; [ "${{{var}:-unset}}" = 1 ] || exit 5; echo '{HELLO}'; read l"#))
+    }
+
+    /// The daemon's decision reaches the worker process: set when honoured,
+    /// even with nothing in the daemon's own environment to inherit.
+    #[test]
+    fn a_forced_software_encoder_reaches_the_worker() {
+        let mut command = needs_override();
+        pass_software_override(&mut command, true);
+        let worker = Worker::spawn_command(command).expect("the worker saw the override");
+        assert!(worker.shut_down(Duration::from_secs(5)).contains("exited cleanly"));
+    }
+
+    /// And removed when not, so a worker cannot pick up a value its daemon
+    /// declined, whatever the environment it would have inherited says.
+    #[test]
+    fn an_override_the_daemon_declined_never_reaches_the_worker() {
+        let mut command = needs_override();
+        command.env(select::FORCE_SOFTWARE_ENV, "1"); // as if inherited
+        pass_software_override(&mut command, false);
+        let Err(why) = Worker::spawn_command(command) else { panic!("the worker saw the override") };
+        assert!(why.contains("code 5"), "{why}");
     }
 }
