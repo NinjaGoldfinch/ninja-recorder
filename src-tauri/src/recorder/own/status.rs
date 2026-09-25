@@ -40,8 +40,17 @@ impl Loaded {
         self.vendor.is_some() || self.url.is_some()
     }
 
+    /// The loaded encoder's name, with its vendor id when it has one.
+    ///
+    /// Microsoft's software H.264 MFT carries no friendly name once loaded
+    /// (the CI test on `windows-latest` shows it), so a nameless encoder with
+    /// no hardware attributes is named for what it is.
     fn describe(&self) -> String {
-        let name = self.name.as_deref().unwrap_or("an encoder that reports no name");
+        let name = match (&self.name, self.hardware()) {
+            (Some(name), _) => name.as_str(),
+            (None, false) => "the software H.264 MFT",
+            (None, true) => "a hardware encoder that reports no name",
+        };
         match &self.vendor {
             Some(vendor) => format!("{name} [{vendor}]"),
             None => name.to_string(),
@@ -236,6 +245,19 @@ mod tests {
         assert!(matches!(status, Status::Ready { .. }), "{status:?}");
         let warning = warning.expect("a warning");
         assert!(warning.contains("NVIDIA"), "{warning}");
+    }
+
+    /// What `windows-latest` loads: the software MFT, with no name at all.
+    #[test]
+    fn a_nameless_software_encoder_is_named_for_what_it_is() {
+        let (adapters, encoders) = nvidia();
+        let choice = select::rank(&adapters, &encoders);
+        let (status, _) =
+            check_loaded(&choice, &adapters, &encoders, &Loaded::default()).unwrap();
+        assert!(
+            status.backend_name().starts_with("own (software encoding: the software H.264 MFT"),
+            "{status:?}"
+        );
     }
 
     #[test]
