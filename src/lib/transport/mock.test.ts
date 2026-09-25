@@ -71,6 +71,37 @@ describe("the generated client over the mock transport", () => {
   });
 });
 
+describe("the review over the mock transport", () => {
+  it("opens one game per recording and keeps what is saved to it", async () => {
+    const [row] = await client.list_recordings();
+    const gameId = await client.open_game_for_recording(row.id);
+    expect(await client.open_game_for_recording(row.id)).toBe(gameId);
+
+    const review = await client.get_game_review(gameId);
+    expect(review?.objectives.length).toBeGreaterThan(0);
+    await client.save_game_review(gameId, {
+      game_rating: "win",
+      lane_rating: null,
+      mental_rating: "good",
+      first_clear_ms: 178_000,
+      smites_at_clear: 1,
+      deaths: null,
+      free_notes: "",
+    });
+    expect((await client.get_game_review(gameId))?.review?.game_rating).toBe("win");
+  });
+
+  it("promotes a takeaway into an active objective once", async () => {
+    const [row] = await client.list_recordings();
+    const gameId = await client.open_game_for_recording(row.id);
+    const takeaway = await client.add_takeaway({ kind: "game", id: gameId }, "Contest grubs");
+    const objective = await client.promote_takeaway(takeaway.id, "macro");
+    expect((await client.promote_takeaway(takeaway.id, "macro")).id).toBe(objective.id);
+    const active = await client.list_objectives("active");
+    expect(active.map((o) => o.body)).toContain("Contest grubs");
+  });
+});
+
 describe("the argument names the client sends", () => {
   /**
    * The one thing that breaks silently. `rename_all = "camelCase"` on the

@@ -241,6 +241,48 @@ export type SampleRow = { id: number, recording_id: number, game_time_s: number,
 
 export type ReconcileReport = { orphans_removed: number, imported: number, };
 
+export type GameObjective = { objective_id: number, body: string, category: ObjectiveCategory, status: ObjectiveStatus, ticked: boolean, };
+
+export type GameResult = "win" | "loss";
+
+export type GameReview = { game: GameSummary, 
+/**
+ * `None` until the first save.
+ */
+review: ReviewInput | null, 
+/**
+ * Death markers on the recording: the value `deaths` shows when unset.
+ * `None` where there is nothing to count, which is not the same as zero:
+ * no recording, or a recording the poller never saw.
+ */
+death_markers: number | null, objectives: Array<GameObjective>, takeaways: Array<Takeaway>, };
+
+export type GameSummary = { id: number, recording_id: number | null, started_at: number, ended_at: number | null, block_id: number | null, champion: string | null, 
+/**
+ * The lane opponent's champion, or `None` where no board says who.
+ */
+matchup: string | null, result: GameResult | null, };
+
+export type LaneRating = "win" | "neutral" | "loss";
+
+export type MentalRating = "good" | "neutral" | "bad";
+
+export type Objective = { id: number, body: string, category: ObjectiveCategory, status: ObjectiveStatus, created_at: number, retired_at: number | null, };
+
+export type ObjectiveCategory = "macro" | "lane" | "mental" | "mechanics" | "other";
+
+export type ObjectiveStatus = "active" | "paused" | "retired";
+
+export type ReviewInput = { game_rating: GameResult | null, lane_rating: LaneRating | null, mental_rating: MentalRating | null, first_clear_ms: number | null, smites_at_clear: number | null, 
+/**
+ * `None` means "use the death markers", not zero.
+ */
+deaths: number | null, free_notes: string, };
+
+export type Takeaway = { id: number, game_id: number | null, block_id: number | null, body: string, objective_id: number | null, promoted_to_id: number | null, created_at: number, };
+
+export type TakeawayOwner = { "kind": "game", "id": number } | { "kind": "block", "id": number };
+
 export type IconRequest = { champions: Array<string>, items: Array<number>, spells: Array<string>, 
 /**
  * The same spells as ids, for a scoreboard rebuilt from match

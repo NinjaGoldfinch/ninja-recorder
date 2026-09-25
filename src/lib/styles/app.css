@@ -1962,3 +1962,170 @@ button.small {
     margin-left: 0;
   }
 }
+
+/* --- Review form and objectives (WS9) ----------------------------- */
+
+/* The rating tones follow the spreadsheet the form replaces: good is green,
+ * middling amber, bad red. Only the lit answer wears one; an unlit control
+ * stays neutral so an unrated game reads as unrated. Amber has no background
+ * token, so it is mixed from the warning foreground the way the win and loss
+ * backgrounds are tints of theirs. */
+.segmented.rating button[aria-checked="true"][data-tone="good"] {
+  background-color: var(--win-bg);
+  color: var(--win-fg);
+}
+
+.segmented.rating button[aria-checked="true"][data-tone="mid"] {
+  background-color: color-mix(in srgb, var(--warn-fg) 16%, transparent);
+  color: var(--warn-fg);
+}
+
+.segmented.rating button[aria-checked="true"][data-tone="bad"] {
+  background-color: var(--loss-bg);
+  color: var(--loss-fg);
+}
+
+.save-status {
+  margin-left: auto;
+  font-size: var(--fs-sm);
+  color: var(--text-subtle);
+}
+
+.save-status[data-status="unsaved"],
+.save-status[data-status="saving"] {
+  color: var(--warn-fg);
+}
+
+.save-status[data-status="error"] {
+  color: var(--loss-fg);
+  font-weight: 600;
+}
+
+.review-game-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-3);
+  margin: 0;
+  font-weight: 550;
+}
+
+.result-pill {
+  padding: 0.1em 0.6em;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.result-pill[data-outcome="win"] {
+  background-color: var(--win-bg);
+  color: var(--win-fg);
+}
+
+.result-pill[data-outcome="loss"] {
+  background-color: var(--loss-bg);
+  color: var(--loss-fg);
+}
+
+.review-numbers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: var(--sp-4);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+
+.review-numbers .field {
+  display: grid;
+  gap: var(--sp-1);
+  align-content: start;
+}
+
+.review-numbers .field.invalid input {
+  border-color: var(--loss-fg);
+}
+
+.review-checklist,
+.review-takeaways,
+.objective-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.review-checklist li,
+.review-takeaways li,
+.objective-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--border);
+}
+
+.review-checklist li:first-child,
+.review-takeaways li:first-child,
+.objective-list li:first-child {
+  border-top: none;
+}
+
+.review-checklist .check {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+.takeaway-body,
+.objective-body {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.takeaway-add,
+.objective-add {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+}
+
+.takeaway-add textarea,
+.objective-add input {
+  flex: 1;
+}
+
+.review-notes {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+}
+
+.objective-list {
+  margin-top: var(--sp-3);
+}
+
+/* The review form's own text fields, dressed like the search box and the
+ * selects above. Scoped to the form rather than added to that global rule,
+ * which would restyle every text input in the dev portal's shared sheet. */
+.review-numbers input,
+.takeaway-add textarea,
+.objective-add input,
+.review-notes {
+  padding: 0.45em 0.7em;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background-color: var(--bg-surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-md);
+}
+
+.review-numbers input:focus-visible,
+.takeaway-add textarea:focus-visible,
+.objective-add input:focus-visible,
+.review-notes:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}

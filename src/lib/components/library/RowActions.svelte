@@ -1,5 +1,5 @@
 <!--
-  Pin, delete and (behind devtools) inspect.
+  Review, pin, delete and (behind devtools) inspect.
 
   Delete is a **two-step on the button itself** rather than a modal: the first
   click arms it, the second deletes, and it disarms itself after four seconds.
@@ -19,13 +19,14 @@ import type { RecordingRow } from "../../../types";
 
 interface Props {
   row: RecordingRow;
+  onreview: (row: RecordingRow) => void;
   onpin: (row: RecordingRow) => void;
   ondelete: (row: RecordingRow) => void;
   oninspect: (row: RecordingRow) => void;
   showInspect: boolean;
 }
 
-const { row, onpin, ondelete, oninspect, showInspect }: Props = $props();
+const { row, onreview, onpin, ondelete, oninspect, showInspect }: Props = $props();
 
 let armed = $state(false);
 let armTimer: ReturnType<typeof setTimeout> | undefined;
@@ -64,6 +65,17 @@ $effect(() => () => clearTimeout(armTimer));
   onkeydown={(e) => e.stopPropagation()}
   role="presentation"
 >
+  <!--
+    The WS9 review form: ratings, objectives, takeaways. Separate from opening
+    the row, which plays the VOD; P1 puts the two side by side.
+  -->
+  <button
+    class="icon-btn review-btn"
+    type="button"
+    aria-label="Review this game"
+    title="Review this game"
+    onclick={() => onreview(row)}>📝</button
+  >
   <button
     class="icon-btn pin-btn"
     class:pinned={row.pinned}
