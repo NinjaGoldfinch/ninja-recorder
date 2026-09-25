@@ -11,7 +11,8 @@ use std::mem::ManuallyDrop;
 
 use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
 use windows::Win32::Media::Audio::{
-    AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
+    AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT,
+    AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR, AUDCLNT_SHAREMODE_SHARED,
     AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK,
     AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
     AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
@@ -172,6 +173,9 @@ pub struct Raw {
     pub frames: u32,
     pub silent: bool,
     pub discontinuity: bool,
+    /// `AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR`: the engine says its own stamp
+    /// for this packet is wrong, whatever it looks like.
+    pub timestamp_error: bool,
     /// `pu64QPCPosition`, as the engine gave it: 100 ns units if it is the
     /// performance counter, and the thing `clock::check_stamp` judges.
     pub qpc: u64,
@@ -298,6 +302,7 @@ impl Loopback {
             frames,
             silent,
             discontinuity: flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0 as u32 != 0,
+            timestamp_error: flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR.0 as u32 != 0,
             qpc,
             device_position,
             arrival,

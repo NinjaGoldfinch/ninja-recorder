@@ -514,10 +514,40 @@ impl Stamper {
         self.timeline.reanchors
     }
 
+    fn began_at(&self, frames: u32, arrival_hns: i64) -> i64 {
+        let span = i128::from(frames) * i128::from(HNS_PER_SECOND) / i128::from(self.rate);
+        arrival_hns - span as i64
+    }
+
     /// The stamp for a packet of `frames` whose `GetBuffer` gave `qpc_stamp`,
     /// taken at `arrival_hns`; whether it follows a hole in device time; and
     /// the clock it is on.
-    pub fn stamp(&mut self, frames: u32, qpc_stamp: u64, arrival_hns: i64) -> (i64, bool, AudioClock) {
+    ///
+    /// `qpc_stamp` is `None` for a packet the engine flagged
+    /// `AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR`, which WASAPI documents for the
+    /// first packet after a start among others. Such a packet is stamped from
+    /// its arrival (or the count, in device mode), counted as substituted,
+    /// and never decides the clock: the first unflagged packet does.
+    pub fn stamp(
+        &mut self,
+        frames: u32,
+        qpc_stamp: Option<u64>,
+        arrival_hns: i64,
+    ) -> (i64, bool, AudioClock) {
+        let Some(qpc_stamp) = qpc_stamp else {
+            self.substituted += 1;
+            return match self.clock {
+                Some(AudioClock::Device) => {
+                    let (hns, hole) = self.timeline.stamp(frames, arrival_hns);
+                    (hns, hole, AudioClock::Device)
+                }
+                // Undecided, the aligner places a first packet the same way
+                // in either mode, so QPC is as good a label as any.
+                Some(AudioClock::Qpc) | None => {
+                    (self.began_at(frames, arrival_hns), false, AudioClock::Qpc)
+                }
+            };
+        };
         let check = check_stamp(qpc_stamp, arrival_hns);
         let clock = match self.clock {
             Some(clock) => clock,
@@ -536,9 +566,7 @@ impl Stamper {
                 Stamp::Qpc { .. } => (qpc_stamp as i64, false, clock),
                 Stamp::Zero | Stamp::Implausible { .. } => {
                     self.substituted += 1;
-                    let span = i128::from(frames) * i128::from(HNS_PER_SECOND)
-                        / i128::from(self.rate);
-                    (arrival_hns - span as i64, false, clock)
+                    (self.began_at(frames, arrival_hns), false, clock)
                 }
             },
             AudioClock::Device => {
@@ -802,11 +830,12 @@ mod tests {
         assert_eq!(s.clock(), None);
         let now = 500 * HNS_PER_SECOND;
         let stamp = (now - 150_000) as u64;
-        assert_eq!(s.stamp(PACKET, stamp, now), (stamp as i64, false, AudioClock::Qpc));
+        assert_eq!(s.stamp(PACKET, Some(stamp), now), (stamp as i64, false, AudioClock::Qpc));
         assert_eq!(s.first, Some(Stamp::Qpc { lag: 150_000 }));
         // One zero stamp later on costs that packet only.
         let later = now + hns_of(480);
-        assert_eq!(s.stamp(PACKET, 0, later), (later - hns_of(480), false, AudioClock::Qpc));
+        let from_arrival = (later - hns_of(480), false, AudioClock::Qpc);
+        assert_eq!(s.stamp(PACKET, Some(0), later), from_arrival);
         assert_eq!(s.substituted, 1);
         assert_eq!(s.clock(), Some(AudioClock::Qpc));
     }
@@ -815,17 +844,35 @@ mod tests {
     fn zero_stamps_put_the_source_on_device_time_for_good() {
         let mut s = Stamper::new(RATE);
         let now = 500 * HNS_PER_SECOND;
-        assert_eq!(s.stamp(PACKET, 0, now), (now - hns_of(480), false, AudioClock::Device));
+        let first = (now - hns_of(480), false, AudioClock::Device);
+        assert_eq!(s.stamp(PACKET, Some(0), now), first);
         assert_eq!(s.first, Some(Stamp::Zero));
         // A real-looking stamp later does not switch the clock back.
         let later = now + hns_of(480);
-        let (hns, _, clock) = s.stamp(PACKET, later as u64, later);
+        let (hns, _, clock) = s.stamp(PACKET, Some(later as u64), later);
         assert_eq!((hns, clock), (now, AudioClock::Device));
-        assert_eq!((s.substituted, s.reanchors()), (0, 0));
+        // A flagged one in device mode is still counted into the timeline.
+        let (hns, _, clock) = s.stamp(PACKET, None, later + hns_of(480));
+        assert_eq!((hns, clock), (later, AudioClock::Device));
+        assert_eq!((s.substituted, s.reanchors()), (1, 0));
         // And a stamp on some other clock is treated as none.
         let mut s = Stamper::new(RATE);
-        s.stamp(PACKET, 12_345, now);
+        s.stamp(PACKET, Some(12_345), now);
         assert!(matches!(s.first, Some(Stamp::Implausible { .. })));
         assert_eq!(s.clock(), Some(AudioClock::Device));
+    }
+
+    #[test]
+    fn a_flagged_first_packet_does_not_decide_the_clock() {
+        let mut s = Stamper::new(RATE);
+        let now = 500 * HNS_PER_SECOND;
+        // WASAPI may flag the first packet after a start as a timestamp
+        // error: it is placed from its arrival and the question stays open.
+        assert_eq!(s.stamp(PACKET, None, now), (now - hns_of(480), false, AudioClock::Qpc));
+        assert_eq!((s.clock(), s.first, s.substituted), (None, None, 1));
+        let later = now + hns_of(480);
+        let stamp = (later - hns_of(480) - 20_000) as u64;
+        assert_eq!(s.stamp(PACKET, Some(stamp), later).2, AudioClock::Qpc);
+        assert_eq!(s.first, Some(Stamp::Qpc { lag: hns_of(480) + 20_000 }));
     }
 }

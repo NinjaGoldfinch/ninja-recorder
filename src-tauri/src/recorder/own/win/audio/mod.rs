@@ -119,7 +119,8 @@ fn capture(
 
     let mut stamper = Stamper::new(SAMPLE_RATE);
     let mut summary = Summary::default();
-    let result = pump(&source, &mut stamper, &mut summary, packets, stop);
+    let mut decided = false;
+    let result = pump(&source, &mut stamper, &mut summary, &mut decided, packets, stop);
     source.stop();
     summary.clock = stamper.clock();
     summary.substituted = stamper.substituted;
@@ -131,6 +132,7 @@ fn pump(
     source: &loopback::Loopback,
     stamper: &mut Stamper,
     summary: &mut Summary,
+    decided: &mut bool,
     packets: &Sender<Packet>,
     stop: &AtomicBool,
 ) -> Result<(), String> {
@@ -142,8 +144,12 @@ fn pump(
             if raw.frames == 0 {
                 continue;
             }
-            let (hns, hole, clock) = stamper.stamp(raw.frames, raw.qpc, raw.arrival);
-            if summary.packets == 0 {
+            // A stamp the engine itself flags as wrong is no stamp, and does
+            // not get to decide the clock.
+            let stamp = (!raw.timestamp_error).then_some(raw.qpc);
+            let (hns, hole, clock) = stamper.stamp(raw.frames, stamp, raw.arrival);
+            if !*decided && stamper.clock().is_some() {
+                *decided = true;
                 log_first(&raw, stamper);
             }
             summary.packets += 1;
@@ -165,12 +171,14 @@ fn pump(
     Ok(())
 }
 
-/// The answer to the QPC question, once per recording: what the first
-/// packet's stamps were and which clock that chose.
+/// The answer to the QPC question, once per recording: what the deciding
+/// packet's stamps were (the first one the engine did not flag as a
+/// timestamp error) and which clock that chose.
 fn log_first(raw: &loopback::Raw, stamper: &Stamper) {
     let positions = format!(
-        "QPC position {}, device position {}, taken at {}",
-        raw.qpc, raw.device_position, raw.arrival
+        "QPC position {}, device position {}, taken at {}; {} earlier packet(s) flagged as \
+         timestamp errors",
+        raw.qpc, raw.device_position, raw.arrival, stamper.substituted
     );
     match stamper.first {
         Some(Stamp::Qpc { lag }) => info!(

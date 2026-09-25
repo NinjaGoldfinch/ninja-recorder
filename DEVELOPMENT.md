@@ -2748,7 +2748,10 @@ its first packet**, and says which way it went:
 - The capture asks `GetBuffer` for both positions. `clock::check_stamp` judges
   the QPC one against the counter read the moment `GetBuffer` returned: zero is
   no stamp; one in the future, or more than a second old, is not this
-  process's counter; anything else is QPC.
+  process's counter; anything else is QPC. A packet the engine itself flags
+  `AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR` (WASAPI documents it for the first
+  packet after a start) is placed from its arrival and does not get to
+  decide: the first unflagged packet does.
 - **A real stamp puts the source on QPC**, the video's clock, and the aligner
   holds it there by slipping single frames, as the spike did. One bad stamp
   later on costs that packet's placement, stamped from its arrival instead,
