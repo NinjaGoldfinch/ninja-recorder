@@ -1542,6 +1542,73 @@ minutes, then end it.
 | 11.1: markers land where they happened | | |
 | 11.1: a second game in the same session records | | |
 
+### 11.2 Resize, minimise, and the game window closing (#240)
+
+§4's resilience cases on the own backend. The recording's size is fixed when
+it starts; a window of any other size is **scaled** into it, aspect kept,
+centred, with black bars, the way libobs fits a window into its canvas
+([DEVELOPMENT.md §2.2](../DEVELOPMENT.md#22-the-recorder-trait), "a resize
+scales; it does not crop"). Each size change writes
+`own backend: the game window is now WxH; into the …x… recording it is …` to
+`daemon.log` (the first dozen per recording): paste the lines with the result.
+Play one Practice Tool game per row, or several rows in one game.
+
+- [ ] **Alt-tab.** Alt-tab out of the game for ten seconds and back, twice.
+      The file has no gap and no corruption; the time away shows the game as
+      WGC saw it (it keeps compositing a window that is not in front).
+- [ ] **A resolution change mid-game.** In-game video settings, change the
+      resolution to one of a *different aspect* (1920x1080 to 1280x1024, say),
+      play a minute, change it back. The file stays at the starting size, the
+      5:4 minute is pillarboxed with **black** bars, not cropped and not
+      smeared with stale pixels, and the picture is not stretched. Then change
+      to a smaller size of the *same* aspect (1280x720): it fills the frame,
+      scaled up.
+- [ ] **Minimise.** Minimise the game (Win+D, or the taskbar) for ten
+      seconds and restore it. The recording keeps going (no `ended early`
+      warning), the file keeps its length, and the minimised stretch is the
+      last frame held still. Recording carries on normally after the restore.
+- [ ] **Borderless.** Start a game in borderless: records normally.
+- [ ] **Windowed.** Start a game windowed, and drag the window's border
+      mid-game. Records normally at the starting size; the drag scales, and
+      the log's size lines stop after a dozen with `(further size changes are
+      not logged)`.
+- [ ] **Exclusive fullscreen.** Start a game in fullscreen. **Record what WGC
+      gets**: a normal picture, black, or a frozen frame, and whether
+      `start` failed (`no frame from WGC for the game window` in the log).
+      Then switch between fullscreen and borderless mid-game and record the
+      same. If the log says `the game window closed` on a mode switch, League
+      recreated its window, and the rest of that recording is black: that is
+      a finding, file it.
+- [ ] **The game closing.** End a game normally: the log has `the game window
+      closed (the game ended or crashed); recording black until stop` once,
+      then the recording stops about five seconds later as usual, and the
+      file ends with a few seconds of black. `stop` does not warn.
+- [ ] **The game crashing.** Kill `League of Legends.exe` in Task Manager
+      mid-game: the same line, then the supervisor's stop, and the file plays
+      up to the kill and is black after it. No `ended early` warning, no
+      hang, and the next game records.
+- [ ] **A lost GPU device**, if it can be caused safely (a driver update
+      mid-game, or `dxcap -forcetdr` from the Windows SDK's graphics tools):
+      `daemon.log` has `the recording ended early: the GPU device was lost
+      (DXGI_ERROR_…)` and `the GPU device was lost; the next start rebuilds
+      it`; `stop` returns within 20 s with the file up to that point, which
+      plays; the next game records. Skip the row if it cannot be caused; do
+      not guess.
+
+| What | Result | Notes |
+|---|---|---|
+| 11.2: alt-tab, twice | | |
+| 11.2: resolution change to another aspect: black bars, not cropped | | |
+| 11.2: resolution change to the same aspect, smaller: fills the frame | | |
+| 11.2: minimise: last frame held, recording continues | | |
+| 11.2: borderless | | |
+| 11.2: windowed, with a border drag | | |
+| 11.2: exclusive fullscreen: what WGC gets | | |
+| 11.2: fullscreen ↔ borderless mid-game: what WGC gets | | |
+| 11.2: game ends: black tail, one log line, no warning | | |
+| 11.2: game killed: plays to the kill, black after, next game records | | |
+| 11.2: GPU device lost (only if it can be caused) | | |
+
 ## Outcome
 
 - [ ] All boxes above checked

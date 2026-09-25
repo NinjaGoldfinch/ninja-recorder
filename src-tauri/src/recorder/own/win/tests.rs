@@ -8,6 +8,10 @@
 //! which the test harness does not capture, so a CI log shows which way it
 //! went on every run.
 //!
+//! The video processor that scales a resized window into the recording's
+//! size runs on WARP as well, with a read-back of the pixels it wrote; it
+//! skips the same way if WARP offers no video processor.
+//!
 //! A WGC capture needs a desktop to composite a window on; that test is
 //! `#[ignore]`d until it proves stable on the runner, and runs by hand with
 //! `cargo test own_backend_records_a_window -- --ignored`.
@@ -16,12 +20,18 @@ use std::fs::File;
 use std::io::Write as _;
 use std::path::Path;
 
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_TEXTURE2D_DESC,
+    D3D11_USAGE_STAGING, ID3D11Texture2D,
+};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Media::MediaFoundation::{MFSTARTUP_FULL, MFShutdown, MFStartup};
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 
-use super::{capture, device, encode, session};
+use super::{capture, device, encode, scale, session};
 use crate::mp4;
 use crate::recorder::own::clock;
+use crate::recorder::own::fit::Size;
 
 /// Straight to the process's stderr, past the harness's capture.
 fn report(line: &str) {
@@ -157,6 +167,149 @@ fn the_sink_writer_writes_a_fragmented_mp4_from_a_warp_device() {
         Err(e) => panic!("the sink-writer path failed: {e}"),
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// --- The video processor on WARP (#240) ------------------------------------
+
+/// Fills a `size` BGRA texture with one colour, `[b, g, r, a]`.
+fn fill(device: &device::Device, texture: &ID3D11Texture2D, size: Size, bgra: [u8; 4]) {
+    let pixels: Vec<u8> = bgra.repeat((size.width * size.height) as usize);
+    // SAFETY: `texture` is a live default-usage BGRA texture of `size` on
+    // this device, and `pixels` is exactly that many 4-byte pixels at that
+    // row pitch.
+    unsafe {
+        device.context.UpdateSubresource(
+            texture,
+            0,
+            None,
+            pixels.as_ptr().cast(),
+            size.width * 4,
+            0,
+        )
+    };
+}
+
+/// Reads a `size` BGRA texture back to the CPU, tightly packed.
+fn read_back(device: &device::Device, texture: &ID3D11Texture2D, size: Size) -> Vec<u8> {
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: size.width,
+        Height: size.height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        Usage: D3D11_USAGE_STAGING,
+        BindFlags: 0,
+        CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+        MiscFlags: 0,
+    };
+    let mut staging: Option<ID3D11Texture2D> = None;
+    // SAFETY: `desc` is complete; no initial data.
+    unsafe { device.device.CreateTexture2D(&desc, None, Some(&mut staging)) }
+        .expect("staging texture");
+    let staging = staging.expect("staging texture");
+    // SAFETY: both live on this device, same size and format.
+    unsafe { device.context.CopyResource(&staging, texture) };
+    let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+    // SAFETY: `staging` is CPU-readable; `mapped` is a live out-parameter.
+    unsafe { device.context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped)) }
+        .expect("Map");
+    let row = (size.width * 4) as usize;
+    let mut out = Vec::with_capacity(row * size.height as usize);
+    for y in 0..size.height as usize {
+        // SAFETY: the mapping is `RowPitch` bytes a row for `size.height`
+        // rows, each at least `row` bytes; it stays mapped until Unmap below.
+        let line = unsafe {
+            std::slice::from_raw_parts(
+                mapped.pData.cast::<u8>().add(y * mapped.RowPitch as usize),
+                row,
+            )
+        };
+        out.extend_from_slice(line);
+    }
+    // SAFETY: mapped above, and nothing reads the mapping after this.
+    unsafe { device.context.Unmap(&staging, 0) };
+    out
+}
+
+fn pixel(pixels: &[u8], size: Size, x: u32, y: u32) -> [u8; 4] {
+    let i = ((y * size.width + x) * 4) as usize;
+    [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+}
+
+fn assert_near(got: [u8; 4], want: [u8; 4], what: &str) {
+    let close = got.iter().zip(want).take(3).all(|(g, w)| g.abs_diff(w) <= 3);
+    assert!(close, "{what}: got BGRA {got:?}, wanted about {want:?}");
+}
+
+const OUTPUT: Size = Size::new(1920, 1080);
+const CONTENT: [u8; 4] = [40, 160, 220, 255];
+const BLACK: [u8; 4] = [0, 0, 0, 255];
+const WHITE: [u8; 4] = [255, 255, 255, 255];
+
+/// One frame of `content` size through the fitter into a 1920x1080 slot that
+/// starts white, so a bar that was not cleared shows as white rather than as
+/// a texture's initial zeroes. Returns what the fitter did and the slot's
+/// pixels.
+fn fit_one(device: &device::Device, content: Size) -> Result<(scale::Placed, Vec<u8>), String> {
+    let source = scale::create_bgra(device, content)?;
+    fill(device, &source, content, CONTENT);
+    let slots = capture::create_slots(&device.device, OUTPUT.width, OUTPUT.height, 1)?;
+    fill(device, &slots[0].texture, OUTPUT, WHITE);
+    let mut fitter = scale::Fitter::new(OUTPUT);
+    let placed = fitter.place(device, &source, content, &slots[0].texture)?;
+    Ok((placed, read_back(device, &slots[0].texture, OUTPUT)))
+}
+
+/// The video processor on WARP scales a 1280x720 frame to fill a 1920x1080
+/// slot, pillarboxes a 1280x1024 one with black bars, and a 1920x1080 frame
+/// is a plain copy. Skips, and says why, where WARP has no video processor.
+#[test]
+fn the_video_processor_letterboxes_on_warp() {
+    let device = device::create_warp_device().expect("a WARP device");
+    let probe = scale::Processor::new(
+        &device,
+        Size::new(1280, 1024),
+        OUTPUT,
+        DXGI_FORMAT_B8G8R8A8_UNORM,
+    );
+    if let Err(e) = probe {
+        report(&format!("SKIPPED the WARP video-processor test: {e}"));
+        return;
+    }
+
+    // The same aspect: scaled up to fill the frame, no bars.
+    let (placed, px) = fit_one(&device, Size::new(1280, 720)).expect("1280x720");
+    assert_eq!(placed, scale::Placed::Scaled);
+    for (x, y) in [(2, 2), (1917, 2), (2, 1077), (1917, 1077), (960, 540)] {
+        assert_near(pixel(&px, OUTPUT, x, y), CONTENT, &format!("1280x720 at ({x}, {y})"));
+    }
+
+    // 5:4: 1350x1080 at x = 284, black either side.
+    let (placed, px) = fit_one(&device, Size::new(1280, 1024)).expect("1280x1024");
+    assert_eq!(placed, scale::Placed::Scaled);
+    for (x, y) in [(0, 0), (100, 540), (280, 1079), (1640, 0), (1820, 540), (1919, 1079)] {
+        assert_near(pixel(&px, OUTPUT, x, y), BLACK, &format!("bar at ({x}, {y})"));
+    }
+    for (x, y) in [(290, 2), (960, 540), (1628, 1077)] {
+        assert_near(pixel(&px, OUTPUT, x, y), CONTENT, &format!("1280x1024 at ({x}, {y})"));
+    }
+
+    // The recording's own size: copied, not scaled.
+    let (placed, px) = fit_one(&device, OUTPUT).expect("1920x1080");
+    assert_eq!(placed, scale::Placed::Copied);
+    assert_near(pixel(&px, OUTPUT, 0, 0), CONTENT, "copied corner");
+    assert_near(pixel(&px, OUTPUT, 1919, 1079), CONTENT, "copied corner");
+
+    // What the session writes after the window closes.
+    let slots = capture::create_slots(&device.device, OUTPUT.width, OUTPUT.height, 1)
+        .expect("slot");
+    fill(&device, &slots[0].texture, OUTPUT, WHITE);
+    scale::fill_black(&device, &slots[0].texture).expect("fill_black");
+    let px = read_back(&device, &slots[0].texture, OUTPUT);
+    assert_near(pixel(&px, OUTPUT, 960, 540), BLACK, "after fill_black");
+
+    report("RAN the WARP video-processor test: scaled, letterboxed, copied, blacked");
 }
 
 /// The whole backend against a window of the game's class: prepare, start,

@@ -18,6 +18,8 @@
 //!
 //! - `clock` — the video tick grid and the audio [`clock::Aligner`] that
 //!   places packets on it.
+//! - `fit` — where a frame from a resized window goes in the fixed-size
+//!   output: scaled, aspect kept, centred, black around it.
 //! - `pcm` — endpoint sample formats to stereo i16 for an encoder, or f32 for
 //!   the mixer.
 //! - `select` — which H.264 encoder to use (hardware first, the software MFT
@@ -45,6 +47,8 @@
 // too. Remove each allow once every item in its module has a caller.
 #[cfg_attr(not(test), allow(dead_code))]
 pub mod clock;
+#[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
+pub mod fit;
 #[cfg_attr(not(test), allow(dead_code))]
 pub mod pcm;
 #[cfg_attr(not(test), allow(dead_code))]
