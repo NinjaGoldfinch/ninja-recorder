@@ -403,12 +403,23 @@ impl Progress {
 /// Turns WGC's yellow border off where this Windows supports it, and says
 /// what happened, for the header.
 ///
-/// The same three steps as libobs' `winrt-capture.cpp`: the property only
-/// exists from Windows 10 build 20348 / Windows 11, so ask `ApiInformation`
-/// first; request `Borderless` access, which some builds require before the
-/// setter takes effect; then clear the flag. libobs ignores the access status
-/// and sets the flag anyway, and so does this. The line reports the flag as
-/// read back, so a setter that silently did nothing shows as `on`.
+/// The steps are the ones Microsoft Learn documents. The property only
+/// exists from Windows 10 build 20348 (the "Windows requirements" table of
+/// `GraphicsCaptureSession.IsBorderRequired`), so ask
+/// `ApiInformation.IsPropertyPresent` first. The same page says the border is
+/// only disabled once the user has consented through
+/// `GraphicsCaptureAccess.RequestAccessAsync` with
+/// `GraphicsCaptureAccessKind.Borderless`, so request that. Then clear the
+/// flag.
+///
+/// - <https://learn.microsoft.com/en-us/uwp/api/windows.graphics.capture.graphicscapturesession.isborderrequired>
+/// - <https://learn.microsoft.com/en-us/uwp/api/windows.graphics.capture.graphicscaptureaccess.requestaccessasync>
+/// - <https://learn.microsoft.com/en-us/uwp/api/windows.foundation.metadata.apiinformation.ispropertypresent>
+///
+/// The access status is not acted on: the page says that without consent
+/// the setter still succeeds and is ignored, so the flag is set anyway. The
+/// line reports the flag as read back, so a setter that silently did nothing
+/// shows as `on`.
 fn hide_border(session: &GraphicsCaptureSession) -> String {
     let supported = ApiInformation::IsPropertyPresent(
         &HSTRING::from("Windows.Graphics.Capture.GraphicsCaptureSession"),
