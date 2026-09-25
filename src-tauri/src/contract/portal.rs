@@ -660,6 +660,14 @@ pub fn dev_command_manifest() -> Vec<DevCommandSpec> {
 macro_rules! production_form_table {
     ($m:ident) => {
         $m! {
+    add_takeaway {
+        group: "Review",
+        danger: false,
+        args: [
+            { name: "owner", kind: "json", default: "{'kind': 'game', 'id': 1}", help: "kind is game or block", optional: false },
+            { name: "body", kind: "string", default: "", help: "", optional: false },
+        ],
+    }
     backfill_match_metadata {
         group: "Library",
         danger: false,
@@ -670,11 +678,26 @@ macro_rules! production_form_table {
         danger: false,
         args: [],
     }
+    create_objective {
+        group: "Review",
+        danger: false,
+        args: [
+            { name: "body", kind: "string", default: "", help: "", optional: false },
+            { name: "category", kind: "string", default: "other", help: "category: macro, lane, mental, mechanics or other", optional: false },
+        ],
+    }
     delete_recording {
         group: "Library",
         danger: true,
         args: [
             { name: "recordingId", kind: "number", default: "", help: "", optional: false },
+        ],
+    }
+    delete_takeaway {
+        group: "Review",
+        danger: true,
+        args: [
+            { name: "takeawayId", kind: "number", default: "", help: "", optional: false },
         ],
     }
     extract_audio_track {
@@ -709,6 +732,13 @@ macro_rules! production_form_table {
         group: "Disk",
         danger: false,
         args: [],
+    }
+    get_game_review {
+        group: "Review",
+        danger: false,
+        args: [
+            { name: "gameId", kind: "number", default: "", help: "", optional: false },
+        ],
     }
     get_recording_markers {
         group: "Library",
@@ -749,13 +779,6 @@ macro_rules! production_form_table {
         danger: true,
         args: [],
     }
-    quit_recorder {
-        group: "Recorder",
-        danger: true,
-        args: [
-            { name: "force", kind: "boolean", default: "false", help: "quit even while a game is being recorded", optional: false },
-        ],
-    }
     is_recording {
         group: "Recorder",
         danger: false,
@@ -771,10 +794,32 @@ macro_rules! production_form_table {
         danger: false,
         args: [],
     }
+    list_objectives {
+        group: "Review",
+        danger: false,
+        args: [
+            { name: "status", kind: "string", default: "active", help: "active, paused or retired; omit for all", optional: true },
+        ],
+    }
     list_recordings {
         group: "Library",
         danger: false,
         args: [],
+    }
+    merge_blocks {
+        group: "Review",
+        danger: true,
+        args: [
+            { name: "intoBlockId", kind: "number", default: "", help: "", optional: false },
+            { name: "fromBlockId", kind: "number", default: "", help: "deleted once emptied", optional: false },
+        ],
+    }
+    open_game_for_recording {
+        group: "Review",
+        danger: false,
+        args: [
+            { name: "recordingId", kind: "number", default: "", help: "", optional: false },
+        ],
     }
     open_recordings_folder {
         group: "Disk",
@@ -788,6 +833,21 @@ macro_rules! production_form_table {
             { name: "policy", kind: "json", default: "{'max_total_bytes': 53687091200, 'max_age_days': 30}", help: "", optional: false },
         ],
     }
+    promote_takeaway {
+        group: "Review",
+        danger: false,
+        args: [
+            { name: "takeawayId", kind: "number", default: "", help: "", optional: false },
+            { name: "category", kind: "string", default: "other", help: "category: macro, lane, mental, mechanics or other", optional: false },
+        ],
+    }
+    quit_recorder {
+        group: "Recorder",
+        danger: true,
+        args: [
+            { name: "force", kind: "boolean", default: "false", help: "quit even while a game is being recorded", optional: false },
+        ],
+    }
     rescan_recordings {
         group: "Library",
         danger: true,
@@ -798,6 +858,14 @@ macro_rules! production_form_table {
         danger: false,
         args: [
             { name: "request", kind: "json", default: "{'champions': ['Wukong'], 'items': [3089], 'spells': ['Flash'], 'runes': [8112]}", help: "Four lists: champions, items, spells, runes. Any of them may be omitted.", optional: false },
+        ],
+    }
+    save_game_review {
+        group: "Review",
+        danger: true,
+        args: [
+            { name: "gameId", kind: "number", default: "", help: "", optional: false },
+            { name: "review", kind: "json", default: "{'game_rating': 'win', 'lane_rating': 'neutral', 'mental_rating': 'good', 'first_clear_ms': 178000, 'smites_at_clear': 1, 'deaths': null, 'free_notes': ''}", help: "replaces the whole review; null clears a field", optional: false },
         ],
     }
     set_audio_preset {
@@ -819,6 +887,23 @@ macro_rules! production_form_table {
         danger: true,
         args: [
             { name: "backend", kind: "string", default: "libobs", help: "libobs or own. Replaces the live backend for the next recording; refused mid-game and for a backend this build cannot construct.", optional: false },
+        ],
+    }
+    set_objective_status {
+        group: "Review",
+        danger: false,
+        args: [
+            { name: "objectiveId", kind: "number", default: "", help: "", optional: false },
+            { name: "status", kind: "string", default: "retired", help: "active, paused or retired", optional: false },
+        ],
+    }
+    set_objective_ticked {
+        group: "Review",
+        danger: false,
+        args: [
+            { name: "gameId", kind: "number", default: "", help: "", optional: false },
+            { name: "objectiveId", kind: "number", default: "", help: "", optional: false },
+            { name: "ticked", kind: "boolean", default: "true", help: "", optional: false },
         ],
     }
     set_pinned {
@@ -844,6 +929,13 @@ macro_rules! production_form_table {
             { name: "value", kind: "string", default: "dark", help: "", optional: false },
         ],
     }
+    split_block {
+        group: "Review",
+        danger: true,
+        args: [
+            { name: "gameId", kind: "number", default: "", help: "the first game of the new block", optional: false },
+        ],
+    }
     start_recording {
         group: "Recorder",
         danger: true,
@@ -853,6 +945,15 @@ macro_rules! production_form_table {
         group: "Recorder",
         danger: true,
         args: [],
+    }
+    update_objective {
+        group: "Review",
+        danger: false,
+        args: [
+            { name: "objectiveId", kind: "number", default: "", help: "", optional: false },
+            { name: "body", kind: "string", default: "", help: "", optional: false },
+            { name: "category", kind: "string", default: "other", help: "category: macro, lane, mental, mechanics or other", optional: false },
+        ],
     }
         }
     };

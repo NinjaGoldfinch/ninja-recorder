@@ -35,6 +35,7 @@ sequenceDiagram
     S->>S: WaitingForGame → Recording
     S->>R: start(RecordConfig)
     S->>D: begin_recording (row opened, finished_at NULL)
+    S->>D: start_game (game, block, objective snapshot)
     S->>S: record started_at + first gameTime → TimeAlignment
 
     loop every second until the game ends
@@ -52,6 +53,7 @@ sequenceDiagram
     S->>R: stop()
     R-->>S: finalized MP4 path
     S->>D: finish_recording; rewrite markers + samples<br/>against the final alignment
+    S->>D: finish_game (champion, matchup, result, end; widen block)
     S->>D: retention::enforce_now
     S-->>UI: emit "library-changed"
     UI->>D: list_recordings
@@ -546,8 +548,9 @@ flowchart TB
     F0 --> F["insert_markers<br/><small>re-resolved against the final alignment</small>"]
     F --> F1["delete_samples<br/><small>likewise, the live curve</small>"]
     F1 --> G["insert_samples<br/><small>re-resolved the same way</small>"]
+    G --> G2["finish_game<br/><small>the session's game, or one made from the row</small>"]
     E --> H
-    G --> H["last_finalized = {path, markers}"]
+    G2 --> H["last_finalized = {path, markers}"]
     H --> I["retention::enforce_now"]
     I --> J["emit library-changed"]
     J --> K["request_summary(recording_id, game_id)"]
@@ -555,6 +558,29 @@ flowchart TB
     style Z fill:#ffebee,stroke:#c62828
     style E fill:#fff3e0,stroke:#ef6c00
 ```
+
+### The review's game (WS9)
+
+Beside `begin_recording`, `start_game` opens a `games` row in one
+transaction. The row is linked to the recording, placed in a block by the
+2-hour rule, and snapshotted against the objectives active at that moment.
+The snapshot is why this happens at start and not at finalize: an objective
+retired mid-game was still what the game was played against. At finalize
+`finish_game` copies the champion, lane opponent, result and end time onto the
+game and widens its block to cover it. Those copies are what the review
+keeps once the VOD is deleted; while the recording exists, the review form
+reads through to it, because the deferred LCU patch below corrects the
+recording, not the game.
+
+Both steps log and carry on. A game that failed to open is made from the
+recording at finalize by `ensure_game_for_recording`, with no objective
+snapshot, because which objectives were active by then is not known. See
+[data-model.md](data-model.md), "The review tables outlive the recording".
+
+**Finalize rewrites markers, so their ids change.** A note linked to a marker
+loses the link (`ON DELETE SET NULL`). P0 writes no notes, so nothing is lost
+today; P1, which adds timestamped notes, has to write them only after
+finalize or re-link them.
 
 ### Identifying the game
 

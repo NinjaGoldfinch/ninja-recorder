@@ -53,6 +53,7 @@ flowchart TB
 | [ci-and-releases.md](ci-and-releases.md) | Touching `.github/workflows/`, or cutting a release |
 | [windows-verification.md](windows-verification.md) | Sitting in front of the Windows box |
 | [product-design.md](product-design.md) | Asking what this product is, or how and in what order it got built |
+| [licensing.md](licensing.md) | Working on WS8, changing how ffmpeg is bundled, or writing capture code that libobs also has |
 | [workstreams.md](workstreams.md) | Looking for the specification of a workstream added after the v2 plan (WS9 onward) |
 | [DEVELOPMENT.md](../DEVELOPMENT.md) | About to argue with a decision |
 

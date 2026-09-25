@@ -735,7 +735,7 @@ stay in the UI process; `dev_registered_commands` must stay direct because
 a shipped build.
 
 > **`src/types.ts` is no longer the source of truth either.** Since WS2.2 all
-> 43 types crossing the boundary derive `ts_rs::TS` beside their serde derives,
+> 55 types crossing the boundary derive `ts_rs::TS` beside their serde derives,
 > and WS2.5's generator emits the TypeScript from those. The hand-written
 > interfaces in `src/types.ts` are what that replaces.
 >
@@ -805,6 +805,12 @@ a shipped build.
 | `check_for_update` | nothing | settings → About → "Check now" |
 | `install_update` | nothing | settings → About → "Install and restart"; ends the process |
 | `start_recording` / `stop_recording` / `is_recording` | nothing | registered but unreferenced by the main UI; the dev portal's Recorder panel drives them |
+| `open_game_for_recording` | the game's id | review form, opened from a library row; makes the game for a recording from before WS9 |
+| `get_game_review` / `save_game_review` | `GameReview \| null` / nothing | review form: load, then the debounced autosave of the whole `ReviewInput` |
+| `set_objective_ticked` | nothing | review form → "Reviewing against" |
+| `add_takeaway` / `delete_takeaway` / `promote_takeaway` | `Takeaway` / nothing / `Objective` | review form → Takeaways |
+| `list_objectives` / `create_objective` / `update_objective` / `set_objective_status` | `Vec<Objective>` / `Objective` | Objectives view |
+| `split_block` / `merge_blocks` | new block id / nothing | nothing in the UI yet: the block view is WS9 P3. The dev portal's Commands panel drives them |
 
 **Start on login is the one setting that is not a pref.** It lives in the
 platform's own store (`HKCU\…\Run` on Windows) which the user can also edit
