@@ -149,43 +149,53 @@ fn no_hardware_reason(adapters: &[Adapter], encoders: &[Encoder]) -> String {
     )
 }
 
-/// The oldest Windows build the own backend runs on.
+/// The oldest Windows build the own backend runs on: **19041**, Windows 10
+/// 2004. That takes in every Windows 10 still in service (2004 to 22H2,
+/// builds 19041 to 19045) as well as Windows 11.
 ///
-/// The stricter of the two APIs it cannot do without:
+/// Set by the stricter of the two APIs it cannot do without:
 ///
 /// - **Process loopback** (`AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`),
-///   for game audio on its own track: "Minimum supported client: Windows 10
-///   Build 20348", per Microsoft Learn's `AUDIOCLIENT_ACTIVATION_TYPE` page
+///   for game audio on its own track. Microsoft documents it from build
+///   20348: "Minimum supported client: Windows 10 Build 20348", per
+///   Microsoft Learn's `AUDIOCLIENT_ACTIVATION_TYPE` page
 ///   (<https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ne-audioclientactivationparams-audioclient_activation_type>),
-///   and the ApplicationLoopback sample's README says the same.
+///   and the ApplicationLoopback sample's README says the same. **OBS
+///   enables it from 19041**, earlier than Microsoft documents, and that is
+///   the floor used here.
 /// - **WGC window capture** (`IGraphicsCaptureItemInterop::CreateForWindow`):
-///   Windows 10 1903, build 18362, per its Microsoft Learn page.
+///   Windows 10 1903, build 18362, per its Microsoft Learn page, so below
+///   either answer.
 ///
-/// OBS enables its process audio capture from build 19041, earlier than
-/// Microsoft documents, which would take in Windows 10 2004 through 22H2
-/// (19041–19045). That is an observation about another program's behaviour
-/// and unverified here, so the floor is Microsoft's documented one. #237's
-/// decision
+/// **Following OBS is unverified on Windows 10 hardware.** #237's decision
 /// (<https://github.com/NinjaGoldfinch/ninja-recorder/issues/237#issuecomment-5822380979>)
-/// is to lower it to 19041 only once a Windows 10 box shows process loopback
-/// working there, and the test pinning this constant is what has to change
-/// with it.
-pub const MIN_BUILD: u32 = 20_348;
+/// was to lower the floor from 20348 only once a Windows 10 box had shown
+/// process loopback working there. #291 lowered it without that run, on
+/// the owner's decision that a bug report can confirm it instead. What makes
+/// that acceptable is that the failure is handled rather than fatal: an
+/// activation Windows refuses costs the game's audio, not the recording
+/// (`plan::realised_layout`), and `worker.log` names the failing call and its
+/// HRESULT. The run in `spikes/p0c-audio/README.md` is now optional
+/// confirmation rather than a gate.
+pub const MIN_BUILD: u32 = 19_041;
 
 /// `None` if the own backend can run on Windows build `build`, or the reason
 /// it cannot, for the backend chooser to show.
 pub fn availability(build: u32) -> Option<String> {
     (build < MIN_BUILD).then(|| {
         format!(
-            "the own capture backend needs Windows build {MIN_BUILD} or newer (Windows 11), \
-             for per-application audio capture; this is build {build}"
+            "the own capture backend needs Windows build {MIN_BUILD} or newer (Windows 10 \
+             version 2004 or later), for per-application audio capture; this is build {build}"
         )
     })
 }
 
 /// The environment variable that lets a **devtools** build construct the own
-/// backend below [`MIN_BUILD`], so it can be tried on Windows 10 before the
-/// floor moves (#237). A release build never reads it.
+/// backend below [`MIN_BUILD`]. It was for trying Windows 10 at all before the
+/// floor came down to 19041 (#237); what is left below the floor now is
+/// Windows 10 1903 and 1909 (builds 18362 and 18363), where WGC window capture
+/// exists and process loopback is not expected to, so this is for finding out
+/// how far the backend gets there. A release build never reads it.
 pub const IGNORE_FLOOR_ENV: &str = "NINJA_OWN_IGNORE_OS_FLOOR";
 
 /// Whether the floor override is in force: only in a devtools build, and
@@ -388,23 +398,26 @@ mod tests {
     }
 
     /// Pins the floor. Changing it is a decision with a source behind it
-    /// (see `MIN_BUILD`), not a tidy-up.
+    /// (see `MIN_BUILD`), not a tidy-up: 19041 is OBS's floor, taken without
+    /// a Windows 10 run (#237).
     #[test]
-    fn the_os_floor_is_build_20348() {
-        assert_eq!(MIN_BUILD, 20_348);
+    fn the_os_floor_is_build_19041() {
+        assert_eq!(MIN_BUILD, 19_041);
         for (build, runs) in [
             (18_362, false), // 1903: WGC window capture, no process loopback
-            (19_041, false), // 2004: where OBS enables process loopback
-            (19_045, false), // Windows 10 22H2, the last Windows 10
-            (20_347, false),
-            (20_348, true),  // Server 2022, the documented floor
+            (18_363, false), // 1909
+            (19_040, false),
+            (19_041, true),  // 2004: where OBS enables process loopback
+            (19_045, true),  // Windows 10 22H2, the last Windows 10
+            (20_348, true),  // Server 2022, Microsoft's documented floor
             (22_000, true),  // Windows 11 21H2
             (26_200, true),  // the verification box (DEVELOPMENT.md §16)
         ] {
             assert_eq!(availability(build).is_none(), runs, "build {build}");
         }
-        let reason = availability(19_045).unwrap();
-        assert!(reason.contains("20348") && reason.contains("19045"), "{reason}");
+        let reason = availability(18_363).unwrap();
+        assert!(reason.contains("19041") && reason.contains("18363"), "{reason}");
+        assert!(!reason.contains("Windows 11"), "Windows 10 2004 is enough: {reason}");
     }
 
     #[test]

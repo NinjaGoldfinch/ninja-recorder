@@ -251,23 +251,34 @@ Implemented in `src-tauri/src/recorder/`: `Recorder`, `RecordConfig`, `RecorderE
     variable or removing it, so a release build neither reads it nor lets its
     worker inherit it. It is the same shape as the floor override below, and
     for the same reason: a way to test a path, never a setting.
-- The own backend needs **Windows build 20348 or newer**
-  (`recorder::own::select::MIN_BUILD`, pinned by a test). That is the
-  documented floor for process loopback,
+- The own backend needs **Windows build 19041 or newer**, Windows 10 2004
+  (`recorder::own::select::MIN_BUILD`, pinned by a test). That admits every
+  Windows 10 still in service (2004 to 22H2, 19041 to 19045) and Windows 11.
+  **It is OBS's floor, not Microsoft's, and it is untested on Windows 10
+  hardware.** Microsoft documents process loopback,
   [`AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`](https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ne-audioclientactivationparams-audioclient_activation_type),
-  and it is stricter than WGC window capture's 18362
-  ([`CreateForWindow`](https://learn.microsoft.com/en-us/windows/win32/api/windows.graphics.capture.interop/nf-windows-graphics-capture-interop-igraphicscaptureiteminterop-createforwindow)).
-  In practice it excludes every Windows 10 client (the last is 19045) and
-  admits Windows 11. OBS enables its process-output source from 19041 on the
-  grounds that it "seems to work earlier"; that is unverified here, and
-  lowering the floor is a measurement on a Windows 10 box, not an edit. The
-  owner's decision on #237 is to aim for 19041 if a Windows 10 22H2 (19045)
-  run passes. #237 sets that run up: the procedure is
-  [`spikes/p0c-audio/README.md`](spikes/p0c-audio/README.md#windows-10-floor-test-237),
-  and a **devtools** build started with `NINJA_OWN_IGNORE_OS_FLOOR=1` offers
-  the own backend below the floor, logging a warning each time, so the backend
-  itself can be tried there too (`select::floor_ignored`; a release build never
-  reads the variable). Neither moves `MIN_BUILD`: only the run's result does.
+  from build 20348, which no Windows 10 client reaches; OBS enables its
+  process-output source from 19041 on the grounds that it "seems to work
+  earlier", and the libobs backend has shipped that source to Windows 10 all
+  along. WGC window capture's 18362
+  ([`CreateForWindow`](https://learn.microsoft.com/en-us/windows/win32/api/windows.graphics.capture.interop/nf-windows-graphics-capture-interop-igraphicscaptureiteminterop-createforwindow))
+  is below both.
+  - *The decision.* #237's plan was to lower the floor from 20348 only once a
+    Windows 10 22H2 (19045) run had shown process loopback working. The owner
+    has since decided to lower it without that run (#291): with libobs gone
+    at WS8, 20348 would leave every Windows 10 user unable to record at all,
+    and if 19041 turns out not to work, a bug report will say so.
+  - *Why that is acceptable.* The failure is contained: a process-loopback
+    activation Windows refuses costs that source, not the recording
+    (`plan::realised_layout`), and the worker logs the failing call and its
+    HRESULT.
+  - *Confirmation is optional, not a gate.* The procedure is still
+    [`spikes/p0c-audio/README.md`](spikes/p0c-audio/README.md#windows-10-floor-test-237),
+    and a result from it, pass or fail, is worth recording on #237. A
+    **devtools** build started with `NINJA_OWN_IGNORE_OS_FLOOR=1` offers the
+    own backend below the floor (Windows 10 1903 and 1909 now), logging a
+    warning each time (`select::floor_ignored`; a release build never reads
+    the variable).
 - 1080p60, H.264, ~8 Mbps CBR as defaults; resolution follows the game window.
 - H.264 + AAC specifically: WebView2's `<video>` decodes it natively, which is what makes the review player trivial (§5).
 - Audio is one AAC track per captured source at 160 kbps, track 0 being the combined mix (§2.5). MP4 rather than MKV even though OBS recommends MKV for multi-track: §2.2's crash-safety rule is already satisfied by fragmented MP4, and MKV would cost the review player its native `<video>` playback for no gain.

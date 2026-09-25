@@ -1609,23 +1609,25 @@ cast, attack a dummy), then end it.
 
 ### 11.3 The Windows 10 floor test (#237)
 
-Whether process loopback works on Windows 10 22H2 (build 19045), which
-decides whether `select::MIN_BUILD` moves from 20348 to OBS's 19041 (the
-decision comment on #237,
-[DEVELOPMENT.md §2.4](../DEVELOPMENT.md#24-encoding-defaults)). On a Windows 10
+Whether process loopback works on Windows 10 22H2 (build 19045).
+**Optional confirmation, no longer a gate.** `select::MIN_BUILD` is already
+19041, OBS's floor, lowered on the owner's decision without this run
+(#291, [DEVELOPMENT.md §2.4](../DEVELOPMENT.md#24-encoding-defaults)); a
+Windows 10 user whose game audio fails will see it in the app and can report
+it. The run is still the fastest way to know rather than wait. On a Windows 10
 22H2 machine, run the procedure in
 [`spikes/p0c-audio/README.md`](../spikes/p0c-audio/README.md#windows-10-floor-test-237)
-and paste what it asks for into #237.
+and paste what it asks for into #237, pass or fail.
 
-Optionally, then run §11.2 on the same machine with a devtools build started
-with `NINJA_OWN_IGNORE_OS_FLOOR=1` (the README says how): that tries the own
-backend itself below the floor.
+Then run §11.2 on the same machine with an ordinary build: 19045 is above
+the floor now, so no override is needed. A failing game source there is the
+result worth having, with the notice's text and the `own: recording` line.
 
 | What | Result | Notes |
 |---|---|---|
 | 11.3: `p0c-audio` include on 19045: the game only | | |
 | 11.3: `p0c-audio` exclude on 19045: Discord, no game | | |
-| 11.3 (optional): §11.2 on 19045 with the override | | |
+| 11.3: §11.2 on 19045 | | |
 
 ### 11.4 Resize, minimise, and the game window closing (#240)
 
