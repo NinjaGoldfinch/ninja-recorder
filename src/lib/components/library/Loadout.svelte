@@ -3,6 +3,12 @@
 
   Order is load-bearing: the grid fills by column, so the four perk slots land
   as spell 1, spell 2 | keystone, secondary tree.
+
+  **A game with no rune page draws no rune slots** (#281). Augment modes such
+  as ARAM Mayhem have none, and both writers then leave `our_runes` out, so
+  two empty frames would stand for a page that never existed rather than one
+  that is missing. The perks column is a fixed track in `.vod-row`, so the
+  columns beside it do not move.
 -->
 
 <script lang="ts">
@@ -49,7 +55,7 @@ const spells = $derived(
 
 const perks = $derived(
   runes === null
-    ? [EMPTY, EMPTY]
+    ? []
     : [
         {
           kind: "rune" as const,
