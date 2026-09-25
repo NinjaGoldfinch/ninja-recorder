@@ -323,13 +323,19 @@ So a finalize records:
 | `alignment_offset_s` | The offset markers were mapped through, or `null` if the clock never advanced. A marker that seeks to the wrong moment is this number being wrong |
 | `backend` | Which capture backend was live: on Windows possibly `FailedRecorder` carrying its init error |
 | `markers`, `samples` | What the finalize wrote. Disagreeing with the tables means an insert failed |
+| `capture_problems` | What the recording lost to a capture failure (#10): a list of tagged `CaptureProblem`s (`sourceFailed`, `sourceEnded`, `endedEarly`), each with the failing call's own message and HRESULT. **Left out when empty**, so a clean recording's JSON is what it was before, and a row from before it reads as empty. A source the preset names that simply was not there (Discord not running) is not in it |
+| `windows_build` | The Windows build the recording was made on, without which a capture problem is not a bug report. Left out when it could not be read, and off Windows |
 
 **Deliberately not a copy of the row.** Everything here is something the
 columns cannot say. Duration, size, path and the audio layout are already
 columns and are not repeated.
 
-It is written in release builds (the failures happen there) and nothing
-in the main UI reads it. The dev portal does (#72).
+It is written in release builds (the failures happen there). The dev portal
+reads all of it (#72), and since #10 the main UI reads one field:
+`capture_problems` is the library row's "Recorded without game audio" line and
+the review page's fuller one (`src/lib/library/problems.ts`), which tolerates
+a missing field, a missing blob and a malformed one alike. No migration: the
+column is JSON, and both fields are optional within it.
 
 **Still missing:** the encoder actually selected, the negotiated resolution
 and frame rate, and dropped-frame counts. Those live inside libobs, which

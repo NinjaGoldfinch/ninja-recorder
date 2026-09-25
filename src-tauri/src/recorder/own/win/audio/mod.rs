@@ -37,6 +37,7 @@ use super::device;
 use crate::recorder::own::clock::{self, AudioClock, Stamp, Stamper};
 use crate::recorder::own::feed::Packet;
 use crate::recorder::own::pcm::{self, SampleFormat};
+use crate::recorder::own::problem::SourceError;
 use crate::{info, warn};
 
 pub use track::AudioTracks;
@@ -205,9 +206,9 @@ impl Source {
 /// Starts capturing `target` on a thread of its own, named for `name` (`game`,
 /// `microphone`, `desktop`, or the application's executable), which is also
 /// how the log lines name it. Returns once the capture is running, or with
-/// the reason it could not start.
-pub fn start(name: &str, target: Target, packets: Sender<Packet>) -> Result<Source, String> {
-    let (ready_tx, ready_rx) = sync_channel::<Result<(), String>>(1);
+/// the reason it could not start and the stage it got to (`own::problem`).
+pub fn start(name: &str, target: Target, packets: Sender<Packet>) -> Result<Source, SourceError> {
+    let (ready_tx, ready_rx) = sync_channel::<Result<(), SourceError>>(1);
     let stop = Arc::new(AtomicBool::new(false));
     let thread_stop = stop.clone();
     let thread_name = name.to_string();
@@ -223,7 +224,9 @@ pub fn start(name: &str, target: Target, packets: Sender<Packet>) -> Result<Sour
         }
         Err(_) => {
             let _ = thread.join();
-            Err(format!("the {name} audio thread exited before it started capturing"))
+            Err(SourceError::open(format!(
+                "the {name} audio thread exited before it started capturing"
+            )))
         }
     }
 }
@@ -232,7 +235,7 @@ fn thread_main(
     name: &str,
     target: Target,
     packets: Sender<Packet>,
-    ready: SyncSender<Result<(), String>>,
+    ready: SyncSender<Result<(), SourceError>>,
     stop: Arc<AtomicBool>,
 ) -> Result<Summary, String> {
     // MTA: process-loopback activation is asynchronous and completes on an
@@ -240,7 +243,7 @@ fn thread_main(
     // SAFETY: once, on this thread, before any COM use; paired below.
     if let Err(e) = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok() {
         let why = format!("CoInitializeEx (audio thread) failed: {e}");
-        let _ = ready.send(Err(why.clone()));
+        let _ = ready.send(Err(SourceError::open(why.clone())));
         return Err(why);
     }
     let result = capture(name, target, &packets, &ready, &stop);
@@ -250,8 +253,10 @@ fn thread_main(
     result
 }
 
-/// Opens and starts `target`.
-fn open(name: &str, target: Target) -> Result<Box<dyn Capture>, String> {
+/// Opens and starts `target`. Everything that fails here is an `Open`
+/// failure except finding an endpoint device, which `endpoint` reports as a
+/// `Find` one (no microphone, no output device).
+fn open(name: &str, target: Target) -> Result<Box<dyn Capture>, SourceError> {
     Ok(match target {
         Target::Process(pid) => {
             let source = loopback::Loopback::open(pid)?;
@@ -277,14 +282,15 @@ fn capture(
     name: &str,
     target: Target,
     packets: &Sender<Packet>,
-    ready: &SyncSender<Result<(), String>>,
+    ready: &SyncSender<Result<(), SourceError>>,
     stop: &AtomicBool,
 ) -> Result<Summary, String> {
     let source = match open(name, target) {
         Ok(source) => source,
         Err(e) => {
-            let _ = ready.send(Err(e.clone()));
-            return Err(e);
+            let why = e.reason.clone();
+            let _ = ready.send(Err(e));
+            return Err(why);
         }
     };
     let _ = ready.send(Ok(()));

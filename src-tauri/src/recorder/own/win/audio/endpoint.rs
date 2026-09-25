@@ -41,6 +41,7 @@ use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree, S
 use windows::core::{PCWSTR, PWSTR};
 
 use super::{Capture, Raw, float_format, read_packet};
+use crate::recorder::own::problem::SourceError;
 
 /// 100 ms of endpoint buffer, polled every 5 ms: generous enough that a slow
 /// poll never overflows it, which would be a discontinuity we caused.
@@ -136,7 +137,12 @@ fn identify(device: &IMMDevice) -> (String, String) {
 }
 
 /// Opens the device for `kind`, and says how it was chosen.
-fn device(kind: &Kind) -> Result<(IMMDevice, &'static str), String> {
+///
+/// **No device is an absence, not a failure** (`own::problem`): a machine
+/// with no microphone, or with the configured one unplugged, records without
+/// it and says so in the log only. So the lookups fail as `Find`, and the
+/// enumerator, which every machine has, fails as `Open`.
+fn device(kind: &Kind) -> Result<(IMMDevice, &'static str), SourceError> {
     // SAFETY: COM is initialised (MTA) on this thread, and the CLSID and the
     // interface are a matching pair.
     let enumerator: IMMDeviceEnumerator =
@@ -146,21 +152,22 @@ fn device(kind: &Kind) -> Result<(IMMDevice, &'static str), String> {
         Kind::Microphone(None) => {
             // SAFETY: `enumerator` is live.
             let device = unsafe { enumerator.GetDefaultAudioEndpoint(eCapture, eCommunications) }
-                .map_err(|e| format!("there is no default microphone: {e}"))?;
+                .map_err(|e| SourceError::find(format!("there is no default microphone: {e}")))?;
             Ok((device, "the default communications microphone"))
         }
         Kind::Microphone(Some(id)) => {
             let wide: Vec<u16> = id.encode_utf16().chain(std::iter::once(0)).collect();
             // SAFETY: `enumerator` is live, and `wide` is a null-terminated
             // wide string that outlives the call.
-            let device = unsafe { enumerator.GetDevice(PCWSTR(wide.as_ptr())) }
-                .map_err(|e| format!("the configured microphone {id} is not there: {e}"))?;
+            let device = unsafe { enumerator.GetDevice(PCWSTR(wide.as_ptr())) }.map_err(|e| {
+                SourceError::find(format!("the configured microphone {id} is not there: {e}"))
+            })?;
             Ok((device, "the configured microphone"))
         }
         Kind::Desktop => {
             // SAFETY: `enumerator` is live.
             let device = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }
-                .map_err(|e| format!("there is no default output device: {e}"))?;
+                .map_err(|e| SourceError::find(format!("there is no default output device: {e}")))?;
             Ok((device, "the default output, in loopback"))
         }
     }
@@ -181,8 +188,9 @@ fn open_client(device: &IMMDevice, flags: u32, what: &str) -> Result<IAudioClien
 
 impl Endpoint {
     /// Opens `kind`'s endpoint for 48 kHz stereo float capture, with a
-    /// keep-alive stream for the desktop.
-    pub fn open(kind: Kind) -> Result<Endpoint, String> {
+    /// keep-alive stream for the desktop. No device is a `Find` failure; any
+    /// other is an `Open` one ([`device`]).
+    pub fn open(kind: Kind) -> Result<Endpoint, SourceError> {
         let (device, how) = device(&kind)?;
         let (id, name) = identify(&device);
         let loopback = matches!(kind, Kind::Desktop);

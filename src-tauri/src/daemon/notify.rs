@@ -104,11 +104,25 @@ pub fn on_supervisor_event(ctx: &Ctx, event: SupervisorEvent) {
             "Recording started",
             "ninja-recorder is capturing this game.",
         ),
-        SupervisorEvent::Finalized(finalized) => {
+        SupervisorEvent::Finalized(finalized, problems) => {
             let name = std::path::Path::new(&finalized.path)
                 .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_else(|| finalized.path.clone());
+            // A recording that lost something says so **instead of** the
+            // plain "Recording saved", so one game is one toast (#10). It is
+            // a problem, so it is the "failed" preference that governs it;
+            // someone who turned those off still gets the ordinary toast.
+            if core::notification_prefs(ctx).allows(NotifyKind::RecordingFailed)
+                && let Some((title, body)) = crate::recorder::problem::notification(
+                    &name,
+                    &problems,
+                    crate::recorder::problem::windows_build(),
+                )
+            {
+                notify(ctx, NotifyKind::RecordingFailed, &title, &body);
+                return;
+            }
             let markers = finalized.markers.len();
             // No champion or KDA here: those columns are still NULL on real
             // recordings (DEVELOPMENT.md §3.4), so the toast says what is

@@ -583,7 +583,7 @@ mod tests {
 
         /// Why the own backend cannot be built, in the fake below: the
         /// shape of a refusal below its OS floor.
-        const OWN_UNAVAILABLE: &str = "the own capture backend needs Windows build 20348 or newer";
+        const OWN_UNAVAILABLE: &str = "the own capture backend needs Windows build 19041 or newer";
 
         /// A recorder that is only a name, and optionally mid-game.
         struct Named(&'static str, bool);

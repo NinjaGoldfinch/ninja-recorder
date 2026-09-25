@@ -50,13 +50,14 @@ mod session;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use super::problem::{self, StopAnswer};
 use super::{plan, select, stats};
 use super::status::Status;
 use super::worker::client::Worker;
 use super::worker::lifetime::{Action, Call, Lifetime};
 use super::worker::protocol::{Reply, Request, Started};
 use crate::recorder::audio::AudioLayout;
-use crate::recorder::{RecordConfig, Recorder, RecorderError, RecordingOutput};
+use crate::recorder::{CaptureProblem, RecordConfig, Recorder, RecorderError, RecordingOutput};
 use crate::{info, warn};
 
 pub use device::windows_build;
@@ -113,6 +114,9 @@ pub struct OwnRecorder {
     active: Option<Active>,
     /// For the faststart remux on stop; `None` skips it, as for libobs.
     ffmpeg_path: Option<PathBuf>,
+    /// How the last worker to go went, with its exit code: for the problem a
+    /// recording it was writing reports (`problem::stop_problem`).
+    lost: Option<String>,
 }
 
 /// What `stop` reports, fixed when the recording starts: the file, and the
@@ -124,6 +128,9 @@ struct Active {
     /// from `start` to the finalize either way: a source that dies
     /// mid-recording leaves it padded with silence, not missing.
     audio: AudioLayout,
+    /// The sources that should have opened and did not, reported at the
+    /// stop with whatever else the recording lost (`RecordingOutput`).
+    problems: Vec<CaptureProblem>,
 }
 
 impl OwnRecorder {
@@ -144,6 +151,7 @@ impl OwnRecorder {
             software: false,
             active: None,
             ffmpeg_path,
+            lost: None,
         }
     }
 
@@ -153,6 +161,7 @@ impl OwnRecorder {
         if let Some(why) = self.worker.as_mut().and_then(Worker::exited) {
             warn!("recorder", "own backend: {why} since it was last asked anything");
             self.worker = None;
+            self.lost = Some(why);
         }
         let mut lifetime = Lifetime {
             worker: self.worker.is_some(),
@@ -196,6 +205,7 @@ impl OwnRecorder {
         worker.ask(&request, timeout).map_err(|e| {
             warn!("recorder", "own backend: {e}");
             self.worker = None;
+            self.lost = Some(e.clone());
             RecorderError::Backend(e)
         })
     }
@@ -270,7 +280,7 @@ impl Recorder for OwnRecorder {
             Reply::Started { result } => result,
             other => return Err(self.out_of_step(other)),
         };
-        let Started { status, audio, summary } = match started {
+        let Started { status, audio, summary, problems } = match started {
             Ok(started) => started,
             Err(e) => {
                 if self.status == Status::Idle {
@@ -282,6 +292,9 @@ impl Recorder for OwnRecorder {
         // The worker logged it to `worker.log`; this is the copy.
         if let Some(summary) = summary {
             info!("recorder", "{summary}");
+        }
+        for problem in &problems {
+            warn!("recorder", "own backend: {}: {}", problem.headline(), problem.reason());
         }
         if let Status::Software { encoder, reason } = &status {
             warn!("recorder", "own backend: software H.264 encoding with {encoder}: {reason}");
@@ -304,7 +317,9 @@ impl Recorder for OwnRecorder {
             self.worker = None;
             return Err(RecorderError::Backend(e));
         }
-        self.active = Some(Active { path, audio });
+        // A worker lost before this recording is not this recording's loss.
+        self.lost = None;
+        self.active = Some(Active { path, audio, problems });
         Ok(())
     }
 
@@ -318,19 +333,25 @@ impl Recorder for OwnRecorder {
     /// faststart remux as a clean stop, and this returns it rather than an
     /// error. Only a worker that died before writing anything at all is an
     /// error.
+    ///
+    /// **Whatever the recording lost is reported with it**: the sources that
+    /// never opened, the ones that stopped part-way, and an early end
+    /// (`problem::stop_problem`), for the supervisor to store and say.
     fn stop(&mut self) -> Result<RecordingOutput, RecorderError> {
         let action = self.decide(Call::Stop);
-        let Active { path, audio } = self.active.take().ok_or(RecorderError::NotRecording)?;
+        let Active { path, audio, mut problems } =
+            self.active.take().ok_or(RecorderError::NotRecording)?;
         // Carried out below if the worker is still there to end; a pending
         // release means nothing once nothing is recording.
         self.release_pending = false;
         let answer = match action {
             Action::Send | Action::SendThenShutDown => match self.ask(Request::Stop, STOP_WAIT) {
-                Ok(Reply::Stopped { result, summary }) => {
+                Ok(Reply::Stopped { result, summary, problems: ended }) => {
                     // The worker logged it to `worker.log`; this is the copy.
                     if let Some(summary) = summary {
                         info!("recorder", "{summary}");
                     }
+                    problems.extend(ended);
                     Some(result)
                 }
                 Ok(other) => {
@@ -351,6 +372,16 @@ impl Recorder for OwnRecorder {
         let has_bytes = path.metadata().is_ok_and(|m| m.len() > 0);
         // The worker closed the file itself, `mfra` and all.
         let finalized = matches!(answer, Some(Ok(_)));
+        // How the recording ended, for the user. A failed finalize or a dead
+        // worker with nothing on disk is the error below instead, which the
+        // supervisor reports as not saved, so only a kept file reaches this.
+        let stopped = match &answer {
+            Some(Ok(None)) => StopAnswer::Clean,
+            Some(Ok(Some(problem))) => StopAnswer::EndedEarly(problem),
+            Some(Err(e)) => StopAnswer::FinalizeFailed(e),
+            None => StopAnswer::WorkerGone(self.lost.as_deref()),
+        };
+        problems.extend(problem::stop_problem(stopped));
         match answer {
             Some(Ok(None)) => {}
             Some(Ok(Some(problem))) => {
@@ -404,7 +435,7 @@ impl Recorder for OwnRecorder {
         }
         info!("recorder", "{}", stats::render_remux(&path, repair.as_ref(), remux.as_ref()));
 
-        Ok(RecordingOutput { path, audio })
+        Ok(RecordingOutput { path, audio, problems })
     }
 
     fn is_recording(&self) -> bool {

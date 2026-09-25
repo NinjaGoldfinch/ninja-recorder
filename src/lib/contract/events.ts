@@ -19,7 +19,7 @@ export type { Event, Topic };
 * a variant be added to an existing topic without a client change.
  */
 export const EVENTS_BY_TOPIC = {
-  recording: ["stateChanged", "recordingStarted", "recordingStopped", "markerAdded", "sampleBatch"],
+  recording: ["stateChanged", "recordingStarted", "recordingStopped", "markerAdded", "sampleBatch", "captureProblems"],
   lcu: ["lcuPhase"],
   library: ["matchSummaryPatched", "libraryChanged", "retentionRan"],
   update: ["updateStatus"],

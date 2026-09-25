@@ -539,9 +539,9 @@ opened it", for the three writers and why this one matches by id.
 flowchart TB
     S["take session; read its clock<br/><small>duration_s, before the remux inflates it</small>"] --> A["Recorder::stop()"]
     A --> B{"ok?"}
-    B -->|"no"| Z["log; keep last_finalized empty"]
+    B -->|"no"| Z["log; keep last_finalized empty<br/><small>toast; captureProblems: notSaved</small>"]
     B -->|"yes"| C["stat file for size_bytes<br/><small>+ serialize the reported audio layout</small>"]
-    C --> D2["assemble RecordingDiagnostics<br/><small>polls, ever_matched, offset, backend</small>"]
+    C --> D2["assemble RecordingDiagnostics<br/><small>polls, ever_matched, offset, backend,<br/>capture_problems, windows_build</small>"]
     D2 --> D["db.finish_recording(id)<br/><small>by id: the row was opened at start.<br/>insert_recording only when there is no id</small>"]
     D -->|"err"| E["log; recording_id = None<br/><small>UI shows DB WRITE FAILED</small>"]
     D -->|"ok"| F0["delete_markers<br/><small>the ones written during the game</small>"]
@@ -553,11 +553,35 @@ flowchart TB
     G2 --> H["last_finalized = {path, markers}"]
     H --> I["retention::enforce_now"]
     I --> J["emit library-changed"]
-    J --> K["request_summary(recording_id, game_id)"]
+    J --> J2["notify Finalized, with its capture problems<br/><small>one toast: saved, or saved without …</small>"]
+    J2 --> J3["publish recordingStopped,<br/>then captureProblems if it lost anything"]
+    J3 --> K["request_summary(recording_id, game_id)"]
     K -.->|"only if both are known"| L["deferred LCU patch<br/><small>off this path; see below</small>"]
     style Z fill:#ffebee,stroke:#c62828
     style E fill:#fff3e0,stroke:#ef6c00
 ```
+
+### What the recording lost, and who is told (#10)
+
+`RecordingOutput::problems` is what the backend reports it lost to a
+**failure**, as against what the preset asked for and the machine did not
+have: game audio that Windows refused to capture, a microphone that stopped
+part-way, a recording that ended before the game did. Discord not running is
+not in it (DEVELOPMENT.md §2.6). The finalize does three things with the list,
+and nothing at all when it is empty:
+
+- stores it in `diagnostics_json` with the Windows build, which is what the
+  library row and the review page read afterwards;
+- hands it to the notifier with `Finalized`, which shows "Recording saved
+  without game audio: … Please report this with your Windows version" instead
+  of "Recording saved";
+- publishes `captureProblems` with the row's id, after `recordingStopped`, for
+  the strip in an open window.
+
+A start the backend refuses has no row. It is the "Recording problem" toast it
+always was, now naming the Windows build, beside the crashed `recordingStopped`
+and a `captureProblems` with no id carrying `notStarted`. A stop that keeps
+nothing is the same with `notSaved`.
 
 ### The review's game (WS9)
 

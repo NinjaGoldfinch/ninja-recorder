@@ -17,6 +17,11 @@
 //! unplugged) is logged once, with the reason its thread gave, and is silence
 //! from then on, in the mix and in its stem: the mixer's watermark is what
 //! stops it holding anything up.
+//!
+//! **Which of those the user is told about** is `own::problem`'s decision:
+//! a source that was there and would not open, and one that died part-way,
+//! are `CaptureProblem`s, carried back with the start and the stop; one that
+//! was simply not there (Discord not running) is only logged.
 
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
@@ -25,11 +30,13 @@ use windows::Win32::Foundation::HWND;
 
 use super::super::process;
 use super::{SAMPLE_RATE, Source, Summary, Target};
+use crate::recorder::CaptureProblem;
 use crate::recorder::audio::{AudioLayout, AudioSourceKind};
 use crate::recorder::own::clock::{self, AudioClock};
 use crate::recorder::own::feed::{Feed, Packet};
 use crate::recorder::own::mix::TrackMix;
 use crate::recorder::own::plan::{self, CapturePlan, source_name};
+use crate::recorder::own::problem::{self, SourceError};
 use crate::recorder::own::root::{self, Proc};
 use crate::recorder::own::stats::{AudioStop, Opened, SourceStop};
 use crate::{info, warn};
@@ -68,17 +75,24 @@ pub struct AudioTracks {
     layout: AudioLayout,
     /// Made when the origin arrives; until then packets wait in the channels.
     mix: Option<TrackMix>,
+    /// The sources that stopped before the recording did, in the order they
+    /// were noticed (`problem::ended`).
+    ended: Vec<CaptureProblem>,
 }
 
 /// Resolves `kind` to what its thread captures, and says what that is for
 /// the start line. `procs` is the process snapshot, taken on first use and
 /// shared by every process source.
+///
+/// A process tree that cannot be found is a `Find` failure, which for an
+/// application means it is not running; a snapshot that cannot be taken is
+/// an `Open` one, because it is a Windows call failing (`own::problem`).
 fn target(
     kind: &AudioSourceKind,
     hwnd: HWND,
     procs: &mut Option<Vec<Proc>>,
-) -> Result<(Target, String), String> {
-    let mut snapshot = || -> Result<Vec<Proc>, String> {
+) -> Result<(Target, String), SourceError> {
+    let mut snapshot = || -> Result<Vec<Proc>, SourceError> {
         if procs.is_none() {
             *procs = Some(process::snapshot()?);
         }
@@ -86,12 +100,13 @@ fn target(
     };
     match kind {
         AudioSourceKind::Game => {
-            let root = root::game_root(&snapshot()?, process::window_owner(hwnd))?;
+            let root = root::game_root(&snapshot()?, process::window_owner(hwnd))
+                .map_err(SourceError::find)?;
             info!("recorder", "own backend: game audio from PID {}, {}", root.pid, root.how);
             Ok((Target::Process(root.pid), format!("PID {} ({})", root.pid, root.how)))
         }
         AudioSourceKind::Application { exe } => {
-            let root = root::application_root(&snapshot()?, exe)?;
+            let root = root::application_root(&snapshot()?, exe).map_err(SourceError::find)?;
             info!("recorder", "own backend: {exe} audio from PID {}, {}", root.pid, root.how);
             Ok((Target::Process(root.pid), format!("PID {} ({})", root.pid, root.how)))
         }
@@ -106,16 +121,18 @@ fn target(
 impl AudioTracks {
     /// Opens every source `plan` names, for the game window `hwnd`. Returns
     /// the tracks, or `None` if no source opened; the layout the file will
-    /// hold, `plan`'s less whatever did not open; and what became of each
-    /// source, for the start line (`own::stats`).
+    /// hold, `plan`'s less whatever did not open; what became of each
+    /// source, for the start line (`own::stats`); and the ones whose failure
+    /// the user should hear about (`problem::not_opened`).
     pub fn start(
         hwnd: HWND,
         plan: &CapturePlan,
-    ) -> (Option<AudioTracks>, AudioLayout, Vec<Opened>) {
+    ) -> (Option<AudioTracks>, AudioLayout, Vec<Opened>, Vec<CaptureProblem>) {
         let mut procs = None;
         let mut inputs = Vec::new();
         let mut opened = Vec::with_capacity(plan.sources.len());
         let mut report = Vec::with_capacity(plan.sources.len());
+        let mut problems = Vec::new();
         for kind in &plan.sources {
             let name = source_name(kind);
             let (tx, packets) = channel();
@@ -124,8 +141,14 @@ impl AudioTracks {
             });
             report.push(Opened {
                 name: name.clone(),
-                outcome: source.as_ref().map(|(_, what)| what.clone()).map_err(Clone::clone),
+                outcome: source.as_ref().map(|(_, what)| what.clone()).map_err(|e| e.reason.clone()),
             });
+            if let Err(e) = &source
+                && let Some(problem) = problem::not_opened(kind, e)
+            {
+                warn!("recorder", "own backend: {}: {e}", problem.headline());
+                problems.push(problem);
+            }
             match source {
                 Ok((source, _)) => {
                     inputs.push(Input {
@@ -154,8 +177,9 @@ impl AudioTracks {
             inputs,
             layout: layout.clone(),
             mix: None,
+            ended: Vec::new(),
         });
-        (tracks, layout, report)
+        (tracks, layout, report, problems)
     }
 
     /// The origin has arrived: packets can be placed from here on.
@@ -191,6 +215,7 @@ impl AudioTracks {
                                  did ({why}); it is silence in every track it feeds from here",
                                 input.name
                             );
+                            self.ended.push(problem::ended(&input.name, &why));
                         }
                         break;
                     }
@@ -221,8 +246,9 @@ impl AudioTracks {
     /// logged rather than returned, because the file is finalized either way.
     /// A recording with nothing to write to drops the tracks instead, which
     /// stops the sources. Returns what the stop line sums up, if anything
-    /// was placed: each source's clock, and what track 0, the mix, clipped.
-    pub fn finish<W>(mut self, end_rel: i64, write: &mut W) -> Option<AudioStop>
+    /// was placed: each source's clock, and what track 0, the mix, clipped;
+    /// and every source that stopped before the recording did.
+    pub fn finish<W>(mut self, end_rel: i64, write: &mut W) -> (Option<AudioStop>, Vec<CaptureProblem>)
     where
         W: FnMut(usize, &[i16], u64) -> Result<(), String>,
     {
@@ -246,12 +272,23 @@ impl AudioTracks {
         }
         for input in &mut self.inputs {
             input.stop();
+            // A thread that had already ended on an error of its own, and
+            // was not noticed before the stop, died too: it is a problem, not
+            // the stop.
+            if !input.ended
+                && let Some(Err(why)) = &input.summary
+            {
+                self.ended.push(problem::ended(&input.name, why));
+            }
             // Stopped on purpose: the channel closing now is not the source
             // dying.
             input.ended = true;
         }
         self.receive();
-        let mut mix = self.mix.take()?;
+        let ended = std::mem::take(&mut self.ended);
+        let Some(mut mix) = self.mix.take() else {
+            return (None, ended);
+        };
 
         let finished = mix.finish(end_rel, write);
         for (t, result) in finished.iter().enumerate() {
@@ -294,7 +331,7 @@ impl AudioTracks {
             );
         }
         let clipped = if mix.tracks() > 0 { mix.track(0).mixer().stats.clipped } else { 0 };
-        Some(AudioStop { sources, clipped })
+        (Some(AudioStop { sources, clipped }), ended)
     }
 }
 

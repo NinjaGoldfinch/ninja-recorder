@@ -127,13 +127,18 @@ empty until a run has produced them.
 ## Windows 10 floor test (#237)
 
 **The question:** does process loopback work on Windows 10 22H2, build 19045?
-The own backend refuses anything below build 20348
-(`recorder::own::select::MIN_BUILD`), the floor Microsoft documents for process
-loopback, and no Windows 10 release reaches it. OBS registers the same capture
-from 19041 ("process filtering seems to work earlier"). The decision on #237 is
-to lower the floor to 19041 **if** this run passes, and to keep 20348 and
-record the result if it does not. [DEVELOPMENT.md §2.4](../../DEVELOPMENT.md#24-encoding-defaults)
-has the floor.
+Microsoft documents it from build 20348, which no Windows 10 release reaches;
+OBS registers the same capture from 19041 ("process filtering seems to work
+earlier"). **The own backend's floor is already 19041**
+(`recorder::own::select::MIN_BUILD`): #237's plan was to lower it only if this
+run passed, and the owner has since lowered it without the run (#291),
+leaving a bug report to confirm it. [DEVELOPMENT.md §2.4](../../DEVELOPMENT.md#24-encoding-defaults)
+has the decision.
+
+**So this is optional confirmation, not a gate.** It is still the quickest way
+to know rather than wait for a report, and a result either way is worth
+pasting into #237. A fail would not stop Windows 10 recording: the own backend
+records without game audio and says so in the app, naming the failing call.
 
 **This spike has no build gate of its own.** It reads the build and prints it,
 warns below 19041, and tries the capture anyway, so it runs unchanged on
@@ -176,8 +181,8 @@ Anything else fails the floor test, and the output says which way:
 
 | What you see | Means |
 |---|---|
-| `ActivateAudioInterfaceAsync failed`, `activation was refused`, or `the activation never completed` | This Windows does not offer process loopback to this process. The floor stays. |
-| `IAudioClient::Initialize failed` | The activation exists but the stream cannot be set up. The floor stays. |
+| `ActivateAudioInterfaceAsync failed`, `activation was refused`, or `the activation never completed` | This Windows does not offer process loopback to this process. The floor should go back up. |
+| `IAudioClient::Initialize failed` | The activation exists but the stream cannot be set up. The floor should go back up. |
 | include has Discord in it | No isolation on this build (check the report did not put Discord inside the tree). |
 | include is `SILENCE CAPTURED` with the right root | The stream exists and the game's audio does not reach it. |
 | exclude has no Discord | Inconclusive: Discord was not audible. Fix that and run again. |
@@ -191,17 +196,19 @@ Anything else fails the floor test, and the output says which way:
 
 As for #7, **do not attach the WAVs**.
 
-A pass is what lets a follow-up change move `MIN_BUILD` to 19041, together
-with `the_os_floor_is_build_20348` and the §2.4 bullet, citing the run. This
-procedure changes neither.
+A pass confirms the floor as it stands: cite the run in the §2.4 bullet and
+in `MIN_BUILD`'s comment, which say it is untested on Windows 10 until then.
+A fail means the floor goes back up to 20348 (`the_os_floor_is_build_19041`
+and the §2.4 bullet), and what Windows 10 gets instead becomes its own issue.
 
-### Optional: the own backend itself, below the floor
+### The own backend itself, on Windows 10
 
-The spike proves the API. To try the own backend on the same machine before
-the floor moves, a **devtools** build can be told to ignore the floor:
-`NINJA_OWN_IGNORE_OS_FLOOR=1` in the daemon's environment. A release build
-never reads it, and a devtools build logs a warning every time it lifts the
-refusal and again at every recording start.
+The spike proves the API. On 19045 the own backend no longer needs any
+override: select it in Settings and follow §11.2. Below the floor (Windows 10
+1903 or 1909, builds 18362 and 18363), a **devtools** build can still be told
+to ignore it: `NINJA_OWN_IGNORE_OS_FLOOR=1` in the daemon's environment. A
+release build never reads it, and a devtools build logs a warning every time
+it lifts the refusal and again at every recording start.
 
 ```powershell
 # Quit the app from the tray first, so no daemon is left running. The daemon

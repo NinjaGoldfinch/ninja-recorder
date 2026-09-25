@@ -22,6 +22,7 @@ use super::device::{self, Device};
 use super::encode;
 use super::output::Output;
 use super::scale::{self, Fitter};
+use crate::recorder::CaptureProblem;
 use crate::recorder::audio::AudioLayout;
 use crate::recorder::own::clock;
 use crate::recorder::own::fit::Size;
@@ -62,6 +63,9 @@ pub struct Started {
     pub audio: AudioLayout,
     /// The start line, as logged (`own::stats`).
     pub summary: String,
+    /// The sources that should have opened and did not
+    /// (`own::problem::not_opened`), for the daemon to report.
+    pub problems: Vec<CaptureProblem>,
 }
 
 /// What a stop answers with.
@@ -72,11 +76,14 @@ pub struct Stopped {
     /// The stop line, as logged (`own::stats`), when a recording was
     /// finalized.
     pub summary: Option<String>,
+    /// The sources that stopped before the recording did
+    /// (`own::problem::ended`).
+    pub problems: Vec<CaptureProblem>,
 }
 
 impl Stopped {
     fn not_recording() -> Stopped {
-        Stopped { result: Err("not recording".to_string()), summary: None }
+        Stopped { result: Err("not recording".to_string()), summary: None, problems: Vec::new() }
     }
 }
 
@@ -283,6 +290,7 @@ impl Session {
             status: recording.status.clone(),
             audio: recording.layout.clone(),
             summary: recording.started.clone(),
+            problems: std::mem::take(&mut recording.problems),
         };
         if reply.send(Ok(started)).is_err() {
             // `start`'s caller has gone. Nothing will ever stop this, so do
@@ -307,7 +315,7 @@ impl Session {
         // SAFETY: pairs timeBeginPeriod(1).
         unsafe { timeEndPeriod(1) };
 
-        let (finalized, summary) = recording.finish();
+        let (finalized, summary, problems) = recording.finish();
         let bytes = std::fs::metadata(&path).ok().map(|m| m.len());
         let line = stats::render_stop(&path, FPS, &summary, &finalized, bytes);
         info!("recorder", "{line}");
@@ -320,7 +328,7 @@ impl Session {
         }
         match ended {
             Ended::Stop(reply) => {
-                let _ = reply.send(Stopped { result: finalized.map(|()| None), summary });
+                let _ = reply.send(Stopped { result: finalized.map(|()| None), summary, problems });
                 false
             }
             Ended::Exit => {
@@ -335,7 +343,7 @@ impl Session {
                     Ok(()) => Ok(Some(problem)),
                     Err(e) => Err(format!("{problem}; then {e}")),
                 };
-                self.ended = Some(Stopped { result, summary });
+                self.ended = Some(Stopped { result, summary, problems });
                 false
             }
         }
@@ -405,6 +413,8 @@ struct Recording {
     summary: stats::Stop,
     /// The start line, for `Started`.
     started: String,
+    /// The sources that should have opened and did not, for `Started`.
+    problems: Vec<CaptureProblem>,
 }
 
 impl Recording {
@@ -472,7 +482,7 @@ impl Recording {
         // is an AAC encoder and a track for each track that kept a source; a
         // source that fails costs itself (and any stem it alone fed), not the
         // recording, and the reported layout says which it was.
-        let (audio, layout, opened) = AudioTracks::start(hwnd, plan);
+        let (audio, layout, opened, problems) = AudioTracks::start(hwnd, plan);
         if audio.is_none() && !plan.sources.is_empty() {
             warn!("recorder", "own backend: no audio source opened, recording video only");
         }
@@ -521,6 +531,7 @@ impl Recording {
             ticks: 0,
             summary: stats::Stop::default(),
             started,
+            problems,
         })
     }
 
@@ -694,16 +705,20 @@ impl Recording {
     /// rather than waits (or gives up after five seconds), and the fragments
     /// already on disk are the recording (`stop` bounds the wait regardless).
     ///
-    /// Returns the finalize's result and the counters for the stop line.
-    fn finish(mut self) -> (Result<(), String>, stats::Stop) {
+    /// Returns the finalize's result, the counters for the stop line, and the
+    /// sources that stopped before the recording did.
+    fn finish(mut self) -> (Result<(), String>, stats::Stop, Vec<CaptureProblem>) {
         drop(self.capture);
         let end = clock::tick_time(self.ticks, FPS);
+        let mut problems = Vec::new();
         if let Some(audio) = self.audio.take() {
             match self.output.as_mut() {
                 Some(output) => {
-                    self.summary.audio = audio.finish(end, &mut |track, pcm, position| {
+                    let (stop, ended) = audio.finish(end, &mut |track, pcm, position| {
                         output.write_audio(track, pcm, position)
                     });
+                    self.summary.audio = stop;
+                    problems = ended;
                 }
                 None => drop(audio),
             }
@@ -726,7 +741,7 @@ impl Recording {
             None => Ok(()),
         };
         drop(self.slots);
-        (result, self.summary)
+        (result, self.summary, problems)
     }
 
 }

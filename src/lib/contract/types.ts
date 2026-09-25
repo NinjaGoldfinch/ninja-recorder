@@ -71,7 +71,12 @@ recordingId: number | null,
  * the library row ends up with. Publishing a guessed path instead
  * would be a value that is sometimes wrong.
  */
-fileStem: string, startedAtMs: number, } | { "type": "recordingStopped", recordingId: number | null, outcome: StopOutcome, } | { "type": "markerAdded", recordingId: number | null, marker: SessionMarker, } | { "type": "sampleBatch", recordingId: number | null, samples: Array<SessionSample>, } | { "type": "matchSummaryPatched", recordingId: number, } | { "type": "libraryChanged", reason: LibraryChangeReason, } | { "type": "retentionRan", deleted: Array<number>, freedBytes: number, } | { "type": "updateStatus", status: UpdateStatus, } | { "type": "daemonShuttingDown", reason: ShutdownReason, } | { "type": "lagged", dropped: number, } | { "type": "showUi", 
+fileStem: string, startedAtMs: number, } | { "type": "recordingStopped", recordingId: number | null, outcome: StopOutcome, } | { "type": "markerAdded", recordingId: number | null, marker: SessionMarker, } | { "type": "sampleBatch", recordingId: number | null, samples: Array<SessionSample>, } | { "type": "captureProblems", recordingId: number | null, 
+/**
+ * The Windows build it happened on, for the report the strip asks
+ * for. `None` off Windows, or if it could not be read.
+ */
+windowsBuild: number | null, problems: Array<CaptureProblem>, } | { "type": "matchSummaryPatched", recordingId: number, } | { "type": "libraryChanged", reason: LibraryChangeReason, } | { "type": "retentionRan", deleted: Array<number>, freedBytes: number, } | { "type": "updateStatus", status: UpdateStatus, } | { "type": "daemonShuttingDown", reason: ShutdownReason, } | { "type": "lagged", dropped: number, } | { "type": "showUi", 
 /**
  * The view to land on, in `router.ts`'s vocabulary, or `None` for
  * wherever the window was. `Some("settings")` is the Settings item.
@@ -417,6 +422,8 @@ kill_diff: number,
  */
 cs_diff: number, };
 
+export type CaptureProblem = { "kind": "sourceFailed", source: string, reason: string, } | { "kind": "sourceEnded", source: string, reason: string, } | { "kind": "endedEarly", reason: string, } | { "kind": "notStarted", reason: string, } | { "kind": "notSaved", reason: string, };
+
 export type AudioInputDevice = { 
 /**
  * The endpoint id the capture backend wants, verbatim.
@@ -509,7 +516,20 @@ backend: string,
  * What the finalize wrote. A count here that disagrees with the
  * `markers`/`samples` tables means an insert failed.
  */
-markers: number, samples: number, };
+markers: number, samples: number, 
+/**
+ * What the recording lost to a failure (#10): a source that should have
+ * opened and did not, one that stopped part-way, an early end. The
+ * library row and the review page show it as "Recorded without …".
+ * Left out when empty, so a clean recording's JSON is what it always
+ * was, and read as empty from a row written before it existed.
+ */
+capture_problems?: Array<CaptureProblem>, 
+/**
+ * The Windows build this was recorded on, which a capture problem is
+ * not diagnosable without. `None` off Windows, and on older rows.
+ */
+windows_build?: number | null, };
 
 export type SessionMarker = { video_time_s: number, kind: MarkerKind, game_time_s: number, 
 /**

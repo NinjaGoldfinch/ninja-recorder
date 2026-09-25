@@ -295,6 +295,25 @@ contract_events! {
         samples: Vec<crate::state_machine::supervisor::SessionSample>,
     } => Recording,
 
+    /// A recording lost something to a failure, or never happened (#10):
+    /// a source that should have opened and did not, one that stopped
+    /// part-way, an early end, a start the backend refused, a stop that kept
+    /// nothing. **Not** a source the preset names that was simply not there
+    /// (Discord not running), which is not a failure (`own::problem`).
+    ///
+    /// Once per recording, with everything it lost: after `RecordingStopped`
+    /// for a finished one, carrying its id, and beside the crashed
+    /// `RecordingStopped` with no id when there is no recording. The UI shows
+    /// it as a dismissible strip; the finished row keeps the same list in its
+    /// `diagnostics_json`, which is what the library shows afterwards.
+    CaptureProblems {
+        recording_id: Option<i64>,
+        /// The Windows build it happened on, for the report the strip asks
+        /// for. `None` off Windows, or if it could not be read.
+        windows_build: Option<u32>,
+        problems: Vec<crate::recorder::CaptureProblem>,
+    } => Recording,
+
     /// The deferred LCU post-game patch landed on a row.
     MatchSummaryPatched { recording_id: i64 } => Library,
 
@@ -361,16 +380,18 @@ mod tests {
     /// variant appearing or disappearing should be a deliberate diff, not a
     /// silent one.
     ///
-    /// **Thirteen, where the plan's Appendix B drafts twelve.** `ShowUi` is the
+    /// **Fourteen, where the plan's Appendix B drafts twelve.** `ShowUi` is one
     /// addition, and it is one WS3.3 forced rather than one anybody wanted: the
     /// tray moved into the daemon, so Open and Settings have to reach a window
     /// in another process, and the pipe is the only channel between them.
+    /// `CaptureProblems` is the other (#10): a capture failure has to reach the
+    /// window as well as a toast, and no existing event carries one.
     /// Appendix B calls itself a draft; this is what it looks like to depart
     /// from it on purpose.
     #[test]
-    fn the_event_surface_is_thirteen_variants() {
-        assert_eq!(event_names().len(), 13);
-        assert_eq!(event_manifest().len(), 13);
+    fn the_event_surface_is_fourteen_variants() {
+        assert_eq!(event_names().len(), 14);
+        assert_eq!(event_manifest().len(), 14);
     }
 
     /// Two lists generated from one table cannot disagree — but they can both
@@ -538,6 +559,35 @@ mod tests {
         assert!(crashed.get("reason").is_none());
     }
 
+    /// The capture-problem event on the wire, as the strip reads it: tagged,
+    /// camelCase, the problems as tagged objects, and the reason text as it
+    /// came, newlines and markup characters included, for the UI to show as
+    /// text.
+    #[test]
+    fn capture_problems_cross_as_tagged_data() {
+        let event = Event::CaptureProblems {
+            recording_id: Some(7),
+            windows_build: Some(19_045),
+            problems: vec![crate::recorder::CaptureProblem::SourceFailed {
+                source: "game".into(),
+                reason: "<b>refused</b> (0x80070005)".into(),
+            }],
+        };
+        assert_eq!(event.topic(), Topic::Recording);
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "type": "captureProblems",
+                "recordingId": 7,
+                "windowsBuild": 19045,
+                "problems": [{"kind": "sourceFailed", "source": "game", "reason": "<b>refused</b> (0x80070005)"}]
+            })
+        );
+        let back: Event = serde_json::from_value(json).unwrap();
+        assert!(matches!(back, Event::CaptureProblems { recording_id: Some(7), .. }));
+    }
+
     /// Payload types are spelled as absolute `crate::` paths so a generator
     /// with no module context can resolve them. Easy to violate by writing the
     /// short name the `use` above already provides.
@@ -551,6 +601,7 @@ mod tests {
             "String",
             "f64",
             "Option<i64>",
+            "Option<u32>",
             "Option<String>",
             "Vec<i64>",
         ];
