@@ -32,6 +32,7 @@ use crate::live_client::{Scoreboard, ScoreboardPlayer, ScoreboardRunes};
 use crate::{debug, info, warn};
 use crate::db::{Db, MatchMetadata, NewSample};
 use crate::lcu::{self, MatchDataError, MatchSummary};
+use crate::lcu::timeline::GoldPoint;
 use crate::live_client::LiveSummary;
 use std::time::Duration;
 
@@ -585,16 +586,6 @@ pub async fn patch(db: &Db, request: &SummaryRequest) -> bool {
     }
 }
 
-/// Adds the gold curve, from Riot's own per-participant accounting.
-///
-/// Best effort throughout. Every early return here is a recording that
-/// keeps its kill and CS curves and simply has no gold line, which the
-/// review view renders as "no gold data" — never as a flat zero, because
-/// zero on that chart means "you were even" and that reading is the entire
-/// reason the old estimate had to go (`lcu::timeline`).
-///
-/// **Custom and practice games end here**, at the empty series: they never
-/// reach match history, so there is no timeline to ask for.
 /// Records the rank a game was played at, when the reading is still about it.
 ///
 /// **Three ways it declines**, and each leaves the columns NULL rather than
@@ -685,6 +676,16 @@ async fn write_ranked_standing(
     }
 }
 
+/// Adds the gold curve, from Riot's own per-participant accounting.
+///
+/// Best effort throughout. Every early return here is a recording that
+/// keeps its kill and CS curves and simply has no gold line, which the
+/// review view renders as "no gold data" — never as a flat zero, because
+/// zero on that chart means "you were even" and that reading is the entire
+/// reason the old estimate had to go (`lcu::timeline`).
+///
+/// **Custom and practice games end here**, at the empty series: they never
+/// reach match history, so there is no timeline to ask for.
 pub(crate) async fn write_gold_series(
     db: &Db,
     client: &lcu::LcuHttpClient,
@@ -724,13 +725,11 @@ pub(crate) async fn write_gold_series(
         return false;
     }
 
-    let samples: Vec<NewSample> = points
-        .iter()
-        // A frame from before the recording started is outside the video.
-        .filter(|p| p.game_time_s + offset >= 0.0)
+    let samples: Vec<NewSample> = place_gold_frames(&points, offset)
+        .into_iter()
         .map(|p| NewSample {
             game_time_s: p.game_time_s,
-            video_time_s: p.game_time_s + offset,
+            video_time_s: p.video_time_s,
             our_team: sides.our_team.clone(),
             gold_diff: Some(p.gold_diff),
             ..Default::default()
@@ -753,11 +752,162 @@ pub(crate) async fn write_gold_series(
     }
 }
 
+/// One gold frame, placed on the video's clock.
+#[derive(Debug, Clone, PartialEq)]
+struct PlacedGold {
+    game_time_s: f64,
+    video_time_s: f64,
+    gold_diff: f64,
+}
+
+/// Places the match timeline's per-minute frames on the video, through the
+/// recording's alignment `offset` (video time minus game time).
+///
+/// Every frame inside the video is kept as it is. A frame from before the
+/// recording started is outside the video and is not kept, **but it is not
+/// ignored either** (#292): the recording starts when Live Client Data first
+/// answers, a fraction of a second after the game clock does, so the offset
+/// is always slightly negative and the 0:00 frame always lands just before
+/// the video. Dropping it left the chart nothing to draw until the 1:00
+/// frame. So when there is a frame on each side of the start, a point is
+/// added at video time 0, its gold interpolated linearly between the two,
+/// and its game time the one the video starts at. The same rule covers a
+/// recording that starts mid-game (#198): the two frames either side of
+/// its start are whichever minutes those are.
+///
+/// Nothing is added when a frame lands exactly on 0, since that frame is the
+/// start already, or when no frame precedes the start, since there is then
+/// nothing to interpolate *from* and extending the first value backwards
+/// would be a number Riot never sent. Frames after the video's end are kept,
+/// as they always were: the chart maps times through the viewing window and
+/// Riot's last frame is the game's end, which the recording outlives.
+///
+/// `points` is sorted by game time, which `lcu::timeline::gold_series`
+/// guarantees. The new point's `video_time_s - game_time_s` is `offset`
+/// exactly, which matters because `Db::sample_alignment_offset` recovers the
+/// offset from the earliest sample, and a rerun must find the same one.
+fn place_gold_frames(points: &[GoldPoint], offset: f64) -> Vec<PlacedGold> {
+    let first_inside = points.partition_point(|p| p.game_time_s + offset < 0.0);
+    let mut placed = Vec::with_capacity(points.len() - first_inside + 1);
+
+    if first_inside > 0
+        && let Some(after) = points.get(first_inside)
+    {
+        let before = &points[first_inside - 1];
+        let start = -offset;
+        if after.game_time_s > start {
+            let span = after.game_time_s - before.game_time_s;
+            let fraction = (start - before.game_time_s) / span;
+            placed.push(PlacedGold {
+                game_time_s: start,
+                video_time_s: 0.0,
+                gold_diff: before.gold_diff + fraction * (after.gold_diff - before.gold_diff),
+            });
+        }
+    }
+
+    placed.extend(points[first_inside..].iter().map(|p| PlacedGold {
+        game_time_s: p.game_time_s,
+        video_time_s: p.game_time_s + offset,
+        gold_diff: p.gold_diff,
+    }));
+    placed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::NewRecording;
     use crate::live_client::Kda;
+
+    // --- placing the gold frames (#292) -----------------------------------
+
+    fn frames(points: &[(f64, f64)]) -> Vec<GoldPoint> {
+        points
+            .iter()
+            .map(|&(game_time_s, gold_diff)| GoldPoint { game_time_s, gold_diff })
+            .collect()
+    }
+
+    fn placed(game_time_s: f64, video_time_s: f64, gold_diff: f64) -> PlacedGold {
+        PlacedGold { game_time_s, video_time_s, gold_diff }
+    }
+
+    /// The recording from the issue: capture began 0.393 s after the game
+    /// clock, so the 0:00 frame lands before the video. It used to be
+    /// dropped and the curve began at 1:00; now the curve begins at 0.
+    #[test]
+    fn the_frame_before_the_start_becomes_a_point_at_zero() {
+        let offset = -0.393;
+        let got = place_gold_frames(&frames(&[(0.0, 0.0), (60.0, 132.0), (120.0, 400.0)]), offset);
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0].video_time_s, 0.0);
+        assert_eq!(got[0].game_time_s, 0.393);
+        assert!((got[0].gold_diff - 132.0 * 0.393 / 60.0).abs() < 1e-9);
+        // The alignment survives: a rerun recovers the same offset from
+        // the earliest sample.
+        assert_eq!(got[0].video_time_s - got[0].game_time_s, offset);
+        assert_eq!(got[1], placed(60.0, 60.0 + offset, 132.0));
+        assert_eq!(got[2], placed(120.0, 120.0 + offset, 400.0));
+    }
+
+    #[test]
+    fn a_frame_exactly_at_the_start_is_used_and_nothing_is_added() {
+        let got = place_gold_frames(&frames(&[(0.0, 50.0), (60.0, 100.0)]), -60.0);
+        assert_eq!(got, vec![placed(60.0, 0.0, 100.0)]);
+
+        let got = place_gold_frames(&frames(&[(0.0, 0.0), (60.0, 100.0)]), 0.0);
+        assert_eq!(got, vec![placed(0.0, 0.0, 0.0), placed(60.0, 60.0, 100.0)]);
+    }
+
+    /// Nothing to interpolate from, and carrying the first value backwards
+    /// would be a number Riot never sent.
+    #[test]
+    fn no_frame_before_the_start_adds_nothing() {
+        let got = place_gold_frames(&frames(&[(0.0, 0.0), (60.0, 100.0)]), 2.0);
+        assert_eq!(got, vec![placed(0.0, 2.0, 0.0), placed(60.0, 62.0, 100.0)]);
+    }
+
+    /// #198's mid-game start: the video begins at game 150 s, between the
+    /// 2:00 and 3:00 frames, and every earlier frame stays out.
+    #[test]
+    fn a_mid_game_start_interpolates_between_the_frames_either_side() {
+        let got = place_gold_frames(
+            &frames(&[(0.0, 0.0), (60.0, 500.0), (120.0, 1000.0), (180.0, -200.0), (240.0, 300.0)]),
+            -150.0,
+        );
+        assert_eq!(
+            got,
+            vec![
+                placed(150.0, 0.0, 400.0),
+                placed(180.0, 30.0, -200.0),
+                placed(240.0, 90.0, 300.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_empty_series_places_nothing() {
+        assert!(place_gold_frames(&[], -0.393).is_empty());
+    }
+
+    /// One frame has no neighbour to interpolate with: kept if it is in the
+    /// video, and not otherwise.
+    #[test]
+    fn a_single_frame_is_kept_only_inside_the_video() {
+        assert_eq!(
+            place_gold_frames(&frames(&[(60.0, 100.0)]), -0.393),
+            vec![placed(60.0, 60.0 - 0.393, 100.0)]
+        );
+        assert!(place_gold_frames(&frames(&[(0.0, 0.0)]), -0.393).is_empty());
+    }
+
+    /// Frames after the video's end are not trimmed, as before this change.
+    #[test]
+    fn frames_after_the_end_are_kept() {
+        let got = place_gold_frames(&frames(&[(0.0, 0.0), (60.0, 100.0), (90.5, 50.0)]), -0.5);
+        assert_eq!(got.last(), Some(&placed(90.5, 90.0, 50.0)));
+    }
 
     // --- the schedule -----------------------------------------------------
 

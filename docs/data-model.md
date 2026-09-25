@@ -520,6 +520,13 @@ Writing it as rows rather than interpolating onto the 1 Hz ones keeps the
 frames' own timestamps, and means a recording can carry a gold curve even
 when the live poller never came up.
 
+The one gold row that is not a frame is the first: when the recording started
+between two frames, as it always does by a fraction of a second, a row at
+`video_time_s = 0` is interpolated between them so the curve reaches the left
+edge (#292; see `docs/recording-pipeline.md`). Its `video_time_s - game_time_s`
+is the alignment offset exactly, since `sample_alignment_offset` reads the
+earliest row and a rerun must recover the same one.
+
 Every diff is stored **pre-signed from the recording player's point of
 view**, with `our_team` alongside, so the sign convention is auditable in the
 data rather than being an unwritten frontend assumption. `our_team` is `NULL`

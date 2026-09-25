@@ -794,7 +794,22 @@ per-participant `totalGold` per frame, and lands as its own sparser rows in
 The frames carry a game clock, so they go through the same game-time →
 video-time alignment the 1 Hz samples did, recovered from an existing sample
 row. A recording with no samples gets no gold: there is no alignment to place
-frames through. A custom or practice game gets none either, since it never
+frames through.
+
+A frame from before the recording started is outside the video, but it is not
+thrown away (#292). Capture starts when Live Client Data first answers, a
+fraction of a second after the game clock, so the offset is always slightly
+negative and the 0:00 frame always lands just before the video; dropping it
+left the chart blank until 1:00. `match_summary::place_gold_frames` keeps
+every frame inside the video and, when there is a frame on each side of the
+start, adds a point at video time 0 with its gold interpolated linearly
+between them. A mid-game start (#198) is the same rule between whichever two
+minutes straddle it. Nothing is added when a frame lands exactly on 0, or when
+no frame precedes the start. Frames after the video's end are kept, as they
+always were. A curve written before this fix still starts at 1:00: Fill in
+only asks for a curve when a row has none, so it does not rewrite these.
+
+A custom or practice game gets none either, since it never
 reaches match history, and that renders as "no gold data for this recording",
 never as a flat zero line, because a zero line reads as "you were even".
 
