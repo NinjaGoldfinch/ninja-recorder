@@ -171,6 +171,18 @@ describe("initRouting", () => {
     expect(router.currentView()).toBe("library");
   });
 
+  it("refuses to open straight into the review form, which needs a game", () => {
+    window.location.hash = "#game";
+    router.initRouting();
+    expect(router.currentView()).toBe("library");
+  });
+
+  it("opens on the objectives list, which needs nothing chosen", () => {
+    window.location.hash = "#objectives";
+    router.initRouting();
+    expect(router.currentView()).toBe("objectives");
+  });
+
   it("ignores a fragment that is not a view", () => {
     window.location.hash = "#not-a-view";
     router.initRouting();

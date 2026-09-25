@@ -6,7 +6,10 @@ import { type Component, mount, unmount } from "svelte";
 // library's visibility was written in places that knew nothing about each
 // other.
 
-export type View = "library" | "review" | "settings";
+// `game` is the WS9 review form for one game and `objectives` the list it
+// reviews against. `game`, like `review`, is never a start fragment: both need
+// something chosen first, and a cold window has nothing chosen.
+export type View = "library" | "review" | "settings" | "game" | "objectives";
 
 const views = new Map<View, HTMLElement>();
 const listeners: ((view: View) => void)[] = [];
@@ -25,7 +28,13 @@ export function registerView(name: View, node: HTMLElement) {
 }
 
 function isView(value: string): value is View {
-  return value === "library" || value === "review" || value === "settings";
+  return (
+    value === "library" ||
+    value === "review" ||
+    value === "settings" ||
+    value === "game" ||
+    value === "objectives"
+  );
 }
 
 // The tray's "Settings" item has to work whether the window already exists or
@@ -34,7 +43,7 @@ function isView(value: string): value is View {
 // listening for an event it only subscribes to once it has loaded.
 export function initRouting() {
   const start = window.location.hash.replace(/^#/, "");
-  if (isView(start) && start !== "review") showView(start);
+  if (isView(start) && start !== "review" && start !== "game") showView(start);
 
   void listen<string>("navigate", (event) => {
     if (isView(event.payload)) showView(event.payload);
