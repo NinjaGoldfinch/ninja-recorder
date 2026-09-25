@@ -80,6 +80,18 @@ macro_rules! all_boundary_types {
             crate::db::RetentionPolicy,
             crate::db::SampleRow,
             crate::db::reconcile::ReconcileReport,
+            crate::db::review::GameObjective,
+            crate::db::review::GameResult,
+            crate::db::review::GameReview,
+            crate::db::review::GameSummary,
+            crate::db::review::LaneRating,
+            crate::db::review::MentalRating,
+            crate::db::review::Objective,
+            crate::db::review::ObjectiveCategory,
+            crate::db::review::ObjectiveStatus,
+            crate::db::review::ReviewInput,
+            crate::db::review::Takeaway,
+            crate::db::review::TakeawayOwner,
             crate::ddragon::IconRequest,
             crate::ddragon::IconSet,
             crate::lcu::gameflow::GameflowPhase,
@@ -174,7 +186,7 @@ mod tests {
             }};
         }
         let n = all_boundary_types!(check);
-        assert_eq!(n, 43, "the boundary type list changed; update the count deliberately");
+        assert_eq!(n, 55, "the boundary type list changed; update the count deliberately");
     }
 
     /// The decision above, made executable. Rendering with ts-rs's default

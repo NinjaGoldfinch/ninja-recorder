@@ -41,6 +41,18 @@ export interface PortalCommand {
 
 export const COMMANDS: PortalCommand[] = [
   {
+    name: "add_takeaway",
+    group: "Review",
+    dev: false,
+    overRpc: true,
+    danger: false,
+    description: "Adds a takeaway to a game or a block. Refuses an empty body.",
+    args: [
+      { name: "owner", kind: "json", default: "{'kind': 'game', 'id': 1}", help: "kind is game or block", optional: false },
+      { name: "body", kind: "string", default: "", help: "", optional: false },
+    ],
+  },
+  {
     name: "backfill_match_metadata",
     group: "Library",
     dev: false,
@@ -59,6 +71,18 @@ export const COMMANDS: PortalCommand[] = [
     args: [],
   },
   {
+    name: "create_objective",
+    group: "Review",
+    dev: false,
+    overRpc: true,
+    danger: false,
+    description: "Adds an active objective. Games that start from now on are played against it. Refuses an empty body.",
+    args: [
+      { name: "body", kind: "string", default: "", help: "", optional: false },
+      { name: "category", kind: "string", default: "other", help: "category: macro, lane, mental, mechanics or other", optional: false },
+    ],
+  },
+  {
     name: "delete_recording",
     group: "Library",
     dev: false,
@@ -67,6 +91,17 @@ export const COMMANDS: PortalCommand[] = [
     description: "Deletes one recording's row and its file on disk.",
     args: [
       { name: "recordingId", kind: "number", default: "", help: "", optional: false },
+    ],
+  },
+  {
+    name: "delete_takeaway",
+    group: "Review",
+    dev: false,
+    overRpc: true,
+    danger: true,
+    description: "Deletes a takeaway. An objective it was promoted to stays.",
+    args: [
+      { name: "takeawayId", kind: "number", default: "", help: "", optional: false },
     ],
   },
   {
@@ -125,6 +160,17 @@ export const COMMANDS: PortalCommand[] = [
     danger: false,
     description: "Total library bytes, recording count, and free space on the recordings volume.",
     args: [],
+  },
+  {
+    name: "get_game_review",
+    group: "Review",
+    dev: false,
+    overRpc: true,
+    danger: false,
+    description: "Everything the review form shows for one game: its header, the saved review (null until the first save), the death-marker count, the objectives it was played against, and its takeaways. null if there is no such game.",
+    args: [
+      { name: "gameId", kind: "number", default: "", help: "", optional: false },
+    ],
   },
   {
     name: "get_recording_markers",
@@ -194,17 +240,6 @@ export const COMMANDS: PortalCommand[] = [
     args: [],
   },
   {
-    name: "quit_recorder",
-    group: "Recorder",
-    dev: false,
-    overRpc: true,
-    danger: true,
-    description: "Stops the recorder itself, so nothing records in the background afterwards. Answers `recordingInFlight` instead of stopping when a game is being recorded and `force` is false; call again with `force` once the person has agreed.",
-    args: [
-      { name: "force", kind: "boolean", default: "false", help: "quit even while a game is being recorded", optional: false },
-    ],
-  },
-  {
     name: "is_recording",
     group: "Recorder",
     dev: false,
@@ -232,6 +267,17 @@ export const COMMANDS: PortalCommand[] = [
     args: [],
   },
   {
+    name: "list_objectives",
+    group: "Review",
+    dev: false,
+    overRpc: true,
+    danger: false,
+    description: "Objectives, newest first. null lists every status.",
+    args: [
+      { name: "status", kind: "string", default: "active", help: "active, paused or retired; omit for all", optional: true },
+    ],
+  },
+  {
     name: "list_recordings",
     group: "Library",
     dev: false,
@@ -239,6 +285,29 @@ export const COMMANDS: PortalCommand[] = [
     danger: false,
     description: "Every row in the VOD library, newest first.",
     args: [],
+  },
+  {
+    name: "merge_blocks",
+    group: "Review",
+    dev: false,
+    overRpc: true,
+    danger: true,
+    description: "Moves every game and takeaway from one block into another and deletes the emptied block.",
+    args: [
+      { name: "intoBlockId", kind: "number", default: "", help: "", optional: false },
+      { name: "fromBlockId", kind: "number", default: "", help: "deleted once emptied", optional: false },
+    ],
+  },
+  {
+    name: "open_game_for_recording",
+    group: "Review",
+    dev: false,
+    overRpc: true,
+    danger: false,
+    description: "The review's game for a recording, made from the recording if it has none: every recording from before VOD review, and anything reconcile imported. A game made this way has no objective snapshot.",
+    args: [
+      { name: "recordingId", kind: "number", default: "", help: "", optional: false },
+    ],
   },
   {
     name: "open_recordings_folder",
@@ -261,6 +330,29 @@ export const COMMANDS: PortalCommand[] = [
     ],
   },
   {
+    name: "promote_takeaway",
+    group: "Review",
+    dev: false,
+    overRpc: true,
+    danger: false,
+    description: "Makes an active objective from a takeaway, in one transaction. A takeaway already promoted returns the objective it became rather than making a second.",
+    args: [
+      { name: "takeawayId", kind: "number", default: "", help: "", optional: false },
+      { name: "category", kind: "string", default: "other", help: "category: macro, lane, mental, mechanics or other", optional: false },
+    ],
+  },
+  {
+    name: "quit_recorder",
+    group: "Recorder",
+    dev: false,
+    overRpc: true,
+    danger: true,
+    description: "Stops the recorder itself, so nothing records in the background afterwards. Answers `recordingInFlight` instead of stopping when a game is being recorded and `force` is false; call again with `force` once the person has agreed.",
+    args: [
+      { name: "force", kind: "boolean", default: "false", help: "quit even while a game is being recorded", optional: false },
+    ],
+  },
+  {
     name: "rescan_recordings",
     group: "Library",
     dev: false,
@@ -278,6 +370,18 @@ export const COMMANDS: PortalCommand[] = [
     description: "Cached Data Dragon art for a page of rows: champions by display name, items and runes by id, spells by display name. Fetches whatever is not cached yet. Anything that could not be resolved is absent from the result rather than null.",
     args: [
       { name: "request", kind: "json", default: "{'champions': ['Wukong'], 'items': [3089], 'spells': ['Flash'], 'runes': [8112]}", help: "Four lists: champions, items, spells, runes. Any of them may be omitted.", optional: false },
+    ],
+  },
+  {
+    name: "save_game_review",
+    group: "Review",
+    dev: false,
+    overRpc: true,
+    danger: true,
+    description: "Saves the whole review for a game, replacing what was there. A null field is cleared, and a null deaths means 'use the death markers'. Refuses a negative count.",
+    args: [
+      { name: "gameId", kind: "number", default: "", help: "", optional: false },
+      { name: "review", kind: "json", default: "{'game_rating': 'win', 'lane_rating': 'neutral', 'mental_rating': 'good', 'first_clear_ms': 178000, 'smites_at_clear': 1, 'deaths': null, 'free_notes': ''}", help: "replaces the whole review; null clears a field", optional: false },
     ],
   },
   {
@@ -311,6 +415,31 @@ export const COMMANDS: PortalCommand[] = [
     description: "Saves which capture backend the daemon builds and puts it in place for the next recording. Refuses a backend this build cannot construct, and refuses while a game is in progress: the backend is never swapped mid-recording.",
     args: [
       { name: "backend", kind: "string", default: "libobs", help: "libobs or own. Replaces the live backend for the next recording; refused mid-game and for a backend this build cannot construct.", optional: false },
+    ],
+  },
+  {
+    name: "set_objective_status",
+    group: "Review",
+    dev: false,
+    overRpc: true,
+    danger: false,
+    description: "Activates, pauses or retires an objective. Only active objectives are snapshotted into new games; past games keep theirs.",
+    args: [
+      { name: "objectiveId", kind: "number", default: "", help: "", optional: false },
+      { name: "status", kind: "string", default: "retired", help: "active, paused or retired", optional: false },
+    ],
+  },
+  {
+    name: "set_objective_ticked",
+    group: "Review",
+    dev: false,
+    overRpc: true,
+    danger: false,
+    description: "Ticks or unticks an objective for a game. Refuses one the game was not played against.",
+    args: [
+      { name: "gameId", kind: "number", default: "", help: "", optional: false },
+      { name: "objectiveId", kind: "number", default: "", help: "", optional: false },
+      { name: "ticked", kind: "boolean", default: "true", help: "", optional: false },
     ],
   },
   {
@@ -349,6 +478,17 @@ export const COMMANDS: PortalCommand[] = [
     ],
   },
   {
+    name: "split_block",
+    group: "Review",
+    dev: false,
+    overRpc: true,
+    danger: true,
+    description: "Starts a new block at a game: it and every later game in its block move to the new one. Returns the new block's id. Refuses the first game of a block.",
+    args: [
+      { name: "gameId", kind: "number", default: "", help: "the first game of the new block", optional: false },
+    ],
+  },
+  {
     name: "start_recording",
     group: "Recorder",
     dev: false,
@@ -365,6 +505,19 @@ export const COMMANDS: PortalCommand[] = [
     danger: true,
     description: "Stops capture and returns the path of the file produced.",
     args: [],
+  },
+  {
+    name: "update_objective",
+    group: "Review",
+    dev: false,
+    overRpc: true,
+    danger: false,
+    description: "Rewrites an objective's text and category. Games already played against it see the new text.",
+    args: [
+      { name: "objectiveId", kind: "number", default: "", help: "", optional: false },
+      { name: "body", kind: "string", default: "", help: "", optional: false },
+      { name: "category", kind: "string", default: "other", help: "category: macro, lane, mental, mechanics or other", optional: false },
+    ],
   },
   {
     name: "dev_open_portal",

@@ -8,7 +8,7 @@
 //   events    src-tauri/src/contract/events.rs (contract_events!)
 //   types     src-tauri/src/contract/types.rs  (the boundary list)
 
-import type { AudioInputDevice, AudioPreset, AutostartStatus, BackfillReport, CaptureBackend, CaptureBackendStatus, DiskUsage, EnforcementReport, IconRequest, IconSet, LcuStatus, MarkerRow, QuitOutcome, ReconcileReport, RecordingRow, RetentionPolicy, SampleRow, SupervisorStatus, UpdateStatus } from "./types";
+import type { AudioInputDevice, AudioPreset, AutostartStatus, BackfillReport, CaptureBackend, CaptureBackendStatus, DiskUsage, EnforcementReport, GameReview, IconRequest, IconSet, LcuStatus, MarkerRow, Objective, ObjectiveCategory, ObjectiveStatus, QuitOutcome, ReconcileReport, RecordingRow, RetentionPolicy, ReviewInput, SampleRow, SupervisorStatus, Takeaway, TakeawayOwner, UpdateStatus } from "./types";
 
 /**
  * How a command reaches the backend. Supplied by the caller rather
@@ -84,5 +84,31 @@ export function createClient(invoke: Invoke) {
       invoke("install_update", {}) as Promise<null>,
     quit_recorder: (force: boolean): Promise<QuitOutcome> =>
       invoke("quit_recorder", { force }) as Promise<QuitOutcome>,
+    open_game_for_recording: (recordingId: number): Promise<number> =>
+      invoke("open_game_for_recording", { recordingId }) as Promise<number>,
+    get_game_review: (gameId: number): Promise<GameReview | null> =>
+      invoke("get_game_review", { gameId }) as Promise<GameReview | null>,
+    save_game_review: (gameId: number, review: ReviewInput): Promise<null> =>
+      invoke("save_game_review", { gameId, review }) as Promise<null>,
+    set_objective_ticked: (gameId: number, objectiveId: number, ticked: boolean): Promise<null> =>
+      invoke("set_objective_ticked", { gameId, objectiveId, ticked }) as Promise<null>,
+    list_objectives: (status: ObjectiveStatus | null): Promise<Array<Objective>> =>
+      invoke("list_objectives", { status }) as Promise<Array<Objective>>,
+    create_objective: (body: string, category: ObjectiveCategory): Promise<Objective> =>
+      invoke("create_objective", { body, category }) as Promise<Objective>,
+    update_objective: (objectiveId: number, body: string, category: ObjectiveCategory): Promise<Objective> =>
+      invoke("update_objective", { objectiveId, body, category }) as Promise<Objective>,
+    set_objective_status: (objectiveId: number, status: ObjectiveStatus): Promise<Objective> =>
+      invoke("set_objective_status", { objectiveId, status }) as Promise<Objective>,
+    add_takeaway: (owner: TakeawayOwner, body: string): Promise<Takeaway> =>
+      invoke("add_takeaway", { owner, body }) as Promise<Takeaway>,
+    delete_takeaway: (takeawayId: number): Promise<null> =>
+      invoke("delete_takeaway", { takeawayId }) as Promise<null>,
+    promote_takeaway: (takeawayId: number, category: ObjectiveCategory): Promise<Objective> =>
+      invoke("promote_takeaway", { takeawayId, category }) as Promise<Objective>,
+    split_block: (gameId: number): Promise<number> =>
+      invoke("split_block", { gameId }) as Promise<number>,
+    merge_blocks: (intoBlockId: number, fromBlockId: number): Promise<null> =>
+      invoke("merge_blocks", { intoBlockId, fromBlockId }) as Promise<null>,
   };
 }
