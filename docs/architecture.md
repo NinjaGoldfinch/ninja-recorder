@@ -278,7 +278,10 @@ with it: the recording's own size (give or take the pixel an odd window was
 rounded down by) is a plain GPU copy, any other size is scaled by the D3D11
 video processor into `fit::letterbox`'s rectangle with black bars around it,
 and a frame with no content is skipped. A minimised window sends no frames,
-so the ticks repeat the last one. WGC's `Closed` (the game ended or crashed)
+so the ticks repeat the last one; one being minimised or alt-tabbed out of
+fullscreen can first send a few whose content is 1x1, and anything under
+`fit::MIN_CONTENT` (64 px) on either side is skipped the same way rather than
+scaled into a box (#301). WGC's `Closed` (the game ended or crashed)
 does not end the loop: it writes black until the supervisor's `stop`, which
 comes when the Live Client API goes away, and the game audio carries on under
 it, held with silence once the game has gone. A lost GPU device
@@ -294,7 +297,7 @@ flowchart LR
     C -->|no| P{"fit::place"}
     P -->|"content = output"| CP["copy into slot"]
     P -->|"other size"| VP["video processor:<br/>scale into letterbox,<br/>bars black"]
-    P -->|"no content"| SK["skip: tick repeats<br/>the last slot"]
+    P -->|"no content,<br/>or under 64 px"| SK["skip: tick repeats<br/>the last slot"]
     CP --> W["convert: NV12<br/><small>once per new frame</small>"]
     VP --> W
     B --> W

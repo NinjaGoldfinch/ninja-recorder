@@ -36,7 +36,27 @@ impl Size {
     pub fn is_empty(self) -> bool {
         self.width == 0 || self.height == 0
     }
+
+    /// Too small in either dimension to be a picture of the game: see
+    /// [`MIN_CONTENT`]. An empty size is too small too.
+    pub fn is_too_small(self) -> bool {
+        self.width < MIN_CONTENT || self.height < MIN_CONTENT
+    }
 }
+
+/// The smallest content, in pixels on either side, that is treated as a
+/// picture of the game rather than as a window with nothing to show.
+///
+/// When League is minimised, or alt-tabbed out of fullscreen, WGC does not
+/// always stop sending frames: it can send some whose content is 1x1 first
+/// (#301). Scaled like any other size, that single pixel fills a 1440x1440
+/// square in a 2560x1440 recording, a solid box for as long as it lasts. No
+/// game frame is anywhere near this small, so anything under it is skipped
+/// and the ticks hold the last real picture, which is what a minimised window
+/// that sends no frames gets anyway. 64 is far below any window the game can
+/// be played in, and far enough above 1 to catch whatever WGC reports for a
+/// window on its way to the taskbar.
+pub const MIN_CONTENT: u32 = 64;
 
 /// A rectangle inside the output frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -121,7 +141,8 @@ pub enum Placement {
     /// The content is some other size: scale it into this rectangle, black
     /// around it.
     Scale(Rect),
-    /// Nothing usable: no content (a minimised window), or content larger
+    /// Nothing usable: no content, or content under [`MIN_CONTENT`] (both a
+    /// minimised or alt-tabbed window), or content larger
     /// than the texture it came in, which is a frame from before the pool was
     /// recreated at the new size and has only part of the picture. The tick
     /// repeats the last frame instead.
@@ -131,7 +152,7 @@ pub enum Placement {
 /// Decides [`Placement`] for a frame whose content is `content`, delivered in
 /// a texture of `texture`, going into an output frame of `output`.
 pub fn place(content: Size, texture: Size, output: Size) -> Placement {
-    if content.is_empty()
+    if content.is_too_small()
         || output.is_empty()
         || content.width > texture.width
         || content.height > texture.height
@@ -293,5 +314,39 @@ mod tests {
         assert_eq!(place(Size::new(2560, 1440), HD, HD), Placement::Skip);
         assert_eq!(place(Size::new(100_000, 1), Size::new(100_000, 1), HD), Placement::Skip);
         assert_eq!(place(HD, HD, Size::new(0, 0)), Placement::Skip);
+    }
+
+    /// #301: a minimised or alt-tabbed window's 1x1 frame would otherwise be
+    /// scaled into a 1440x1440 box in a 2560x1440 recording.
+    #[test]
+    fn a_minimised_windows_tiny_frame_is_skipped_not_boxed() {
+        let qhd = Size::new(2560, 1440);
+        // What letterbox alone does with it: the box the issue saw.
+        assert_eq!(letterbox(Size::new(1, 1), qhd), rect(560, 0, 1440, 1440));
+        // What place does instead.
+        assert_eq!(place(Size::new(1, 1), qhd, qhd), Placement::Skip);
+        assert_eq!(place(Size::new(1, 1), Size::new(1, 1), qhd), Placement::Skip);
+        // Under the minimum in either dimension, however large the other.
+        for content in [
+            Size::new(MIN_CONTENT - 1, MIN_CONTENT - 1),
+            Size::new(MIN_CONTENT - 1, 1440),
+            Size::new(2560, MIN_CONTENT - 1),
+            Size::new(2, 2),
+        ] {
+            assert!(content.is_too_small(), "{content:?}");
+            assert_eq!(place(content, qhd, qhd), Placement::Skip, "{content:?}");
+        }
+    }
+
+    #[test]
+    fn content_at_the_minimum_is_still_a_picture() {
+        let at = Size::new(MIN_CONTENT, MIN_CONTENT);
+        assert!(!at.is_too_small());
+        assert_eq!(place(at, at, HD), Placement::Scale(rect(420, 0, 1080, 1080)));
+        // A small but real window is scaled as before.
+        assert_eq!(
+            place(Size::new(640, 480), Size::new(640, 480), HD),
+            Placement::Scale(rect(240, 0, 1440, 1080))
+        );
     }
 }
