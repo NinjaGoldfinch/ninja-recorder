@@ -938,7 +938,7 @@ writes the row, and clicking the automatic pick does write it:
 the daemon knows about, each with a one-line explanation
 (`settings/capture.ts`'s `BACKEND_EXPLAINED`: Own is the default, libobs the
 fallback for one release), one it cannot build **disabled with the daemon's
-reason** beside it (the own backend off Windows or below build 20348), and
+reason** beside it (the own backend off Windows or below build 19041), and
 the backend actually
 live. A click calls `set_capture_backend` and the control shows the status it
 returns, never the value it sent, so a refusal leaves it where it was and

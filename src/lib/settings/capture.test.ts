@@ -86,7 +86,7 @@ describe("automaticNote", () => {
     expect(automaticNote(status)).toBe("Automatic: Own, the default.");
   });
 
-  // Windows 10 with nothing saved: the daemon records on libobs, and the row
+  // Below the floor with nothing saved: the daemon records on libobs, and the row
   // says so with the daemon's reason for Own.
   it("says libobs is the automatic pick, and why, where Own cannot be built", () => {
     expect(automaticNote(today({ automatic: true }))).toBe(

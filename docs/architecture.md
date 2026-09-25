@@ -79,7 +79,7 @@ flowchart TB
 | `recorder/backend.rs` | The `capture_backend` setting, and the pure choice of which backend to build from it | `CaptureBackend`, `choose`, `construct`, `Backends` |
 | `recorder/libobs/` | Windows capture backend (WGC + hardware encode). The fallback since #243, selectable for one release; WS8 deletes it | `LibObsRecorder` |
 | `recorder/window.rs` | Finding the League game window and its client size, for both Windows backends | `find_window`, `find_by_class`, `client_size` |
-| `recorder/own/` | Option B (WGC → D3D11 → Media Foundation), built through WS1.6 and **the default backend since #243**, on Windows build 20348+: the game window's video and every source the audio preset names (the game by process loopback; the microphone, the desktop and applications), every track of the preset's layout, the mix and each stem, in one file: the encoder MFTs driven directly, the file written by `mp4::write` | `OwnRecorder` |
+| `recorder/own/` | Option B (WGC → D3D11 → Media Foundation), built through WS1.6 and **the default backend since #243**, on Windows build 19041+: the game window's video and every source the audio preset names (the game by process loopback; the microphone, the desktop and applications), every track of the preset's layout, the mix and each stem, in one file: the encoder MFTs driven directly, the file written by `mp4::write` | `OwnRecorder` |
 | `recorder/own/clock.rs` | The video tick grid on QPC, and placing audio packets on it: drift measured, corrected by slipping frames, or trusted from the device count when a source has no QPC stamps. Which of the two a source gets is decided from its first packet's stamp | `tick_time`, `ticks_due`, `Aligner`, `check_stamp`, `Stamper`, `DeviceTimeline` |
 | `recorder/own/feed.rs` | One audio source's packets through its own `Aligner` into the mixer: never past the video, held with silence to the mixer's watermark while the source is quiet, padded to the last tick at stop | `Feed`, `Packet` |
 | `recorder/own/fit.rs` | Where a frame from a resized game window goes in the fixed-size output: scaled with its aspect kept, centred, black around it, even dimensions and offsets; and whether a frame is copied, scaled or skipped | `letterbox`, `place`, `Placement` |
@@ -166,7 +166,7 @@ behind a three-method trait and nothing above it knows libobs exists.
 flowchart TB
     SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release · collect_output<br/>backend_name · software_encoding<br/>current_file · worker_running"}
     T -->|"libobs, #[cfg(windows)]:<br/>the fallback, for one release"| L["LibObsRecorder<br/><small>WGC window capture,<br/>NVENC/AMF/QSV H.264,<br/>one AAC track per audio source,<br/>fragmented MP4 + faststart remux</small>"]
-    T -->|"own, #[cfg(windows)], build 20348+:<br/>the default"| O["OwnRecorder<br/><small>Option B: WGC → D3D11 →<br/>Media Foundation MFTs, driven directly,<br/>every track (mix + stems) in one file<br/>by our own writer, + faststart remux</small>"]
+    T -->|"own, #[cfg(windows)], build 19041+:<br/>the default"| O["OwnRecorder<br/><small>Option B: WGC → D3D11 →<br/>Media Foundation MFTs, driven directly,<br/>every track (mix + stems) in one file<br/>by our own writer, + faststart remux</small>"]
     O -.->|"stdin / stdout,<br/>one JSON line each"| WK["capture worker process<br/><small>--capture-worker, only while<br/>League runs; kill-on-close job</small>"]
     WK -.->|"channel"| SES["session thread<br/><small>owns every COM object:<br/>device, WGC, encoder MFTs</small>"]
     AUD["audio source threads<br/><small>game, applications: process loopback<br/>microphone, desktop: WASAPI endpoints</small>"] -.->|"stamped packets"| MIX["own::mix::TrackMix<br/><small>per track, per source aligner,<br/>10 ms blocks, watermark</small>"]
@@ -336,7 +336,7 @@ is that it does not record.
 flowchart LR
     KV[("settings_kv<br/>capture_backend")] -->|"libobs or own,<br/>as saved"| C{"backend::choose<br/><small>pure</small>"}
     KV -->|"no row, or unrecognised:<br/>own if buildable, else libobs"| C
-    OPT["DaemonBackends::options<br/><small>libobs: worker staged?<br/>own: Windows build 20348+?<br/>(devtools: floor override)</small>"] --> C
+    OPT["DaemonBackends::options<br/><small>libobs: worker staged?<br/>own: Windows build 19041+?<br/>(devtools: floor override)</small>"] --> C
     C -->|"buildable"| B["DaemonBackends::build"]
     C -->|"not buildable: the reason"| F["FailedRecorder(reason)"]
     B --> BOX["the recorder box<br/><small>one Arc · Mutex · Box dyn Recorder,<br/>shared by the supervisor and Ctx</small>"]
@@ -354,7 +354,7 @@ flowchart LR
 - **The default is `own`, since #243**, WS1.6's last piece, wherever own
   can be built. It moved only the users with no saved row: a stored `libobs`
   stays libobs, with no migration. `DaemonBackends` offers `own` wherever
-  `select::availability` passes (Windows build 20348 or newer) and builds an
+  `select::availability` passes (Windows build 19041 or newer) and builds an
   `OwnRecorder` for it; below that build, and off Windows, it is listed as
   unavailable with the reason. There, an unset key resolves to libobs
   (`backend::resolve`), logged once at startup, and Settings shows

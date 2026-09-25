@@ -35,13 +35,13 @@ let svelte: Svelte;
 
 const NOT_BUILT = "the own capture backend is not in this build yet";
 
-/** Both backends buildable: a release build on Windows 11. */
+/** Both backends buildable: Windows 10 2004+ or Windows 11. */
 const BOTH_BUILT = [
   { backend: "libobs", unavailable: null },
   { backend: "own", unavailable: null },
 ];
 
-/** The own backend below its OS floor, as on Windows 10. */
+/** The own backend below its OS floor, as on Windows 10 1909. */
 const OWN_UNBUILT = [
   { backend: "libobs", unavailable: null },
   { backend: "own", unavailable: NOT_BUILT },
@@ -316,7 +316,7 @@ describe("the capture backend", () => {
     expect(notice?.textContent).toContain("more CPU");
   });
 
-  // Windows 10 with nothing saved: libobs records, and the row says why.
+  // Below the floor with nothing saved: libobs records, and the row says why.
   it("says which backend is automatic, and why, when nothing is saved", async () => {
     stubBackend({
       get_capture_backend: backendStatus({
@@ -344,7 +344,7 @@ describe("the capture backend", () => {
     expect(call).toHaveBeenCalledWith("set_capture_backend", { backend: "own" });
   });
 
-  // A saved own on Windows 10: refused, never moved to libobs.
+  // A saved own below the floor: refused, never moved to libobs.
   it("warns that nothing will be recorded when the saved backend cannot be built", async () => {
     stubBackend({
       get_capture_backend: backendStatus({

@@ -26,7 +26,7 @@
 //! impossible to attribute (`RecordingDiagnostics::backend`).
 //!
 //! **With nothing saved, the choice is ours**, and it is own where own can be
-//! built and libobs otherwise (#243): nobody asked for own on a Windows 10
+//! built and libobs otherwise (#243): nobody asked for own on a Windows 10 1909
 //! machine, so refusing to record there would be refusing on the user's
 //! behalf. The fallback is logged with its reason and shown in Settings as
 //! "Automatic", so it is attributable without being a refusal.
@@ -52,7 +52,7 @@ pub enum CaptureBackend {
     /// selectable for one release after Option B ships.
     Libobs,
     /// Option B: WGC → D3D11 → Media Foundation, in `recorder/own/`, on
-    /// Windows build 20348 or newer. The default.
+    /// Windows build 19041 or newer (`own::select::MIN_BUILD`). The default.
     #[default]
     Own,
 }
@@ -217,14 +217,17 @@ mod tests {
 
     /// Why the own backend is refused below its OS floor, in the shape
     /// `select::availability` words it.
-    const TOO_OLD: &str = "the own capture backend needs Windows build 20348 or newer";
+    const TOO_OLD: &str = "the own capture backend needs Windows build 19041 or newer \
+                           (Windows 10 version 2004 or later), for per-application audio \
+                           capture; this is build 18363";
 
-    /// A Windows 10 machine: libobs works, the own backend is below its floor.
+    /// A Windows 10 1909 machine (build 18363): libobs works, the own backend
+    /// is below its floor.
     fn windows_10() -> Vec<CaptureBackendOption> {
         vec![option(CaptureBackend::Libobs, None), option(CaptureBackend::Own, Some(TOO_OLD))]
     }
 
-    /// A Windows 11 machine: both can be built.
+    /// A Windows 10 2004+ or Windows 11 machine: both can be built.
     fn windows_11() -> Vec<CaptureBackendOption> {
         vec![option(CaptureBackend::Libobs, None), option(CaptureBackend::Own, None)]
     }
@@ -382,7 +385,7 @@ mod tests {
         let (built, _) = construct(Some(CaptureBackend::Libobs), &Windows10);
         assert_eq!(built.backend_name(), "stub");
 
-        // Unset on Windows 10: built, on libobs, and the decision says why.
+        // Unset below the floor: built, on libobs, and the decision says why.
         let (automatic, decision) = construct(None, &Windows10);
         assert_eq!(automatic.backend_name(), "stub");
         assert_eq!(decision.unwrap().backend, CaptureBackend::Libobs);

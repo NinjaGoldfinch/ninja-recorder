@@ -3,7 +3,7 @@
 
   Every choice the daemon knows about is listed, and one this build cannot
   construct is shown disabled with the daemon's reason rather than left out:
-  the own backend needs Windows build 20348 or newer, and a missing option
+  the own backend needs Windows build 19041 or newer, and a missing option
   would say nothing about why. The reasons and the live backend's name come
   from the daemon, and are interpolated, never rendered as markup.
 

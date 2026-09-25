@@ -74,7 +74,7 @@ trait Recorder {
 Backends:
 - `LibObsRecorder`: Windows. What every release before #243 recorded with, and since then the fallback, selectable for one release; WS8 deletes it.
 - `StubRecorder`: every non-Windows build. It sleeps, then copies a fixture MP4 into place. Keeps the entire app layer developable and testable without Windows. Nothing ships it; since the macOS bundle was dropped it exists purely for the dev loop and `cargo test` (§9).
-- `OwnRecorder` (Option B, `recorder/own/`): **the default since #243**, built through WS1.6, on Windows build 20348 or newer. It records the game window's video and every source the audio preset names, the game by process loopback since #237 and the microphone, the desktop and applications since #238, and since #239 every track of the preset in one file, the mix and each stem, with the encoder MFTs driven directly and the file written by our own muxer (§2.5). A missing `capture_backend` setting means this backend; a stored `libobs` row keeps libobs. Its pure core (the tick grid, the audio aligner and feed, the mixer of every track, the capture plan, the process-tree root, encoder ranking, the loaded-encoder check, the asynchronous encoder's bookkeeping, the mux, the CPU colour conversion) is compiled and tested on every platform. Which of it and libobs the daemon builds is the `capture_backend` setting, and what happens when the chosen one cannot be built is §16's "The switch, and when it applies".
+- `OwnRecorder` (Option B, `recorder/own/`): **the default since #243**, built through WS1.6, on Windows build 19041 or newer (§2.4). It records the game window's video and every source the audio preset names, the game by process loopback since #237 and the microphone, the desktop and applications since #238, and since #239 every track of the preset in one file, the mix and each stem, with the encoder MFTs driven directly and the file written by our own muxer (§2.5). A missing `capture_backend` setting means this backend; a stored `libobs` row keeps libobs. Its pure core (the tick grid, the audio aligner and feed, the mixer of every track, the capture plan, the process-tree root, encoder ranking, the loaded-encoder check, the asynchronous encoder's bookkeeping, the mux, the CPU colour conversion) is compiled and tested on every platform. Which of it and libobs the daemon builds is the `capture_backend` setting, and what happens when the chosen one cannot be built is §16's "The switch, and when it applies".
 
 **Decision: the own backend holds no COM object; a session thread does.**
 Every D3D11, Media Foundation and WinRT object lives on one thread
@@ -3254,8 +3254,8 @@ every other key in that table ([data-model.md](docs/data-model.md#what-lives-in-
 `own`.** Not because libobs was the preferred answer; the plan's default is
 Option B. A default the build cannot construct would have refused every game
 for everyone who never opened Settings, and before #236 that is what `own`
-would have done. #236 made `own` constructible on Windows build 20348 or
-newer, #237 gave it the Game preset's audio, #238 every source a preset
+would have done. #236 made `own` constructible (on Windows build 20348 or
+newer then; #291 lowered the floor to 19041), #237 gave it the Game preset's audio, #238 every source a preset
 names, mixed into track 0, and #239 every track; the flip waited until it had
 been measured against libobs (the exit run,
 [windows-verification.md §11.8](docs/windows-verification.md#118-the-exit-run-243)).
@@ -3265,11 +3265,15 @@ who never chose. Someone who picked libobs explicitly has a stored row and
 keeps it, with no migration; `a_stored_libobs_row_stays_on_libobs` pins that.
 
 **With nothing saved, the default is own where own can be built, and
-libobs where it cannot.** The own backend's floor is Windows build 20348
-(§2.4), which leaves out every Windows 10 machine, and no release build
-before the flip had the Settings row, so no release user has a saved row.
-Resolving a missing key to `own` everywhere would have stopped every
-Windows 10 user recording on the day the flip shipped. So
+libobs where it cannot.** The own backend's floor is Windows build 19041
+(§2.4, lowered from 20348 by #291), so every Windows 10 from 2004 on and
+Windows 11 get own. What is left below it is Windows 10 1903 and 1909
+(builds 18362 and 18363), both long out of support, so a machine that falls
+back is rare. It still matters: no release build before the flip had the
+Settings row, so no release user has a saved row, and resolving a missing
+key to `own` everywhere would have stopped such a machine recording on the
+day the flip shipped. It also covers any other reason own cannot be built.
+So
 `recorder::backend::resolve` takes the saved value as an `Option` beside
 what the build offers, and decides:
 
@@ -3292,10 +3296,12 @@ pick never becomes the user's by itself. An unrecognised stored value, such
 as one written by a newer build, is treated as unset.
 
 **WS8 (#51) has to settle Windows 10 before libobs is deleted.** Once libobs
-is gone, there is nothing for an unset key to fall back to below the floor.
-#237's floor test decides which of two answers WS8 ships: Windows 10 22H2
-(19045) passes, and the floor comes down so own records there, or it does not,
-and Windows 10 is dropped as a supported platform, said in the release notes.
+is gone, there is nothing for an unset key to fall back to below the floor,
+and the 19041 floor is OBS's, not Microsoft's, and untested on Windows 10
+hardware (§2.4). #237's floor test decides which of two answers WS8 ships:
+Windows 10 22H2 (19045) works, and own records on Windows 10 from 2004 on, or
+it does not, and Windows 10 is dropped as a supported platform, said in the
+release notes. Builds below 19041 are dropped either way.
 
 **The Settings row was devtools-only until the flip, which un-hid it.** Until
 #236 the row could offer one backend, with the other disabled beside it, and
@@ -3325,7 +3331,7 @@ disabled with that reason, and `set_capture_backend` refuses it again for any
 caller that got past the control. What remains is a row written some other
 way: a downgrade from a build that had the own backend, or a raw
 `set_ui_pref`, or a machine that was upgraded from and then back to a
-Windows below build 20348 with `own` saved. With nothing saved, a machine
+Windows below build 19041 with `own` saved. With nothing saved, a machine
 below that build records on libobs instead (above). The daemon then records
 nothing, and the settings row says so in a warning rather than only through
 a disabled button.
