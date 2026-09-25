@@ -164,7 +164,7 @@ behind a three-method trait and nothing above it knows libobs exists.
 
 ```mermaid
 flowchart TB
-    SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release · collect_output<br/>backend_name · current_file · worker_running"}
+    SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release · collect_output<br/>watch_capture · capture_lost<br/>backend_name · current_file · worker_running"}
     T -->|"libobs, #[cfg(windows)]"| L["LibObsRecorder<br/><small>WGC window capture,<br/>NVENC/AMF/QSV H.264,<br/>one AAC track per audio source,<br/>fragmented MP4 + faststart remux</small>"]
     T -->|"own, #[cfg(windows)], build 20348+"| O["OwnRecorder<br/><small>Option B: WGC → D3D11 →<br/>Media Foundation MFTs, driven directly,<br/>every track (mix + stems) in one file<br/>by our own writer, + faststart remux</small>"]
     O -.->|"stdin / stdout,<br/>one JSON line each"| WK["capture worker process<br/><small>--capture-worker, only while<br/>League runs; kill-on-close job</small>"]
@@ -207,6 +207,16 @@ flight). A worker that dies mid-recording is logged with its exit code, and
 `stop` hands over what reached the disk, repaired by `mp4::write::repair` and
 remuxed, rather than an error; the next `prepare` spawns a fresh one
 ([DEVELOPMENT.md §12](../DEVELOPMENT.md#the-capture-worker-a-third-mode-and-only-while-league-runs-241)).
+
+That death is noticed as it happens, not at the stop (#299). The worker's
+reply thread sees EOF when its stdout closes and calls the `CaptureWatch` the
+supervisor installed with `watch_capture` before the start; the supervisor, on
+a thread of its own, asks `capture_lost`, which reaps the worker and reports
+the loss once, and sends `CaptureLost` through the state machine. The `stop`
+that follows recovers the file from disk and reports its own length in
+`RecordingOutput::duration_s`, which the row stores in place of the wall
+clock. Both methods default to doing nothing, so the libobs backend, the stub
+and `FailedRecorder` are unchanged.
 
 Every audio source has a thread of its own, started for each recording. The
 game's finds the process tree to capture from the window being recorded
