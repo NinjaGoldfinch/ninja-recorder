@@ -38,6 +38,8 @@
 //! - `select` — which H.264 encoder to use (hardware first, the software MFT
 //!   only as a marked fallback), the Windows build floor, and the checked
 //!   layout of an audio preset.
+//! - `stats` — the session summary: one line in the log at start, one at
+//!   stop (and one for the remux), rendered from plain counters.
 //! - `status` — the even frame size, whether the encoder Media Foundation
 //!   loaded is the one `select` chose, and the backend's name.
 //! - `worker` — the capture worker (`--capture-worker`, #241): the process
@@ -82,6 +84,8 @@ pub mod plan;
 pub mod root;
 #[cfg_attr(not(test), allow(dead_code))]
 pub mod select;
+#[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
+pub mod stats;
 #[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
 pub mod status;
 // Compiled everywhere, like the pure modules: the protocol, the worker's loop

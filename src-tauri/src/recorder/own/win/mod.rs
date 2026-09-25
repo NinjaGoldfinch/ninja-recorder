@@ -37,9 +37,9 @@ mod scale;
 mod session;
 
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use super::{plan, select};
+use super::{plan, select, stats};
 use super::status::Status;
 use super::worker::client::Worker;
 use super::worker::lifetime::{Action, Call, Lifetime};
@@ -256,7 +256,7 @@ impl Recorder for OwnRecorder {
             Reply::Started { result } => result,
             other => return Err(self.out_of_step(other)),
         };
-        let Started { status, audio } = match started {
+        let Started { status, audio, summary } = match started {
             Ok(started) => started,
             Err(e) => {
                 if self.status == Status::Idle {
@@ -265,6 +265,10 @@ impl Recorder for OwnRecorder {
                 return Err(RecorderError::Backend(e));
             }
         };
+        // The worker logged it to `worker.log`; this is the copy.
+        if let Some(summary) = summary {
+            info!("recorder", "{summary}");
+        }
         if let Status::Software { encoder, reason } = &status {
             warn!("recorder", "own backend: software H.264 encoding with {encoder}: {reason}");
         }
@@ -311,7 +315,13 @@ impl Recorder for OwnRecorder {
         self.release_pending = false;
         let answer = match action {
             Action::Send | Action::SendThenShutDown => match self.ask(Request::Stop, STOP_WAIT) {
-                Ok(Reply::Stopped { result }) => Some(result),
+                Ok(Reply::Stopped { result, summary }) => {
+                    // The worker logged it to `worker.log`; this is the copy.
+                    if let Some(summary) = summary {
+                        info!("recorder", "{summary}");
+                    }
+                    Some(result)
+                }
                 Ok(other) => {
                     let _ = self.out_of_step(other);
                     None
@@ -359,12 +369,15 @@ impl Recorder for OwnRecorder {
         // same function, as the libobs backend's stop and startup recovery.
         // `audio.tracks.len()` sets track 0's default disposition when there
         // is one.
-        if let Some(ffmpeg_path) = &self.ffmpeg_path
-            && let Err(e) =
-                crate::recorder::remux::remux_faststart(ffmpeg_path, &path, audio.tracks.len())
-        {
+        let remux = self.ffmpeg_path.as_ref().map(|ffmpeg| {
+            let began = Instant::now();
+            let result = crate::recorder::remux::remux_faststart(ffmpeg, &path, audio.tracks.len());
+            (result, began.elapsed())
+        });
+        if let Some((Err(e), _)) = &remux {
             warn!("recorder", "faststart remux failed, keeping original (unseekable) file: {e}");
         }
+        info!("recorder", "{}", stats::render_remux(&path, remux.as_ref()));
 
         Ok(RecordingOutput { path, audio })
     }
