@@ -192,10 +192,12 @@ jobs:
           node-version: 22
           cache: npm
 
-      # No version argument, deliberately: that is what makes the action read
-      # `src-tauri/rust-toolchain.toml` instead of overriding it. `@stable`
-      # here would silently un-pin the compiler while the file sat in the tree
-      # looking like it was in force.
+      # `@stable` is the action's ref, not the compiler that builds: it makes
+      # the current stable rustup's default. Every cargo command here runs in
+      # `src-tauri`, where rustup reads `rust-toolchain.toml` and installs and
+      # uses the pinned version instead. The log shows it ("syncing channel
+      # updates for 1.x.y") at the first cargo step. So the pin lives in that
+      # file alone: a `toolchain:` input here would be a second copy to drift.
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -347,8 +349,9 @@ jobs:
           node-version: 22
           cache: npm
 
-      # No version argument: reads src-tauri/rust-toolchain.toml, same as
-      # `test`. cargo-about only runs `cargo metadata`, but the toolchain
+      # Same as `test`: the pinned version comes from
+      # src-tauri/rust-toolchain.toml, because cargo-about runs cargo in
+      # src-tauri. cargo-about only runs `cargo metadata`, but the toolchain
       # decides how Cargo.lock is read, so it should be the pinned one.
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -429,10 +432,10 @@ jobs:
           node-version: 22
           cache: npm
 
-      # Same as `test`: no version argument, so `rust-toolchain.toml` is
-      # what decides. The shipped installer and the tests that cleared it
-      # have to be built by the same compiler for either result to mean
-      # anything.
+      # Same as `test`: `rust-toolchain.toml` decides, because the Tauri CLI
+      # runs cargo from `src-tauri`. The shipped installer and the tests that
+      # cleared it have to be built by the same compiler for either result to
+      # mean anything.
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 

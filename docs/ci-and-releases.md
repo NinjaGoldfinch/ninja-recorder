@@ -200,10 +200,15 @@ avoid.
 
 ### The compiler is pinned
 
-`src-tauri/rust-toolchain.toml` names an exact stable version, and both
-`dtolnay/rust-toolchain` steps take **no version argument** so they read it.
-That missing argument is load-bearing: `@stable` would win, and the pin would
-be a file in the tree that looked like it was in force and was not.
+`src-tauri/rust-toolchain.toml` names an exact stable version, and that file
+is the only place the version is written. The `dtolnay/rust-toolchain@stable`
+steps only make the current stable rustup's default. Every cargo command in
+CI runs in `src-tauri` (the Tauri CLI changes into it too), and there rustup
+reads the file and installs and uses the pinned version instead: a job's log
+shows `syncing channel updates for 1.x.y` at its first cargo step. Don't add a
+`toolchain:` input to those steps; it would be a second copy of the version to
+drift. Anything that runs cargo **outside** `src-tauri` would get the floating
+stable, so keep cargo steps there.
 
 Two CI runs a week apart now use the same compiler, which is the whole point
 a build that breaks on Tuesday and not on Monday has one candidate cause
