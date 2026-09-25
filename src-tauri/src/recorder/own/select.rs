@@ -172,11 +172,14 @@ fn no_hardware_reason(adapters: &[Adapter], encoders: &[Encoder]) -> String {
 /// was to lower the floor from 20348 only once a Windows 10 box had shown
 /// process loopback working there. #291 lowered it without that run, on
 /// the owner's decision that a bug report can confirm it instead. What makes
-/// that acceptable is that the failure is handled rather than fatal: an
+/// that acceptable is that the failure is handled rather than silent: an
 /// activation Windows refuses costs the game's audio, not the recording
-/// (`plan::realised_layout`), and `worker.log` names the failing call and its
-/// HRESULT. The run in `spikes/p0c-audio/README.md` is now optional
-/// confirmation rather than a gate.
+/// (`plan::realised_layout`), and since #10 it is shown to the user, as a
+/// desktop notification, a strip in the window and a line on the recording,
+/// naming the Windows build, the failing call and its HRESULT
+/// (`own::problem`, `recorder::problem`). The run in
+/// `spikes/p0c-audio/README.md` is now optional confirmation rather than a
+/// gate.
 pub const MIN_BUILD: u32 = 19_041;
 
 /// `None` if the own backend can run on Windows build `build`, or the reason

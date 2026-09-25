@@ -403,4 +403,56 @@ describe("untrusted input", () => {
     expect(article?.getAttribute("onmouseover")).toBeNull();
     expect(article?.getAttribute("aria-label")).toContain(nasty);
   });
+
+  /**
+   * A capture problem's reason is what a Windows call said (#10): untrusted
+   * in the same way a filename is, and shown the same way.
+   */
+  it("renders a capture problem's reason as text", () => {
+    const nasty = '<img src=x onerror=alert(1)>" onmouseover="alert(2)';
+    const el = render(
+      row({
+        diagnostics_json: JSON.stringify({
+          capture_problems: [{ kind: "sourceFailed", source: "<b>game</b>", reason: nasty }],
+        }),
+      }),
+    );
+    const line = el.querySelector(".vod-without");
+    expect(el.querySelectorAll("img, b")).toHaveLength(0);
+    expect(line?.textContent).toBe("Recorded without <b>game</b> audio");
+    expect(line?.getAttribute("title")).toContain(nasty);
+    expect(line?.getAttribute("onmouseover")).toBeNull();
+  });
+});
+
+describe("what a capture failure cost", () => {
+  it("says nothing on a clean row, and keeps the slack column", () => {
+    const el = render(row({ diagnostics_json: JSON.stringify({ backend: "own", markers: 2 }) }));
+    expect(el.querySelector(".vod-without")).toBeNull();
+    expect(el.querySelector(".vod-slack")).not.toBeNull();
+  });
+
+  it("says what the recording is without, with every reason in the tooltip", () => {
+    const el = render(
+      row({
+        diagnostics_json: JSON.stringify({
+          capture_problems: [
+            {
+              kind: "sourceFailed",
+              source: "game",
+              reason: "process-loopback activation for PID 7 was refused: (0x80070005)",
+            },
+          ],
+          windows_build: 19045,
+        }),
+      }),
+    );
+    const line = el.querySelector(".vod-without");
+    // In the slack column, so the row keeps its shape.
+    expect(line?.classList.contains("vod-slack")).toBe(true);
+    expect(line?.textContent).toBe("Recorded without game audio");
+    expect(line?.getAttribute("title")).toBe(
+      "Recorded without game audio (process-loopback activation for PID 7 was refused: (0x80070005)).",
+    );
+  });
 });

@@ -1986,6 +1986,44 @@ restart the app when you are done.
 | 11.7: colour against libobs: not washed out, not crushed; `tv`/`bt709` (paste) | | |
 | 11.7: `hardware_encoder_writes_every_track` on the box (paste) | | |
 
+### 11.9 Capture failures shown in the app (#10)
+
+A capture failure on the own backend is told to the user three ways: a
+desktop notification in place of "Recording saved", a strip above the views,
+and a line on the recording ("Recorded without …" in the library row, in full
+on the review page). An absence is not ([DEVELOPMENT.md §2.6](../DEVELOPMENT.md#26-decision-a-capture-failure-is-shown-in-the-app-an-absence-is-not-10)).
+Numbered 11.9 because #243's exit run takes 11.8. Check it in an **installed
+release build** (a `cargo run` build's toasts may not appear, §5.0.3) and again in
+a devtools one. Own backend, Practice Tool, the window open.
+
+- [ ] **An absence says nothing.** Preset **Game + mic + Discord** with Discord
+      **closed**. One game. No strip, no "without" toast (just "Recording
+      saved"), no line on the row; `worker.log` has `no Discord.exe audio`.
+- [ ] **A failure says it.** Settings → Privacy & security → Microphone → turn
+      **Let desktop apps access your microphone** off. Preset **Game + mic**.
+      One game. The toast reads "Recording saved without microphone audio",
+      names the failing call with its HRESULT (`0x80070005` expected) and the
+      Windows build; the strip says the same with a Dismiss button; the row
+      says "Recorded without microphone audio" with the reason in its tooltip;
+      the review page shows the full line. Paste the toast's text and the
+      `own backend: No microphone audio: …` line. Turn the permission back on.
+- [ ] **Part-way.** Preset **Game + mic** with a USB microphone; unplug it a
+      minute in. The row says "Recorded without part of the microphone audio".
+- [ ] **An early end.** §11.7's worker kill: the toast is "Recording ended
+      early", naming the worker's exit code.
+- [ ] **Windows 10 (19041 to 19045)**, if a box is available: a game on the
+      Game preset. Either game audio works (§11.3) or the notice names the
+      refused process-loopback activation. Paste whichever it is into #237.
+
+| What | Result | Notes |
+|---|---|---|
+| 11.9: Discord closed: no notice anywhere | | |
+| 11.9: microphone permission off: toast, strip, row, review (paste the toast) | | |
+| 11.9: microphone unplugged part-way: the row's line | | |
+| 11.9: worker killed: "Recording ended early" with the exit code | | |
+| 11.9: the same in a devtools build | | |
+| 11.9: Windows 10, Game preset: game audio, or the notice (paste) | | |
+
 ## Outcome
 
 - [ ] All boxes above checked

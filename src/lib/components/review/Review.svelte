@@ -18,6 +18,7 @@ import { assetUrl, call } from "../../../bridge";
 import { vodHeading } from "../../../format";
 import { showView } from "../../../router";
 import type { AudioLayout } from "../../../types";
+import { recordedWithout } from "../../library/problems";
 import { laneOpponent } from "../../library/scoreboard";
 import { type HotkeyContext, hotkeyAction, SEEK_STEP_S } from "../../review/hotkeys";
 import { parseAudioLayout, videoErrorReport } from "../../review/playback";
@@ -69,6 +70,12 @@ const heading = $derived(
   review.recording
     ? vodHeading(review.recording, laneOpponent(review.recording)?.champion ?? null)
     : "",
+);
+
+// What a capture failure cost this recording (#10), with every reason: the
+// library row's line in full. Text only; the reasons are untrusted.
+const without = $derived(
+  review.recording ? recordedWithout(review.recording.diagnostics_json) : null,
 );
 
 // --- The window ---------------------------------------------------------
@@ -502,6 +509,10 @@ $effect(() => {
   <button type="button" class="back-btn" onclick={close}>&larr; Back</button>
   <h2>{heading}</h2>
 </div>
+
+{#if without}
+  <p class="review-without" role="note">{without.full}</p>
+{/if}
 
 <div class="player-wrap" bind:this={playerWrap}>
   <!-- svelte-ignore a11y_media_has_caption -->

@@ -33,6 +33,7 @@ import Review from "./components/review/Review.svelte";
 import ReviewForm from "./components/reviewform/ReviewForm.svelte";
 import Settings from "./components/settings/Settings.svelte";
 import AppBar from "./components/shell/AppBar.svelte";
+import CaptureStrip from "./components/shell/CaptureStrip.svelte";
 import DaemonStrip from "./components/shell/DaemonStrip.svelte";
 import QuitDialog from "./components/shell/QuitDialog.svelte";
 import Toast from "./components/shell/Toast.svelte";
@@ -71,6 +72,8 @@ $effect(() => {
 <AppBar />
 
 <DaemonStrip />
+
+<CaptureStrip />
 
 <main class="container">
   <section bind:this={libraryNode} id="library-view">

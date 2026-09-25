@@ -18,6 +18,8 @@ pub mod window;
 // The faststart remux. Not behind a backend's `cfg`: startup recovery
 // remuxes a killed recording whichever backend wrote it.
 pub mod remux;
+// What a recording lost to a failure, and how a person is told (#10).
+pub mod problem;
 // Also compiled on Windows under `cfg(test)`: `state_machine::supervisor`'s
 // unit tests use `StubRecorder` as a platform-agnostic dummy `Recorder`
 // regardless of which real backend the current platform ships.
@@ -25,6 +27,7 @@ pub mod remux;
 pub mod stub;
 
 use audio::{AudioLayout, AudioPreset};
+pub use problem::CaptureProblem;
 use std::path::PathBuf;
 
 /// Parameters for a single recording. Still minimal: resolution and encoder
@@ -75,6 +78,12 @@ impl RecordConfig {
 pub struct RecordingOutput {
     pub path: PathBuf,
     pub audio: AudioLayout,
+    /// What the recording lost to a failure: a source that should have
+    /// opened and did not, one that stopped part-way, an early end. Empty for
+    /// a clean recording, and for a source the preset names that simply was
+    /// not there (Discord not running), which is not a failure. The
+    /// supervisor stores these with the row and tells the user (`problem`).
+    pub problems: Vec<CaptureProblem>,
 }
 
 #[derive(Debug, thiserror::Error)]

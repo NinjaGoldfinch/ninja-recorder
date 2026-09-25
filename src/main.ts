@@ -2,6 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 
 import { initDesktop } from "./desktop";
 import App from "./lib/App.svelte";
+import { initCaptureNotices } from "./lib/stores/capture.svelte";
 import { initDaemonStatus, whenDaemonReachable } from "./lib/stores/daemon.svelte";
 import { applyDefaultSort, refreshDiskUsage, refreshLibrary } from "./lib/stores/library.svelte";
 import { quitEverything } from "./lib/stores/quit.svelte";
@@ -38,6 +39,9 @@ window.addEventListener("DOMContentLoaded", () => {
   // of it. Both are polls and subscriptions rather than elements now, so
   // neither cares whether the root has mounted.
   initDaemonStatus();
+  // What the last recording lost to a capture failure (#10). A subscription,
+  // like the one above, so it cares nothing for whether the root has mounted.
+  initCaptureNotices();
   initStatus();
   void refreshUpdateStatus();
 

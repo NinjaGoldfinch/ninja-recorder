@@ -41,6 +41,9 @@
 //! - `pcm` — endpoint sample formats to stereo f32 for the mixer (or i16).
 //! - `plan` — which sources a preset's layout opens and what each written
 //!   track sums, and the layout that is left once some fail to open.
+//! - `problem` — which capture outcomes are failures to tell someone about
+//!   (a source there and not capturable, one that stopped part-way, an early
+//!   end) and which are absences the preset allows (Discord not running).
 //! - `root` — which process tree a process-loopback capture targets: the
 //!   game, or the top of an application's tree.
 //! - `select` — which H.264 encoder to use (hardware first, the software MFT
@@ -95,6 +98,8 @@ pub mod nv12;
 pub mod pcm;
 #[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
 pub mod plan;
+#[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
+pub mod problem;
 #[cfg_attr(not(test), allow(dead_code))]
 pub mod root;
 #[cfg_attr(not(test), allow(dead_code))]

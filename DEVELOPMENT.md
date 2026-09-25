@@ -268,10 +268,11 @@ Implemented in `src-tauri/src/recorder/`: `Recorder`, `RecordConfig`, `RecorderE
     has since decided to lower it without that run (#291): with libobs gone
     at WS8, 20348 would leave every Windows 10 user unable to record at all,
     and if 19041 turns out not to work, a bug report will say so.
-  - *Why that is acceptable.* The failure is contained: a process-loopback
-    activation Windows refuses costs that source, not the recording
-    (`plan::realised_layout`), and the worker logs the failing call and its
-    HRESULT.
+  - *Why that is acceptable.* The failure is contained and visible: a
+    process-loopback activation Windows refuses costs that source, not the
+    recording (`plan::realised_layout`), and it is shown in the app, as a
+    notification, a strip and a line on the recording, with the Windows build,
+    the failing call and its HRESULT (§2.6). That is the bug report.
   - *Confirmation is optional, not a gate.* The procedure is still
     [`spikes/p0c-audio/README.md`](spikes/p0c-audio/README.md#windows-10-floor-test-237),
     and a result from it, pass or fail, is worth recording on #237. A
@@ -526,6 +527,54 @@ reasons the libobs alternative did not have:
 What stays unmeasured until the box runs it is the microphone's own drift and
 stamps (windows-verification.md §11.5); the log line each source writes at
 stop carries both.
+
+### 2.6 Decision: a capture failure is shown in the app; an absence is not (#10)
+
+The own backend has always recorded on when a source fails: a source that
+does not open costs itself and any stem it alone fed, not the recording
+(§2.5), and one that dies mid-game is silence from then on. Until #10 the
+only trace was a line in `worker.log`, so a Windows 10 machine whose process
+loopback is refused (§2.4's floor) would have produced recordings with no game
+audio and nobody the wiser. **A capture failure is now told to the user**, in
+release and devtools builds alike, three ways:
+
+- a **desktop notification** from the daemon, once per recording, in place of
+  "Recording saved" (`recorder::problem::notification`: "Recording saved
+  without game audio", the failing call with its HRESULT, and "Please report
+  this with your Windows version (Windows build 19045)"). It is governed by
+  the *failed* notification preference; someone who turned that off still gets
+  the ordinary "Recording saved";
+- a **strip** above the views (`CaptureStrip.svelte`), from the
+  `captureProblems` contract event, dismissed by hand because it is a fact
+  about the last recording rather than a state that clears itself;
+- a **line on the recording**, from `capture_problems` in the row's
+  `diagnostics_json`: "Recorded without game audio" in the library row's
+  empty slack column, with every reason in its tooltip and in full on the
+  review page, so it is still there for a window that was closed at the time.
+
+**The distinction that makes this bearable is failure against absence.** A
+preset names sources the machine may simply not have: Discord not running, no
+microphone plugged in, no output device. Saying so after every game would train
+people to ignore the strip, so those are logged and nothing else. What is
+reported is something that was there and could not be captured. The rule is
+`own::problem`, pure and tested: a source lost while *finding* what to capture
+(the process tree, the endpoint device) is an absence, except the game, whose
+window being there is what started the recording; a source lost while
+*opening* what was found (activation, `Initialize`, `Start`) is always a
+failure, and so is one that stops part-way. So is a recording that ends before
+the game does (the GPU device lost, a write failing, the worker dying), a start
+the backend refuses, and a stop that keeps nothing.
+
+**It travels as data, not text.** `CaptureProblem` is one tagged enum that
+crosses the worker's pipe (as optional fields on `Started` and `Stopped`, so
+neither side needed a protocol bump), `RecordingOutput`, the contract and the
+stored JSON. The daemon words the notification and the UI words the strip and
+the line, each from the same structure. The reason inside it is the failing
+call's own message and is untrusted text: interpolated, never markup (§19).
+
+The libobs backend reports none. Its fork logs a source it cannot open and
+records on, and the backend has no per-source result to classify; it leaves
+with libobs at WS8.
 
 ---
 
@@ -1872,13 +1921,21 @@ a logged warning, never an error that propagates. It is feedback *about* a
 recording and must never be able to affect one. Like `tray.rs`, it carries no
 tests; the decisions live in `core::NotificationPrefs`, which is tested.
 
+**A recording that lost something gets one toast, not two** (#10, §2.6). The
+finalize hands its capture problems to the notifier with the recording, and
+`daemon::notify` shows the problem notification instead of "Recording saved",
+under the *failed* preference; the wording is `recorder::problem`'s, and
+tested there. A start the backend refuses was already a "Recording problem"
+toast, and now names the Windows build as well.
+
 ### One notifier, one seam
 
 `Supervisor` now has a single `set_event_notifier` over a `SupervisorEvent`
 enum of `LibraryChanged`, `RecordingStarted`, `Finalized` and `RecordingFailed`,
 rather than a callback per signal. The finalize toast needed to know *what* was
 written, which a bare "something changed" callback cannot say, and adding a
-second one-off notifier would have meant a third later. When the recorder moves
+second one-off notifier would have meant a third later. `Finalized` carries the
+recording's capture problems beside it since #10, for the same reason. When the recorder moves
 into its own process this seam becomes a socket write, and there should be
 exactly one place to change it.
 

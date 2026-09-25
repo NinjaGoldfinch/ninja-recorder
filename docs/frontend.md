@@ -26,9 +26,10 @@ flowchart TB
     PREFS["prefs.ts<br/><small>owns: the preference cache</small>"]
     DESK["desktop.ts<br/><small>owns: the browser behaviours we suppress</small>"]
     APP["lib/App.svelte<br/><small>the root: app bar, strip, five views,<br/>quit dialog, toast</small>"]
-    SHELL["lib/components/shell/<br/><small>AppBar, DaemonStrip, QuitDialog, Toast</small>"]
+    SHELL["lib/components/shell/<br/><small>AppBar, DaemonStrip, CaptureStrip,<br/>QuitDialog, Toast</small>"]
     STATUS["lib/stores/status.svelte.ts<br/><small>owns: the poll timer</small>"]
     DAEMONS["lib/stores/daemon.svelte.ts<br/><small>owns: whether the recorder is there</small>"]
+    CAPS["lib/stores/capture.svelte.ts<br/><small>owns: what the last recording lost</small>"]
     QUITS["lib/stores/quit.svelte.ts<br/><small>owns: the two-process quit flow</small>"]
     TOASTS["lib/stores/toast.svelte.ts<br/><small>owns: the transient message</small>"]
     ABOUT["lib/stores/about.svelte.ts<br/><small>owns: the three live About lines</small>"]
@@ -41,7 +42,7 @@ flowchart TB
     SETS["lib/stores/settings.svelte.ts<br/><small>owns: autostart, audio, capture backend,<br/>retention, the folder, mirrored prefs</small>"]
     UPD["lib/stores/update.svelte.ts<br/><small>owns: the update status</small>"]
     TL["lib/timeline/<br/><small>window, clusters, graph, stem,<br/>markers, navigate · pure, tested</small>"]
-    LIBP["lib/library/<br/><small>filters, sort, stats, scoreboard<br/>pure, tested</small>"]
+    LIBP["lib/library/<br/><small>filters, sort, stats, scoreboard,<br/>problems · pure, tested</small>"]
     SETP["lib/settings/<br/><small>notes, backfill, retention, audio,<br/>capture, update, about · pure, tested</small>"]
     REVP["lib/review/<br/><small>hotkeys, playback<br/>pure, tested</small>"]
     RFV["lib/components/reviewform/<br/><small>ReviewForm, RatingControl</small>"]
@@ -63,6 +64,7 @@ flowchart TB
     MAIN --> PREFS
     MAIN --> STATUS
     MAIN --> DAEMONS
+    MAIN --> CAPS
     MAIN --> QUITS
     MAIN --> DESK
     DESK --> BRIDGE
@@ -91,6 +93,10 @@ flowchart TB
     OBS --> RFP
     OBS --> TOASTS
     SHELL --> DAEMONS
+    SHELL --> CAPS
+    CAPS --> TRANSPORT
+    CAPS --> LIBP
+    REVV --> LIBP
     SHELL --> QUITS
     SHELL --> TOASTS
     SHELL --> UPD
@@ -124,6 +130,7 @@ flowchart TB
     style APP fill:#fff3e0,stroke:#ef6c00
     style SHELL fill:#fff3e0,stroke:#ef6c00
     style DAEMONS fill:#fff3e0,stroke:#ef6c00
+    style CAPS fill:#fff3e0,stroke:#ef6c00
     style QUITS fill:#fff3e0,stroke:#ef6c00
     style TOASTS fill:#fff3e0,stroke:#ef6c00
     style ABOUT fill:#fff3e0,stroke:#ef6c00
@@ -197,6 +204,22 @@ recorder was still missing would be worse than saying nothing. Version skew gets
 its own message and no button, since a UI and a daemon from different builds
 cannot be made to agree by waiting, and the one thing the window must not do is
 tell the daemon to quit while it may be recording.
+
+**A capture failure gets a strip of its own** (#10, DEVELOPMENT.md §2.6).
+`stores/capture.svelte.ts` subscribes to the `captureProblems` event and
+`shell/CaptureStrip.svelte` shows it under the recorder strip, in the same
+shape: "The last recording was saved without game audio (the failing call and
+its HRESULT). If this keeps happening, please report it with your Windows
+version (Windows build 19045)", or, for a game that was not recorded at all,
+the same as an error. Unlike the recorder strip it is an event rather than a
+state, so it does not clear itself: it stays until it is dismissed, and the
+next problem replaces it. The recording keeps the same list in its
+`diagnostics_json`, and `library/problems.ts` turns that into the library row's
+"Recorded without game audio" (in the slack column, with every reason in its
+tooltip) and the review page's full line under the heading, so a window that was
+closed at the time still says it. Every reason is untrusted text and is only
+ever interpolated; `CaptureStrip.test.ts`, `Row.test.ts` and `Review.test.ts`
+each feed one markup and check it comes out as text.
 
 **It also decides when the views may fetch.** `whenDaemonReachable` runs its
 caller once the daemon is reachable and again on every reconnect, and `main.ts`
@@ -295,6 +318,12 @@ their own instead. A fixed grid of squares dropped into a `1fr` track leaves
 the leftover width *inside* a data column, where it is invisible to read but
 real to every column added after it; slack that stays slack keeps the rule
 above true rather than nearly true.
+
+**One thing may sit in the slack: what a capture failure cost** (#10). A
+recording whose `diagnostics_json` lists capture problems says "Recorded
+without game audio" there, right-aligned, ellipsized, with every reason in its
+tooltip. It is the one cell that is empty on almost every row, so a row that
+says it is still the same shape as one that does not.
 
 **The lane matchup, not the lobby.** The row shows the one opponent who
 played your position, with their champion, their line and their build, where it
@@ -938,7 +967,7 @@ variant be added to an existing topic without a client change.
 
 | Topic | Carries | Subscribed by |
 |---|---|---|
-| `recording` | `StateChanged`, `RecordingStarted`, `RecordingStopped`, `MarkerAdded`, `SampleBatch` | main UI, dev portal |
+| `recording` | `StateChanged`, `RecordingStarted`, `RecordingStopped`, `MarkerAdded`, `SampleBatch`, `CaptureProblems` | main UI, dev portal |
 | `lcu` | `LcuPhase` | main UI, dev portal |
 | `library` | `LibraryChanged`, `MatchSummaryPatched`, `RetentionRan` | main UI, dev portal |
 | `update` | `UpdateStatus` | main UI, dev portal |
@@ -958,6 +987,14 @@ Three details are load-bearing:
 - **`LcuPhase.phase` is `None` exactly when no client is running**, which is a
   different statement from `GameflowPhase::None`, which is a client sitting at
   the front page. A test pins the two apart.
+- **`CaptureProblems` is once per recording, and only for a failure** (#10). It
+  follows `RecordingStopped` with the row's id, or stands beside a crashed one
+  with no id when there is no recording (`notStarted`, `notSaved`). It carries
+  the Windows build and a list of tagged `CaptureProblem`s whose `reason` is a
+  Windows call's own message: untrusted text. A source the preset names that
+  was simply not there is not a failure and is never in it (DEVELOPMENT.md
+  §2.6). It is the fourteenth event; the other addition past Appendix B's
+  twelve is `ShowUi`.
 
 **Q7 is answered by the code rather than left open.** Issue #73 asks whether
 `LcuPhase` carries the full `gameflow-phase` enumeration or "the subset
@@ -1171,7 +1208,7 @@ the three views, the quit dialog and the toast.
 | Was | Is |
 |---|---|
 | `toast.ts` | `stores/toast.svelte.ts` + `shell/Toast.svelte` |
-| `daemon.ts` | `stores/daemon.svelte.ts` + `shell/DaemonStrip.svelte` |
+| `daemon.ts` | `stores/daemon.svelte.ts` + `shell/DaemonStrip.svelte` (and, new in #10, `stores/capture.svelte.ts` + `shell/CaptureStrip.svelte` beside it) |
 | `quit.ts` | `stores/quit.svelte.ts` + `shell/QuitDialog.svelte` |
 | `status.ts` | `stores/status.svelte.ts` (the poll kept; the pills go to a store) |
 | `appbar.svelte.ts`, `devportal.ts` | `shell/AppBar.svelte` |
