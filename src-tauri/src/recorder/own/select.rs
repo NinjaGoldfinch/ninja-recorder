@@ -9,7 +9,9 @@
 //! The policy is DEVELOPMENT.md §2.4's: hardware first, by adapter vendor,
 //! NVIDIA → AMD → Intel; Microsoft's software H.264 MFT only when no usable
 //! hardware encoder exists, and then as a [`Choice::SoftwareFallback`] that
-//! says why, so no caller can use it without knowing.
+//! says why, so no caller can use it without knowing. [`choose`] is what the
+//! session calls: [`rank`], or the software MFT when a devtools build is told
+//! to take the fallback on purpose ([`FORCE_SOFTWARE_ENV`]).
 //!
 //! It also answers the two other "can it record this" questions: the Windows
 //! build floor ([`availability`]), and whether an audio preset is a layout at
@@ -193,6 +195,49 @@ pub fn floor_ignored(devtools: bool, value: Option<&str>) -> bool {
     devtools && value == Some("1")
 }
 
+/// The environment variable that makes a **devtools** build encode with
+/// Microsoft's software H.264 MFT even when a hardware encoder is there, so
+/// the fallback path (the log line, `backend_name`, the stop summary, the
+/// diagnostics, the CPU it costs) can be exercised on a machine that would
+/// never take it. A release build never reads it.
+pub const FORCE_SOFTWARE_ENV: &str = "NINJA_OWN_FORCE_SOFTWARE_ENCODER";
+
+/// The reason a forced fallback carries, everywhere a real one's goes.
+pub const FORCED_SOFTWARE_REASON: &str = "forced by NINJA_OWN_FORCE_SOFTWARE_ENCODER (devtools)";
+
+/// Whether the software-encoder override is in force: only in a devtools
+/// build, and only for the value `1`. Pure, like [`floor_ignored`].
+pub fn software_forced(devtools: bool, value: Option<&str>) -> bool {
+    devtools && value == Some("1")
+}
+
+/// [`software_forced`] for this build, reading the variable through `lookup`
+/// (`std::env::var` in production). A build without `devtools` returns
+/// before `lookup` is called, so it never reads the variable at all.
+pub fn software_forced_in_this_build(lookup: impl FnOnce(&str) -> Option<String>) -> bool {
+    if !cfg!(feature = "devtools") {
+        return false;
+    }
+    software_forced(true, lookup(FORCE_SOFTWARE_ENV).as_deref())
+}
+
+/// [`rank`], unless `force_software` is set: then Microsoft's software H.264
+/// MFT, as a [`Choice::SoftwareFallback`] whose reason is
+/// [`FORCED_SOFTWARE_REASON`], so everything downstream treats it exactly as
+/// it treats a real fallback. With no software encoder to force, the backend
+/// is unavailable and says why, rather than quietly using the hardware.
+pub fn choose(adapters: &[Adapter], encoders: &[Encoder], force_software: bool) -> Choice {
+    if !force_software {
+        return rank(adapters, encoders);
+    }
+    match encoders.iter().position(|e| !e.hardware) {
+        Some(encoder) => Choice::SoftwareFallback { encoder, reason: FORCED_SOFTWARE_REASON.to_string() },
+        None => Choice::Unavailable {
+            reason: format!("{FORCED_SOFTWARE_REASON}, but Media Foundation offers no software H.264 encoder"),
+        },
+    }
+}
+
 /// The audio layout the own backend records for `preset`, or why it cannot.
 ///
 /// **Every preset, since #238.** Each source the layout names is captured by
@@ -370,6 +415,59 @@ mod tests {
             assert!(!floor_ignored(true, value), "{value:?}");
         }
         assert!(!floor_ignored(false, Some("1")), "a release build never honours it");
+    }
+
+    #[test]
+    fn the_software_override_is_devtools_only_and_needs_exactly_1() {
+        assert_eq!(FORCE_SOFTWARE_ENV, "NINJA_OWN_FORCE_SOFTWARE_ENCODER");
+        assert!(software_forced(true, Some("1")));
+        for value in [None, Some(""), Some("0"), Some("true"), Some("yes"), Some(" 1")] {
+            assert!(!software_forced(true, value), "{value:?}");
+        }
+        assert!(!software_forced(false, Some("1")), "a release build never honours it");
+    }
+
+    /// In this build, the override is honoured exactly when `devtools` is on:
+    /// `cargo test` checks the release half, `cargo test --features devtools`
+    /// the other.
+    #[test]
+    fn this_build_honours_the_software_override_only_with_devtools() {
+        let set = |name: &str| (name == FORCE_SOFTWARE_ENV).then(|| "1".to_string());
+        assert_eq!(software_forced_in_this_build(set), cfg!(feature = "devtools"));
+        assert!(!software_forced_in_this_build(|_| None));
+        assert!(!software_forced_in_this_build(|_| Some("0".to_string())));
+    }
+
+    /// A build without `devtools` does not so much as look the variable up.
+    #[cfg(not(feature = "devtools"))]
+    #[test]
+    fn a_release_build_never_reads_the_software_override() {
+        assert!(!software_forced_in_this_build(|name| panic!("read {name}")));
+    }
+
+    #[test]
+    fn forcing_software_takes_the_software_mft_over_hardware_as_a_fallback() {
+        let adapters = [gpu("RTX", VENDOR_NVIDIA), basic_render()];
+        let encoders = [hw("NVIDIA H.264 Encoder MFT", "VEN_10DE"), software()];
+        assert_eq!(choose(&adapters, &encoders, false), rank(&adapters, &encoders));
+        assert_eq!(choose(&adapters, &encoders, false), Choice::Hardware { encoder: 0, adapter: 0 });
+
+        let forced = choose(&adapters, &encoders, true);
+        assert_eq!(
+            forced,
+            Choice::SoftwareFallback {
+                encoder: 1,
+                reason: "forced by NINJA_OWN_FORCE_SOFTWARE_ENCODER (devtools)".to_string()
+            }
+        );
+        assert!(forced.is_fallback());
+    }
+
+    #[test]
+    fn forcing_software_with_no_software_mft_is_unavailable_not_hardware() {
+        let choice = choose(&[gpu("RTX", VENDOR_NVIDIA)], &[hw("NVIDIA H.264 Encoder MFT", "VEN_10DE")], true);
+        let Choice::Unavailable { reason } = &choice else { panic!("{choice:?}") };
+        assert!(reason.contains(FORCED_SOFTWARE_REASON) && reason.contains("no software"), "{reason}");
     }
 
     #[test]

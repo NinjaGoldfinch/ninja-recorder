@@ -248,6 +248,19 @@ Implemented in `src-tauri/src/recorder/`: `Recorder`, `RecordConfig`, `RecorderE
     ([windows-verification.md §11.8](docs/windows-verification.md#118-the-exit-run-243));
     the fallback does not ship as the default path until that number
     exists.
+  - **A devtools build can be made to take the fallback on purpose**, so it
+    can be exercised and measured on a machine with a hardware encoder:
+    started with `NINJA_OWN_FORCE_SOFTWARE_ENCODER=1`, the own backend picks
+    the software MFT as a `SoftwareFallback` whose reason is "forced by
+    NINJA_OWN_FORCE_SOFTWARE_ENCODER (devtools)" (`select::choose`), so the
+    log line, `backend_name`, the stop summary and the diagnostics are exactly
+    a real fallback's. It is logged as a warning by the daemon when it spawns
+    the capture worker, by the worker when it brings the encoder up, and at
+    every start. The daemon decides (`select::software_forced`: devtools, and
+    exactly `1`) and hands the answer to the worker explicitly, setting the
+    variable or removing it, so a release build neither reads it nor lets its
+    worker inherit it. It is the same shape as the floor override below, and
+    for the same reason: a way to test a path, never a setting.
 - The own backend needs **Windows build 20348 or newer**
   (`recorder::own::select::MIN_BUILD`, pinned by a test). That is the
   documented floor for process loopback,

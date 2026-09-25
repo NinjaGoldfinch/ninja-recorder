@@ -1940,6 +1940,37 @@ Tool game of five minutes or more:
       `daemon-devtools.log` has `repaired recovered <file>: …` and then the
       remux line; the recording is in the library with every stem.
 
+**The software fallback, forced.** A machine with a hardware encoder never
+takes [DEVELOPMENT.md §2.4](../DEVELOPMENT.md#24-encoding-defaults)'s software
+fallback, so a devtools build can be told to:
+`NINJA_OWN_FORCE_SOFTWARE_ENCODER=1` in the daemon's environment (exactly `1`;
+a release build never reads it). The daemon hands it to the capture worker
+itself, so only the daemon has to be started with it:
+
+```powershell
+# Quit the app from the tray first, so no daemon is left running. One started
+# at login or by the window does not have the variable.
+$env:NINJA_OWN_FORCE_SOFTWARE_ENCODER = "1"
+& "$env:LOCALAPPDATA\ninja-recorder-dev\ninja-recorder-dev.exe" --daemon
+```
+
+Then open the app from the Start Menu (it connects to that daemon) and record a
+Practice Tool game on Own with the Game preset. Close that PowerShell and
+restart the app when you are done.
+
+- [ ] **It is a fallback in every place a real one is.**
+      `daemon-devtools.log` has `NINJA_OWN_FORCE_SOFTWARE_ENCODER=1: the
+      capture worker will encode in SOFTWARE` when the worker is spawned, and
+      `own backend: software H.264 encoding with <encoder>: forced by
+      NINJA_OWN_FORCE_SOFTWARE_ENCODER (devtools)` at each start;
+      `worker-devtools.log` has `… using the SOFTWARE H.264 encoder although
+      <hardware encoder> would have been used` and a warm line reading
+      `encoder own (software encoding: …, because forced by …)`. The start
+      line says `synchronous`, and `diagnostics_json.backend` carries the
+      same `software encoding … because forced by …` text. No NVENC session
+      in `nvidia-smi`. Paste the lines.
+- [ ] **It plays and scrubs**, like any other recording on Own.
+
 **The hardware encoder**:
 
 - [ ] **An NVENC session exists while recording.** During a game, run
@@ -1970,6 +2001,8 @@ Tool game of five minutes or more:
 | 11.7: Desktop: game once in `a:0`, alone in `a:1` | | |
 | 11.7: worker killed at minute five: repaired, plays, every stem (paste) | | |
 | 11.7: daemon killed: repaired at startup, every stem | | |
+| 11.7: `NINJA_OWN_FORCE_SOFTWARE_ENCODER=1`: a marked fallback in both logs and `diagnostics_json`, synchronous, no NVENC session (paste) | | |
+| 11.7: `NINJA_OWN_FORCE_SOFTWARE_ENCODER=1`: plays and scrubs | | |
 | 11.7: an NVENC session in `nvidia-smi` while recording (paste) | | |
 | 11.7: colour against libobs: not washed out, not crushed; `tv`/`bt709` (paste) | | |
 | 11.7: `hardware_encoder_writes_every_track` on the box (paste) | | |
