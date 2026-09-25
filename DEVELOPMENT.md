@@ -74,7 +74,7 @@ trait Recorder {
 Backends:
 - `LibObsRecorder`: Windows, the real one.
 - `StubRecorder`: every non-Windows build. It sleeps, then copies a fixture MP4 into place. Keeps the entire app layer developable and testable without Windows. Nothing ships it; since the macOS bundle was dropped it exists purely for the dev loop and `cargo test` (§9).
-- `OwnRecorder` (Option B, `recorder/own/`): being built through WS1.6, and **constructible since #236** on Windows build 20348 or newer. It records the game window's video and, since #237, the game's own audio by process loopback, through Media Foundation's sink writer: the Game audio preset, and only that one until #238 and #239. Only a devtools build can select it until the default flips (#243). Its pure core (the tick grid, the audio aligner and feed, the process-tree root, encoder ranking, the loaded-encoder check) is compiled and tested on every platform. Which of it and libobs the daemon builds is the `capture_backend` setting, and what happens when the chosen one cannot be built is §16's "The switch, and when it applies".
+- `OwnRecorder` (Option B, `recorder/own/`): being built through WS1.6, and **constructible since #236** on Windows build 20348 or newer. It records the game window's video and every source the audio preset names, the game by process loopback since #237 and the microphone, the desktop and applications since #238, through Media Foundation's sink writer: every preset, as one mixed track until the stems arrive with #239. Only a devtools build can select it until the default flips (#243). Its pure core (the tick grid, the audio aligner and feed, the mixer, the capture plan, the process-tree root, encoder ranking, the loaded-encoder check) is compiled and tested on every platform. Which of it and libobs the daemon builds is the `capture_backend` setting, and what happens when the chosen one cannot be built is §16's "The switch, and when it applies".
 
 **Decision: the own backend holds no COM object; a session thread does.**
 `OwnRecorder` is a channel sender and a join handle. Every D3D11, Media
@@ -266,7 +266,9 @@ fixes an encoder's mixer index at creation with no setter, so encoder *i* is
 permanently track *i*, and what varies per recording is a per-source mixer
 bitmask. A libobs source can feed several mixes at once, which is what makes
 the combined-mix-plus-stems layout nearly free: game audio on both track 0
-and track 1 is one extra bit, not a second capture.
+and track 1 is one extra bit, not a second capture. The own backend, which
+has no libobs mixer, made the other choice; why that is acceptable there is
+under "The own backend captures each source itself" below.
 
 Two traps in that area, both of which fail silently:
 - libobs defaults a source's `audio_mixers` to `0xFF` (every mix). Left alone,
@@ -366,7 +368,7 @@ source's packets on the video's clock with its own `clock::Aligner`
   process that owns the game window being recorded, cross-checked against the
   name `League of Legends.exe`, and falls back to the name alone (the newest,
   if a stale game is still running). `application_root` is the top of an
-  application's own tree, which is what Discord needs in #238: its audio plays
+  application's own tree, which is what Discord needs (#238): its audio plays
   in a helper process under the one the user started. Both keep the spike's
   creation-time check, so a parent PID Windows has since reused is not taken
   for a parent.
@@ -375,10 +377,70 @@ source's packets on the video's clock with its own `clock::Aligner`
   `daemon.log` says why, and `stop` reports no audio tracks, so the library
   row describes the file that exists. That is the trade the libobs fork makes
   too ("lose per-app audio, not all recording").
-- **Every other preset is refused until #238 and #239**, with the reason, by
-  `own::select::audio_layout`. The sink writer holds one audio stream, and a
-  file that quietly left out a source the preset names would be the bug this
-  section warns about.
+- **Every preset records since #238, as one mixed track until #239.** The
+  sink writer holds one audio stream, so the file has track 0 only, the
+  combined mix, and the layout `stop` reports says exactly that: one track,
+  labelled as the preset labels its mix, over the sources that opened
+  (`own::plan::realised_layout`). A source that cannot open (no microphone,
+  Discord not running) is logged, dropped from the layout with its stem, and
+  the recording goes ahead without it; only when nothing opens is the file
+  video only. #239 writes the stems through our own writer (above).
+
+#238 adds the other three kinds of source, and mixes them:
+
+- **The microphone and the desktop come from their WASAPI endpoints**, ported
+  from `spikes/p0c-video`. The microphone is `eCapture`, and "Windows
+  default" is `eCommunications`, exactly as the picker and libobs resolve it,
+  so both backends open the same device; a chosen microphone is opened by the
+  endpoint id the picker stored, through `GetDevice`. The desktop is the
+  default output in loopback, with the spike's silent keep-alive stream so a
+  quiet machine still delivers packets. Both are initialised with
+  `AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY`
+  for 48 kHz stereo float, the format process loopback already asserts, so the
+  audio engine does every rate conversion and this code has no resampler.
+- **An application is process loopback on its own tree**, rooted by
+  `own::root::application_root`: for Discord, the process the user started,
+  not the helper that plays the sound.
+- **Every source gets the same clock decision, separately.** Each has its own
+  `clock::Stamper`, so its own answer to the QPC question (§16), and its own
+  `clock::Aligner`, so its own slips. A source's packets are on the video's
+  timeline before they meet any other source's.
+- **The mix is `own::mix`, and it is pure.** Fixed 10 ms blocks on that
+  timeline, summed, clamped to full scale, then quantised to i16 once. A block
+  is mixed when every source has delivered it, or once a watermark 150 ms
+  behind now has passed its end; a source with nothing for it contributes
+  silence. That one rule covers a silent game (process loopback may send
+  nothing), Discord's tree with nobody speaking, and a microphone unplugged
+  mid-game, whose thread ends and is logged once. No source can hold the mix,
+  or the video, back, and nothing is mixed past the video written so far.
+- **The Desktop preset's mix is the desktop alone.** Desktop capture already
+  contains the game, so summing the game in too would play it twice; the
+  game source feeds only its stem, which means that until #239 it is not
+  opened at all (`own::plan`).
+
+**This reverses, for the own backend, the decision above that rejected a
+separately captured microphone.** For libobs the alternative was capturing the
+mic ourselves and muxing it in with ffmpeg afterwards: owning A/V sync for
+the mic outside the capture pipeline, the class of bug §2.1 chose libobs to
+avoid. Option B has no libobs mixer to hand the mic to, so capturing each
+source itself is the only design it has, and it is acceptable here for two
+reasons the libobs alternative did not have:
+
+- **Every packet is placed by its QPC stamp**, the clock the video's ticks
+  are laid on, not by a sample count that drifts away from it, and each
+  source is held there by its own single-frame slips. The sync is decided at
+  capture, per source and per packet, in pure code with unit tests, rather
+  than repaired in a mux afterwards.
+- **The residual is measured, and small.** §16's P0c-2 run held the written
+  audio within 0.016 frames of the video over ten minutes by exactly this
+  slipping, against a raw endpoint drift of −0.2 ppm. A source whose stamps
+  turn out not to be QPC falls back to device time and carries its own raw
+  drift instead, which for that endpoint was about a quarter of a millisecond
+  over ten minutes.
+
+What stays unmeasured until the box runs it is the microphone's own drift and
+stamps (windows-verification.md §11.4); the log line each source writes at
+stop carries both.
 
 ---
 
@@ -2769,15 +2831,24 @@ its first packet**, and says which way it went:
   the slips, the gaps and the holds. Those two lines are what the box reads
   ([windows-verification.md §11.2](docs/windows-verification.md#112-game-audio-by-process-loopback-237)),
   and what this paragraph is updated from once it has.
+- **Since #238 every source answers it for itself**, the same way: the
+  microphone and the desktop from their endpoints, an application by process
+  loopback. Each writes its own pair of lines, named for the source
+  (`microphone audio clock …`, `desktop audio clock …`,
+  `Discord.exe audio clock …`), and a mix of a QPC source and a device-time
+  one is fine: each is on the video's timeline before the two are summed.
 
 **One more difference from the spike's endpoint: a silent target may send
 nothing.** A render endpoint in loopback delivers continuously once something
 keeps it running, which is what the spike's keep-alive stream did; a
 process-loopback stream is not guaranteed to be fed while the game is quiet.
-The feed therefore holds the track with silence half a second behind the
-video when no packet is waiting (`feed::Feed::hold`), so the muxer is never
-left waiting on the audio, and a packet that resumes after it lands where its
-stamp says, with the gap filled.
+#237 held the track with silence half a second behind the video when no
+packet was waiting. Since #238 the mixer does it for every source
+(`own::mix`): a block no packet has come for is mixed as silence once a
+watermark 150 ms behind now has passed it, and each source's feed is held
+with silence to the same point, so the muxer is never left waiting on the
+audio, and a packet that resumes after it lands where its stamp says, with
+the gap filled.
 
 ### The switch, and when it applies
 
@@ -2798,9 +2869,9 @@ every other key in that table ([data-model.md](docs/data-model.md#what-lives-in-
 Option B. A default the build cannot construct would refuse every game for
 everyone who never opened Settings, and before #236 that is what `own` would
 have done. Since #236 `own` is constructible on Windows build 20348 or newer,
-and since #237 it records the Game preset's audio, but the flip waits until it
-carries every source (#238) and every track (#239) and has been measured
-against libobs. The flip
+since #237 it records the Game preset's audio, and since #238 every source a
+preset names, mixed into track 0; but the flip waits until it carries every
+track (#239) and has been measured against libobs. The flip
 is a one-line change to `CaptureBackend`'s `#[default]`, pinned by a test so
 that it cannot happen by accident. It moves only the users who never chose.
 Someone who picked libobs explicitly has a stored row and keeps it.
@@ -2879,7 +2950,7 @@ and that the next game records on the backend the row says is in use. Since
 #236 a devtools build can switch to a real own backend, so that row can be
 checked both ways. The comparison WS1.7's exit criterion asks for, both
 backends recording the same game with audio, can be run on the Game preset
-since #237; the other presets wait on #238 and #239.
+since #237, and on every preset's track 0 since #238; the stems wait on #239.
 
 ---
 

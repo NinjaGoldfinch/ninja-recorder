@@ -9,7 +9,9 @@
 //!   frames are copied into.
 //! - `process` — the process table and the game window's owner, which
 //!   `root` chooses the audio's process tree from.
-//! - `audio` — the game's audio by process loopback, on its own thread.
+//! - `audio` — every audio source on its own thread (the game and
+//!   applications by process loopback, the microphone and the desktop from
+//!   their endpoints), and track 0, the mix of them.
 //! - `encode` — the H.264 encoders on offer, and the sink writer with its
 //!   AAC stream.
 //! - `session` — the thread that owns all of the above.
@@ -28,8 +30,8 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Sender, channel};
 use std::thread::JoinHandle;
 
-use super::select;
 use super::status::Status;
+use super::{plan, select};
 use crate::recorder::audio::AudioLayout;
 use crate::recorder::{RecordConfig, Recorder, RecorderError, RecordingOutput};
 use crate::{info, warn};
@@ -47,9 +49,9 @@ pub use device::windows_build;
 /// for an apartment-bound COM pointer. The same boundary becomes the capture
 /// worker's pipe in WS1.6.9 (#241).
 ///
-/// The Game audio preset only until #238 and #239, and reachable only from a
-/// devtools build that selects it (DEVELOPMENT.md §16, "The switch, and when
-/// it applies").
+/// Every audio preset since #238, mixed into track 0; the stems arrive with
+/// #239. Reachable only from a devtools build that selects it
+/// (DEVELOPMENT.md §16, "The switch, and when it applies").
 pub struct OwnRecorder {
     session: Option<SessionThread>,
     status: Status,
@@ -63,10 +65,10 @@ pub struct OwnRecorder {
 /// audio layout that made it into it.
 struct Active {
     path: PathBuf,
-    /// The preset's layout if the game's audio track exists, or no tracks if
-    /// process loopback could not start. The track exists from `start` to
-    /// the finalize either way: a source that dies mid-recording leaves it
-    /// padded with silence, not missing.
+    /// What the file holds: track 0, the mix, over every source that opened
+    /// (`plan::realised_layout`), or no tracks if none did. The track exists
+    /// from `start` to the finalize either way: a source that dies
+    /// mid-recording leaves it padded with silence, not missing.
     audio: AudioLayout,
 }
 
@@ -139,16 +141,20 @@ impl Recorder for OwnRecorder {
     /// happened, with no offset for this backend. Move any work after the
     /// origin read and that stops being true.
     ///
-    /// The game's audio is started inside that wait, before the origin, so
-    /// its first packets are already flowing when tick 0 is taken; the ones
-    /// captured before it are dropped by the aligner.
+    /// The audio sources are started inside that wait, before the origin, so
+    /// their first packets are already flowing when tick 0 is taken; the ones
+    /// captured before it are dropped by each source's aligner.
     fn start(&mut self, config: RecordConfig) -> Result<(), RecorderError> {
         if self.active.is_some() {
             return Err(RecorderError::AlreadyRecording);
         }
-        // Refused before anything comes up: a preset naming a source this
-        // backend cannot capture yet records nothing rather than less.
+        // Refused before anything comes up: a layout that is not one (a
+        // hand-edited `Custom` row) records nothing rather than something.
+        // Until #239 the file holds track 0 only, the mix, so that is all the
+        // plan opens.
         let layout = select::audio_layout(&config.audio).map_err(RecorderError::Backend)?;
+        let plan = plan::plan(&layout, plan::TRACKS_WRITTEN);
+        let planned = plan.sources.len();
         if let Some(build) = windows_build()
             && let Some(floor) = select::availability(build)
         {
@@ -165,10 +171,11 @@ impl Recorder for OwnRecorder {
         let (origin_tx, origin_rx) = channel();
         let started = self.ask(|reply| Command::Start {
             path: path.clone(),
+            plan,
             reply,
             origin: origin_rx,
         })?;
-        let Started { status, game_audio } = match started {
+        let Started { status, audio } = match started {
             Ok(started) => started,
             Err(e) => {
                 if self.status == Status::Idle {
@@ -184,11 +191,16 @@ impl Recorder for OwnRecorder {
             "recorder",
             "own backend recording: {}; {}",
             status.backend_name(),
-            if game_audio { "game audio on track 0" } else { "no audio track" }
+            match audio.tracks.first() {
+                Some(track) => format!(
+                    "track 0 ({}) mixes {} of the {planned} source(s) planned for it",
+                    track.label,
+                    track.sources.len()
+                ),
+                None => "no audio track".to_string(),
+            }
         );
         self.status = status;
-        let audio =
-            if game_audio { layout } else { AudioLayout { sources: Vec::new(), tracks: Vec::new() } };
         self.active = Some(Active { path, audio });
 
         // The origin, last: see the doc comment above.
