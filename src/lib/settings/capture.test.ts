@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CaptureBackendStatus } from "../contract/types";
-import { refusalNote, unavailableNotes } from "./capture";
+import { refusalNote, softwareNote, unavailableNotes } from "./capture";
 
 const NOT_BUILT = "the own capture backend is not in this build yet";
 
@@ -9,6 +9,7 @@ function today(over: Partial<CaptureBackendStatus> = {}): CaptureBackendStatus {
   return {
     configured: "libobs",
     active: "libobs (idle)",
+    software_encoding: false,
     options: [
       { backend: "libobs", unavailable: null },
       { backend: "own", unavailable: NOT_BUILT },
@@ -44,5 +45,25 @@ describe("refusalNote", () => {
     const note = refusalNote(today({ configured: "own", active: `unavailable (${NOT_BUILT})` }));
     expect(note).toContain("Nothing will be recorded");
     expect(note).toContain(NOT_BUILT);
+  });
+});
+
+describe("softwareNote", () => {
+  it("is quiet while the backend encodes in hardware", () => {
+    expect(softwareNote(today({ configured: "own", active: "own (ready: NVENC)" }))).toBeNull();
+  });
+
+  // DEVELOPMENT.md §2.4: the software fallback is allowed only if the user is
+  // told, and the flag is what says so, not the wording of `active`.
+  it("says the recording costs more CPU when the daemon flags software encoding", () => {
+    const note = softwareNote(
+      today({
+        configured: "own",
+        active: "own (software encoding: H264 Encoder MFT, because no hardware GPU was found)",
+        software_encoding: true,
+      }),
+    );
+    expect(note).toContain("encoding video in software");
+    expect(note).toContain("more CPU");
   });
 });

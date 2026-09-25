@@ -17,6 +17,7 @@ import {
   BACKEND_EXPLAINED,
   BACKEND_LABELS,
   refusalNote,
+  softwareNote,
   unavailableNotes,
 } from "../../settings/capture";
 import { saveCaptureBackend, settings } from "../../stores/settings.svelte";
@@ -25,6 +26,7 @@ import SettingRow from "./SettingRow.svelte";
 const status = $derived(settings.captureBackend);
 const notes = $derived(status ? unavailableNotes(status) : []);
 const refusal = $derived(status ? refusalNote(status) : null);
+const software = $derived(status ? softwareNote(status) : null);
 </script>
 
 <section class="settings-group">
@@ -64,6 +66,10 @@ const refusal = $derived(status ? refusalNote(status) : null);
       {/each}
     </div>
   </SettingRow>
+
+  {#if software}
+    <p class="callout callout-warn">{software}</p>
+  {/if}
 
   {#if refusal}
     <p class="callout callout-warn">{refusal}</p>

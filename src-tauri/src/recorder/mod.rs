@@ -113,6 +113,17 @@ pub trait Recorder: Send {
     /// which is why this returns an owned `String`.
     fn backend_name(&self) -> String;
 
+    /// Whether this backend is encoding video in software, which the UI
+    /// shows as a notice about the extra CPU (DEVELOPMENT.md §2.4). Only the
+    /// own backend can: libobs refuses rather than fall back. A flag beside
+    /// `backend_name` rather than a parse of it, so the wording of that
+    /// string stays free to change.
+    ///
+    /// Default `false`.
+    fn software_encoding(&self) -> bool {
+        false
+    }
+
     /// Bring the backend up ahead of time, because a recording now looks
     /// plausible — the supervisor calls this on entering `ClientRunning`.
     ///

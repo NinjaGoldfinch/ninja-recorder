@@ -816,13 +816,19 @@ fn backends(ctx: &Ctx) -> Result<&dyn Backends, String> {
     })
 }
 
-/// The `capture_backend` setting, the backend actually live, and what this
-/// build can offer. The settings row renders all three.
+/// The `capture_backend` setting, the backend actually live (and whether it
+/// is encoding in software), and what this build can offer. The settings row
+/// renders all of it.
 pub fn get_capture_backend(ctx: &Ctx) -> Result<CaptureBackendStatus, String> {
     let backends = backends(ctx)?;
+    let (active, software_encoding) = {
+        let recorder = ctx.recorder.lock().map_err(|e| e.to_string())?;
+        (recorder.backend_name(), recorder.software_encoding())
+    };
     Ok(CaptureBackendStatus {
         configured: ctx.db.get_capture_backend().map_err(|e| e.to_string())?,
-        active: ctx.recorder.lock().map_err(|e| e.to_string())?.backend_name(),
+        active,
+        software_encoding,
         options: backends.options(),
     })
 }

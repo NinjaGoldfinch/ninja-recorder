@@ -453,6 +453,12 @@ configured: CaptureBackend,
  */
 active: string, 
 /**
+ * The live backend is encoding video in software
+ * (`Recorder::software_encoding`), so recording costs noticeably more
+ * CPU. The row shows a notice while it is true (DEVELOPMENT.md §2.4).
+ */
+software_encoding: boolean, 
+/**
  * Every backend this build knows about, available or not, in the order
  * the control lists them.
  */

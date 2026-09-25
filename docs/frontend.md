@@ -899,6 +899,17 @@ the backend actually
 live. A click calls `set_capture_backend` and the control shows the status it
 returns, never the value it sent, so a refusal leaves it where it was and
 raises a toast. The row says that a change applies from the next recording.
+
+**The software-encoding notice.** When `CaptureBackendStatus` has
+`software_encoding` set, the row shows a warning callout
+(`settings/capture.ts`'s `softwareNote`) that recording is encoding in
+software and costs more CPU: the UI's third of DEVELOPMENT.md §2.4's rule that
+the own backend's software fallback is never silent. The own backend only
+learns its encoder when the League client opens, long after the view first
+reads the status, so `status.svelte.ts` calls `refreshCaptureBackend` on every
+game-state edge, next to `refreshUpdateStatus`; it does nothing until the view
+has read the status once. The daemon keeps the flag set after the client
+closes, so the notice is still there when Settings is opened after a game.
 Every string in it that came from the daemon is interpolated, never rendered
 as markup.
 

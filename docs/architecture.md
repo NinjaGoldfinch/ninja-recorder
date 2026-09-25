@@ -162,7 +162,7 @@ behind a three-method trait and nothing above it knows libobs exists.
 
 ```mermaid
 flowchart TB
-    SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release · collect_output"}
+    SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release · collect_output<br/>backend_name · software_encoding"}
     T -->|"libobs, #[cfg(windows)]:<br/>the fallback, for one release"| L["LibObsRecorder<br/><small>WGC window capture,<br/>NVENC/AMF/QSV H.264,<br/>one AAC track per audio source,<br/>fragmented MP4 + faststart remux</small>"]
     T -->|"own, #[cfg(windows)], build 20348+:<br/>the default"| O["OwnRecorder<br/><small>Option B: WGC → D3D11 →<br/>Media Foundation MFTs, driven directly,<br/>every track (mix + stems) in one file<br/>by our own writer, + faststart remux</small>"]
     O -.->|"stdin / stdout,<br/>one JSON line each"| WK["capture worker process<br/><small>--capture-worker, only while<br/>League runs; kill-on-close job</small>"]
@@ -289,6 +289,15 @@ flowchart LR
     SK --> W
     W --> E["H.264 MFT"]
 ```
+
+`software_encoding` defaults to `false`, and only `OwnRecorder` overrides it:
+true once a bring-up chose Microsoft's software H.264 encoder, and kept
+through `release` until one chooses hardware
+(`own::status::Status::software_encoding`). `get_capture_backend` carries it
+to Settings as `CaptureBackendStatus::software_encoding`, which shows a notice
+about the extra CPU
+([DEVELOPMENT.md §2.4](../DEVELOPMENT.md#24-encoding-defaults)). A flag rather
+than a parse of `backend_name`, so that string's wording stays free to change.
 
 `collect_output` is the third default no-op, and the supervisor calls it every
 fifth Live Client poll while a recording runs. The libobs worker's info and

@@ -55,6 +55,7 @@ function backendStatus(over: Record<string, unknown> = {}) {
   return {
     configured: "libobs",
     active: "libobs (idle)",
+    software_encoding: false,
     options: BOTH_BUILT,
     ...over,
   };
@@ -289,6 +290,29 @@ describe("the capture backend", () => {
 
     expect(choice(el, "libobs")?.getAttribute("aria-checked")).toBe("true");
     expect(toasts.toastState.message).toContain("recording is in progress");
+  });
+
+  it("says nothing about software encoding while the encoder is hardware", async () => {
+    const el = render();
+    await settle();
+    expect(el.textContent).not.toContain("encoding video in software");
+  });
+
+  // DEVELOPMENT.md §2.4: the own backend's software fallback is never silent.
+  it("shows a notice while the own backend encodes in software", async () => {
+    stubBackend({
+      get_capture_backend: backendStatus({
+        configured: "own",
+        active: "own (software encoding: H264 Encoder MFT, because no hardware GPU was found)",
+        software_encoding: true,
+      }),
+    });
+    const el = render();
+    await settle();
+    const notice = [...el.querySelectorAll(".callout-warn")].find((n) =>
+      n.textContent?.includes("encoding video in software"),
+    );
+    expect(notice?.textContent).toContain("more CPU");
   });
 
   // The default on Windows 10 with nothing saved: own, below its OS floor.

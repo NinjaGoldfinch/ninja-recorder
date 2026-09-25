@@ -41,6 +41,24 @@ export function unavailableNotes(status: CaptureBackendStatus): string[] {
 }
 
 /**
+ * The notice for the own backend's software fallback, or `null`.
+ *
+ * DEVELOPMENT.md §2.4: the own backend encodes with Microsoft's software H.264
+ * encoder when no usable hardware one exists, and that is allowed only if it
+ * is never silent. The log and the recording's diagnostics carry the encoder
+ * and the reason; this is the part a user sees. Driven by the daemon's flag,
+ * not by reading `active`, whose wording is free to change.
+ */
+export function softwareNote(status: CaptureBackendStatus): string | null {
+  if (!status.software_encoding) return null;
+  return (
+    "Recording is encoding video in software, because no usable hardware encoder " +
+    "was found. It uses noticeably more CPU than a graphics card's encoder, " +
+    "which can cost frame rate in game."
+  );
+}
+
+/**
  * The warning for a saved choice this build cannot construct, or `null`.
  *
  * The control cannot save one, but a downgrade or a missing libobs worker can

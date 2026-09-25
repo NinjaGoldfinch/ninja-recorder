@@ -222,12 +222,20 @@ Implemented in `src-tauri/src/recorder/`: `Recorder`, `RecordConfig`, `RecorderE
     hardware adapter. It is **never silent**: `recorder::own::select::rank`
     returns it as a `SoftwareFallback` carrying the reason, and every caller
     has to put that reason in `daemon.log` and the recording's
-    `diagnostics_json` and show the UI a notice about the extra CPU. Since
-    #236 the first two are done: `OwnRecorder` writes a `warn` line naming
-    the encoder and the reason, and its `backend_name` (which is what
+    `diagnostics_json` and show the UI a notice about the extra CPU. All
+    three are done: `OwnRecorder` writes a `warn` line naming the encoder
+    and the reason, its `backend_name` (which is what
     `RecordingDiagnostics::backend` records) reads `own (software encoding:
-    <encoder>, because <reason>)`. The UI notice is still owed, and arrives
-    before the fallback can reach a release user (#243). The check is made
+    <encoder>, because <reason>)`, and since #243 Settings → Advanced shows
+    a notice about the extra CPU. The notice is driven by a flag, not by
+    parsing that name: `Recorder::software_encoding` (default `false`, and
+    only `OwnRecorder` overrides it) reaches the UI as
+    `CaptureBackendStatus::software_encoding`. It is sticky across the
+    client closing (`own::status::Status::software_encoding`), because the
+    worker's status goes back to idle then and Settings is usually opened
+    after a game; only a new encoder bring-up changes it. The UI re-reads the
+    status on each game-state edge, which is when the answer can move. The
+    check is made
     twice: once on the ranking, and again on what was actually activated
     (`own::status::check_loaded`). Until #239 that second check caught the
     sink writer loading the software MFT when asked for hardware; now the
@@ -236,8 +244,10 @@ Implemented in `src-tauri/src/recorder/`: `Recorder`, `RecordConfig`, `RecorderE
     turns a wrong vendor match (#224) or an unusual GPU into no recording at
     all, where a fallback turns it into a recording that costs CPU and says
     so. The software path's CPU cost on the gameplay machine is **measured
-    before own becomes the default (#243)**; the fallback does not ship as
-    the default path until that number exists.
+    before own becomes the default**, in the exit run
+    ([windows-verification.md §11.8](docs/windows-verification.md#118-the-exit-run-243));
+    the fallback does not ship as the default path until that number
+    exists.
 - The own backend needs **Windows build 20348 or newer**
   (`recorder::own::select::MIN_BUILD`, pinned by a test). That is the
   documented floor for process loopback,

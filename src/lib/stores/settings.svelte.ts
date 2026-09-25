@@ -280,6 +280,22 @@ export async function loadCaptureBackend(): Promise<void> {
  * moved before the answer would claim a switch that did not happen. Nothing
  * is written optimistically, so a refusal has nothing to roll back.
  */
+/**
+ * Re-reads the capture backend's status on a game-state edge, once the view
+ * has read it at least once. `status.svelte.ts` calls this.
+ *
+ * What the daemon reports changes without anyone touching the row: the own
+ * backend only knows which encoder it has once the League client opens and
+ * it warms up, and that is when the software-encoding notice can appear. The
+ * view reads the status when the daemon becomes reachable, which is usually
+ * long before that. Skipped until then, because the view's own load is what
+ * decides when the first read is safe.
+ */
+export async function refreshCaptureBackend(): Promise<void> {
+  if (captureBackend === null) return;
+  await loadCaptureBackend();
+}
+
 export async function saveCaptureBackend(backend: CaptureBackend): Promise<void> {
   if (captureBackend?.configured === backend) return;
   captureBackendBusy = true;
