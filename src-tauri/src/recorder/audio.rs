@@ -19,8 +19,11 @@ use serde::{Deserialize, Serialize};
 /// channel you're looking at — see `AudioSourceKind::Application`.
 pub const DISCORD_EXE: &str = "Discord.exe";
 
-/// libobs' `MAX_AUDIO_MIXES`. No preset comes close (the largest is four),
-/// but a `Custom` layout arrives from outside and has to be bounded somewhere.
+/// The most audio tracks a recording may have, on either backend. It is
+/// libobs' `MAX_AUDIO_MIXES`, and the own backend checks the same bound
+/// (`own::select`), so a layout is valid or not whichever one records it. No
+/// preset comes close (the largest is four), but a `Custom` layout arrives
+/// from outside and has to be bounded somewhere.
 pub const MAX_TRACKS: usize = 6;
 
 /// One capturable audio source. Each maps to exactly one libobs source object
@@ -87,7 +90,7 @@ impl AudioLayout {
         }
         if self.tracks.len() > MAX_TRACKS {
             return Err(format!(
-                "{} audio tracks requested, libobs supports at most {MAX_TRACKS}",
+                "{} audio tracks requested, and a recording can have at most {MAX_TRACKS}",
                 self.tracks.len()
             ));
         }
@@ -354,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_more_tracks_than_libobs_has_mixes() {
+    fn validate_rejects_more_tracks_than_the_limit() {
         let layout = AudioLayout {
             sources: vec![AudioSourceKind::Game],
             tracks: (0..MAX_TRACKS + 1)

@@ -114,8 +114,8 @@ allow = ["GPL-2.0-only"]
 #    listed together, and WS8 deletes the whole block as a unit — the property
 #    the plan is asking for is preserved.
 #
-#    See docs/provenance.md for the WS1.7 debt: the fork has no tags, so
-#    `Cargo.toml` pins a branch and not a tag.
+#    The fork is pinned by tag, `v2.0.0` (`Cargo.toml`); docs/provenance.md
+#    has how that pin was made and what the exceptions owe.
 [[licenses.exceptions]]
 name = "libobs-recorder"
 allow = ["GPL-2.0"]
@@ -188,7 +188,6 @@ wildcards = "deny"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-# The capture backend. A branch pin, not a tag — WS1.7 debt, recorded in
-# docs/provenance.md. `Cargo.lock` pins the exact revision, so a build is
-# reproducible; what is not pinned is where `cargo update` would move it.
+# The libobs capture backend's fork, pinned by tag (`v2.0.0`) in `Cargo.toml`
+# and to the exact revision in `Cargo.lock`. WS8 deletes it with libobs.
 allow-git = ["https://github.com/NinjaGoldfinch/libobs-recorder.git"]
