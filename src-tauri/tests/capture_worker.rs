@@ -18,6 +18,10 @@
 //! binary that has no application manifest (DEVELOPMENT.md §12).
 
 #![cfg(target_os = "windows")]
+// `build.rs` delay-loads Media Foundation with `cargo:rustc-link-arg`, which
+// reaches every link, this one included; this test imports none of it, so
+// MSVC's linker says the `/DELAYLOAD` was ignored (LNK4199). True and harmless.
+#![allow(linker_messages)]
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdout, Command, Stdio};
@@ -97,7 +101,8 @@ fn the_worker_shakes_hands_prepares_and_exits_cleanly_on_release() {
     // answer; what is under test is that it came back as one line.
     let result = &prepared["result"];
     assert!(result.get("Ok").is_some() || result.get("Err").is_some(), "{prepared}");
-    eprintln!("[capture worker test] prepare answered {result}");
+    // Straight to stderr, past the harness's capture, so a CI log says which.
+    let _ = writeln!(std::io::stderr(), "[capture worker test] prepare answered {result}");
 
     send(&mut child, r#"{"type":"stop"}"#);
     let stopped = reply(&mut stdout);
