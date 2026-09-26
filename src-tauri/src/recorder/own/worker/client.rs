@@ -60,7 +60,7 @@ pub struct Worker {
     replies: Receiver<Line<Reply>>,
     /// Kills the worker if the daemon dies without saying so.
     #[cfg(target_os = "windows")]
-    _job: Option<super::job::Job>,
+    _job: Option<crate::recorder::job::Job>,
     /// Set once the process has been waited for.
     exited: Option<ExitStatus>,
     /// Set by the reply thread when the worker's stdout reaches EOF.
@@ -123,7 +123,7 @@ impl Worker {
         // it: a dead daemon's end of the pipe closes, and the worker finalizes
         // and exits.
         #[cfg(target_os = "windows")]
-        let job = match super::job::Job::contain(&child) {
+        let job = match crate::recorder::job::Job::contain(&child) {
             Ok(job) => Some(job),
             Err(e) => {
                 warn!(

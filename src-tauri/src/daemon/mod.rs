@@ -626,12 +626,16 @@ async fn start(paths: Paths) -> Result<Option<Started>, DaemonError> {
     // the library. At this point in startup there is nothing recording to
     // confuse it with. The on-demand rescan deliberately does not call this.
     match db::reconcile::recover_unfinished(&db, paths.ffmpeg.as_deref()) {
-        Ok(report) if report.recovered > 0 || report.abandoned_removed > 0 => {
+        Ok(report)
+            if report.recovered > 0 || report.abandoned_removed > 0 || report.still_writing > 0 =>
+        {
             info!(
                 "db",
-                "startup recovery: finished {} interrupted recording(s), removed {} with no file",
+                "startup recovery: finished {} interrupted recording(s), removed {} with no \
+                 file, left {} still being written",
                 report.recovered,
-                report.abandoned_removed
+                report.abandoned_removed,
+                report.still_writing
             );
             events.publish(Event::LibraryChanged { reason: LibraryChangeReason::Reconciled });
         }
