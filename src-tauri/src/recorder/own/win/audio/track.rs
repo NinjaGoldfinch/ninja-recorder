@@ -22,6 +22,14 @@
 //! a source that was there and would not open, and one that died part-way,
 //! are `CaptureProblem`s, carried back with the start and the stop; one that
 //! was simply not there (Discord not running) is only logged.
+//!
+//! **The game's source follows the game** (#302). A game that crashes and is
+//! reconnected is a new `League of Legends.exe`, and process loopback is
+//! bound to a PID, so when the session captures the new game window it asks
+//! [`AudioTracks::restart_game`] to capture the new process into the same
+//! input. The track does not notice beyond a gap: the mixer's watermark
+//! carried it as silence while the game was gone, and the new source's
+//! packets are placed on the same timeline after it.
 
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
@@ -57,6 +65,14 @@ struct Input {
     ended: bool,
     /// How the thread ended, if it has: kept for the line at stop.
     summary: Option<Result<Summary, String>>,
+    /// The game's own audio, which a reconnected game restarts
+    /// ([`AudioTracks::restart_game`]).
+    game: bool,
+    /// The process a process-loopback source captures.
+    pid: Option<u32>,
+    /// A source restarted on a new process: its first packet is a
+    /// discontinuity, not drift.
+    restarted: bool,
 }
 
 impl Input {
@@ -137,11 +153,18 @@ impl AudioTracks {
             let name = source_name(kind);
             let (tx, packets) = channel();
             let source = target(kind, hwnd, &mut procs).and_then(|(target, what)| {
-                super::start(&name, target, tx).map(|source| (source, what))
+                let pid = match target {
+                    Target::Process(pid) => Some(pid),
+                    _ => None,
+                };
+                super::start(&name, target, tx).map(|source| (source, what, pid))
             });
             report.push(Opened {
                 name: name.clone(),
-                outcome: source.as_ref().map(|(_, what)| what.clone()).map_err(|e| e.reason.clone()),
+                outcome: source
+                    .as_ref()
+                    .map(|(_, what, _)| what.clone())
+                    .map_err(|e| e.reason.clone()),
             });
             if let Err(e) = &source
                 && let Some(problem) = problem::not_opened(kind, e)
@@ -150,13 +173,16 @@ impl AudioTracks {
                 problems.push(problem);
             }
             match source {
-                Ok((source, _)) => {
+                Ok((source, _, pid)) => {
                     inputs.push(Input {
                         name,
                         source: Some(source),
                         packets,
                         ended: false,
                         summary: None,
+                        game: matches!(kind, AudioSourceKind::Game),
+                        pid,
+                        restarted: false,
                     });
                     opened.push(true);
                 }
@@ -197,7 +223,13 @@ impl AudioTracks {
         for (i, input) in self.inputs.iter_mut().enumerate() {
             loop {
                 match input.packets.try_recv() {
-                    Ok(packet) => mix.push(i, packet),
+                    Ok(mut packet) => {
+                        if input.restarted {
+                            input.restarted = false;
+                            packet.discontinuity = true;
+                        }
+                        mix.push(i, packet);
+                    }
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         if !input.ended {
@@ -220,6 +252,65 @@ impl AudioTracks {
                         break;
                     }
                 }
+            }
+        }
+    }
+
+    /// Captures the game's audio from the process that owns `hwnd`, a game
+    /// window the session has just attached to after losing the last one
+    /// (#302). Returns what happened, for the log, or `None` when there is
+    /// nothing to do: no game source opened at start (so the file has no
+    /// place for one), or it already captures that process.
+    ///
+    /// The old source is stopped first, and whatever it sent before it
+    /// stopped is placed; the new one feeds the same input, so every track
+    /// that summed the game still does, and the time between is the silence
+    /// the mixer's watermark already wrote. A new source that will not start
+    /// leaves the input ended, silent to the stop, and is reported as a
+    /// source that stopped part-way.
+    pub fn restart_game(&mut self, hwnd: HWND) -> Option<String> {
+        let i = self.inputs.iter().position(|input| input.game)?;
+        let (target, what) = match target(&AudioSourceKind::Game, hwnd, &mut None) {
+            Ok(found) => found,
+            Err(e) => return Some(format!("its audio was not found ({e}); the game track stays silent")),
+        };
+        let Target::Process(pid) = target else {
+            return None;
+        };
+        if self.inputs[i].pid == Some(pid) && !self.inputs[i].ended {
+            return None;
+        }
+        // Everything the old source sent goes in before it is replaced.
+        self.receive();
+        let input = &mut self.inputs[i];
+        let old = input.pid;
+        input.stop();
+        if let Some(mix) = self.mix.as_mut() {
+            while let Ok(packet) = input.packets.try_recv() {
+                mix.push(i, packet);
+            }
+        }
+        let (tx, packets) = channel();
+        input.packets = packets;
+        input.pid = Some(pid);
+        match super::start(&input.name, target, tx) {
+            Ok(source) => {
+                input.source = Some(source);
+                input.ended = false;
+                input.summary = None;
+                input.restarted = true;
+                Some(format!(
+                    "its audio is captured again from {what}{}",
+                    old.map_or_else(String::new, |old| format!(", after PID {old}"))
+                ))
+            }
+            Err(e) => {
+                let why = format!("could not restart it on PID {pid}: {e}");
+                if !input.ended {
+                    self.ended.push(problem::ended(&input.name, &why));
+                }
+                input.ended = true;
+                Some(format!("its audio {why}; the game track stays silent"))
             }
         }
     }

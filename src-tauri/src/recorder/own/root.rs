@@ -207,6 +207,13 @@ pub fn application_root(procs: &[Proc], exe: &str) -> Result<Root, String> {
     }
 }
 
+/// Whether `pid` is a process named [`GAME_EXE`]: the test a window found
+/// by class passes before a recording that lost its game window captures it
+/// (`own::watch`, #302). Another window of the same class is not the game.
+pub fn is_game(procs: &[Proc], pid: u32) -> bool {
+    find(procs, pid).is_some_and(|p| p.exe.eq_ignore_ascii_case(GAME_EXE))
+}
+
 /// The oldest process by creation time; one with an unknown time sorts
 /// last, then the lowest PID wins so the answer is stable.
 fn oldest<'a>(procs: &[&'a Proc]) -> &'a Proc {
@@ -223,6 +230,22 @@ mod tests {
 
     fn p(pid: u32, ppid: u32, exe: &str, created: u64) -> Proc {
         Proc { pid, ppid, exe: exe.to_string(), created: Some(created) }
+    }
+
+    #[test]
+    fn only_a_process_named_for_the_game_is_the_game() {
+        let procs = measured();
+        assert!(is_game(&procs, 4000));
+        assert!(!is_game(&procs, 3000));
+        assert!(!is_game(&procs, 5000));
+        // Gone from the snapshot: not the game.
+        assert!(!is_game(&procs, 4001));
+    }
+
+    #[test]
+    fn the_game_name_is_matched_without_case() {
+        let procs = vec![p(7, 1, "league of legends.EXE", 1)];
+        assert!(is_game(&procs, 7));
     }
 
     /// The tree §16 measured on the box: the game under the client under the
