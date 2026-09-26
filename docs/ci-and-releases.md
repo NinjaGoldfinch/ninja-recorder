@@ -548,7 +548,10 @@ grows a second binary that does have to ship.
 Its pre-install and pre-uninstall hooks stop this install's
 `libobs\extprocess_recorder.exe`, found by path, before the template touches a
 file: Windows will not let an installer replace a DLL a running process has
-loaded (#220). Why by path, and why the app goes first, is
+loaded (#220). Its post-uninstall hook removes `$INSTDIR\libobs` recursively
+once the template's per-file deletes have run, because those skip a file that
+is still loaded and anything the bundle did not list (#308). Why by path, why
+the app goes first, and why nothing is removed before an install, is
 [DEVELOPMENT.md §14](../DEVELOPMENT.md#the-capture-backend-has-to-be-shut-down-first).
 
 The same build step reads the generated `installer.nsi` back and fails if it
@@ -556,8 +559,9 @@ does not include the hooks. Both bundles are checked, because the devtools one
 is `tauri.devtools.conf.json` merged over the rest and the question is whether
 the merge kept the Windows file's `nsis` block. A Rust test in `daemon`
 (`the_installer_hooks_stop_the_worker_the_daemon_starts`) pins the config key
-and the worker path against the one the daemon starts, which is as far as a
-Linux gate can see: nothing here runs makensis before the Windows leg does.
+and the worker path against the one the daemon starts, and checks the
+post-uninstall `RMDir /r` is still there, which is as far as a Linux gate can
+see: nothing here runs makensis before the Windows leg does.
 
 > Working on the capture backend locally on the Windows box means running the
 > same clone-build-copy sequence by hand before `cargo run`. It is not

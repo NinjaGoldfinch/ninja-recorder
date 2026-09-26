@@ -1470,8 +1470,21 @@ Details tab, with the *Image path name* column on, before going on.
       the new version. Then compare `libobs\` against the new build's artifact:
       every file there should have the new build's timestamps.
 - [ ] **Uninstall with the app running.** Apps & Features → Uninstall: one
-      prompt, and afterwards `%LOCALAPPDATA%\ninja-recorder\libobs\` holds
-      none of the DLLs the worker had loaded.
+      prompt, and afterwards `%LOCALAPPDATA%\ninja-recorder\libobs\` does not
+      exist at all, nor does the install folder itself (#308: before the
+      post-uninstall hook, the worker's DLLs, its executable and three
+      win-capture `.json` files were left behind). App data under
+      `%APPDATA%` is untouched unless the "delete app data" box was ticked.
+      Before closing the uninstaller, open *Show details*: say whether it has a
+      `Stopped process <pid> (…\libobs\extprocess_recorder.exe)` line, and
+      whether it has a `Could not remove …\libobs` line (it should not). The
+      first is what says whether the pre-uninstall hook saw the worker, which
+      #308 left unanswered.
+- [ ] **Uninstall before installing still installs a whole `libobs\`.** Run a
+      newer installer by hand over an install of this build (or later) and
+      keep the reinstall page's "Uninstall before installing". The old
+      uninstaller now removes `libobs\` whole; afterwards the folder is back,
+      holds the new build's files, and the app records.
 
 What this does **not** fix, so do not expect it: an *interactive upgrade* that
 chooses "Uninstall before installing" runs the **previously installed**
@@ -1486,7 +1499,8 @@ uninstaller it runs is this one.
 | 10: interactive install: Cancel leaves both running, OK stops both, no locked-file error | | |
 | 10: the other build's worker survives | | |
 | 10: in-app update replaces every `libobs\` file | | |
-| 10: uninstall with the app running leaves no loaded DLL behind | | |
+| 10: uninstall with the app running leaves no `libobs\` folder behind | | |
+| 10: uninstall before installing still leaves a complete, working `libobs\` | | |
 
 ## 11. The own backend (WS1.6, #10)
 

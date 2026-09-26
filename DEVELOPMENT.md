@@ -2649,21 +2649,46 @@ leave it that way if the person then pressed Cancel on the template's prompt.
 Asking once, up front, means Cancel stops nothing and OK stops both, and the
 template's check that follows finds nothing to ask about.
 
+**Uninstalling removes `libobs\` whole** (#308). Tauri's template uninstalls
+resources with one `Delete` per file it bundled and a non-recursive `RMDir` per
+directory, and it never reads the error flag. So a file the worker still had
+mapped when those lines ran survives silently, and so does anything written at
+run time, which is on no list. #308 saw both at once: an uninstall with the
+app running left exactly the worker's module list (the executable and the 23
+DLLs it loads) plus three win-capture `.json` files no bundle ships, while
+every unloaded file beside them went. That the worker was still alive after
+the pre-uninstall hook is established; *why* is not (the likeliest reading is
+that the hook's query did not see it, the template's by-name kill took the
+app, and the orphaned worker exited on its closed pipe a moment after the
+deletes).
+The post-uninstall hook therefore stops the worker by path once more and then
+runs `RMDir /r "$INSTDIR\libobs"`, retrying for up to ten seconds while a file
+in it is still in use, so an orphan that exits on its own is waited out rather
+than raced. The folder is ours alone, and app data is not under `$INSTDIR`.
+It ignores `$UpdateMode` on purpose: the uninstaller only runs during an
+install when the reinstall page uninstalls first, and the Install section then
+copies the whole folder again.
+
 Two things it does not do:
 
 - **An interactive upgrade that uninstalls first is only covered one release
   later.** Tauri's reinstall page runs the *previously installed* uninstaller
   before the new installer's Install section, so before any hook of the new
   one. An uninstaller from before #220 has no hook, its worker survives, and a
-  DLL it had loaded is left behind. The uninstaller this build installs does
-  have one, so the next upgrade is covered.
-- **Nothing removes a file the new version no longer ships.** Installing over
-  an install copies files and never deletes, whether they were locked or not.
-  The only way to clear `libobs\` without a generated list of what the new
-  build ships would be to delete it before copying, and any abort after that
-  point (a Cancel on the template's prompt, a write that fails) leaves the
-  installed app with no capture backend. Not done. Today only the devtools
-  bundle is ever trimmed, and it never updates itself.
+  DLL it had loaded is left behind; one from before #308 does not clear
+  `libobs\`. The uninstaller this build installs does both, so the next
+  upgrade is covered.
+- **An install over an install removes nothing.** It copies files and never
+  deletes, whether they were locked or not, so a file the new version no longer
+  ships stays unless that install uninstalled first (which now clears the
+  folder). The in-app update never does: `/UPDATE` skips the uninstall. The
+  only way to clear `libobs\` there without a generated list of what the new
+  build ships would be to delete it in the pre-install hook, and any abort
+  after that point leaves the installed app with no capture backend. The
+  template's "close the app?" prompt comes *after* that hook, so a Cancel on it
+  is exactly such an abort whenever the app is running and the worker is not
+  (the own backend, or a libobs worker that has already exited). Not done.
+  Today only the devtools bundle is ever trimmed, and it never updates itself.
 
 ### The devtools bundle must never update itself
 
