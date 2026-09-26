@@ -13,7 +13,12 @@ import { call } from "../../bridge";
 import type { MarkerRow, RecordingRow, SampleRow } from "../../types";
 import type { MetricKey } from "../timeline/graph";
 import { splitByFootage } from "../timeline/markers";
-import { measureGameEnd, measureGameStart, viewingWindow } from "../timeline/window";
+import {
+  measureGameEnd,
+  measureGameStart,
+  unreadableAtEnd,
+  viewingWindow,
+} from "../timeline/window";
 
 let recording = $state<RecordingRow | null>(null);
 let markers = $state<MarkerRow[]>([]);
@@ -50,9 +55,17 @@ export const review = {
   get duration() {
     return duration;
   },
-  /** Where the game sits inside the file. See `lib/timeline/window.ts`. */
+  /**
+   * Where the game sits inside the file. See `lib/timeline/window.ts`.
+   *
+   * The end is not measured when the poll was unreadable after the last
+   * sample (#305): what follows it is game, not the post-game screen.
+   */
   get window() {
-    return viewingWindow(measureGameStart(samples), measureGameEnd(samples), duration);
+    const gameEndsAt = unreadableAtEnd(recording?.diagnostics_json)
+      ? null
+      : measureGameEnd(samples);
+    return viewingWindow(measureGameStart(samples), gameEndsAt, duration);
   },
   /**
    * The markers the file reaches, and the ones it does not.
