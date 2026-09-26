@@ -2174,30 +2174,30 @@ empty until a run fills it:
 
 | What | Result | Notes |
 |---|---|---|
-| 11.8: the commit and CI run the installer came from | | |
-| 11.8: full game: plays, seeks, markers land | | |
-| 11.8: `diagnostics_json.backend` names own and the encoder (paste) | | |
-| 11.8: A/V end offset under one frame over the full game (paste) | | |
-| 11.8: Game preset: Discord audible, absent from the file | | |
-| 11.8: Game + mic + Discord: four tracks, each isolated, `a:0` default | | |
-| 11.8: Desktop: two tracks, the game not doubled | | |
-| 11.8: worker killed at minute five: recovered, scrubs, every stem | | |
-| 11.8: daemon killed: recovered at startup, every stem | | |
-| 11.8: §4 resilience on own | | |
-| 11.8: borderless / windowed / exclusive fullscreen | | |
-| 11.8: no yellow border | | |
-| 11.8: the hardware encoder used (paste `nvidia-smi`) | | |
-| 11.8: software fallback (forced, §11.7's override): in the log (paste) | | |
-| 11.8: software fallback (forced): in the diagnostics (paste) | | |
-| 11.8: software fallback (forced): the UI notice (the flip's devtools installer) | | |
-| 11.8: idle RAM, own vs libobs (`measure.ps1`) | | |
-| 11.8: recording RAM, own (hardware) vs own (software) vs libobs | | |
-| 11.8: idle CPU, own vs libobs (`measure.ps1 -Cpu`, totals, 3+ runs each) | | |
-| 11.8: recording CPU, own (hardware) vs own (software) vs libobs (totals, alternated, 3+ runs each) | | |
-| 11.8: the capture worker only while League runs | | |
-| 11.8: switching own ↔ libobs in the lobby, both ways (the flip's installer) | | |
-| 11.8: fresh install records on own (the flip's installer) | | |
-| 11.8: Windows 10 2004+, nothing saved: records on own (the flip's installer) | | |
+| 11.8: the commit and CI run the installer came from | `40cd157` | Combined test build, CI run 36209014631 (this PR + #300, #303, #304, #306, #309, #310). Windows 11 Pro 26200, RTX 4080 (driver 32.0.16.1714), 28 logical CPUs |
+| 11.8: full game: plays, seeks, markers land | Pass | `recording-1790411825918`, 25:15, Game + mic + Discord: plays to the end, seeks with no stall, every marker kind lands |
+| 11.8: `diagnostics_json.backend` names own and the encoder (paste) | Pass | `own (ready: NVIDIA H.264 Encoder MFT [VEN_10DE])` |
+| 11.8: A/V end offset under one frame over the full game (paste) | Pass | video `25:15.01`, all four AAC `25:15.00` (10 ms, ffmpeg's resolution). 1523.18 s recorded, 1.35% repeated, worst tick 0.45 f late, drift −0.92 / −0.44 / +0.00 ppm |
+| 11.8: Game preset: Discord audible, absent from the file | Pass | One AAC stream; the call inaudible in the file |
+| 11.8: Game + mic + Discord: four tracks, each isolated, `a:0` default | Pass | 4 AAC, only `a:0` default; each stem holds only its source |
+| 11.8: Desktop: two tracks, the game not doubled | Pass | 2 AAC; the game once in `a:0`, alone in `a:1` |
+| 11.8: worker killed at minute five: recovered, scrubs, every stem | Pass | Devtools, killed at 1:10 of a short game: finished at once and resumed 0.74 s later (#300); plays and scrubs |
+| 11.8: daemon killed: recovered at startup, every stem | Pass | `remuxed recovered … (x42, 4 audio track(s)) in 227 ms`, `left 0 still being written`; plays and scrubs. The recovered card offered no track menu: #311, fixed by #312 |
+| 11.8: §4 resilience on own | Pass | Alt-tab, resolution change (pillarboxed), League killed + Reconnect (reattached in 4 s, one file, #304), headset unplug (desktop stopped part-way, #298). Post-reattach slips: #313 |
+| 11.8: borderless / windowed / exclusive fullscreen | Pass | All three record and play; fullscreen gets the picture; windowed includes the title bar (#314) |
+| 11.8: no yellow border | Pass | None in any mode |
+| 11.8: the hardware encoder used (paste `nvidia-smi`) | Pass | A session on the `--capture-worker` pid, H.264 2560x1440 at 60 fps, 2.6–3.6 ms |
+| 11.8: software fallback (forced, §11.7's override): in the log (paste) | Pass | `software H.264 encoding with H264 Encoder MFT: forced by NINJA_OWN_FORCE_SOFTWARE_ENCODER (devtools)`; no NVENC session for the worker |
+| 11.8: software fallback (forced): in the diagnostics (paste) | Pass | `own (software encoding: H264 Encoder MFT, because forced by NINJA_OWN_FORCE_SOFTWARE_ENCODER (devtools))` |
+| 11.8: software fallback (forced): the UI notice (the flip's devtools installer) | Pass | Shown with the client open and after it closed. Its text blames "no usable hardware encoder" when forced: #296 |
+| 11.8: idle RAM, own vs libobs (`measure.ps1`) | 8.4 MB | Daemon, idle, no client (backend-independent): Private Bytes 8.4 MB, Working Set 34.3 MB, flat over 60 s. Per-backend idle-with-client not taken |
+| 11.8: recording RAM, own (hardware) vs own (software) vs libobs | 305.8 / 438.0 / 716.3 MB | Recording worker, Private Bytes median (Working Set): own hardware 305.8 MB (119.5), own software 438.0 MB (230.5), libobs `extprocess_recorder` 716.3 MB (318.8). Practice Tool, fountain, Game preset, 60 s @ 1 Hz |
+| 11.8: idle CPU, own vs libobs (`measure.ps1 -Cpu`, totals, 3+ runs each) | Not taken |  |
+| 11.8: recording CPU, own (hardware) vs own (software) vs libobs (totals, alternated, 3+ runs each) | 0.22% / 4.69% / 0.70% | Totals, % of the machine (28 logical), mean of 3 runs: own hardware 0.23, 0.21, 0.23 (6.2% of one core); own software 4.77, 4.62, 4.70 (131% of one core, peak 217%); libobs 0.75, 0.65, 0.69 (19.5% of one core). Run in blocks, not alternated |
+| 11.8: the capture worker only while League runs | Pass | None with the client closed; one once it opened |
+| 11.8: switching own ↔ libobs in the lobby, both ways (the flip's installer) | Pass | Consecutive games recorded on libobs then own; a stored libobs survives a reinstall |
+| 11.8: fresh install records on own (the flip's installer) | Pass | `(capture_backend = unset)`; Settings "Automatic: Own, the default."; recorded on own |
+| 11.8: Windows 10 2004+, nothing saved: records on own (the flip's installer) | Skipped | No Windows 10 box |
 | 11.8: below 19041, nothing saved: records on libobs, the row says why (the flip's installer) | | |
 | 11.8: below 19041, `own` saved: refused with the warning (the flip's installer) | | |
 | 11.8: a stored `libobs` row stays on libobs (the flip's installer) | | |
