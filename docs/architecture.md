@@ -211,7 +211,8 @@ remuxed, rather than an error; the next `prepare` spawns a fresh one
 That death is noticed as it happens, not at the stop (#299). The worker's
 reply thread sees EOF when its stdout closes and calls the `CaptureWatch` the
 supervisor installed with `watch_capture` before the start; the supervisor, on
-a thread of its own, asks `capture_lost`, which reaps the worker and reports
+the async runtime's blocking pool (the finalize's callbacks spawn tasks, and
+panic on a thread with no runtime), asks `capture_lost`, which reaps the worker and reports
 the loss once, and sends `CaptureLost` through the state machine. The `stop`
 that follows recovers the file from disk and reports its own length in
 `RecordingOutput::duration_s`, which the row stores in place of the wall

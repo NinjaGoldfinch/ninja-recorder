@@ -1355,22 +1355,20 @@ impl Supervisor {
     /// backend calls it from the capture worker's reply thread the moment the
     /// worker's pipe closes (#299).
     ///
-    /// The check runs on a thread of its own, because the caller must not
-    /// wait: stopping a recording remuxes it, under the recorder lock, and
-    /// the caller is the thread that reads the worker's replies. Holds the
-    /// supervisor weakly, because the recorder that holds this closure is
-    /// held by the supervisor.
+    /// The check runs elsewhere, because the caller must not wait: stopping a
+    /// recording remuxes it, under the recorder lock, and the caller is the
+    /// thread that reads the worker's replies. **On the async runtime's
+    /// blocking pool, not a plain thread**, because the finalize it runs calls
+    /// the callbacks `lib.rs` and the daemon install, and those spawn tasks: on
+    /// a thread with no runtime that panicked under the recorder lock and left
+    /// every later start unable to take it (#299). Holds the supervisor
+    /// weakly, because the recorder that holds this closure is held by the
+    /// supervisor.
     fn capture_watch(self: &Arc<Self>) -> crate::recorder::CaptureWatch {
         let supervisor = Arc::downgrade(self);
         Arc::new(move || {
             let Some(supervisor) = supervisor.upgrade() else { return };
-            let spawned = std::thread::Builder::new()
-                .name("capture-lost".to_string())
-                .spawn(move || supervisor.check_capture(true));
-            if let Err(e) = spawned {
-                // The Live Client poll's check still catches it.
-                warn!("state_machine", "could not start the capture check: {e}");
-            }
+            tauri::async_runtime::spawn_blocking(move || supervisor.check_capture(true));
         })
     }
 
@@ -1386,14 +1384,35 @@ impl Supervisor {
     fn check_capture(self: &Arc<Self>, wait: bool) {
         let recorder = if wait { self.recorder.lock().ok() } else { self.recorder.try_lock().ok() };
         let lost = recorder.and_then(|mut recorder| recorder.capture_lost());
-        if let Some(why) = lost {
-            warn!(
+        let Some(why) = lost else { return };
+        warn!(
+            "state_machine",
+            "the capture stopped while the game was still running ({why}); finishing \
+             the recording now"
+        );
+        self.dispatch(StateEvent::CaptureLost);
+        // Said either way, so a run that does not resume shows why in the log
+        // rather than simply going quiet.
+        let (state, polling) = (self.machine.lock().unwrap().state.clone(), self.is_polling());
+        match (state, polling) {
+            (GameState::WaitingForGame, true) => info!(
                 "state_machine",
-                "the capture stopped while the game was still running ({why}); finishing \
-                 the recording now"
-            );
-            self.dispatch(StateEvent::CaptureLost);
+                "resuming the game into a new recording at the next Live Client poll"
+            ),
+            (GameState::WaitingForGame, false) => info!(
+                "state_machine",
+                "not resuming: this game's capture restarts are spent; waiting for it to end"
+            ),
+            (state, _) => info!(
+                "state_machine",
+                "not resuming: the game moved on while the recording was finished ({state:?})"
+            ),
         }
+    }
+
+    /// Whether the Live Client poll is running, for the log line above.
+    fn is_polling(&self) -> bool {
+        self.live_client_task.lock().unwrap().is_some()
     }
 
     /// Executes `Action::StopRecording`: stops the recorder, then writes
@@ -2706,6 +2725,22 @@ mod tests {
             watch: Arc::clone(&watch),
             ..Default::default()
         }));
+        // Shaped like the daemon's: it spawns onto the ambient runtime, which
+        // panics on a thread that has none. The first box run of #299 did
+        // exactly that from the capture check's thread, under the recorder
+        // lock, poisoning it so that the resume never started.
+        let trims = Arc::new(Mutex::new(Vec::new()));
+        // This thread stands in for the daemon's watcher tasks, which run on
+        // the runtime; the capture check's thread gets no such help from it.
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let _on_the_runtime = runtime.enter();
+        {
+            let trims = Arc::clone(&trims);
+            sup.set_trim_requester(Box::new(move |id| {
+                tokio::spawn(async {});
+                trims.lock().unwrap().push(id);
+            }));
+        }
         sup.dispatch(present());
         sup.dispatch(StateEvent::GameflowPhase(GameflowPhase::InProgress));
         sup.dispatch(StateEvent::LiveClientUp);
@@ -2721,9 +2756,11 @@ mod tests {
         let installed = watch.lock().unwrap().clone().expect("start installed the watch");
         installed();
 
-        eventually(|| {
-            told.lock().unwrap().iter().any(|e| matches!(e, SupervisorEvent::Finalized(..)))
-        });
+        // The whole finalize, to the trim it asks for last, ran on a thread
+        // with a runtime.
+        eventually(|| trims.lock().unwrap().as_slice() == [opened]);
+        assert!(told.lock().unwrap().iter().any(|e| matches!(e, SupervisorEvent::Finalized(..))));
+        assert!(!sup.recorder.is_poisoned(), "the finalize panicked under the recorder lock");
         assert_eq!(sup.status().state, GameState::WaitingForGame, "no longer Recording");
         assert!(sup.current_recording().is_none());
 
