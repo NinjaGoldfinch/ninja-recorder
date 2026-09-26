@@ -325,6 +325,8 @@ So a finalize records:
 | `markers`, `samples` | What the finalize wrote. Disagreeing with the tables means an insert failed |
 | `capture_problems` | What the recording lost to a capture failure (#10): a list of tagged `CaptureProblem`s (`sourceFailed`, `sourceEnded`, `endedEarly`), each with the failing call's own message and HRESULT. **Left out when empty**, so a clean recording's JSON is what it was before, and a row from before it reads as empty. A source the preset names that simply was not there (Discord not running) is not in it |
 | `windows_build` | The Windows build the recording was made on, without which a capture problem is not a bug report. Left out when it could not be read, and off Windows |
+| `unreadable_polls` | Polls the Live Client endpoint answered but that could not be read as a snapshot (#305), not counted in `polls`. Left out when zero |
+| `unreadable_at_end` | Whether an unreadable poll came **after the last sample**, which is whether the stretch from the last sample to the end of the file was still game (#305). **Read by two things**: the trim cuts a post-game tail only when this is `false` (`trim::TailEvidence`), and the review player does not clip the tail when it is `true`. Absent on a row from before it existed, which the trim reads as "not known" and cuts no tail from |
 
 **Deliberately not a copy of the row.** Everything here is something the
 columns cannot say. Duration, size, path and the audio layout are already

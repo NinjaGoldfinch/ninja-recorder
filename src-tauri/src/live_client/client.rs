@@ -27,6 +27,20 @@ pub enum LiveClientError {
     Build(reqwest::Error),
     #[error("failed to parse response json: {0}")]
     Parse(#[from] serde_json::Error),
+    /// A response `AllGameData` could not read, with where it failed and what
+    /// it was (#305).
+    ///
+    /// `path` is the field, as `serde_path_to_error` spells it
+    /// (`allPlayers[0].items`), because serde_json on its own reports a line
+    /// and column in a response that is gone by the time anyone reads the
+    /// log. `raw` is the response itself, so the poller can keep the first
+    /// one of a game (`poller::save_unreadable`).
+    #[error("failed to parse response json at {path}: {source}")]
+    Unreadable {
+        path: String,
+        source: serde_json::Error,
+        raw: String,
+    },
 }
 
 impl LiveClientError {
@@ -59,7 +73,9 @@ impl LiveClientError {
     pub fn means_no_game(&self) -> bool {
         match self {
             LiveClientError::Request(e) => e.status() == Some(reqwest::StatusCode::NOT_FOUND),
-            LiveClientError::Parse(_) | LiveClientError::Build(_) => false,
+            LiveClientError::Parse(_)
+            | LiveClientError::Unreadable { .. }
+            | LiveClientError::Build(_) => false,
         }
     }
 
@@ -68,7 +84,7 @@ impl LiveClientError {
             // `status()` is `None` when no response was received.
             LiveClientError::Request(e) => e.status().is_none(),
             // Something answered; it just was not what we could read.
-            LiveClientError::Parse(_) => false,
+            LiveClientError::Parse(_) | LiveClientError::Unreadable { .. } => false,
             // Building the client failed, which happens once at startup
             // and says nothing about the game.
             LiveClientError::Build(_) => false,
@@ -107,7 +123,7 @@ impl LiveClientDataClient {
 
         fixtures::record("live-client", ALL_GAME_DATA_PATH, &text);
 
-        Ok(serde_json::from_str(&text)?)
+        parse_all_game_data(text)
     }
 
     /// The same request, returned unparsed. The dev portal wants the raw
@@ -128,6 +144,24 @@ impl LiveClientDataClient {
 
         Ok(serde_json::from_str(&text)?)
     }
+}
+
+/// Parses one `allgamedata` response, naming the JSON path of a failure.
+///
+/// Takes the text by value because the failure path keeps it: the poller
+/// saves the first unreadable response of a game next to the logs.
+pub fn parse_all_game_data(text: String) -> Result<AllGameData, LiveClientError> {
+    let mut json = serde_json::Deserializer::from_str(&text);
+    let (path, source) = match serde_path_to_error::deserialize(&mut json) {
+        // `end` rejects trailing characters, which `serde_json::from_str`
+        // did too.
+        Ok(snapshot) => match json.end() {
+            Ok(()) => return Ok(snapshot),
+            Err(source) => ("(after the document)".to_string(), source),
+        },
+        Err(e) => (e.path().to_string(), e.into_inner()),
+    };
+    Err(LiveClientError::Unreadable { path, source, raw: text })
 }
 
 impl Default for LiveClientDataClient {
@@ -199,6 +233,33 @@ mod tests {
         let e = error_from("500 Internal Server Error").await;
         assert!(!e.means_no_game(), "a 500 says nothing about whether a game is running");
         assert!(!e.means_endpoint_gone(), "something answered, so the game is alive");
+    }
+
+    /// A response that still fails names the field it failed at, and keeps
+    /// itself for the poller to save (#305). The log line used to say "line
+    /// 237 column 12" of a response nobody had.
+    #[test]
+    fn an_unreadable_response_names_its_path_and_keeps_its_text() {
+        let text = r#"{"gameData": {"gameTime": "late"}}"#.to_string();
+        let e = parse_all_game_data(text.clone()).unwrap_err();
+        match &e {
+            LiveClientError::Unreadable { path, raw, .. } => {
+                assert_eq!(path, "gameData.gameTime");
+                assert_eq!(raw, &text);
+            }
+            other => panic!("expected Unreadable, got {other:?}"),
+        }
+        assert!(e.to_string().contains("at gameData.gameTime"), "{e}");
+        // Something answered, so the game is alive.
+        assert!(!e.means_endpoint_gone());
+        assert!(!e.means_no_game());
+    }
+
+    /// And a readable one still reads, trailing whitespace and all.
+    #[test]
+    fn a_readable_response_parses() {
+        let snapshot = parse_all_game_data("{\"gameData\": {\"gameTime\": 1.5}}\n".into()).unwrap();
+        assert_eq!(snapshot.game_data.game_time, 1.5);
     }
 
     /// Nothing answered, which is the one case that does end a recording.

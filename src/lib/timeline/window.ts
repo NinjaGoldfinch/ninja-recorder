@@ -106,6 +106,33 @@ export function measureGameEnd(samples: readonly SampleRow[]): number | null {
   return latest;
 }
 
+/**
+ * Whether the recording's stored diagnostics say the Live Client poll was
+ * **unreadable after the last sample** (#305).
+ *
+ * When it was, the stretch between the last sample and the end of the file
+ * is game the parser could not read, not the post-game screen, and the
+ * player must not clip it: `trim.rs` keeps it in the file for the same
+ * reason. The caller passes `null` for `gameEndsAt` instead.
+ *
+ * `false` for anything that does not say `true` - a row from before this was
+ * stored, one a rescan imported, or a blob that does not parse - so those
+ * keep the window they always had.
+ */
+export function unreadableAtEnd(diagnosticsJson: string | null | undefined): boolean {
+  if (!diagnosticsJson) return false;
+  try {
+    const parsed: unknown = JSON.parse(diagnosticsJson);
+    return (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      (parsed as { unreadable_at_end?: unknown }).unreadable_at_end === true
+    );
+  } catch {
+    return false;
+  }
+}
+
 export interface ViewingWindow {
   start: number;
   end: number;
