@@ -1783,6 +1783,14 @@ on "Windows default".
 - [ ] **Quiet stretches.** Mute everything for thirty seconds mid-game: the
       recording is silent there, in sync after, and the stop line shows no
       large gap count for the desktop (the keep-alive kept packets coming).
+- [ ] **The desktop is on QPC.** At the first packet, `desktop audio clock
+      qpc: the first packet's QPC stamp is real, N ms after it was taken`,
+      with N a few milliseconds: a render-loopback stamp is the packet's
+      presentation time, ahead of the read, and up to 50 ms of that is
+      accepted (#295). A `desktop audio clock device` line instead names the
+      limit that failed and its value, for example `60.0 ms in the future; at
+      most 50 ms allowed`: paste it. At stop the desktop's line says `clock
+      qpc: raw drift … ppm` rather than `clock device`.
 - [ ] **One track, `System audio`,** in `audio_tracks_json`, over one source.
 
 **Discord via an application source.** Settings → Audio → **Game + mic +
