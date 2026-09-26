@@ -1234,14 +1234,17 @@ impl Supervisor {
         let expected_path = config.expected_output_path();
         // The backend's name is read under the same lock as the start, so the
         // line below names the one that started this recording rather than
-        // whatever is in the box a moment later. The guard is dropped before
-        // the `match`, which asks nothing more of the recorder.
+        // whatever is in the box a moment later. The audio layout likewise,
+        // for the row below. The guard is dropped before the `match`, which
+        // asks nothing more of the recorder.
         let started = {
             let mut recorder = self.recorder.lock().unwrap();
-            recorder.start(config).map(|()| recorder.backend_name())
+            recorder
+                .start(config)
+                .map(|()| (recorder.backend_name(), recorder.current_audio()))
         };
         match started {
-            Ok(backend) => {
+            Ok((backend, audio)) => {
                 // Said here as well as by the backend, so the log names what
                 // recorded this game without depending on libobs's own output
                 // reaching a file (#221).
@@ -1259,10 +1262,22 @@ impl Supervisor {
                 //
                 // A failure here is logged and carried: recording without
                 // crash-safe markers is worth more than not recording.
-                let recording_id = match self
-                    .db
-                    .begin_recording(&expected_path.display().to_string(), started_at_millis)
-                {
+                //
+                // The audio layout goes in with it (#311), so a recording
+                // that startup recovery finishes still offers its stems.
+                // The finalize rewrites it from what `stop` reports.
+                let audio_tracks_json = audio.and_then(|layout| {
+                    serde_json::to_string(&layout)
+                        .inspect_err(|e| {
+                            warn!("state_machine", "could not encode the audio track layout: {e}")
+                        })
+                        .ok()
+                });
+                let recording_id = match self.db.begin_recording(
+                    &expected_path.display().to_string(),
+                    started_at_millis,
+                    audio_tracks_json.as_deref(),
+                ) {
                     Ok(id) => Some(id),
                     Err(e) => {
                         error!(
@@ -2673,6 +2688,86 @@ mod tests {
             "an unfinished recording is not a library entry"
         );
         assert_eq!(sup.db.unfinished_recordings().unwrap().len(), 1);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Reports one layout at the start and another at the stop, as a backend
+    /// whose microphone stopped existing mid-game would.
+    struct ShrinkingRecorder {
+        dir: PathBuf,
+        recording: bool,
+    }
+
+    fn with_discord() -> crate::recorder::audio::AudioLayout {
+        crate::recorder::audio::AudioPreset::GameMicDiscord { mic_device_id: None }.layout()
+    }
+
+    fn without_discord() -> crate::recorder::audio::AudioLayout {
+        crate::recorder::audio::AudioPreset::GameMic { mic_device_id: None }.layout()
+    }
+
+    impl Recorder for ShrinkingRecorder {
+        fn start(&mut self, _config: crate::recorder::RecordConfig) -> Result<(), RecorderError> {
+            self.recording = true;
+            Ok(())
+        }
+
+        fn stop(&mut self) -> Result<crate::recorder::RecordingOutput, RecorderError> {
+            self.recording = false;
+            let path = self.dir.join("shrinking.mp4");
+            std::fs::create_dir_all(&self.dir)?;
+            std::fs::write(&path, b"not really an mp4")?;
+            Ok(crate::recorder::RecordingOutput { path, audio: without_discord(), problems: vec![] })
+        }
+
+        fn is_recording(&self) -> bool {
+            self.recording
+        }
+
+        fn backend_name(&self) -> String {
+            "shrinking".to_string()
+        }
+
+        fn current_audio(&self) -> Option<crate::recorder::audio::AudioLayout> {
+            self.recording.then(with_discord)
+        }
+    }
+
+    fn layout_of(json: Option<&str>) -> crate::recorder::audio::AudioLayout {
+        serde_json::from_str(json.expect("a stored layout")).unwrap()
+    }
+
+    /// #311: the row a recording opens carries the layout the backend
+    /// reported at the start, so a daemon killed mid-game leaves a row that
+    /// startup recovery can finish with its stems intact.
+    #[test]
+    fn a_killed_daemon_leaves_the_audio_layout_on_the_row() {
+        let dir = std::env::temp_dir().join(format!("ninja-shrinking-{}", timestamp_millis()));
+        let (sup, _, _) =
+            supervisor_recording_with(Box::new(ShrinkingRecorder { dir: dir.clone(), recording: false }));
+        sup.start_recording();
+
+        // The daemon dies here. No finalize, ever.
+
+        let open = sup.db.unfinished_recordings().unwrap();
+        assert_eq!(layout_of(open[0].audio_tracks_json.as_deref()), with_discord());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The finalize still has the last word: what `stop` reports is what the
+    /// file holds, and it replaces what the start said.
+    #[test]
+    fn the_finalize_rewrites_the_audio_layout_the_start_stored() {
+        let dir = std::env::temp_dir().join(format!("ninja-shrinking-fin-{}", timestamp_millis()));
+        let (sup, _, _) =
+            supervisor_recording_with(Box::new(ShrinkingRecorder { dir: dir.clone(), recording: false }));
+        sup.start_recording();
+        sup.stop_recording();
+
+        let rows = sup.db.list_recordings().unwrap();
+        assert_eq!(layout_of(rows[0].audio_tracks_json.as_deref()), without_discord());
 
         std::fs::remove_dir_all(&dir).ok();
     }

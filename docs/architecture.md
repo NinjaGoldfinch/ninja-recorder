@@ -164,7 +164,7 @@ behind a three-method trait and nothing above it knows libobs exists.
 
 ```mermaid
 flowchart TB
-    SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release · collect_output<br/>backend_name · current_file · worker_running"}
+    SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release · collect_output<br/>backend_name · current_file · current_audio · worker_running"}
     T -->|"libobs, #[cfg(windows)]"| L["LibObsRecorder<br/><small>WGC window capture,<br/>NVENC/AMF/QSV H.264,<br/>one AAC track per audio source,<br/>fragmented MP4 + faststart remux</small>"]
     T -->|"own, #[cfg(windows)], build 20348+"| O["OwnRecorder<br/><small>Option B: WGC → D3D11 →<br/>Media Foundation MFTs, driven directly,<br/>every track (mix + stems) in one file<br/>by our own writer, + faststart remux</small>"]
     O -.->|"stdin / stdout,<br/>one JSON line each"| WK["capture worker process<br/><small>--capture-worker, only while<br/>League runs; kill-on-close job</small>"]
@@ -315,7 +315,13 @@ because a `&self` read once a second must not wait on a pipe.
 `start` takes the user's audio preset and `stop` reports the track layout it
 actually wrote: reported, not assumed, because a microphone can be unplugged
 mid-game and the library row has to describe the file that exists
-([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#25-multi-track-audio)). Both types are
+([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#25-multi-track-audio)).
+`current_audio` is the same layout as known once `start` returns (the sources
+that opened, for the own backend), and unlike the diagnostics above it is
+stored: the supervisor writes it with the row it opens, so a recording that
+startup recovery finishes still has its stems (#311). The finalize overwrites
+it with what `stop` reports. A backend that cannot say returns `None` and the
+row's layout waits for the finalize, as it always did. Both types are
 plain Rust in `recorder/audio.rs`; the libobs vocabulary stops at
 `to_obs_tracks`, so nothing above the trait grows a libobs dependency.
 

@@ -291,6 +291,12 @@ impl Recorder for LibObsRecorder {
         self.active_path.clone()
     }
 
+    /// The layout `stop` will report: libobs opens every source the preset
+    /// names, so what `start` asked for is what the file holds.
+    fn current_audio(&self) -> Option<AudioLayout> {
+        self.active_audio.clone()
+    }
+
     /// `inner` is the worker: bringing `LibObs` up spawns it, and `tear_down`
     /// ends it.
     fn worker_running(&self) -> Option<bool> {

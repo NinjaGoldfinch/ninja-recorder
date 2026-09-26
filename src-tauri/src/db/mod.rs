@@ -847,23 +847,38 @@ impl Db {
     /// it, instead of importing a half-written recording as an "unknown
     /// recording". `finish_recording` corrects it afterwards, **by id**.
     ///
+    /// `audio_tracks_json` is the layout the backend reported when it started
+    /// (`Recorder::current_audio`), or `None` if it cannot say. Written now
+    /// rather than only at finalize (#311): a recording that startup recovery
+    /// finishes never reaches the finalize, and without a layout the player
+    /// offers no track but the first. The finalize still overwrites it with
+    /// what `stop` reports.
+    ///
     /// Upserts rather than failing on a duplicate `path`. A row already
     /// holding this path is either one `reconcile` imported from an earlier
     /// crash, or one abandoned by a daemon that died before its recovery pass
     /// ran; in both cases the file is about to be overwritten by this
     /// recording, so the row should become this recording. `started_at` moves
     /// with it and `finished_at` goes back to NULL, which is what re-hides a
-    /// stale row that recovery had already finished.
-    pub fn begin_recording(&self, path: &str, started_at: i64) -> Result<i64, DbError> {
+    /// stale row that recovery had already finished. The layout moves too,
+    /// NULL included: the old one described a file that is being replaced.
+    pub fn begin_recording(
+        &self,
+        path: &str,
+        started_at: i64,
+        audio_tracks_json: Option<&str>,
+    ) -> Result<i64, DbError> {
         let conn = self.pool.write();
         conn.query_row(
-            "INSERT INTO recordings (path, started_at, pinned, size_bytes, finished_at)
-             VALUES (?1, ?2, 0, 0, NULL)
+            "INSERT INTO recordings
+                (path, started_at, pinned, size_bytes, finished_at, audio_tracks_json)
+             VALUES (?1, ?2, 0, 0, NULL, ?3)
              ON CONFLICT(path) DO UPDATE SET
-                started_at  = excluded.started_at,
-                finished_at = NULL
+                started_at        = excluded.started_at,
+                finished_at       = NULL,
+                audio_tracks_json = excluded.audio_tracks_json
              RETURNING id",
-            params![path, started_at],
+            params![path, started_at, audio_tracks_json],
             |row| row.get(0),
         )
         .map_err(DbError::from)
@@ -956,23 +971,30 @@ impl Db {
     /// Finishes an abandoned row from what the file on disk can be made to
     /// say, which is all that is left once the session is gone.
     ///
-    /// Touches only the four columns a file can answer for. Everything the
+    /// Touches only the columns a file can answer for. Everything the
     /// Live Client Data polls had established died with the daemon, and
     /// writing defaults over those columns would replace "not known" with a
     /// confident wrong answer. The markers written during the game stay
     /// exactly as they are; they are the thing this whole path exists to keep.
+    ///
+    /// `audio_tracks_json` only fills a NULL. The layout `begin_recording`
+    /// stored came from the backend and names the stems; the one recovery
+    /// can offer is a guess from the file's track count, for a row begun by
+    /// a build that did not store one (#311).
     pub fn recover_recording(
         &self,
         id: i64,
         duration_s: Option<f64>,
         size_bytes: i64,
         finished_at: i64,
+        audio_tracks_json: Option<&str>,
     ) -> Result<(), DbError> {
         let conn = self.pool.write();
         conn.execute(
-            "UPDATE recordings SET duration_s = ?2, size_bytes = ?3, finished_at = ?4
+            "UPDATE recordings SET duration_s = ?2, size_bytes = ?3, finished_at = ?4,
+                audio_tracks_json = COALESCE(audio_tracks_json, ?5)
              WHERE id = ?1",
-            params![id, duration_s, size_bytes, finished_at],
+            params![id, duration_s, size_bytes, finished_at, audio_tracks_json],
         )?;
         Ok(())
     }
@@ -1918,10 +1940,63 @@ mod tests {
 
     // --- A row exists before the recording finishes (#150) ----------------
 
+    /// #311: the layout goes in with the row, so a recording recovery
+    /// finishes has one, and the finalize still replaces it.
+    #[test]
+    fn a_begun_recording_carries_its_layout_until_the_finalize_replaces_it() {
+        let db = Db::open_temporary().unwrap();
+        let begun = r#"{"sources":[],"tracks":[{"label":"Everything","sources":[]}]}"#;
+        let id = db.begin_recording("C:/vods/layout.mp4", 1_000, Some(begun)).unwrap();
+        assert_eq!(db.unfinished_recordings().unwrap()[0].audio_tracks_json.as_deref(), Some(begun));
+
+        let finished = r#"{"sources":[],"tracks":[]}"#;
+        db.finish_recording(
+            id,
+            &NewRecording {
+                path: "C:/vods/layout.mp4".into(),
+                started_at: 1_000,
+                audio_tracks_json: Some(finished.into()),
+                finished_at: Some(2_000),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(db.get_recording(id).unwrap().unwrap().audio_tracks_json.as_deref(), Some(finished));
+    }
+
+    /// Recovery fills a missing layout and never replaces one the start
+    /// stored, which came from the backend rather than a track count.
+    #[test]
+    fn recovery_fills_a_missing_layout_but_keeps_a_stored_one() {
+        let db = Db::open_temporary().unwrap();
+        let stored = r#"{"sources":[],"tracks":[{"label":"Game","sources":[]}]}"#;
+        let guessed = r#"{"sources":[],"tracks":[{"label":"Track 1","sources":[]}]}"#;
+
+        let kept = db.begin_recording("C:/vods/kept.mp4", 1_000, Some(stored)).unwrap();
+        db.recover_recording(kept, None, 1, 2_000, Some(guessed)).unwrap();
+        assert_eq!(db.get_recording(kept).unwrap().unwrap().audio_tracks_json.as_deref(), Some(stored));
+
+        let filled = db.begin_recording("C:/vods/filled.mp4", 1_000, None).unwrap();
+        db.recover_recording(filled, None, 1, 2_000, Some(guessed)).unwrap();
+        assert_eq!(db.get_recording(filled).unwrap().unwrap().audio_tracks_json.as_deref(), Some(guessed));
+    }
+
+    /// A path reused by a new recording takes that recording's layout, and
+    /// an unknown one is unknown rather than the old file's.
+    #[test]
+    fn beginning_over_an_old_row_replaces_its_layout() {
+        let db = Db::open_temporary().unwrap();
+        let old = r#"{"sources":[],"tracks":[{"label":"Game","sources":[]}]}"#;
+        let first = db.begin_recording("C:/vods/reused.mp4", 1_000, Some(old)).unwrap();
+        let second = db.begin_recording("C:/vods/reused.mp4", 5_000, None).unwrap();
+        assert_eq!(first, second, "the same row");
+        assert_eq!(db.unfinished_recordings().unwrap()[0].audio_tracks_json, None);
+    }
+
     #[test]
     fn a_begun_recording_is_hidden_until_it_is_finished() {
         let db = Db::open_temporary().unwrap();
-        let id = db.begin_recording("C:/vods/recording-1.mp4", 1_000).unwrap();
+        let id = db.begin_recording("C:/vods/recording-1.mp4", 1_000, None).unwrap();
 
         assert!(db.list_recordings().unwrap().is_empty(), "not a library entry yet");
         let open = db.unfinished_recordings().unwrap();
@@ -1960,7 +2035,7 @@ mod tests {
     #[test]
     fn finishing_by_id_follows_a_path_that_changed() {
         let db = Db::open_temporary().unwrap();
-        let id = db.begin_recording("C:/vods/predicted.mp4", 1_000).unwrap();
+        let id = db.begin_recording("C:/vods/predicted.mp4", 1_000, None).unwrap();
         db.insert_markers(id, &[marker("kill", 210.5)]).unwrap();
 
         db.finish_recording(
@@ -1992,7 +2067,7 @@ mod tests {
     #[test]
     fn finishing_removes_a_row_reconcile_imported_for_the_same_file() {
         let db = Db::open_temporary().unwrap();
-        let id = db.begin_recording("C:/vods/recording-3.mp4", 1_000).unwrap();
+        let id = db.begin_recording("C:/vods/recording-3.mp4", 1_000, None).unwrap();
         db.insert_markers(id, &[marker("kill", 210.5)]).unwrap();
 
         // Reconcile, mid-game, importing the growing file under a path that
@@ -2044,7 +2119,7 @@ mod tests {
             })
             .unwrap();
 
-        let id = db.begin_recording("C:/vods/recording-4.mp4", 9_000).unwrap();
+        let id = db.begin_recording("C:/vods/recording-4.mp4", 9_000, None).unwrap();
         assert_eq!(id, existing, "reclaimed, not duplicated");
         assert!(db.list_recordings().unwrap().is_empty(), "hidden again while it records");
         assert_eq!(db.unfinished_recordings().unwrap()[0].started_at, 9_000);
@@ -2053,7 +2128,7 @@ mod tests {
     #[test]
     fn deleting_markers_leaves_the_recording_alone() {
         let db = Db::open_temporary().unwrap();
-        let id = db.begin_recording("C:/vods/recording-5.mp4", 1_000).unwrap();
+        let id = db.begin_recording("C:/vods/recording-5.mp4", 1_000, None).unwrap();
         db.insert_markers(id, &[marker("kill", 10.0), marker("death", 20.0)])
             .unwrap();
         assert_eq!(db.get_markers(id).unwrap().len(), 2);
@@ -2069,7 +2144,7 @@ mod tests {
     #[test]
     fn deleting_samples_leaves_the_recording_alone() {
         let db = Db::open_temporary().unwrap();
-        let id = db.begin_recording("C:/vods/recording-5a.mp4", 1_000).unwrap();
+        let id = db.begin_recording("C:/vods/recording-5a.mp4", 1_000, None).unwrap();
         db.insert_samples(id, &[sample(10.0, 100.0, 1), sample(20.0, 200.0, 2)])
             .unwrap();
         assert_eq!(db.get_samples(id).unwrap().len(), 2);
@@ -2087,7 +2162,7 @@ mod tests {
     #[test]
     fn the_live_summary_overwrites_rather_than_merging() {
         let db = Db::open_temporary().unwrap();
-        let id = db.begin_recording("C:/vods/recording-5b.mp4", 1_000).unwrap();
+        let id = db.begin_recording("C:/vods/recording-5b.mp4", 1_000, None).unwrap();
 
         db.update_live_summary(
             id,
@@ -2130,7 +2205,7 @@ mod tests {
     #[test]
     fn the_live_summary_carries_the_game_identity() {
         let db = Db::open_temporary().unwrap();
-        let id = db.begin_recording("C:/vods/recording-5d.mp4", 1_000).unwrap();
+        let id = db.begin_recording("C:/vods/recording-5d.mp4", 1_000, None).unwrap();
         db.update_live_summary(
             id,
             &LiveMatch {
@@ -2153,7 +2228,7 @@ mod tests {
     #[test]
     fn a_recovered_row_with_an_id_is_still_a_candidate_and_carries_it() {
         let db = Db::open_temporary().unwrap();
-        let id = db.begin_recording("C:/vods/recording-5e.mp4", 1_000).unwrap();
+        let id = db.begin_recording("C:/vods/recording-5e.mp4", 1_000, None).unwrap();
         db.update_live_summary(
             id,
             &LiveMatch {
@@ -2165,7 +2240,7 @@ mod tests {
         )
         .unwrap();
         // The daemon restarts and finishes the abandoned row from the file.
-        db.recover_recording(id, Some(42.0), 4_096, 5_000).unwrap();
+        db.recover_recording(id, Some(42.0), 4_096, 5_000, None).unwrap();
 
         let candidates = db.recordings_missing_metadata().unwrap();
         assert_eq!(candidates.len(), 1, "role, patch and win are still missing");
@@ -2182,7 +2257,7 @@ mod tests {
     #[test]
     fn the_live_summary_carries_the_scoreboard_through_a_recovery() {
         let db = Db::open_temporary().unwrap();
-        let id = db.begin_recording("C:/vods/recording-5f.mp4", 1_000).unwrap();
+        let id = db.begin_recording("C:/vods/recording-5f.mp4", 1_000, None).unwrap();
         db.update_live_summary(
             id,
             &LiveMatch {
@@ -2194,7 +2269,7 @@ mod tests {
         )
         .unwrap();
         // The daemon is killed; the next one finishes the row from the file.
-        db.recover_recording(id, Some(42.0), 4_096, 5_000).unwrap();
+        db.recover_recording(id, Some(42.0), 4_096, 5_000, None).unwrap();
 
         let row = db.get_recording(id).unwrap().unwrap();
         assert_eq!(row.scoreboard_json.as_deref(), Some(r#"{"players":[]}"#));
@@ -2207,7 +2282,7 @@ mod tests {
     #[test]
     fn the_live_summary_does_not_put_the_row_in_the_library() {
         let db = Db::open_temporary().unwrap();
-        let id = db.begin_recording("C:/vods/recording-5c.mp4", 1_000).unwrap();
+        let id = db.begin_recording("C:/vods/recording-5c.mp4", 1_000, None).unwrap();
         db.update_live_summary(
             id,
             &LiveMatch {
@@ -2227,9 +2302,9 @@ mod tests {
     #[test]
     fn recovering_a_row_sets_only_what_the_file_knows() {
         let db = Db::open_temporary().unwrap();
-        let id = db.begin_recording("C:/vods/recording-6.mp4", 1_000).unwrap();
+        let id = db.begin_recording("C:/vods/recording-6.mp4", 1_000, None).unwrap();
 
-        db.recover_recording(id, Some(42.0), 4_096, 5_000).unwrap();
+        db.recover_recording(id, Some(42.0), 4_096, 5_000, None).unwrap();
 
         let rows = db.list_recordings().unwrap();
         assert_eq!(rows.len(), 1);
@@ -2916,7 +2991,7 @@ mod tests {
     #[test]
     fn a_recording_still_in_flight_is_not_a_candidate() {
         let db = Db::open_temporary().unwrap();
-        let id = db.begin_recording("C:/vods/in-flight.mp4", 1_000).unwrap();
+        let id = db.begin_recording("C:/vods/in-flight.mp4", 1_000, None).unwrap();
 
         assert!(
             db.recordings_missing_metadata().unwrap().is_empty(),

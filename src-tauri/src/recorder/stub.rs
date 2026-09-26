@@ -76,6 +76,11 @@ impl Recorder for StubRecorder {
     fn current_file(&self) -> Option<PathBuf> {
         self.active.as_ref().map(RecordConfig::expected_output_path)
     }
+
+    /// What `stop` will report, for the same reason.
+    fn current_audio(&self) -> Option<super::audio::AudioLayout> {
+        self.active.as_ref().map(|_| AudioPreset::Game.layout())
+    }
 }
 
 fn fixture_path() -> Option<PathBuf> {

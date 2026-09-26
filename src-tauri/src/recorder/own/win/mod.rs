@@ -450,6 +450,12 @@ impl Recorder for OwnRecorder {
         self.active.as_ref().map(|active| active.path.clone())
     }
 
+    /// The layout the worker reported when it started: the sources that
+    /// opened, not the ones planned. The same value `stop` reports.
+    fn current_audio(&self) -> Option<AudioLayout> {
+        self.active.as_ref().map(|active| active.audio.clone())
+    }
+
     /// Whether a worker has been spawned and not yet seen to end. One that
     /// died since the last call still counts until `decide` notices it.
     fn worker_running(&self) -> Option<bool> {
