@@ -64,7 +64,9 @@ pub fn faststart_args(input: &Path, tmp: &Path, audio_tracks: usize) -> Vec<OsSt
 /// Stream-copies `video_path` through ffmpeg with `-movflags +faststart` so
 /// the `moov` (seek index) ends up at the front of the file instead of
 /// wherever the fragmented writer left it, then atomically replaces the
-/// original. On failure the original is left exactly as it was.
+/// original. On failure the original is left exactly as it was, and the temp
+/// file is gone: a failed remux of a long recording leaves a copy as large as
+/// the recording, and nothing else would ever delete it (#307).
 pub fn remux_faststart(
     ffmpeg_path: &Path,
     video_path: &Path,
@@ -72,13 +74,19 @@ pub fn remux_faststart(
 ) -> Result<(), String> {
     let tmp = tmp_path(video_path);
 
-    let output = crate::ffmpeg_command(ffmpeg_path)
+    let output = match crate::ffmpeg_command(ffmpeg_path)
         .args(faststart_args(video_path, &tmp, audio_tracks))
         .output()
-        .map_err(|e| format!("failed to launch ffmpeg at {}: {e}", ffmpeg_path.display()))?;
+    {
+        Ok(output) => output,
+        Err(e) => {
+            discard_tmp(&tmp);
+            return Err(format!("failed to launch ffmpeg at {}: {e}", ffmpeg_path.display()));
+        }
+    };
 
     if !output.status.success() {
-        let _ = std::fs::remove_file(&tmp);
+        discard_tmp(&tmp);
         return Err(format!(
             "ffmpeg exited with {}: {}",
             output.status,
@@ -86,8 +94,28 @@ pub fn remux_faststart(
         ));
     }
 
-    std::fs::rename(&tmp, video_path)
-        .map_err(|e| format!("failed to replace original file with remuxed one: {e}"))
+    replace_with(&tmp, video_path)
+}
+
+/// Moves the finished `tmp` over `video_path`, or deletes `tmp` if it cannot.
+///
+/// The failure that made this a function: the replace is the one step that
+/// fails *after* ffmpeg has written a whole copy, and on Windows it fails
+/// whenever anything still has the recording open. Startup recovery hit that
+/// against a libobs worker the killed daemon had left writing, and the copy,
+/// 181 MB, stayed in the folder (#307).
+fn replace_with(tmp: &Path, video_path: &Path) -> Result<(), String> {
+    std::fs::rename(tmp, video_path).map_err(|e| {
+        discard_tmp(tmp);
+        format!("failed to replace original file with remuxed one: {e}")
+    })
+}
+
+/// Best effort: the error being returned is the one worth reporting, and a
+/// temp file that cannot be deleted now is swept by the next startup's
+/// `db::reconcile`.
+fn discard_tmp(tmp: &Path) {
+    let _ = std::fs::remove_file(tmp);
 }
 
 /// Real media files for tests, made by a local ffmpeg.
@@ -243,6 +271,54 @@ mod tests {
         assert!(after.moov_offset < after.first_mdat_offset, "the index is up front");
         assert_eq!(after.audio_tracks, 2);
         assert!(!tmp_path(&file).exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The replace is refused (here because the destination is a directory
+    /// with something in it, which fails on every platform; on the box it was
+    /// a recording still open for writing). The copy must not outlive it.
+    #[test]
+    fn a_failed_replace_deletes_the_temp_file() {
+        let dir = fixtures::dir("remux-replace-fail");
+        let video = dir.join("game.mp4");
+        std::fs::create_dir_all(video.join("in-the-way")).unwrap();
+        let tmp = tmp_path(&video);
+        std::fs::write(&tmp, b"a whole remuxed copy").unwrap();
+
+        let e = replace_with(&tmp, &video).unwrap_err();
+        assert!(e.contains("failed to replace"), "{e}");
+        assert!(!tmp.exists(), "the copy is gone");
+        assert!(video.join("in-the-way").exists(), "the destination is untouched");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_successful_replace_leaves_only_the_recording() {
+        let dir = fixtures::dir("remux-replace-ok");
+        let video = dir.join("game.mp4");
+        std::fs::write(&video, b"fragmented").unwrap();
+        let tmp = tmp_path(&video);
+        std::fs::write(&tmp, b"faststart").unwrap();
+
+        replace_with(&tmp, &video).unwrap();
+        assert_eq!(std::fs::read(&video).unwrap(), b"faststart");
+        assert!(!tmp.exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An ffmpeg that cannot even be launched leaves nothing behind either,
+    /// including a stale temp file a previous crash left.
+    #[test]
+    fn an_ffmpeg_that_will_not_launch_leaves_no_temp_file() {
+        let dir = fixtures::dir("remux-no-ffmpeg");
+        let video = dir.join("game.mp4");
+        std::fs::write(&video, b"fragmented").unwrap();
+        std::fs::write(tmp_path(&video), b"stale").unwrap();
+
+        let e = remux_faststart(Path::new("/definitely/not/ffmpeg"), &video, 1).unwrap_err();
+        assert!(e.contains("failed to launch ffmpeg"), "{e}");
+        assert!(!tmp_path(&video).exists());
+        assert_eq!(std::fs::read(&video).unwrap(), b"fragmented");
         std::fs::remove_dir_all(&dir).ok();
     }
 

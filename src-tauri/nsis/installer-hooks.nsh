@@ -11,7 +11,9 @@
 ; worker: at the pinned CLI (2.11.4) `CheckIfAppIsRunning` finds and kills
 ; processes by the *name* `${MAINBINARYNAME}.exe` and nothing else.
 ;
-; So both hooks stop the worker before the template touches a file.
+; So both hooks stop the worker before the template touches a file, and the
+; post-uninstall hook then removes whatever the template's deletes left in
+; libobs\ (#308).
 ;
 ; The own backend's capture worker (#241) needs nothing here. It is the main
 ; executable run with `--capture-worker`, so its image name is
@@ -48,9 +50,9 @@
 ;
 ; ## Not verified
 ;
-; Nothing on Linux runs makensis against this, so until CI's Windows leg builds
-; a bundle it has been read, not compiled or run. docs/windows-verification.md
-; section 10 says how to check it.
+; No gate runs makensis on Linux: CI's Windows build job is the first thing
+; that compiles this, and nothing in CI runs an installer.
+; docs/windows-verification.md section 10 says how to check it on a box.
 
 !define /ifndef NR_ERROR_MORE_DATA 234
 ; sizeof(RM_PROCESS_INFO): RM_UNIQUE_PROCESS (12) + WCHAR[256] (512)
@@ -207,4 +209,78 @@ FunctionEnd
 
 !macro NSIS_HOOK_PREUNINSTALL
   !insertmacro NR_STOP_CAPTURE_WORKER "un."
+!macroend
+
+; How many times to try removing libobs\, and how long to wait between tries.
+!define NR_RMDIR_TRIES 20
+!define NR_RMDIR_WAIT_MS 500
+
+; Removes $INSTDIR\libobs and everything in it (#308).
+;
+; The template's uninstall deletes resources one `Delete` per file, from the
+; list of files it bundled, and ends with a non-recursive `RMDir` per
+; directory. That leaves two kinds of file behind, and #308 saw both:
+;
+; - Anything the worker had loaded, if it was still running when the
+;   `Delete`s ran. `Delete` on a mapped image fails and sets the error flag,
+;   which the template never reads. What survived was exactly the worker's
+;   module list: extprocess_recorder.exe and the 23 DLLs it loads, while
+;   every file in the same folders it had not loaded (ffmpeg.exe,
+;   obs-ffmpeg-mux.exe, libobs-opengl.dll, data\...) was deleted.
+; - Anything written at run time, which is on no list. meta.json,
+;   package.json and compatibility.json survived too, and no staged libobs
+;   ships a .json file: those are the names of OBS win-capture's
+;   compatibility-data download, so the worker most likely wrote them.
+;
+; The folder is ours alone, so the fix is to remove all of it once the worker
+; is gone. This runs after the template's `Delete`s, so it only ever sees what
+; they left. The worker is stopped by path again first, in case it outlived
+; the pre-uninstall hook, and then the delete is retried for a few seconds: a
+; worker whose app was killed under it exits by itself when its pipe closes,
+; and until it does its DLLs cannot be deleted. The retry costs nothing when
+; the first attempt succeeds, which is every uninstall with no worker running.
+;
+; Nothing here depends on $UpdateMode. The uninstaller only runs during an
+; install when the reinstall page chooses "uninstall before installing", and
+; the Install section that follows copies the whole libobs resource folder
+; again. An in-app update (`/UPDATE`) never runs the uninstaller at all.
+; App data lives under %APPDATA%\<identifier>, not $INSTDIR, and is untouched.
+!macro NR_REMOVE_LIBOBS_DIR
+  Push $R5
+  Push $R6
+
+  ${If} $INSTDIR != ""
+  ${AndIf} ${FileExists} "$INSTDIR\libobs\*.*"
+    Push "$INSTDIR\${NR_WORKER}"
+    Push 1
+    Call un.NR_ProcessesUsing
+    Pop $R6
+
+    StrCpy $R5 0
+    ${Do}
+      ClearErrors
+      RMDir /r "$INSTDIR\libobs"
+      ${IfNot} ${Errors}
+      ${AndIfNot} ${FileExists} "$INSTDIR\libobs\*.*"
+        ${Break}
+      ${EndIf}
+      IntOp $R5 $R5 + 1
+      ${If} $R5 >= ${NR_RMDIR_TRIES}
+        DetailPrint "Could not remove $INSTDIR\libobs; a file in it is still in use"
+        ${Break}
+      ${EndIf}
+      Sleep ${NR_RMDIR_WAIT_MS}
+    ${Loop}
+
+    ; The template's own `RMDir "$INSTDIR"` ran while libobs\ was still
+    ; there, so it failed. Non-recursive: this only removes an empty folder.
+    RMDir "$INSTDIR"
+  ${EndIf}
+
+  Pop $R6
+  Pop $R5
+!macroend
+
+!macro NSIS_HOOK_POSTUNINSTALL
+  !insertmacro NR_REMOVE_LIBOBS_DIR
 !macroend

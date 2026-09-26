@@ -1018,7 +1018,7 @@ export const COMMANDS: PortalCommand[] = [
     dev: true,
     overRpc: true,
     danger: true,
-    description: "Cuts the loading screen off a recording's file and rebases its markers and samples onto what is left. Finalize already does this; the command is for recordings made before it did, or one it skipped. A no-op on anything already trimmed.",
+    description: "Cuts the loading screen off a recording's file and rebases its markers and samples onto what is left. Finalize already does this; the command is for recordings made before it did, or one it skipped. A no-op on anything already trimmed. The post-game tail comes off only when the diagnostics say the polls ended readably, so a recording from before that was stored keeps its end.",
     args: [
       { name: "recordingId", kind: "number", default: "", help: "The row to cut. It needs samples: the loading screen's length is measured from them.", optional: false },
     ],

@@ -495,11 +495,12 @@ pub fn line_matches(
 
 /// Where the log is being written. `None` before `init`.
 ///
-/// Two callers, which is why the gate is wider than the rest of this
-/// section: the dev portal lists the files here, and on Windows the
-/// libobs worker's stderr is pointed at this directory
-/// (`recorder::libobs::worker_log`) so its log lands beside ours.
-#[cfg(any(feature = "devtools", target_os = "windows"))]
+/// Three callers, which is why it is not gated like the rest of this
+/// section: the dev portal lists the files here, on Windows the libobs
+/// worker's stderr is pointed at this directory
+/// (`recorder::libobs::worker_log`) so its log lands beside ours, and the
+/// Live Client poller keeps the first unreadable response of a game here
+/// (`live_client::poller`, #305).
 pub fn dir() -> Option<PathBuf> {
     let sink = SINK.get()?;
     let sink = match sink.lock() {

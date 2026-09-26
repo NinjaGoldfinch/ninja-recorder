@@ -1470,8 +1470,21 @@ Details tab, with the *Image path name* column on, before going on.
       the new version. Then compare `libobs\` against the new build's artifact:
       every file there should have the new build's timestamps.
 - [ ] **Uninstall with the app running.** Apps & Features → Uninstall: one
-      prompt, and afterwards `%LOCALAPPDATA%\ninja-recorder\libobs\` holds
-      none of the DLLs the worker had loaded.
+      prompt, and afterwards `%LOCALAPPDATA%\ninja-recorder\libobs\` does not
+      exist at all, nor does the install folder itself (#308: before the
+      post-uninstall hook, the worker's DLLs, its executable and three
+      win-capture `.json` files were left behind). App data under
+      `%APPDATA%` is untouched unless the "delete app data" box was ticked.
+      Before closing the uninstaller, open *Show details*: say whether it has a
+      `Stopped process <pid> (…\libobs\extprocess_recorder.exe)` line, and
+      whether it has a `Could not remove …\libobs` line (it should not). The
+      first is what says whether the pre-uninstall hook saw the worker, which
+      #308 left unanswered.
+- [ ] **Uninstall before installing still installs a whole `libobs\`.** Run a
+      newer installer by hand over an install of this build (or later) and
+      keep the reinstall page's "Uninstall before installing". The old
+      uninstaller now removes `libobs\` whole; afterwards the folder is back,
+      holds the new build's files, and the app records.
 
 What this does **not** fix, so do not expect it: an *interactive upgrade* that
 chooses "Uninstall before installing" runs the **previously installed**
@@ -1486,7 +1499,8 @@ uninstaller it runs is this one.
 | 10: interactive install: Cancel leaves both running, OK stops both, no locked-file error | | |
 | 10: the other build's worker survives | | |
 | 10: in-app update replaces every `libobs\` file | | |
-| 10: uninstall with the app running leaves no loaded DLL behind | | |
+| 10: uninstall with the app running leaves no `libobs\` folder behind | | |
+| 10: uninstall before installing still leaves a complete, working `libobs\` | | |
 
 ## 11. The own backend (WS1.6, #10)
 
@@ -1670,20 +1684,33 @@ Play one Practice Tool game per row, or several rows in one game.
       `start` failed (`no frame from WGC for the game window` in the log).
       Then switch between fullscreen and borderless mid-game and record the
       same. If the log says `the game window closed` on a mode switch, League
-      recreated its window, and the rest of that recording is black: that is
-      a finding, file it.
+      recreated its window: the next line within a second or two should be
+      `the game window came back (PID …); capturing it again`, and the file
+      has a short black stretch there, not a black rest-of-recording. Note
+      which way it went.
 - [ ] **The game closing.** End a game normally: the log has `the game window
-      closed (the game ended or crashed); recording black until stop` once,
-      then the recording stops about five seconds later as usual, and the
+      closed (the game ended or crashed; …); recording black until stop, or
+      until a game window comes back` once, within a quarter second of the
+      window going (the part in brackets says whether the poll or WGC's
+      `Closed` noticed; #302 found `Closed` never fires), no `came back`
+      line, then the recording stops about five seconds later as usual, and the
       file ends with a few seconds of black, with the audio track running
       to the end under it (silent once the game has gone). `stop` does not
       warn. A `the game audio capture ended before the recording did` line
       here is expected if process loopback ends with the game's process:
       note which way it went.
 - [ ] **The game crashing.** Kill `League of Legends.exe` in Task Manager
-      mid-game: the same line, then the supervisor's stop, and the file plays
-      up to the kill and is black after it. No `ended early` warning, no
-      hang, and the next game records.
+      mid-game: the same line, and the file plays up to the kill and is black
+      after it, not frozen. No `ended early` warning, no hang, and the next
+      game records.
+- [ ] **The game reconnecting.** Kill `League of Legends.exe` mid-game and
+      press Reconnect in the client (#302). The log has the `window closed`
+      line, then, once the new game window is up, `the game window came back
+      (PID …); capturing it again` and `the game came back: its audio is
+      captured again from PID …`. The file is black from the kill to the
+      reconnect and shows the game again after it (letterboxed if the window
+      came back another size), with the game's audio back in the mix and its
+      stem, silent across the gap. One file, not two.
 - [ ] **A lost GPU device**, if it can be caused safely (a driver update
       mid-game, or `dxcap -forcetdr` from the Windows SDK's graphics tools):
       `worker-devtools.log` has `the recording ended early: the GPU device was lost
@@ -1705,6 +1732,7 @@ Play one Practice Tool game per row, or several rows in one game.
 | 11.4: fullscreen ↔ borderless mid-game: what WGC gets | | |
 | 11.4: game ends: black tail, one log line, no warning | | |
 | 11.4: game killed: plays to the kill, black after, next game records | | |
+| 11.4: game killed and reconnected: black gap, picture and game audio return | | |
 | 11.4: GPU device lost (only if it can be caused) | | |
 
 ### 11.5 Microphone, desktop and application sources, mixed into track 0 (#238)

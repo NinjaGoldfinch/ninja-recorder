@@ -6,9 +6,11 @@
 //! without a live poller — see the tests module and
 //! `fixtures/live-client/sample-allgamedata.json`.
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
-use crate::debug;
-use std::collections::HashSet;
+use crate::{debug, warn};
+use std::collections::{BTreeSet, HashSet};
+use std::sync::Mutex;
 
 // --- Live Client Data response shape (subset we care about) ------------
 
@@ -21,8 +23,11 @@ pub struct AllGameData {
     /// Assister fields — see `classify_event`), but the review timeline's
     /// advantage curve does: it's the only place the API exposes per-player
     /// scores, and the only way to learn which side we're on.
-    #[serde(rename = "allPlayers", default)]
+    #[serde(rename = "allPlayers", default, deserialize_with = "lenient_all_players")]
     pub all_players: Vec<PlayerEntry>,
+    /// Defaulted like the lists: a snapshot with no event list is a snapshot
+    /// with no new markers, not an unreadable one.
+    #[serde(default)]
     pub events: EventsWrapper,
     #[serde(rename = "gameData")]
     pub game_data: GameData,
@@ -111,7 +116,7 @@ pub struct PlayerEntry {
     /// and jungle — see `role` on `LiveSummary`.
     #[serde(default)]
     pub position: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_player_items")]
     pub items: Vec<PlayerItem>,
     #[serde(rename = "summonerSpells", default)]
     pub summoner_spells: SummonerSpells,
@@ -208,7 +213,7 @@ impl ActivePlayer {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct EventsWrapper {
     #[serde(rename = "Events", default, deserialize_with = "lenient_events")]
     pub events: Vec<GameEvent>,
@@ -218,33 +223,140 @@ pub struct EventsWrapper {
 /// read instead of failing the whole snapshot.
 ///
 /// This is the difference between losing one marker and losing a
-/// recording. The events array is the only part of `AllGameData` that both
-/// grows during a game and can fail to deserialize — everything in
-/// `allPlayers` is defaulted — so it is the one place where a shape nobody
-/// here has seen can arrive mid-game and take the payload with it. In #74
-/// something did, nine minutes in, and the recording ended.
+/// recording. The events array grows during a game, so it is where a shape
+/// nobody here has seen is most likely to arrive mid-game and take the
+/// payload with it. In #74 something did, nine minutes in, and the recording
+/// ended.
 ///
 /// Riot may also add event types we have never modelled. Being unable to
 /// read one of those should cost that event and nothing else.
+///
+/// Since #305 every other list in a snapshot goes through the same reader,
+/// `lenient_list`, because defaulting a field only covers it being *missing*.
 fn lenient_events<'de, D>(deserializer: D) -> Result<Vec<GameEvent>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let raw = Vec::<serde_json::Value>::deserialize(deserializer)?;
-    let mut events = Vec::with_capacity(raw.len());
-    for value in raw {
+    lenient_list(deserializer, "events.Events")
+}
+
+/// Reads a list **without letting its shape fail the snapshot** (#305).
+///
+/// One `Vec` field in `allgamedata` arriving as a JSON object once made every
+/// poll for the rest of a game unreadable: no markers, no samples, no
+/// scoreboard, and the trim then took the silence for post-game. Whatever the
+/// cause, one field must cost at most that field. So a list is accepted as:
+///
+/// - an **array**, read entry by entry, skipping any entry that does not
+///   parse, exactly as `lenient_events` always has;
+/// - an **object**, taken as its values. Keys that are all whole numbers
+///   (`{"0": …, "1": …}`, the shape a sparse array serialises to) put the
+///   values in numeric order; anything else keeps the map's own order;
+/// - **null, missing, or a scalar**: empty.
+///
+/// The first time a field is coerced a warning names it, once per process:
+/// that line is how the next run on a real box says *which* field it was.
+fn lenient_list<'de, D, T>(deserializer: D, field: &'static str) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned,
+{
+    let values = match Option::<serde_json::Value>::deserialize(deserializer)? {
+        None | Some(serde_json::Value::Null) => Vec::new(),
+        Some(serde_json::Value::Array(items)) => items,
+        Some(serde_json::Value::Object(map)) => {
+            note_coerced(field, "an object");
+            object_values(map)
+        }
+        Some(other) => {
+            note_coerced(field, json_kind(&other));
+            Vec::new()
+        }
+    };
+    let mut out = Vec::with_capacity(values.len());
+    for value in values {
         // Borrowing deserializer, so the value survives for the log line
         // on the failure path without cloning on the success path.
-        match GameEvent::deserialize(&value) {
-            Ok(event) => events.push(event),
-            // Debug, not warn: the array is cumulative, so one bad event
-            // repeats on every poll for the rest of the game. Fixture
+        match T::deserialize(&value) {
+            Ok(item) => out.push(item),
+            // Debug, not warn: every list is re-sent on every poll, so one
+            // bad entry repeats each second for the rest of the game. Fixture
             // capture (DEVELOPMENT.md §3.3) is what preserves the shape
             // itself.
-            Err(e) => debug!("live-client", "skipped an unreadable event ({e}): {value}"),
+            Err(e) => debug!("live-client", "skipped an unreadable entry in {field} ({e}): {value}"),
         }
     }
-    Ok(events)
+    Ok(out)
+}
+
+/// An object's values as a list: in numeric key order when every key is a
+/// whole number, and in the map's own order otherwise.
+fn object_values(map: serde_json::Map<String, serde_json::Value>) -> Vec<serde_json::Value> {
+    let numbered: Option<Vec<u64>> = map.keys().map(|key| key.trim().parse().ok()).collect();
+    match numbered {
+        Some(keys) => {
+            let mut pairs: Vec<(u64, serde_json::Value)> =
+                keys.into_iter().zip(map.into_iter().map(|(_, value)| value)).collect();
+            pairs.sort_by_key(|(n, _)| *n);
+            pairs.into_iter().map(|(_, value)| value).collect()
+        }
+        None => map.into_iter().map(|(_, value)| value).collect(),
+    }
+}
+
+fn json_kind(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "a bool",
+        serde_json::Value::Number(_) => "a number",
+        serde_json::Value::String(_) => "a string",
+        serde_json::Value::Array(_) => "an array",
+        serde_json::Value::Object(_) => "an object",
+    }
+}
+
+/// Says, once per field per process, that a list arrived as something else.
+///
+/// Once, because the payload is re-sent every second and the same coercion
+/// would otherwise be most of the log. Warn, because it is the one line that
+/// names a shape nobody here has seen, and that is worth reading.
+fn note_coerced(field: &'static str, kind: &'static str) {
+    static SEEN: Mutex<BTreeSet<&'static str>> = Mutex::new(BTreeSet::new());
+    let first = match SEEN.lock() {
+        Ok(mut seen) => seen.insert(field),
+        Err(poisoned) => poisoned.into_inner().insert(field),
+    };
+    if first {
+        warn!(
+            "live-client",
+            "{field} arrived as {kind} rather than a list and was read leniently \
+             (said once per field)"
+        );
+    }
+}
+
+/// One `deserialize_with` function per lenient list: serde can only name a
+/// function, and the field's name is what the log line needs.
+macro_rules! lenient_lists {
+    ($($name:ident => $field:literal,)*) => {$(
+        fn $name<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+        where
+            D: Deserializer<'de>,
+            T: DeserializeOwned,
+        {
+            lenient_list(deserializer, $field)
+        }
+    )*};
+}
+
+lenient_lists! {
+    lenient_all_players => "allPlayers",
+    lenient_player_items => "allPlayers[].items",
+    lenient_assisters => "events.Events[].Assisters",
+    lenient_scoreboard_players => "scoreboard.players",
+    lenient_scoreboard_items => "scoreboard.players[].items",
+    lenient_scoreboard_spells => "scoreboard.players[].spells",
+    lenient_scoreboard_spell_ids => "scoreboard.players[].spell_ids",
 }
 
 /// `Stolen` and friends: accept the value however this client spells it.
@@ -299,7 +411,7 @@ pub struct GameEvent {
     pub killer_name: Option<String>,
     #[serde(rename = "VictimName", default)]
     pub victim_name: Option<String>,
-    #[serde(rename = "Assisters", default)]
+    #[serde(rename = "Assisters", default, deserialize_with = "lenient_assisters")]
     pub assisters: Vec<String>,
     #[serde(rename = "Recipient", default)]
     pub recipient: Option<String>,
@@ -575,6 +687,7 @@ fn live_position(position: &str) -> Option<String> {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 pub struct Scoreboard {
     /// Both teams, in the order the response listed them.
+    #[serde(default, deserialize_with = "lenient_scoreboard_players")]
     pub players: Vec<ScoreboardPlayer>,
     /// `"ORDER"` or `"CHAOS"`, or absent when we could not be matched —
     /// in which case the row cannot say which half is ours and shows
@@ -616,12 +729,13 @@ pub struct ScoreboardPlayer {
     /// Item ids in slot order, trinket included. Empty slots are dropped
     /// rather than zero-filled: a zero is an item id that does not exist,
     /// and the row draws as many boxes as it wants regardless.
+    #[serde(default, deserialize_with = "lenient_scoreboard_items")]
     pub items: Vec<i64>,
     /// Spell display names — `["Flash", "Smite"]`. Names rather than the
     /// keys Data Dragon files art under, because the name is the half that
     /// survives a response shape changing; mapping one to the other is the
     /// art layer's job, as it already is for champions.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_scoreboard_spells")]
     pub spells: Vec<String>,
     /// The same two spells as ids, which is all match history gives.
     ///
@@ -630,7 +744,11 @@ pub struct ScoreboardPlayer {
     /// art, so both are stored rather than one being converted into the
     /// other — converting would need the CDN, in a path that otherwise
     /// only talks to the League client.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "lenient_scoreboard_spell_ids"
+    )]
     pub spell_ids: Vec<i64>,
 }
 
@@ -2532,5 +2650,140 @@ mod tests {
         .unwrap();
         assert!(snapshot.events.events.is_empty());
         assert_eq!(snapshot.game_data.game_time, 42.0);
+    }
+
+    // --- Every list is lenient (#305) -------------------------------------
+
+    /// **The #305 shape.** A list arriving as an object used to fail the
+    /// whole snapshot, every poll, for the rest of the game. It now reads as
+    /// its values, in numeric key order when the keys are numbers.
+    #[test]
+    fn a_list_that_arrives_as_an_object_is_read_as_its_values() {
+        let snapshot: AllGameData = serde_json::from_str(
+            r#"{
+                "gameData": {"gameTime": 42.0},
+                "allPlayers": [{
+                    "championName": "Ahri",
+                    "items": {
+                        "10": {"itemID": 3340, "slot": 6},
+                        "2": {"itemID": 3157, "slot": 1},
+                        "0": {"itemID": 3089, "slot": 0}
+                    }
+                }],
+                "events": {"Events": [{
+                    "EventID": 1, "EventName": "ChampionKill", "EventTime": 60.0,
+                    "Assisters": {"a": "Garen"}
+                }]}
+            }"#,
+        )
+        .expect("an object where a list belongs must not fail the snapshot");
+
+        let items: Vec<i64> = snapshot.all_players[0].items.iter().map(|i| i.item_id).collect();
+        // 0, 2, 10: numeric, not the string order 0, 10, 2.
+        assert_eq!(items, vec![3089, 3157, 3340]);
+        assert_eq!(snapshot.events.events[0].assisters, vec!["Garen".to_string()]);
+    }
+
+    /// An empty object, the likeliest form of the #305 field: `{}` where an
+    /// empty inventory's `[]` was expected.
+    #[test]
+    fn an_empty_object_is_an_empty_list() {
+        let snapshot: AllGameData = serde_json::from_str(
+            r#"{"gameData": {"gameTime": 42.0}, "allPlayers": {}, "events": {"Events": {}}}"#,
+        )
+        .unwrap();
+        assert!(snapshot.all_players.is_empty());
+        assert!(snapshot.events.events.is_empty());
+    }
+
+    /// Null, a scalar, or nothing at all: empty, and the snapshot survives.
+    #[test]
+    fn a_null_or_scalar_list_is_empty() {
+        let snapshot: AllGameData = serde_json::from_str(
+            r#"{
+                "gameData": {"gameTime": 42.0},
+                "allPlayers": [
+                    {"championName": "Ahri", "items": null},
+                    {"championName": "Garen", "items": "none"}
+                ],
+                "events": {"Events": [
+                    {"EventID": 1, "EventName": "ChampionKill", "EventTime": 60.0, "Assisters": null}
+                ]}
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(snapshot.all_players.len(), 2);
+        assert!(snapshot.all_players.iter().all(|p| p.items.is_empty()));
+        assert!(snapshot.events.events[0].assisters.is_empty());
+
+        // No event list at all is no new markers, not an unreadable poll.
+        let snapshot: AllGameData =
+            serde_json::from_str(r#"{"gameData": {"gameTime": 42.0}}"#).unwrap();
+        assert!(snapshot.events.events.is_empty());
+        assert!(snapshot.all_players.is_empty());
+    }
+
+    /// One unreadable entry costs that entry, as it always has for events.
+    #[test]
+    fn an_unreadable_entry_is_skipped_not_fatal() {
+        let snapshot: AllGameData = serde_json::from_str(
+            r#"{
+                "gameData": {"gameTime": 42.0},
+                "allPlayers": [
+                    {"championName": "Ahri", "items": [{"itemID": "not a number"}, {"itemID": 3089}]},
+                    {"championName": "Garen", "level": "eleven"},
+                    {"championName": "Zed"}
+                ]
+            }"#,
+        )
+        .unwrap();
+        let names: Vec<&str> =
+            snapshot.all_players.iter().map(|p| p.champion_name.as_str()).collect();
+        assert_eq!(names, vec!["Ahri", "Zed"]);
+        let items: Vec<i64> = snapshot.all_players[0].items.iter().map(|i| i.item_id).collect();
+        assert_eq!(items, vec![3089]);
+    }
+
+    /// A stored scoreboard reads its lists the same way, so a row written by
+    /// something with a different idea of the shape still loads.
+    #[test]
+    fn a_scoreboard_reads_its_lists_leniently() {
+        let board: Scoreboard = serde_json::from_str(
+            r#"{"players": [{
+                "champion": "Ahri", "team": "ORDER", "level": 11,
+                "kills": 3, "deaths": 1, "assists": 2, "cs": 150,
+                "items": {"1": 3157, "0": 3089},
+                "spells": null,
+                "spell_ids": {"0": 4, "1": 14}
+            }]}"#,
+        )
+        .unwrap();
+        let player = &board.players[0];
+        assert_eq!(player.items, vec![3089, 3157]);
+        assert!(player.spells.is_empty());
+        assert_eq!(player.spell_ids, vec![4, 14]);
+    }
+
+    /// The real fixture still reads exactly as it did.
+    #[test]
+    fn the_fixture_is_unchanged_by_leniency() {
+        let json = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/live-client/sample-allgamedata.json"
+        ));
+        let lenient: AllGameData = serde_json::from_str(json).unwrap();
+        let raw: serde_json::Value = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            lenient.all_players.len(),
+            raw["allPlayers"].as_array().unwrap().len()
+        );
+        assert_eq!(
+            lenient.events.events.len(),
+            raw["events"]["Events"].as_array().unwrap().len()
+        );
+        assert_eq!(
+            lenient.all_players[0].items.len(),
+            raw["allPlayers"][0]["items"].as_array().unwrap().len()
+        );
     }
 }

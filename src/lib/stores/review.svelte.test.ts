@@ -101,6 +101,21 @@ describe("the window", () => {
     expect(store.review.window.end).toBe(600);
   });
 
+  it("runs to the end of the file when the poll was unreadable after the last sample", async () => {
+    // #305: the last 43s of a Practice Tool game were gameplay the parser
+    // could not read, not the post-game screen, and must stay watchable.
+    const unreadable = {
+      id: 1,
+      path: "C:/vods/1.mp4",
+      diagnostics_json: '{"polls":38,"unreadable_polls":42,"unreadable_at_end":true}',
+    } as never;
+    call.mockResolvedValueOnce([]).mockResolvedValueOnce([sample(0, 0), sample(36.5, 36.5)]);
+    await store.openRecording(unreadable);
+    store.setDuration(79.8);
+
+    expect(store.review.window.end).toBe(79.8);
+  });
+
   it("refuses a duration that is not a number", async () => {
     // `video.duration` is NaN until metadata loads; passing it through would
     // make every derived number NaN silently.

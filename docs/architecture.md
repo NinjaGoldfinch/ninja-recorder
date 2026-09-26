@@ -95,15 +95,17 @@ flowchart TB
 | `recorder/own/stats.rs` | The session summary, logged by the worker in `worker.log` and copied into `daemon.log` from its `Started`/`Stopped` replies: one line at start (size, adapter, encoder and whether it is the software fallback, each source's root or why it failed, the tracks), one at stop (ticks, repeated ticks, the worst late tick, each source's clock, raw ppm, slips, gaps and holds, clipping, size, fragments, finalize), and one for the repair and the remux, rendered from plain counters (DEVELOPMENT.md §13) | `render_start`, `render_stop`, `render_remux`, `Cadence` |
 | `recorder/own/status.rs` | The even frame size, whether the encoder that was activated is the one `rank` chose, and the backend's name (`own (ready: …)`, `own (software encoding: …)`, `own (unavailable: …)`) | `even_size`, `check_loaded`, `Status` |
 | `recorder/own/win/` | Everything that calls Windows, and the only part of `own/` gated to it: the adapters and D3D11 device, the WGC capture with its border off, `scale` (frames into the fixed-size slots: a copy, or the D3D11 video processor when the window has been resized; the same processor, told BT.709 studio range, does `convert`'s BGRA → NV12), the process table, one thread per audio source (the game and applications by process loopback, include mode; the microphone and the desktop from their endpoints, the desktop with a silent keep-alive; all 48 kHz stereo float), every track's mix (`audio::AudioTracks`), the encoders driven directly (`h264`: the H.264 MFT, asynchronous or synchronous as it declares, 8 Mbps CBR, GOP 120, low latency, no B-frames, textures in where it is D3D11-aware; `aac`: an AAC MFT per track, 160 kbps), `output` (frames, encoders and the `own::mux` file together), and the session thread that owns them, which runs in the capture worker (`host`: the session as the worker's `Host`). `OwnRecorder` is the daemon's thin client of that worker, and repairs the file of a worker that died | `OwnRecorder`, `session::run`, `host::SessionHost`, `audio::start`, `audio::AudioTracks`, `h264::VideoEncoder`, `aac::AacEncoder`, `convert::Frames`, `output::Output`, `scale::Processor`, `scale::Fitter` |
-| `recorder/own/worker/` | The capture worker, `ninja-recorder --capture-worker` (#241): the process the session thread runs in, spawned only while League runs. The line protocol both sides share, the worker's loop (EOF is a shutdown), the pure lifetime rule, and the daemon's client with its timeouts and its kill-on-close job object | `run`, `protocol::{Request, Reply}`, `serve::serve`, `lifetime::Lifetime`, `client::Worker` |
+| `recorder/own/worker/` | The capture worker, `ninja-recorder --capture-worker` (#241): the process the session thread runs in, spawned only while League runs. The line protocol both sides share, the worker's loop (EOF is a shutdown), the pure lifetime rule, and the daemon's client with its timeouts, which puts the worker in a `recorder::job` | `run`, `protocol::{Request, Reply}`, `serve::serve`, `lifetime::Lifetime`, `client::Worker` |
+| `recorder/job.rs` | The kill-on-close job object both Windows backends put their worker in, so a daemon that dies takes it along (#241, #307). The own backend hands over its `Child`; the libobs worker is spawned inside the fork, so it is found among the daemon's children by name, before and after bring-up (`new_children`, pure) | `Job::contain`, `Job::assign_pid`, `new_children`, `processes` |
 | `recorder/problem.rs` | What a recording lost to a capture failure, backend-agnostic: the `CaptureProblem` enum that crosses the worker's pipe, `RecordingOutput`, the `captureProblems` event and `diagnostics_json`, and the words of the daemon's notification for it (DEVELOPMENT.md §2.6) | `CaptureProblem`, `notification`, `refused_message`, `windows_build` |
 | `recorder/stub.rs` | Non-Windows dev backend that copies a fixture MP4 | `StubRecorder` |
-| `recorder/remux.rs` | The faststart remux, a `-c copy` through `ffmpeg_command` that moves the index to the front so a fragmented file scrubs. Shared by both Windows backends' `stop` and startup recovery; the argument list is pure | `faststart_args`, `remux_faststart` |
+| `recorder/remux.rs` | The faststart remux, a `-c copy` through `ffmpeg_command` that moves the index to the front so a fragmented file scrubs. Shared by both Windows backends' `stop` and startup recovery; the argument list is pure. Any failure, the final replace included, deletes `<stem>.faststart.tmp` (#307) | `faststart_args`, `remux_faststart` |
 | `mp4/read.rs` | Reading an MP4's top-level boxes directly, no ffmpeg: fragmented or not, how many whole fragments, how many audio tracks, and what a kill cut short | `summarize`, `Summary` |
 | `mp4/write.rs` | The own backend's fragmented-MP4 muxer: one H.264 track and any number of AAC tracks, a `moof`+`mdat` per flush, an `mfra` at the end, and `repair` for a killed file. Pure Rust, no ffmpeg. Written through by the own backend's `own::mux` since #239, and `repair` is what startup recovery and a dead worker's `stop` run first ([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#25-multi-track-audio)) | `Writer`, `Track`, `repair` |
 | `ddragon.rs` | Champion art from Data Dragon, fetched on first use and cached on disk | `champion_icon` |
 | `db/mod.rs` | Schema, migrations, every query | `Db` |
-| `db/reconcile.rs` | Reconciling DB rows against files on disk, and finishing the recordings a dead daemon left open: an own-backend file repaired in Rust first (`mp4::write::repair`), then every file remuxed | `reconcile`, `recover_unfinished`, `recovery_action` |
+| `db/reconcile.rs` | Reconciling DB rows against files on disk, and finishing the recordings a dead daemon left open: an own-backend file repaired in Rust first (`mp4::write::repair`), then every file remuxed. A file still open elsewhere is left for a later start, and the scan sweeps stale remux temp files (#307) | `reconcile`, `recover_unfinished`, `recovery_action` |
+| `db/in_use.rs` | Whether a file is still open in another process: an exclusive open (`share_mode(0)`) on Windows, retried for up to ten seconds by recovery; always free elsewhere | `is_free`, `wait_for_writer`, `wait_until_free` |
 | `probe.rs` | Reading a container's duration back out with ffmpeg, for files `reconcile` imported | `duration_s` |
 | `match_summary.rs` | Waiting out the LCU after a finalize, then patching the row with what it eventually says | `patch`, `next_delay` |
 | `retention.rs` | Deletion policy and free-space preflight | `select_for_deletion`, `enforce_now`, `has_room_to_record` |
@@ -164,8 +166,9 @@ behind a three-method trait and nothing above it knows libobs exists.
 
 ```mermaid
 flowchart TB
-    SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release · collect_output<br/>backend_name · current_file · current_audio · worker_running"}
+    SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release · collect_output<br/>watch_capture · capture_lost<br/>backend_name · current_file · current_audio · worker_running"}
     T -->|"libobs, #[cfg(windows)]"| L["LibObsRecorder<br/><small>WGC window capture,<br/>NVENC/AMF/QSV H.264,<br/>one AAC track per audio source,<br/>fragmented MP4 + faststart remux</small>"]
+    L -.->|"ipc-link, stdin / stdout"| LW["extprocess_recorder.exe<br/><small>spawned by the fork; found by name<br/>and put in a kill-on-close job</small>"]
     T -->|"own, #[cfg(windows)], build 20348+"| O["OwnRecorder<br/><small>Option B: WGC → D3D11 →<br/>Media Foundation MFTs, driven directly,<br/>every track (mix + stems) in one file<br/>by our own writer, + faststart remux</small>"]
     O -.->|"stdin / stdout,<br/>one JSON line each"| WK["capture worker process<br/><small>--capture-worker, only while<br/>League runs; kill-on-close job</small>"]
     WK -.->|"channel"| SES["session thread<br/><small>owns every COM object:<br/>device, WGC, encoder MFTs</small>"]
@@ -207,6 +210,17 @@ flight). A worker that dies mid-recording is logged with its exit code, and
 `stop` hands over what reached the disk, repaired by `mp4::write::repair` and
 remuxed, rather than an error; the next `prepare` spawns a fresh one
 ([DEVELOPMENT.md §12](../DEVELOPMENT.md#the-capture-worker-a-third-mode-and-only-while-league-runs-241)).
+
+That death is noticed as it happens, not at the stop (#299). The worker's
+reply thread sees EOF when its stdout closes and calls the `CaptureWatch` the
+supervisor installed with `watch_capture` before the start; the supervisor, on
+the async runtime's blocking pool (the finalize's callbacks spawn tasks, and
+panic on a thread with no runtime), asks `capture_lost`, which reaps the worker and reports
+the loss once, and sends `CaptureLost` through the state machine. The `stop`
+that follows recovers the file from disk and reports its own length in
+`RecordingOutput::duration_s`, which the row stores in place of the wall
+clock. Both methods default to doing nothing, so the libobs backend, the stub
+and `FailedRecorder` are unchanged.
 
 Every audio source has a thread of its own, started for each recording. The
 game's finds the process tree to capture from the window being recorded
@@ -271,10 +285,20 @@ and a frame with no content is skipped. A minimised window sends no frames,
 so the ticks repeat the last one; one being minimised or alt-tabbed out of
 fullscreen can first send a few whose content is 1x1, and anything under
 `fit::MIN_CONTENT` (64 px) on either side is skipped the same way rather than
-scaled into a box (#301). WGC's `Closed` (the game ended or crashed)
-does not end the loop: it writes black until the supervisor's `stop`, which
-comes when the Live Client API goes away, and the game audio carries on under
-it, held with silence once the game has gone. A lost GPU device
+scaled into a box (#301). A window that has gone (the game ended or
+crashed) does not end the loop: it writes black until the supervisor's `stop`,
+which comes when the Live Client API goes away, and the game audio carries on
+under it, held with silence once the game has gone. The loop learns of it by
+polling, every 250 ms, `IsWindow` and the window's owning process (a recycled
+handle names someone else's), because WGC's `Closed` never fired on the box
+(#302); `Closed` is kept as a second signal, and `own::watch` makes the
+decisions. While black it looks for a game window every second, by the lookup
+`start` used, and captures one that has a size and belongs to `League of
+Legends.exe`: that is a crashed game the player reconnected to, which the state
+machine keeps recording through. The picture comes back letterboxed if the new
+window is another size, and the game's process-loopback source is restarted on
+the new PID into the same tracks, which carried silence across the gap. A
+normal game end finds no window, and the black runs to `stop`. A lost GPU device
 (`DXGI_ERROR_DEVICE_REMOVED`, `_RESET`) does end it, with what was written
 finalized, and `stop` waits at most 20 s for the capture worker whatever
 happens: a worker wedged in a driver past that is killed and its file kept, so
@@ -282,8 +306,10 @@ it cannot hold the supervisor.
 
 ```mermaid
 flowchart LR
-    F["WGC frame"] --> C{"Closed?"}
-    C -->|yes| B["black slot<br/><small>every tick until stop</small>"]
+    F["WGC frame"] --> C{"window gone?<br/><small>IsWindow + owner, 250 ms;<br/>or WGC Closed</small>"}
+    C -->|yes| B["black slot<br/><small>every tick until stop,<br/>or a game window comes back</small>"]
+    B -.->|"new game window<br/>(searched each second)"| R["new WGC capture;<br/>game audio restarted<br/>on the new PID"]
+    R -.-> F
     C -->|no| P{"fit::place"}
     P -->|"content = output"| CP["copy into slot"]
     P -->|"other size"| VP["video processor:<br/>scale into letterbox,<br/>bars black"]
@@ -474,7 +500,9 @@ builds none of what the other two modes do: no lock, no tray, no database, no
 pipe. The job object it sits in closes when the daemon does, so it cannot
 outlive it. The libobs backend has had a worker process all along
 (`extprocess_recorder.exe`), with its own lifetime
-([DEVELOPMENT.md §12](../DEVELOPMENT.md#the-capture-worker-a-third-mode-and-only-while-league-runs-241)).
+([DEVELOPMENT.md §12](../DEVELOPMENT.md#the-capture-worker-a-third-mode-and-only-while-league-runs-241)),
+and since #307 it sits in a kill-on-close job too (`recorder::job`), so neither
+worker can go on writing a file after the daemon that started it is gone.
 
 Since WS3.4 the window is a client. `invoke('rpc', ...)` reaches `ui::link`,
 which forwards the name and arguments over the pipe and returns what the daemon

@@ -915,6 +915,21 @@ markers. A poll that does not move the game clock still writes nothing:
 run of points through the graph, and the live write skips precisely the polls
 `ingest` did.
 
+**Recovery does not touch a file something still has open** (#307). A daemon
+killed mid-game could leave its capture worker running, and the next daemon's
+recovery treated the file that worker was still writing as a torn one: it cut
+4.36 MB of live footage off the end as a "torn tail", then failed the remux's
+replace with "Access is denied" and left a 181 MB temp file behind. Both
+workers now die with the daemon (§12), but a job's kill is asynchronous and a
+build without the job leaves its worker anyway, so recovery opens each file
+exclusively first (`share_mode(0)`), retries for up to ten seconds, and if
+something still holds it, leaves the row unfinished for the next start rather
+than finishing it from a file that has not stopped changing. Ten seconds is
+long enough for a worker in a closing job and short enough to spend before the
+daemon can record; it is only spent at all when something is holding a file.
+A failed remux now deletes its temp file on every path, the replace included,
+and the folder scan deletes any remux temp file nothing is writing.
+
 ### 4.4 Decision: the library is the first view to cross, and it crosses whole
 
 WS4 is a strangler, so each task moves one view and deletes its vanilla
@@ -1503,6 +1518,41 @@ in each: no samples, a tail already shorter than the margin, and a gap wider
 than 60 s, which is not a post-game tail, since one is five to fifteen
 seconds. That is the same rule `trim.rs` applies to the head: act on a measured
 answer, never on a guessed one, and when the numbers do not agree, do nothing.
+
+**The 60 s cap was not enough, and #305 is why.** An unreadable stretch that
+starts less than a minute before the game ends looks exactly like a post-game
+tail by size: a Practice Tool game became unreadable 38 s in, ran another
+43 s, and the trim cut all 43 s of it as "post-game". The size of the gap
+cannot tell the two apart, so the decision now needs **evidence that the gap
+is bounded by the game ending**, not just a gap of the right size.
+
+The evidence is the one thing only the poller sees: whether anything answered
+unreadably *after the last sample*. The supervisor marks the session on every
+unreadable response (a 404 does not count: that is the API saying there is no
+game, which is an end signal) and clears the mark on every new sample, and the
+finalize stores it as `RecordingDiagnostics::unreadable_at_end`. The trim
+(`trim::TailEvidence`) cuts a tail only when that is `false`: the endpoint
+went away, or said the game was over, or answered with a stopped clock, and
+nothing after the last sample could have been game. When it is `true` the tail
+stays whatever its size, and the review player does not clip it either. When
+it is absent, on a row from before it was stored, the trim reads it as "not
+known" and cuts no tail, while the player keeps the window it always had,
+because those recordings were already trimmed at finalize and changing their
+window now would only make them end on black.
+
+**Why the diagnostics blob and not a column or an argument.** The evidence has
+to reach two readers, the trim (including `dev_trim_lead_in`, which runs
+long after the session is gone) and the player, and `diagnostics_json` is
+already the place a finalize records what it observed and cannot be derived
+afterwards (docs/data-model.md). A column would be a migration for a value
+nothing filters on; passing it to the trim as an argument would leave the
+player and the dev command without it.
+
+The parser side of #305 is §3.2's concern and is covered in
+[docs/recording-pipeline.md](docs/recording-pipeline.md): every list in a
+snapshot is now lenient, so the stretch this guards against should be rare.
+This rule does not depend on that. Whatever makes a poll unreadable, it must
+not delete video.
 
 The file is cut at both ends too, in **one pass**. `-ss` for the front and
 `-t` for the length, a duration rather than `-to`, because with `-ss` ahead
@@ -2289,6 +2339,21 @@ Windows ends the worker. There is a moment between the spawn and the assignment
 when the worker is not yet in the job; EOF covers it, because a dead daemon's
 end of the stdin pipe closes too. The worker is spawned with `CREATE_NO_WINDOW`.
 
+**The libobs worker is in one too, found rather than handed over** (#307). It
+was not, and on the box a daemon force-killed mid-game left
+`extprocess_recorder.exe` recording: EOF did not stop it, because a libobs
+worker busy recording never reads its stdin. The next daemon's recovery then
+repaired a file that was still growing. The fork spawns that worker inside
+`ipc-link` and keeps its `Child` private, so the daemon lists its own children
+named `extprocess_recorder.exe` before bringing the fork up and again after,
+and puts the one that appeared in a kill-on-close job
+(`recorder::job::new_children`, pure). Assigning the daemon itself to a job
+instead was rejected: closing it would take every other child, and the daemon,
+with it. Exposing the child from the fork would be tidier and is not worth a
+fork release while WS8 is deleting the fork. Either way a failure is a warning,
+never a refused recording, and the job is closed only after the worker has been
+asked to shut down.
+
 **A dead worker never takes the daemon with it.** Every call has a timeout
 (replies are read on a thread and handed over on a channel), and every failure
 ends the same way: the worker is killed if it is still there, reaped, and
@@ -2300,6 +2365,38 @@ logged with its exit code. Then:
 - the next `prepare` or `start` spawns a fresh worker. A worker found dead
   between calls is noticed at the next one and replaced, so a worker that died
   idle does not cost the next game.
+
+**A worker that dies mid-recording is noticed at once, not at the stop**
+(#299). Discovering it at the next call meant the next call was the end of the
+game: the header said Recording for the rest of it, the notice came when the
+game ended, and the card's length was the game's rather than the file's. The
+reply thread already sees EOF the moment the worker's stdout closes, which it
+only does by exiting, so it now says so (`Recorder::watch_capture`), and the
+supervisor asks the recorder (`Recorder::capture_lost`, once per recording) and
+sends `StateEvent::CaptureLost`. That is a transition of its own, `Recording →
+WaitingForGame` with a stop, rather than a reuse of `Finalizing`, because the
+game has not ended: the gameflow watch and the Live Client poll stay up, and
+the next poll starts a fresh worker and a second recording of the rest of the
+game, the way a daemon restarted mid-game resumes one. The first recording is
+repaired and finished by id at once, with the file's own length
+(`RecordingOutput::duration_s`) and an `EndedEarly` problem naming where it
+stopped.
+
+That finalize runs on the async runtime's blocking pool, not on a thread of
+its own. The first build ran it on a plain thread: the daemon's trim and
+summary callbacks called `tokio::spawn`, which panics with no runtime, under
+the recorder lock, and the poisoned lock stopped the resume dead with nothing
+in the log. The callbacks now spawn through a handle captured at startup, the
+daemon logs panics to `daemon.log`, and the check logs whether it is resuming.
+
+The restart is bounded, three per game (`machine::MAX_CAPTURE_RESTARTS`): a
+worker that dies on every first frame would otherwise cost a short file and a
+notification a second for the rest of the game. After the third the poll is
+stopped as well, and the game is waited out in `WaitingForGame`. The two
+recordings of one game share its gameflow identity (game id, queue) and are
+otherwise separate library entries, exactly as the daemon-restart case leaves
+them; how the library should show a game recorded in two parts is not decided
+yet.
 
 **The installer and the updater.** The worker's image name is the main
 executable's, so Tauri's template, which kills `${MAINBINARYNAME}.exe` by name
@@ -2656,21 +2753,46 @@ leave it that way if the person then pressed Cancel on the template's prompt.
 Asking once, up front, means Cancel stops nothing and OK stops both, and the
 template's check that follows finds nothing to ask about.
 
+**Uninstalling removes `libobs\` whole** (#308). Tauri's template uninstalls
+resources with one `Delete` per file it bundled and a non-recursive `RMDir` per
+directory, and it never reads the error flag. So a file the worker still had
+mapped when those lines ran survives silently, and so does anything written at
+run time, which is on no list. #308 saw both at once: an uninstall with the
+app running left exactly the worker's module list (the executable and the 23
+DLLs it loads) plus three win-capture `.json` files no bundle ships, while
+every unloaded file beside them went. That the worker was still alive after
+the pre-uninstall hook is established; *why* is not (the likeliest reading is
+that the hook's query did not see it, the template's by-name kill took the
+app, and the orphaned worker exited on its closed pipe a moment after the
+deletes).
+The post-uninstall hook therefore stops the worker by path once more and then
+runs `RMDir /r "$INSTDIR\libobs"`, retrying for up to ten seconds while a file
+in it is still in use, so an orphan that exits on its own is waited out rather
+than raced. The folder is ours alone, and app data is not under `$INSTDIR`.
+It ignores `$UpdateMode` on purpose: the uninstaller only runs during an
+install when the reinstall page uninstalls first, and the Install section then
+copies the whole folder again.
+
 Two things it does not do:
 
 - **An interactive upgrade that uninstalls first is only covered one release
   later.** Tauri's reinstall page runs the *previously installed* uninstaller
   before the new installer's Install section, so before any hook of the new
   one. An uninstaller from before #220 has no hook, its worker survives, and a
-  DLL it had loaded is left behind. The uninstaller this build installs does
-  have one, so the next upgrade is covered.
-- **Nothing removes a file the new version no longer ships.** Installing over
-  an install copies files and never deletes, whether they were locked or not.
-  The only way to clear `libobs\` without a generated list of what the new
-  build ships would be to delete it before copying, and any abort after that
-  point (a Cancel on the template's prompt, a write that fails) leaves the
-  installed app with no capture backend. Not done. Today only the devtools
-  bundle is ever trimmed, and it never updates itself.
+  DLL it had loaded is left behind; one from before #308 does not clear
+  `libobs\`. The uninstaller this build installs does both, so the next
+  upgrade is covered.
+- **An install over an install removes nothing.** It copies files and never
+  deletes, whether they were locked or not, so a file the new version no longer
+  ships stays unless that install uninstalled first (which now clears the
+  folder). The in-app update never does: `/UPDATE` skips the uninstall. The
+  only way to clear `libobs\` there without a generated list of what the new
+  build ships would be to delete it in the pre-install hook, and any abort
+  after that point leaves the installed app with no capture backend. The
+  template's "close the app?" prompt comes *after* that hook, so a Cancel on it
+  is exactly such an abort whenever the app is running and the worker is not
+  (the own backend, or a libobs worker that has already exited). Not done.
+  Today only the devtools bundle is ever trimmed, and it never updates itself.
 
 ### The devtools bundle must never update itself
 
