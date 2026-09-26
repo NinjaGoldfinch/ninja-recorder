@@ -122,6 +122,46 @@ pub fn trim_point_s(game_starts_at_s: f64) -> Option<f64> {
     (point >= MIN_TRIM_S).then_some(point)
 }
 
+/// What the Live Client polls saw between a recording's last sample and the
+/// end of its file — the evidence that gap is post-game at all (#305).
+///
+/// The last sample is the last moment the game *was reported*, which is not
+/// the same thing as the moment it ended. The two only coincide when nothing
+/// after the sample could have been game: the endpoint went away, said there
+/// was no game (a 404), or answered with a clock that had stopped. A poll that
+/// answered with something unreadable is the game still running, and in #305
+/// forty-three seconds of it were cut off as "post-game".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TailEvidence {
+    /// Nothing unreadable came back after the last sample: the gap is bounded
+    /// by the game ending, and is the end screen.
+    Clean,
+    /// The endpoint answered with something unreadable after the last
+    /// sample, so the gap is at least partly game.
+    Unreadable,
+    /// Nothing says either way: a recording made before this was stored, one
+    /// a rescan imported, or one whose diagnostics could not be read.
+    Unknown,
+}
+
+impl TailEvidence {
+    /// Reads the evidence the finalize stored in `diagnostics_json`
+    /// (`RecordingDiagnostics::unreadable_at_end`).
+    ///
+    /// Pure, and tolerant the way every reader of that blob is: anything it
+    /// cannot read is `Unknown`, which cuts no tail.
+    pub fn from_diagnostics(diagnostics_json: Option<&str>) -> Self {
+        let stored = diagnostics_json
+            .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+            .and_then(|value| value.get("unreadable_at_end").and_then(serde_json::Value::as_bool));
+        match stored {
+            Some(false) => TailEvidence::Clean,
+            Some(true) => TailEvidence::Unreadable,
+            None => TailEvidence::Unknown,
+        }
+    }
+}
+
 /// Where to stop, in video time — the other end of `trim_point_s`.
 ///
 /// A recording brackets the game on both sides. Capture keeps running after
@@ -129,10 +169,17 @@ pub fn trim_point_s(game_starts_at_s: f64) -> Option<f64> {
 /// knows at that instant, and a window that no longer exists captures as
 /// **black** under WGC rather than as a frozen last frame (#119).
 ///
-/// `None` means leave the end alone, and it says so in three cases. Each one
+/// `None` means leave the end alone, and it says so in four cases. Each one
 /// is the same rule the head applies: act on a measured answer, never a
 /// guessed one.
-pub fn tail_point_s(game_ends_at_s: f64, duration_s: f64) -> Option<f64> {
+pub fn tail_point_s(game_ends_at_s: f64, duration_s: f64, evidence: TailEvidence) -> Option<f64> {
+    // **Not known to be post-game** (#305). The last sample bounds the game
+    // only when nothing after it was game; otherwise the gap is measured from
+    // the last *readable* poll, and cutting it would delete video of the
+    // game itself. Whatever made a poll unreadable, it must never cost footage.
+    if evidence != TailEvidence::Clean {
+        return None;
+    }
     let point = game_ends_at_s + TAIL_OUT_S;
     // Already at or past the end — nothing to remove.
     if point >= duration_s {
@@ -140,11 +187,10 @@ pub fn tail_point_s(game_ends_at_s: f64, duration_s: f64) -> Option<f64> {
     }
     // **Not a post-game tail.** One is five to fifteen seconds: five failed
     // polls at 1 Hz, or three times that if the dying game process makes them
-    // time out rather than refuse. A much larger gap means something else —
-    // most likely a stretch where Live Client Data answered with something
-    // the parser could not read, which keeps recording and produces *no
-    // samples*, so real gameplay sits after the last one. Cutting there would
-    // hide the game rather than the black.
+    // time out rather than refuse. A much larger gap means something else
+    // this cannot see — a game paused at the end, or polls that stopped
+    // without saying why. Cutting there would hide the game rather than the
+    // black.
     if duration_s - point > MAX_TAIL_CLIP_S {
         return None;
     }
@@ -250,6 +296,9 @@ pub fn trim_recording(db: &Db, ffmpeg: &Path, recording_id: i64) -> Result<TrimR
         .get_recording(recording_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("no recording {recording_id}"))?;
+    // What the polls saw after the last sample, stored by the finalize. The
+    // post-game tail is cut only when it is `Clean` (#305).
+    let evidence = TailEvidence::from_diagnostics(row.diagnostics_json.as_deref());
 
     // The same number the player uses, from the same place: a sample carries
     // both a game clock and a video clock, and the gap between them is the
@@ -271,7 +320,16 @@ pub fn trim_recording(db: &Db, ffmpeg: &Path, recording_id: i64) -> Result<TrimR
     let tail = db
         .last_sample_video_time_s(recording_id)
         .map_err(|e| e.to_string())?
-        .and_then(|game_ends_at| tail_point_s(game_ends_at, before));
+        .and_then(|game_ends_at| tail_point_s(game_ends_at, before, evidence));
+    // The one refusal worth a line: it is the answer to "why does this VOD end
+    // on the end screen", and the evidence behind it exists nowhere else.
+    if evidence == TailEvidence::Unreadable {
+        info!(
+            "trim",
+            "keeping the end of recording {recording_id}: the Live Client poll was \
+             unreadable after the last sample, so that stretch is game, not post-game"
+        );
+    }
 
     if head.is_none() && tail.is_none() {
         return Err(format!(
@@ -409,7 +467,7 @@ mod tests {
     fn the_tail_is_cut_when_there_is_a_real_one() {
         // Game ends at 1500s in a 1520s file: 20s of black, all of it cut.
         // The cut lands on the last reported moment, with no margin after it.
-        assert_eq!(tail_point_s(1500.0, 1520.0), Some(1500.0));
+        assert_eq!(tail_point_s(1500.0, 1520.0, TailEvidence::Clean), Some(1500.0));
     }
 
     /// Each refusal falls back to keeping the whole file, never to a guess —
@@ -417,16 +475,58 @@ mod tests {
     #[test]
     fn the_tail_is_left_alone_when_the_answer_is_not_measured() {
         // Already at or past the end: nothing to remove.
-        assert_eq!(tail_point_s(1500.0, 1500.0), None);
+        assert_eq!(tail_point_s(1500.0, 1500.0, TailEvidence::Clean), None);
         // Below the rewrite threshold: not worth a gigabyte of I/O for two
         // seconds. This is now the only thing keeping a short tail — the
         // margin used to absorb it.
-        assert_eq!(tail_point_s(1500.0, 1502.0), None);
+        assert_eq!(tail_point_s(1500.0, 1502.0, TailEvidence::Clean), None);
         // **Not a post-game tail.** A real one is 5-15s. A gap this wide
-        // means something else — most likely a stretch of Live Client Data
-        // the parser could not read, which keeps recording and produces no
-        // samples, so real gameplay sits after the last one.
-        assert_eq!(tail_point_s(1500.0, 1600.0), None);
+        // means something this cannot see, and the video is kept.
+        assert_eq!(tail_point_s(1500.0, 1600.0, TailEvidence::Clean), None);
+    }
+
+    /// #305, as it happened: the poll became unreadable 36.5s into a 79.8s
+    /// file and stayed that way until the game ended. The last sample was at
+    /// 36.5s, the gap was under the 60s cap, and 43.3s of real gameplay were
+    /// cut as "post-game". An unreadable poll after the last sample means the
+    /// gap is game, so nothing comes off the end.
+    #[test]
+    fn polls_unreadable_at_the_end_cut_no_tail() {
+        assert_eq!(tail_point_s(36.5, 79.8, TailEvidence::Unreadable), None);
+        // However short the gap: the rule is about what it is, not its size.
+        assert_eq!(tail_point_s(1500.0, 1520.0, TailEvidence::Unreadable), None);
+    }
+
+    /// A recording with no record of its last polls — made before they were
+    /// stored, or imported by a rescan — is not known to end in post-game,
+    /// so its tail stays.
+    #[test]
+    fn an_unknown_end_cuts_no_tail() {
+        assert_eq!(tail_point_s(1500.0, 1520.0, TailEvidence::Unknown), None);
+    }
+
+    /// The finalize stores the answer in the diagnostics; anything that
+    /// cannot say `false` there is not a clean end.
+    #[test]
+    fn the_evidence_is_read_from_the_stored_diagnostics() {
+        let read = |json: &str| TailEvidence::from_diagnostics(Some(json));
+        assert_eq!(read(r#"{"polls":80,"unreadable_at_end":false}"#), TailEvidence::Clean);
+        assert_eq!(
+            read(r#"{"polls":38,"unreadable_polls":42,"unreadable_at_end":true}"#),
+            TailEvidence::Unreadable
+        );
+        // A row from before #305, one with no diagnostics, and a broken blob.
+        assert_eq!(read(r#"{"polls":80}"#), TailEvidence::Unknown);
+        assert_eq!(TailEvidence::from_diagnostics(None), TailEvidence::Unknown);
+        assert_eq!(read("not json"), TailEvidence::Unknown);
+    }
+
+    /// The same gap as #305 with a clean end — the endpoint went away, or
+    /// said there was no game — is the end screen and is cut as before.
+    #[test]
+    fn a_clean_end_cuts_the_tail_as_before() {
+        assert_eq!(tail_point_s(36.5, 79.8, TailEvidence::Clean), Some(36.5));
+        assert_eq!(tail_point_s(1500.0, 1512.0, TailEvidence::Clean), Some(1500.0));
     }
 
     /// The two halves must stay separable: markers rebase by what came off

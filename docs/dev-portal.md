@@ -236,7 +236,10 @@ command is for the recordings made before it did, and for re-running one by
 hand where the finalize skipped it: a build with no ffmpeg, or a file still
 being written when it reached for it. It is a no-op on anything already
 trimmed: the rebase moved the samples with the file, so the measured loading
-screen is then under the floor.
+screen is then under the floor. The post-game tail follows the stored
+diagnostics exactly as the finalize's trim does: it comes off only when
+`unreadable_at_end` is `false`, so a recording from before that field existed
+keeps its end (#305).
 
 What keeps the shared path from being reckless:
 

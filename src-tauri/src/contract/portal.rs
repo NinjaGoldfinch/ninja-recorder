@@ -520,7 +520,7 @@ macro_rules! dev_rpc_command_table {
             { name: "enabled", kind: "boolean", default: "True", help: "", optional: false },
         ],
     }
-    /// Cuts the loading screen off a recording's file and rebases its markers and samples onto what is left. Finalize already does this; the command is for recordings made before it did, or one it skipped. A no-op on anything already trimmed.
+    /// Cuts the loading screen off a recording's file and rebases its markers and samples onto what is left. Finalize already does this; the command is for recordings made before it did, or one it skipped. A no-op on anything already trimmed. The post-game tail comes off only when the diagnostics say the polls ended readably, so a recording from before that was stored keeps its end.
     dev_trim_lead_in {
         group: "Dev · Tools",
         danger: true,

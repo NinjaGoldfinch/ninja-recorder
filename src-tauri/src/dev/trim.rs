@@ -8,6 +8,10 @@
 //! It is a no-op on anything already trimmed: the rebase moved the samples
 //! with the file, so the measured loading screen is then under the floor and
 //! `trim_point_s` returns `None`.
+//!
+//! The post-game tail follows the stored diagnostics exactly as the finalize's
+//! trim does (`trim::TailEvidence`, #305): a recording from before they said
+//! how its polls ended is not known to end in post-game, and keeps its end.
 
 use crate::trim::{trim_recording, TrimReport};
 

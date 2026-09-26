@@ -583,12 +583,13 @@ between them is the loading screen, and the last sample is the last thing the
 game reported. No column, no migration, and it works on recordings made long
 before this existed.
 
-**Three ways it declines to clip the tail**, each falling back to the end of
+**Four ways it declines to clip the tail**, each falling back to the end of
 the file rather than to a guess:
 
 | Condition | Why |
 |---|---|
 | No samples | A rescan import, or a game whose poller never came up. Nothing knows where its game ended |
+| The diagnostics say `unreadable_at_end` | The Live Client poll answered with something unreadable after the last sample (#305), so what follows it is game, not the post-game screen. `review.svelte.ts` passes no game end at all (`unreadableAtEnd` in `timeline/window.ts`). A row that does not say keeps the old window |
 | Tail shorter than `MIN_TRIM_S` (3 s) | Not worth rewriting a gigabyte for. The tail margin is zero (DEVELOPMENT.md §5.4), so this is the only thing that keeps a short one |
 | Gap wider than `MAX_TAIL_CLIP_S` (60 s) | Not a post-game tail. A stretch of unreadable Live Client Data responses keeps recording and produces *no samples*, so real gameplay would sit after the last one, and cutting there would hide the game |
 
@@ -1379,7 +1380,7 @@ without a DOM.
 
 | Module | What it owns |
 |---|---|
-| `timeline/window.ts` | which slice of the file is the game: the lead-in skip, the tail clip and its three refusals, and every fraction drawn along the timeline |
+| `timeline/window.ts` | which slice of the file is the game: the lead-in skip, the tail clip and its four refusals (one of them a recording whose polls were unreadable at the end, #305), and every fraction drawn along the timeline |
 | `timeline/clusters.ts` | markers too close together to draw separately, and which icon a cluster shows |
 | `timeline/graph.ts` | the advantage curve's max-abs downsampling, and the ruler's tick spacing |
 | `timeline/stem.ts` | whether a drifting audio stem is nudged back or seeked |

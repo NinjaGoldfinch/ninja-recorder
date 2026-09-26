@@ -1507,6 +1507,41 @@ than 60 s, which is not a post-game tail, since one is five to fifteen
 seconds. That is the same rule `trim.rs` applies to the head: act on a measured
 answer, never on a guessed one, and when the numbers do not agree, do nothing.
 
+**The 60 s cap was not enough, and #305 is why.** An unreadable stretch that
+starts less than a minute before the game ends looks exactly like a post-game
+tail by size: a Practice Tool game became unreadable 38 s in, ran another
+43 s, and the trim cut all 43 s of it as "post-game". The size of the gap
+cannot tell the two apart, so the decision now needs **evidence that the gap
+is bounded by the game ending**, not just a gap of the right size.
+
+The evidence is the one thing only the poller sees: whether anything answered
+unreadably *after the last sample*. The supervisor marks the session on every
+unreadable response (a 404 does not count: that is the API saying there is no
+game, which is an end signal) and clears the mark on every new sample, and the
+finalize stores it as `RecordingDiagnostics::unreadable_at_end`. The trim
+(`trim::TailEvidence`) cuts a tail only when that is `false`: the endpoint
+went away, or said the game was over, or answered with a stopped clock, and
+nothing after the last sample could have been game. When it is `true` the tail
+stays whatever its size, and the review player does not clip it either. When
+it is absent, on a row from before it was stored, the trim reads it as "not
+known" and cuts no tail, while the player keeps the window it always had,
+because those recordings were already trimmed at finalize and changing their
+window now would only make them end on black.
+
+**Why the diagnostics blob and not a column or an argument.** The evidence has
+to reach two readers, the trim (including `dev_trim_lead_in`, which runs
+long after the session is gone) and the player, and `diagnostics_json` is
+already the place a finalize records what it observed and cannot be derived
+afterwards (docs/data-model.md). A column would be a migration for a value
+nothing filters on; passing it to the trim as an argument would leave the
+player and the dev command without it.
+
+The parser side of #305 is §3.2's concern and is covered in
+[docs/recording-pipeline.md](docs/recording-pipeline.md): every list in a
+snapshot is now lenient, so the stretch this guards against should be rare.
+This rule does not depend on that. Whatever makes a poll unreadable, it must
+not delete video.
+
 The file is cut at both ends too, in **one pass**. `-ss` for the front and
 `-t` for the length, a duration rather than `-to`, because with `-ss` ahead
 of `-i` the output timeline restarts at zero and a stop *time* would be
