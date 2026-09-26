@@ -275,6 +275,26 @@ pub struct RecordingDiagnostics {
     /// not diagnosable without. `None` off Windows, and on older rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub windows_build: Option<u32>,
+
+    /// Polls the endpoint answered but that could not be read as a snapshot
+    /// (#305). Not counted in `polls`. Left out when zero, so a clean
+    /// recording's JSON is what it always was.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub unreadable_polls: usize,
+    /// Whether an unreadable poll came **after the last sample** (#305):
+    /// whether the stretch from the last sample to the end of the file was
+    /// still game, rather than the post-game screen it otherwise looks like.
+    ///
+    /// The trim cuts a post-game tail only on `Some(false)`
+    /// (`trim::TailEvidence`), and the player does not clip one on
+    /// `Some(true)`. `None` is a row from before this existed, or a recording
+    /// that never polled at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unreadable_at_end: Option<bool>,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 struct RecordingSession {
@@ -310,6 +330,18 @@ struct RecordingSession {
     /// `allPlayers` at all. Overwriting with one of those would trade a
     /// real scoreboard for the absence of one.
     scoreboard: Option<live_client::Scoreboard>,
+    /// Whether the endpoint answered with something unreadable after the
+    /// last sample was taken (#305).
+    ///
+    /// Set by every unreadable response and cleared by every new sample, so
+    /// at finalize it says whether the stretch between the last sample and
+    /// the end of the file was *game*. Stored as
+    /// `RecordingDiagnostics::unreadable_at_end`, which the trim reads:
+    /// without it, that stretch looks exactly like the post-game screen and
+    /// is cut off.
+    unreadable_since_sample: bool,
+    /// Every unreadable poll while recording, for the diagnostics.
+    unreadable_polls: usize,
     /// Diagnostic counters, for `RecordingDiagnostics` at finalize.
     polls: usize,
     first_game_time_s: Option<f64>,
@@ -675,6 +707,7 @@ impl Supervisor {
     /// Sent *after* the markers and samples are in, because the trim is
     /// expressed as a rebase of exactly those rows — the same path
     /// `dev_trim_lead_in` takes for a recording made before this existed.
+    /// The diagnostics are in too, and the tail cut reads them (#305).
     fn request_trim(&self, recording_id: i64) {
         if let Some(request) = self.trim_requester.lock().unwrap().as_ref() {
             request(recording_id);
@@ -1016,6 +1049,10 @@ impl Supervisor {
                 },
                 {
                     let sup = Arc::clone(&sup);
+                    move || sup.on_unreadable_poll()
+                },
+                {
+                    let sup = Arc::clone(&sup);
                     move || sup.dispatch(StateEvent::LiveClientDown)
                 },
             )
@@ -1058,6 +1095,11 @@ impl Supervisor {
         let samples_before = session.samples.len();
         let added = session.ingest(&snapshot, elapsed_s);
         let new_sample = session.sample_added_since(samples_before);
+        // A sample after an unreadable stretch moves the last known moment of
+        // the game past it, so the stretch no longer sits in the tail (#305).
+        if new_sample.is_some() {
+            session.unreadable_since_sample = false;
+        }
         // The identity is fetched once per game by a task that races the
         // first polls, so it is picked up here rather than at `start`, and
         // absorbed rather than assigned: a client that drops out later must
@@ -1190,6 +1232,17 @@ impl Supervisor {
         }
     }
 
+    /// Every poll the endpoint answered but that could not be read as a
+    /// snapshot (#305). The game is alive, so nothing ends; what changes is
+    /// that the recording's tail after the last sample is now known to be
+    /// game, which the finalize stores for the trim and the player.
+    fn on_unreadable_poll(&self) {
+        if let Some(session) = self.session.lock().unwrap().as_mut() {
+            session.unreadable_since_sample = true;
+            session.unreadable_polls += 1;
+        }
+    }
+
     /// Executes `Action::StartRecording`. The state machine has already
     /// optimistically transitioned to `Recording` by the time this runs —
     /// if `Recorder::start` fails here (only reachable today via the dev
@@ -1297,6 +1350,8 @@ impl Supervisor {
                     align: AlignmentTracker::new(),
                     live: LiveSummary::default(),
                     scoreboard: None,
+                    unreadable_since_sample: false,
+                    unreadable_polls: 0,
                     polls: 0,
                     first_game_time_s: None,
                     last_game_time_s: None,
@@ -1453,6 +1508,8 @@ impl Supervisor {
                     samples: samples.len(),
                     capture_problems: problems.clone(),
                     windows_build,
+                    unreadable_polls: session.as_ref().map_or(0, |s| s.unreadable_polls),
+                    unreadable_at_end: session.as_ref().map(|s| s.unreadable_since_sample),
                 };
                 let diagnostics_json = match serde_json::to_string(&diagnostics) {
                     Ok(json) => Some(json),
@@ -2205,6 +2262,8 @@ mod tests {
             align: AlignmentTracker::new(),
             live: LiveSummary::default(),
             scoreboard: None,
+            unreadable_since_sample: false,
+            unreadable_polls: 0,
             polls: 0,
             first_game_time_s: None,
             last_game_time_s: None,
@@ -2570,6 +2629,14 @@ mod tests {
         let d: RecordingDiagnostics = serde_json::from_str(old).unwrap();
         assert!(d.capture_problems.is_empty());
         assert_eq!(d.windows_build, None);
+        // Nor the #305 pair, and "not known" is what it reads as: not a clean
+        // end, which would let the trim cut a tail nobody measured.
+        assert_eq!(d.unreadable_polls, 0);
+        assert_eq!(d.unreadable_at_end, None);
+        assert_eq!(
+            crate::trim::TailEvidence::from_diagnostics(Some(old)),
+            crate::trim::TailEvidence::Unknown
+        );
     }
 
     /// A start the backend refuses is a toast naming the build, and a
@@ -2628,6 +2695,74 @@ mod tests {
         assert_eq!(rows[0].game_mode.as_deref(), Some("CLASSIC"));
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- The trim hears how the polls ended (#305) ------------------------
+
+    /// Drives one recording through `polls` and returns what its stored
+    /// diagnostics tell the trim about its end.
+    fn tail_evidence_after(
+        polls: impl Fn(&Arc<Supervisor>),
+    ) -> (crate::trim::TailEvidence, RecordingDiagnostics) {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+        polls(&sup);
+        sup.stop_recording();
+        std::fs::remove_dir_all(&dir).ok();
+
+        let row = &sup.db.list_recordings().unwrap()[0];
+        let tail = crate::trim::TailEvidence::from_diagnostics(row.diagnostics_json.as_deref());
+        (tail, diagnostics_of(&sup))
+    }
+
+    /// #305 as it happened: the polls went unreadable mid-game and stayed
+    /// that way to the end. The stretch after the last sample is game, and
+    /// the trim is told so.
+    #[test]
+    fn unreadable_polls_at_the_end_reach_the_trim() {
+        let (tail, diagnostics) = tail_evidence_after(|sup| {
+            sup.on_snapshot(snapshot(10.0, &[]));
+            sup.on_snapshot(snapshot(11.0, &[]));
+            sup.on_unreadable_poll();
+            sup.on_unreadable_poll();
+        });
+        assert_eq!(tail, crate::trim::TailEvidence::Unreadable);
+        assert_eq!(diagnostics.unreadable_polls, 2);
+        assert_eq!(diagnostics.unreadable_at_end, Some(true));
+    }
+
+    /// A readable sample after an unreadable stretch moves the end of the
+    /// game past it, so the tail is clean again.
+    #[test]
+    fn a_sample_after_unreadable_polls_clears_them() {
+        let (tail, _) = tail_evidence_after(|sup| {
+            sup.on_snapshot(snapshot(10.0, &[]));
+            sup.on_unreadable_poll();
+            sup.on_snapshot(snapshot(12.0, &[]));
+        });
+        assert_eq!(tail, crate::trim::TailEvidence::Clean);
+    }
+
+    /// A readable poll whose clock has stopped — the end-of-game screen —
+    /// takes no sample, so it cannot clear an unreadable stretch before it.
+    #[test]
+    fn a_frozen_clock_does_not_clear_unreadable_polls() {
+        let (tail, _) = tail_evidence_after(|sup| {
+            sup.on_snapshot(snapshot(10.0, &[]));
+            sup.on_unreadable_poll();
+            sup.on_snapshot(snapshot(10.0, &[]));
+        });
+        assert_eq!(tail, crate::trim::TailEvidence::Unreadable);
+    }
+
+    /// The ordinary game: every poll read, then the endpoint went away.
+    #[test]
+    fn a_clean_game_reaches_the_trim_as_clean() {
+        let (tail, _) = tail_evidence_after(|sup| {
+            sup.on_snapshot(snapshot(10.0, &[]));
+            sup.on_snapshot(snapshot(11.0, &[]));
+        });
+        assert_eq!(tail, crate::trim::TailEvidence::Clean);
     }
 
     // --- A killed daemon keeps its markers (#150) -------------------------

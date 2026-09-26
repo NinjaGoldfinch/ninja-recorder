@@ -65,6 +65,11 @@ tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Names the JSON path a Live Client Data response failed to parse at (#305).
+# serde_json alone says "line 237 column 12", which is a position in a
+# response nobody kept; the path says which field. dtolnay's, MIT/Apache-2.0,
+# and depends on nothing but serde.
+serde_path_to_error = "0.1"
 # TypeScript declarations for every type that crosses the IPC boundary (WS2.2).
 #
 # `serde-compat` is on by default and is the point: several of these types carry
