@@ -26,8 +26,6 @@
 //! - [`client`] — the daemon's side: the child, its job object and its pipes.
 
 pub mod client;
-#[cfg(target_os = "windows")]
-mod job;
 pub mod lifetime;
 pub mod protocol;
 pub mod serve;

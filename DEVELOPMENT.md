@@ -908,6 +908,21 @@ markers. A poll that does not move the game clock still writes nothing:
 run of points through the graph, and the live write skips precisely the polls
 `ingest` did.
 
+**Recovery does not touch a file something still has open** (#307). A daemon
+killed mid-game could leave its capture worker running, and the next daemon's
+recovery treated the file that worker was still writing as a torn one: it cut
+4.36 MB of live footage off the end as a "torn tail", then failed the remux's
+replace with "Access is denied" and left a 181 MB temp file behind. Both
+workers now die with the daemon (§12), but a job's kill is asynchronous and a
+build without the job leaves its worker anyway, so recovery opens each file
+exclusively first (`share_mode(0)`), retries for up to ten seconds, and if
+something still holds it, leaves the row unfinished for the next start rather
+than finishing it from a file that has not stopped changing. Ten seconds is
+long enough for a worker in a closing job and short enough to spend before the
+daemon can record; it is only spent at all when something is holding a file.
+A failed remux now deletes its temp file on every path, the replace included,
+and the folder scan deletes any remux temp file nothing is writing.
+
 ### 4.4 Decision: the library is the first view to cross, and it crosses whole
 
 WS4 is a strangler, so each task moves one view and deletes its vanilla
@@ -2281,6 +2296,21 @@ the daemon ends (a crash, Task Manager, the installer), the handle closes and
 Windows ends the worker. There is a moment between the spawn and the assignment
 when the worker is not yet in the job; EOF covers it, because a dead daemon's
 end of the stdin pipe closes too. The worker is spawned with `CREATE_NO_WINDOW`.
+
+**The libobs worker is in one too, found rather than handed over** (#307). It
+was not, and on the box a daemon force-killed mid-game left
+`extprocess_recorder.exe` recording: EOF did not stop it, because a libobs
+worker busy recording never reads its stdin. The next daemon's recovery then
+repaired a file that was still growing. The fork spawns that worker inside
+`ipc-link` and keeps its `Child` private, so the daemon lists its own children
+named `extprocess_recorder.exe` before bringing the fork up and again after,
+and puts the one that appeared in a kill-on-close job
+(`recorder::job::new_children`, pure). Assigning the daemon itself to a job
+instead was rejected: closing it would take every other child, and the daemon,
+with it. Exposing the child from the fork would be tidier and is not worth a
+fork release while WS8 is deleting the fork. Either way a failure is a warning,
+never a refused recording, and the job is closed only after the worker has been
+asked to shut down.
 
 **A dead worker never takes the daemon with it.** Every call has a timeout
 (replies are read on a thread and handed over on a channel), and every failure
