@@ -128,6 +128,17 @@ pub enum DaemonError {
 /// with a floor, not a timeout.
 const GOODBYE_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
 
+/// How long a clean stop waits for the capture backend to release its worker
+/// before the process exits anyway (#293).
+///
+/// A bound on the exit, not on the worker: the backend keeps its own
+/// timeouts, and a release still running when this runs out is left behind.
+/// The process then exits, its job object closes, and the worker is killed,
+/// which is how every clean stop ended before this existed. An idle worker
+/// answers `Release` in well under a second, and a recording in flight has
+/// been finalized before this is asked.
+const RELEASE_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Everything the UI would ask an `AppHandle` for.
 ///
 /// Resolved once, at startup, and then owned — the same shape `Ctx` already
@@ -790,7 +801,54 @@ async fn finish(ctx: &Arc<core::Ctx>, events: &snapshot::Stream, reason: Shutdow
     if finalized {
         info!("daemon", "finalized an in-flight recording before exiting");
     }
+
+    // **Release the capture backend rather than leaving its worker to the job
+    // object** (#293). Both backends' workers sit in a kill-on-close job this
+    // process owns, so exiting without this ends them anyway, but as a kill:
+    // the worker never runs its own `Release`, and the logs cannot tell a
+    // clean quit from a crash. `release` sends the worker `Release` and waits
+    // for it to exit on its own, as it does when the League client closes; the
+    // job stays as the backstop for a worker that will not go.
+    //
+    // After the finalize, because `release` is a no-op while recording.
+    if !release_before_exit(Arc::clone(&ctx.recorder), RELEASE_GRACE) {
+        warn!(
+            "daemon",
+            "the capture backend did not release within {RELEASE_GRACE:?}; exiting anyway, \
+             and the job object ends its worker"
+        );
+    }
     info!("daemon", "stopped");
+}
+
+/// Releases `recorder` on a thread of its own and waits up to `grace` for it:
+/// `true` if the release finished in time.
+///
+/// A plain thread rather than `spawn_blocking`, because dropping the runtime
+/// waits for every blocking task: a release that outlived `grace` there would
+/// hold the process open for as long as it liked, which is what the bound is
+/// for. A thread still running when `main` returns is not waited for.
+fn release_before_exit(
+    recorder: Arc<Mutex<Box<dyn Recorder>>>,
+    grace: std::time::Duration,
+) -> bool {
+    let (done, finished) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new()
+        .name("release-on-exit".to_string())
+        .spawn(move || {
+            match recorder.lock() {
+                Ok(mut backend) => backend.release(),
+                Err(e) => warn!("daemon", "could not release the capture backend: {e}"),
+            }
+            let _ = done.send(());
+        });
+    match spawned {
+        Ok(_) => finished.recv_timeout(grace).is_ok(),
+        Err(e) => {
+            warn!("daemon", "could not start a thread to release the capture backend: {e}");
+            false
+        }
+    }
 }
 
 /// Serves clients until something asks the process to stop.
@@ -1058,5 +1116,56 @@ mod tests {
                 path.display()
             );
         }
+    }
+
+    /// A recorder that only answers `release`: after `delay`, then telling
+    /// `released`.
+    struct Releasing {
+        delay: std::time::Duration,
+        released: std::sync::mpsc::Sender<()>,
+    }
+
+    impl Recorder for Releasing {
+        fn start(&mut self, _: crate::recorder::RecordConfig) -> Result<(), crate::recorder::RecorderError> {
+            unreachable!("nothing here records")
+        }
+        fn stop(&mut self) -> Result<crate::recorder::RecordingOutput, crate::recorder::RecorderError> {
+            unreachable!("nor stops")
+        }
+        fn is_recording(&self) -> bool {
+            false
+        }
+        fn backend_name(&self) -> String {
+            "releasing".to_string()
+        }
+        fn release(&mut self) {
+            std::thread::sleep(self.delay);
+            let _ = self.released.send(());
+        }
+    }
+
+    fn releasing(delay: std::time::Duration) -> (Arc<Mutex<Box<dyn Recorder>>>, std::sync::mpsc::Receiver<()>) {
+        let (released, heard) = std::sync::mpsc::channel();
+        let recorder: Box<dyn Recorder> = Box::new(Releasing { delay, released });
+        (Arc::new(Mutex::new(recorder)), heard)
+    }
+
+    /// A clean stop releases the backend, which is what sends its worker
+    /// `Release` instead of leaving it to the job object's kill (#293).
+    #[test]
+    fn a_clean_stop_releases_the_capture_backend() {
+        let (recorder, heard) = releasing(std::time::Duration::ZERO);
+        assert!(release_before_exit(recorder, std::time::Duration::from_secs(5)));
+        heard.try_recv().expect("release was never called");
+    }
+
+    /// A release that will not finish does not hold the exit: the daemon
+    /// gives up at the grace, and the job object is left to end the worker.
+    #[test]
+    fn a_release_that_hangs_does_not_hold_the_exit() {
+        let (recorder, _heard) = releasing(std::time::Duration::from_secs(30));
+        let started = std::time::Instant::now();
+        assert!(!release_before_exit(recorder, std::time::Duration::from_millis(100)));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "waited for the release");
     }
 }
