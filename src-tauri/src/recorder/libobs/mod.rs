@@ -272,7 +272,7 @@ impl Recorder for LibObsRecorder {
 
         // libobs reports no per-source failures: its fork logs them and
         // records on (`recorder::problem` is the own backend's so far).
-        Ok(RecordingOutput { path, audio, problems: Vec::new() })
+        Ok(RecordingOutput { path, audio, problems: Vec::new(), duration_s: None })
     }
 
     fn is_recording(&self) -> bool {

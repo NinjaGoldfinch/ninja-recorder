@@ -29,6 +29,12 @@ pub mod stub;
 use audio::{AudioLayout, AudioPreset};
 pub use problem::CaptureProblem;
 use std::path::PathBuf;
+use std::sync::Arc;
+
+/// Called by a backend, from whatever thread noticed, when the recording in
+/// flight may have lost its capture: see `Recorder::watch_capture`. Must
+/// return at once, and must not take the recorder lock itself.
+pub type CaptureWatch = Arc<dyn Fn() + Send + Sync>;
 
 /// Parameters for a single recording. Still minimal: resolution and encoder
 /// are the backend's business, not the caller's. Audio is the exception —
@@ -84,6 +90,13 @@ pub struct RecordingOutput {
     /// not there (Discord not running), which is not a failure. The
     /// supervisor stores these with the row and tells the user (`problem`).
     pub problems: Vec<CaptureProblem>,
+    /// The file's own length, in seconds, when the backend knows the
+    /// recording stopped before `stop` was called (a capture worker that
+    /// died, a recording that ended on its own) and could read it. The
+    /// supervisor stores this in place of the time between `start` and
+    /// `stop`, which would count the minutes nothing was recorded (#299).
+    /// `None` for a clean stop, where the two agree.
+    pub duration_s: Option<f64>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -136,10 +149,36 @@ pub trait Recorder: Send {
     /// for a backend that has no worker (the stub, a `FailedRecorder`).
     ///
     /// As of the last call the backend handled. A worker that died since is
-    /// noticed on the next `prepare`, `start` or `stop`, not here, because
-    /// this takes `&self` and must not wait on anything: the dev portal
-    /// asks it once a second, under the recorder lock.
+    /// noticed by `capture_lost` (at once, mid-recording) or on the next
+    /// `prepare`, `start` or `stop`, not here, because this takes `&self` and
+    /// must not wait on anything: the dev portal asks it once a second,
+    /// under the recorder lock.
     fn worker_running(&self) -> Option<bool> {
+        None
+    }
+
+    /// Hands the backend something to call the moment it notices that the
+    /// recording in flight may have lost its capture: for the own backend,
+    /// the capture worker's pipe closing (#299). The supervisor installs it
+    /// before every `start`, and on a call asks `capture_lost` under the
+    /// recorder lock, so a call that turns out to mean nothing (a worker
+    /// ending because it was released) costs nothing.
+    ///
+    /// Default no-op: a backend that cannot lose its capture mid-recording,
+    /// or cannot tell, never calls it, and the recording ends at `stop` as
+    /// it always did.
+    fn watch_capture(&mut self, _watch: CaptureWatch) {}
+
+    /// Whether the recording in flight has lost its capture: `Some` with how,
+    /// **once** per recording, and `None` otherwise (nothing recording, a
+    /// capture that is fine, or a loss already reported). The supervisor
+    /// then stops the recording at once, rather than at the end of the game
+    /// (`StateEvent::CaptureLost`).
+    ///
+    /// Must not wait on anything for long: it is asked under the recorder
+    /// lock, from the watch above and from the Live Client poll. Default
+    /// `None`.
+    fn capture_lost(&mut self) -> Option<String> {
         None
     }
 

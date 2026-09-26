@@ -511,6 +511,16 @@ async fn start(paths: Paths) -> Result<Option<Started>, DaemonError> {
     if log_file.is_none() {
         eprintln!("[log] could not open a log file; this session logs to stderr only");
     }
+    // A panic on any thread goes into `daemon.log` as well as to stderr, which
+    // a release build has nowhere to put. Without this a thread that panics
+    // (#299's resume did, in a callback outside the runtime) leaves the daemon
+    // quietly doing less, and the log simply stops.
+    let report = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic| {
+        let thread = std::thread::current();
+        error!("daemon", "thread '{}' panicked: {panic}", thread.name().unwrap_or("unnamed"));
+        report(panic);
+    }));
 
     let endpoint = rpc::endpoint(&paths.data);
     let listener = match rpc::Listener::bind(&endpoint) {
@@ -828,20 +838,29 @@ async fn accept_until_shutdown(
 /// Each must return immediately: they are called from inside `stop_recording`,
 /// under the recorder lock, where blocking would hold up the 1 Hz status poll
 /// and the start of the next game.
+///
+/// **And each spawns through a handle taken here, never `tokio::spawn`.** A
+/// finalize is not always on the runtime: the one a lost capture triggers
+/// (#299) runs on a plain thread, where `tokio::spawn` panics for want of a
+/// runtime, under the recorder lock, poisoning it. That is how the first
+/// build of #299's resume stopped dead after the first recording. Must be
+/// called on the runtime, as `start` does.
 fn wire_finalize_work(
     supervisor: &Arc<state_machine::Supervisor>,
     events: &snapshot::Stream,
     db: &Arc<db::Db>,
     ffmpeg: Option<PathBuf>,
 ) {
+    let runtime = tokio::runtime::Handle::current();
     if let Some(ffmpeg) = ffmpeg {
         let db = Arc::clone(db);
         let events = events.clone();
+        let runtime = runtime.clone();
         supervisor.set_trim_requester(Box::new(move |recording_id| {
             let db = Arc::clone(&db);
             let ffmpeg = ffmpeg.clone();
             let events = events.clone();
-            tokio::task::spawn_blocking(move || match trim::trim_recording(&db, &ffmpeg, recording_id) {
+            runtime.spawn_blocking(move || match trim::trim_recording(&db, &ffmpeg, recording_id) {
                 Ok(report) => {
                     // `head_removed_s` is a *measured* difference rather than a
                     // decision, so a recording that began at or after the game
@@ -880,10 +899,11 @@ fn wire_finalize_work(
     {
         let db = Arc::clone(db);
         let events = events.clone();
+        let runtime = runtime.clone();
         supervisor.set_summary_resumer(Box::new(move |lockfile| {
             let db = Arc::clone(&db);
             let events = events.clone();
-            tokio::spawn(async move {
+            runtime.spawn(async move {
                 let now_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as i64)
@@ -903,7 +923,7 @@ fn wire_finalize_work(
         supervisor.set_summary_fetcher(Box::new(move |request| {
             let db = Arc::clone(&db);
             let events = events.clone();
-            tokio::spawn(async move {
+            runtime.spawn(async move {
                 if match_summary::patch(&db, &request).await {
                     // Nothing else will say so: the row changed minutes after
                     // the library last looked at it.

@@ -6,7 +6,8 @@
 //! fault inside an encoder MFT (the class of crash #218 fixed in the spike)
 //! kills the worker, not the daemon in the middle of a game. The recording it
 //! was writing is fragmented, so it is playable up to its last fragment, and
-//! the daemon keeps it (`OwnRecorder::stop`).
+//! the daemon keeps it (`OwnRecorder::stop`), as soon as the worker's pipe
+//! closes rather than at the end of the game (#299, `client`).
 //!
 //! **Why not a bin target.** Tauri's bundler installs every bin target this
 //! package builds (CLAUDE.md, "The emitter is not built by default"), so a

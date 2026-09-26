@@ -1214,6 +1214,10 @@ pub struct Repaired {
     pub removed_bytes: u64,
     /// The file already ended in a complete `mfra`; nothing was changed.
     pub already_complete: bool,
+    /// How long what was kept plays, in milliseconds: the longest track's
+    /// end, as `mehd` states it ([`MOVIE_TIMESCALE`]). What the library
+    /// shows for a recording the worker died in (#299).
+    pub duration_ms: u64,
 }
 
 /// Make a killed recording whole: truncate it to its last complete
@@ -1235,6 +1239,7 @@ pub fn repair(path: &Path) -> io::Result<Repaired> {
         kept_bytes: plan.keep,
         removed_bytes: len - plan.keep,
         already_complete: plan.already_complete,
+        duration_ms: plan.duration,
     };
     if plan.already_complete {
         return Ok(report);
@@ -2786,6 +2791,8 @@ mod tests {
             // second keyframe: 1024 samples at 48 kHz is 21.3 ms.
             let duration = be64(&repaired, mehd);
             assert!((4000..4022).contains(&duration), "mehd {duration} ms");
+            // And the report says the same, for the row's duration (#299).
+            assert_eq!(report.duration_ms, duration);
             let json = ffprobe_json(&tools.1, &killed);
             let packets = as_f64(&json["streams"][0]["nb_read_packets"]) as usize;
             assert_eq!(

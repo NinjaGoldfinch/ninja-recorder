@@ -2294,6 +2294,38 @@ logged with its exit code. Then:
   between calls is noticed at the next one and replaced, so a worker that died
   idle does not cost the next game.
 
+**A worker that dies mid-recording is noticed at once, not at the stop**
+(#299). Discovering it at the next call meant the next call was the end of the
+game: the header said Recording for the rest of it, the notice came when the
+game ended, and the card's length was the game's rather than the file's. The
+reply thread already sees EOF the moment the worker's stdout closes, which it
+only does by exiting, so it now says so (`Recorder::watch_capture`), and the
+supervisor asks the recorder (`Recorder::capture_lost`, once per recording) and
+sends `StateEvent::CaptureLost`. That is a transition of its own, `Recording →
+WaitingForGame` with a stop, rather than a reuse of `Finalizing`, because the
+game has not ended: the gameflow watch and the Live Client poll stay up, and
+the next poll starts a fresh worker and a second recording of the rest of the
+game, the way a daemon restarted mid-game resumes one. The first recording is
+repaired and finished by id at once, with the file's own length
+(`RecordingOutput::duration_s`) and an `EndedEarly` problem naming where it
+stopped.
+
+That finalize runs on the async runtime's blocking pool, not on a thread of
+its own. The first build ran it on a plain thread: the daemon's trim and
+summary callbacks called `tokio::spawn`, which panics with no runtime, under
+the recorder lock, and the poisoned lock stopped the resume dead with nothing
+in the log. The callbacks now spawn through a handle captured at startup, the
+daemon logs panics to `daemon.log`, and the check logs whether it is resuming.
+
+The restart is bounded, three per game (`machine::MAX_CAPTURE_RESTARTS`): a
+worker that dies on every first frame would otherwise cost a short file and a
+notification a second for the rest of the game. After the third the poll is
+stopped as well, and the game is waited out in `WaitingForGame`. The two
+recordings of one game share its gameflow identity (game id, queue) and are
+otherwise separate library entries, exactly as the daemon-restart case leaves
+them; how the library should show a game recorded in two parts is not decided
+yet.
+
 **The installer and the updater.** The worker's image name is the main
 executable's, so Tauri's template, which kills `${MAINBINARYNAME}.exe` by name
 before it replaces anything, ends it with the app and the daemon; the devtools

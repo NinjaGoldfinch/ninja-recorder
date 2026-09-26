@@ -92,7 +92,7 @@ pub fn ended(name: &str, reason: &str) -> CaptureProblem {
 
 /// What the daemon heard back from a stop, reduced to what decides whether the
 /// recording ended early.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StopAnswer<'a> {
     /// Stopped when asked, and finalized.
     Clean,
@@ -101,8 +101,10 @@ pub enum StopAnswer<'a> {
     EndedEarly(&'a str),
     /// The worker's finalize failed; the fragments on disk are kept.
     FinalizeFailed(&'a str),
-    /// No answer: the worker died, with why if the daemon saw it go.
-    WorkerGone(Option<&'a str>),
+    /// No answer: the worker died, with why if the daemon saw it go, and
+    /// how far into the recording the file it left reaches, if that could be
+    /// read (#299).
+    WorkerGone { why: Option<&'a str>, at_s: Option<f64> },
 }
 
 /// The problem a stop whose file is being kept amounts to, or `None` for a
@@ -115,10 +117,24 @@ pub fn stop_problem(answer: StopAnswer) -> Option<CaptureProblem> {
         StopAnswer::FinalizeFailed(why) => {
             format!("the file could not be finished ({why}); it plays up to its last fragment")
         }
-        StopAnswer::WorkerGone(Some(why)) => format!("the capture worker stopped: {why}"),
-        StopAnswer::WorkerGone(None) => "the capture worker stopped mid-recording".to_string(),
+        StopAnswer::WorkerGone { why, at_s } => {
+            let at = at_s.map_or_else(|| "mid-recording".to_string(), |s| format!("at {}", clock(s)));
+            match why {
+                Some(why) => format!("the capture worker stopped {at}: {why}"),
+                None => format!("the capture worker stopped {at}"),
+            }
+        }
     };
     Some(CaptureProblem::EndedEarly { reason })
+}
+
+/// `2:58`, or `1:02:03` past the hour: a point in the recording, as the
+/// player's own clock shows it. Seconds are truncated, so the time named is
+/// one the file reaches.
+fn clock(seconds: f64) -> String {
+    let whole = seconds.max(0.0) as u64;
+    let (h, m, s) = (whole / 3600, whole / 60 % 60, whole % 60);
+    if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m}:{s:02}") }
 }
 
 #[cfg(test)]
@@ -224,12 +240,42 @@ mod tests {
             panic!()
         };
         assert!(reason.contains("MF_E_X") && reason.contains("last fragment"), "{reason}");
-        let Some(CaptureProblem::EndedEarly { reason }) =
-            stop_problem(StopAnswer::WorkerGone(Some("capture worker pid 7 exited with code -1073741819")))
-        else {
+        let Some(CaptureProblem::EndedEarly { reason }) = stop_problem(StopAnswer::WorkerGone {
+            why: Some("capture worker pid 7 exited with code -1073741819"),
+            at_s: None,
+        }) else {
             panic!()
         };
         assert!(reason.contains("-1073741819"), "{reason}");
-        assert!(stop_problem(StopAnswer::WorkerGone(None)).is_some());
+        assert!(reason.contains("mid-recording"), "{reason}");
+        assert!(stop_problem(StopAnswer::WorkerGone { why: None, at_s: None }).is_some());
+    }
+
+    /// A worker that died says where the file it left ends (#299), which is
+    /// where the recording stopped.
+    #[test]
+    fn a_dead_worker_says_where_the_recording_stopped() {
+        let Some(CaptureProblem::EndedEarly { reason }) = stop_problem(StopAnswer::WorkerGone {
+            why: Some("capture worker pid 7 exited with code 1"),
+            at_s: Some(178.9),
+        }) else {
+            panic!()
+        };
+        assert_eq!(reason, "the capture worker stopped at 2:58: capture worker pid 7 exited with code 1");
+        let Some(CaptureProblem::EndedEarly { reason }) =
+            stop_problem(StopAnswer::WorkerGone { why: None, at_s: Some(3723.0) })
+        else {
+            panic!()
+        };
+        assert_eq!(reason, "the capture worker stopped at 1:02:03");
+    }
+
+    #[test]
+    fn the_clock_reads_like_the_players() {
+        assert_eq!(clock(0.0), "0:00");
+        assert_eq!(clock(59.99), "0:59");
+        assert_eq!(clock(206.0), "3:26");
+        assert_eq!(clock(3600.0), "1:00:00");
+        assert_eq!(clock(-1.0), "0:00");
     }
 }
