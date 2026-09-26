@@ -2320,6 +2320,13 @@ repaired and finished by id at once, with the file's own length
 (`RecordingOutput::duration_s`) and an `EndedEarly` problem naming where it
 stopped.
 
+That finalize runs on the async runtime's blocking pool, not on a thread of
+its own. The first build ran it on a plain thread: the daemon's trim and
+summary callbacks called `tokio::spawn`, which panics with no runtime, under
+the recorder lock, and the poisoned lock stopped the resume dead with nothing
+in the log. The callbacks now spawn through a handle captured at startup, the
+daemon logs panics to `daemon.log`, and the check logs whether it is resuming.
+
 The restart is bounded, three per game (`machine::MAX_CAPTURE_RESTARTS`): a
 worker that dies on every first frame would otherwise cost a short file and a
 notification a second for the rest of the game. After the third the poll is
