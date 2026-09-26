@@ -393,11 +393,21 @@ pub struct Fitter {
     /// The last content size seen, for the log.
     last: Option<Size>,
     lines: u32,
+    /// Whether a frame too small to be a picture has been logged yet.
+    tiny_logged: bool,
 }
 
 impl Fitter {
     pub fn new(output: Size) -> Fitter {
-        Fitter { output, staging: None, processor: None, unavailable: None, last: None, lines: 0 }
+        Fitter {
+            output,
+            staging: None,
+            processor: None,
+            unavailable: None,
+            last: None,
+            lines: 0,
+            tiny_logged: false,
+        }
     }
 
     /// A fitter whose video processor has already failed, so a resize takes
@@ -487,8 +497,27 @@ impl Fitter {
     }
 
     /// Logs a change of content size, up to [`SIZE_LINES`] times.
+    ///
+    /// A frame too small to be a picture (`fit::MIN_CONTENT`) is the window
+    /// being minimised or alt-tabbed away from, not a new size: it is logged
+    /// once per recording, does not count against the budget, and does not
+    /// become the size the next frame is compared with, so the window coming
+    /// back at the size it had is not a change either.
     fn note(&mut self, content: Size, placement: Placement) {
-        if self.last == Some(content) || content.is_empty() {
+        if content.is_too_small() {
+            if !self.tiny_logged && !content.is_empty() {
+                self.tiny_logged = true;
+                info!(
+                    "recorder",
+                    "own backend: the game window sent a {}x{} frame (minimised or alt-tabbed \
+                     away); holding the last picture until it has one again (not logged again)",
+                    content.width,
+                    content.height
+                );
+            }
+            return;
+        }
+        if self.last == Some(content) {
             return;
         }
         let first = self.last.is_none();
