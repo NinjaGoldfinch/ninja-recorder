@@ -1009,6 +1009,10 @@ mod tests {
             "!macro NSIS_HOOK_PREINSTALL",
             "!macro NSIS_HOOK_PREUNINSTALL",
             r#"!define NR_WORKER "libobs\extprocess_recorder.exe""#,
+            // The template deletes only the files it bundled, and fails
+            // silently on one the worker still has loaded (#308).
+            "!macro NSIS_HOOK_POSTUNINSTALL",
+            r#"RMDir /r "$INSTDIR\libobs""#,
         ] {
             assert!(hooks.contains(needle), "installer-hooks.nsh lost {needle:?}");
         }
