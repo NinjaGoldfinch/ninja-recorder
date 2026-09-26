@@ -15,6 +15,9 @@ pub mod own;
 // The game window's lookup, shared by both Windows backends.
 #[cfg(target_os = "windows")]
 pub mod window;
+// The kill-on-close job both Windows backends put their worker in (#307).
+// Not behind `cfg`: which PIDs to put in it is pure, and tested everywhere.
+pub mod job;
 // The faststart remux. Not behind a backend's `cfg`: startup recovery
 // remuxes a killed recording whichever backend wrote it.
 pub mod remux;

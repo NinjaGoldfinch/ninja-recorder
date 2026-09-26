@@ -269,11 +269,12 @@ windows = { version = "0.62", features = [
     # `WNDCLASSW`, for the window the own backend's WGC test captures.
     "Win32_Graphics_Gdi",
     # The process table the own backend's process-loopback root is chosen
-    # from (`recorder/own/win/process.rs`, #237), as `spikes/p0c-audio` reads it.
+    # from (`recorder/own/win/process.rs`, #237), as `spikes/p0c-audio` reads it;
+    # and the libobs worker found among the daemon's children (`recorder/job.rs`).
     "Win32_System_Diagnostics_ToolHelp",
-    # The job object the own backend's capture worker runs in, with
+    # The job object both backends' capture workers run in, with
     # kill-on-close, so a daemon that dies takes the worker with it
-    # (`recorder/own/worker/job.rs`, #241).
+    # (`recorder/job.rs`, #241, #307).
     "Win32_System_JobObjects",
 ] }
 # `#[implement]` (the own backend's sample-release callback) expands to

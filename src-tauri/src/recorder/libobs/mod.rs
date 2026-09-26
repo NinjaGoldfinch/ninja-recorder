@@ -62,6 +62,13 @@ pub struct LibObsRecorder {
     /// to the state machine's `ClientRunning` window instead. See
     /// `prepare`/`release`.
     inner: Option<LibObs>,
+    /// The kill-on-close job `inner`'s worker process is in, so a daemon
+    /// that dies, however it dies, takes `extprocess_recorder.exe` with it
+    /// (#307). `None` when the worker could not be found or assigned, which
+    /// costs only that guarantee. Declared after `inner` so that dropping the
+    /// recorder lets `LibObs` shut the worker down politely before the job
+    /// closes on it.
+    job: Option<super::job::Job>,
     /// Kept so `ensure_up` can rebuild `inner` after a `release`.
     extprocess_recorder_path: PathBuf,
     /// Why the last bring-up failed, for `backend_name`. Init failure used
@@ -100,6 +107,7 @@ impl LibObsRecorder {
     pub fn new(extprocess_recorder_path: PathBuf, ffmpeg_path: Option<PathBuf>) -> Self {
         Self {
             inner: None,
+            job: None,
             extprocess_recorder_path,
             last_error: None,
             active_path: None,
@@ -125,10 +133,17 @@ impl LibObsRecorder {
             if let Some(path) = worker_log::redirect_once() {
                 info!("recorder", "libobs output is going to {}", path.display());
             }
+            // The fork spawns the worker and keeps its `Child` to itself, so
+            // it is found in the process table instead: which of the
+            // daemon's children of that name there were before, so the new
+            // one is the one that was not.
+            let image = worker_image_name(&worker);
+            let before = our_workers(&image);
             match LibObs::new_with_paths(Some(worker), None, None, None) {
                 Ok(obs) => {
                     self.last_error = None;
                     self.inner = Some(obs);
+                    self.job = tie_to_daemon(&image, &before);
                 }
                 Err(e) => {
                     let message = e.to_string();
@@ -155,6 +170,9 @@ impl LibObsRecorder {
             // regardless, and we are on our way to idle either way.
             warn!("recorder", "libobs shutdown failed, dropping anyway: {e}");
         }
+        // After the worker is gone, so closing the job kills nothing that
+        // was still wanted; if it somehow is not gone, this is what ends it.
+        self.job = None;
     }
 }
 
@@ -376,6 +394,68 @@ fn to_obs_tracks(layout: &AudioLayout) -> Vec<ObsAudioTrack> {
             sources: track.sources.iter().filter_map(|&i| sources.get(i).cloned()).collect(),
         })
         .collect()
+}
+
+/// The worker's image name as Toolhelp reports it: the file name the fork
+/// launches.
+fn worker_image_name(worker: &std::path::Path) -> String {
+    worker
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("extprocess_recorder.exe")
+        .to_string()
+}
+
+/// The PIDs of the daemon's children named `image`, or none if the process
+/// table could not be read.
+fn our_workers(image: &str) -> Vec<u32> {
+    let procs = super::job::processes().unwrap_or_default();
+    super::job::new_children(&[], &procs, std::process::id(), image)
+}
+
+/// Puts the worker the fork just spawned in a kill-on-close job (#307).
+///
+/// Never fails the bring-up: without the job the worker still records, and
+/// still exits on a clean shutdown. What is lost is the guarantee that a
+/// killed daemon takes it along, so the outcome is logged either way.
+fn tie_to_daemon(image: &str, before: &[u32]) -> Option<super::job::Job> {
+    let procs = match super::job::processes() {
+        Ok(procs) => procs,
+        Err(e) => {
+            warn!("recorder", "could not list processes to find the libobs worker ({e}); \
+                   it will outlive a daemon that is killed");
+            return None;
+        }
+    };
+    let pids = super::job::new_children(before, &procs, std::process::id(), image);
+    if pids.is_empty() {
+        warn!("recorder", "could not find the libobs worker ({image}) among the daemon's \
+               children; it will outlive a daemon that is killed");
+        return None;
+    }
+    let job = match super::job::Job::new() {
+        Ok(job) => job,
+        Err(e) => {
+            warn!("recorder", "could not create a job for the libobs worker ({e}); \
+                   it will outlive a daemon that is killed");
+            return None;
+        }
+    };
+    let mut tied = false;
+    for pid in pids {
+        match job.assign_pid(pid) {
+            Ok(()) => {
+                tied = true;
+                info!("recorder", "libobs worker pid {pid} tied to the daemon's lifetime");
+            }
+            Err(e) => warn!(
+                "recorder",
+                "libobs worker pid {pid} is not in a job object ({e}); it will outlive a \
+                 daemon that is killed"
+            ),
+        }
+    }
+    tied.then_some(job)
 }
 
 fn wait_for_window_size(max_attempts: u32, interval: Duration) -> Option<Resolution> {

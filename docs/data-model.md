@@ -655,12 +655,30 @@ own-backend stop is, until the review player is shown to seek an `mfra` file
 ([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#decision-the-own-backend-writes-its-own-mp4)).
 Either rewrite puts the mtime the kill left back afterwards.
 
+**Nothing is rewritten while something still has the file open** (#307). A
+capture worker that outlived its daemon went on writing the file recovery was
+repairing, which cut live footage off its end and then failed the remux's
+replace. Recovery now opens each file exclusively first (`db::in_use`, a
+`share_mode(0)` open on Windows) and retries for up to ten seconds; a file
+still held after that is left alone, row and all, and counted as
+`still_writing`, so the next start recovers it once the writer is gone. Its
+file is not imported meanwhile, because its row still exists.
+
+**A remux temp file never outlives its remux.** `remux_faststart` deletes
+`<stem>.faststart.tmp` on every failure, the final replace included, and the
+folder scan deletes any `*.faststart.tmp` (or the older `*.faststart.tmp.mp4`)
+it finds that nothing has open. The scan also runs on demand, and a clean
+stop's remux may be writing its temp file right then; that one is open, so it
+is left.
+
 ```mermaid
 flowchart TB
     START["recover_unfinished(db, ffmpeg)<br/><small>daemon startup only</small>"] --> OPEN["unfinished_recordings()<br/><small>finished_at IS NULL</small>"]
     OPEN --> C0{"File still<br/>on disk?"}
     C0 -->|"no"| DROP0["Delete the row<br/><small>nothing to show, nothing to keep</small>"]
-    C0 -->|"yes"| MTIME["Read the mtime<br/><small>before anything rewrites the file</small>"]
+    C0 -->|"yes"| BUSY{"Still open elsewhere?<br/><small>exclusive open, retried<br/>for up to 10 s</small>"}
+    BUSY -->|"yes"| LATER["Leave the row unfinished<br/><small>a worker the dead daemon left writing;<br/>the next start tries again</small>"]
+    BUSY -->|"no"| MTIME["Read the mtime<br/><small>before anything rewrites the file</small>"]
     MTIME --> STALE["Delete a stale *.faststart.tmp beside it<br/><small>a remux the dead daemon never finished</small>"]
     STALE --> OWN{"mp4::write::repair<br/><small>ours? (the own backend's writer)</small>"}
     OWN -->|"yes: torn tail cut,<br/>mfra and mehd written,<br/>mtime put back"| READ
@@ -673,19 +691,24 @@ flowchart TB
     TRUNC --> FF
     FF -->|"yes"| REMUX["recorder::remux::remux_faststart<br/><small>audio track count from the moov;<br/>time taken logged; mtime put back</small>"]
     FF -->|"no"| PROBE0
-    REMUX -->|"ok, or failed and<br/>original kept"| PROBE0
+    REMUX -->|"ok, or failed: original kept,<br/>temp file deleted"| PROBE0
     ACT -->|"Leave<br/><small>complete, unfragmented</small>"| PROBE0
     ACT -->|"Unplayable<br/><small>no whole fragment,<br/>or not an MP4</small>"| PROBE0
     PROBE0["probe::duration_s<br/><small>the session clock died with the daemon</small>"]
     PROBE0 --> FIN["recover_recording<br/><small>duration_s, size_bytes, finished_at from mtime.<br/>Markers untouched; champion and KDA stay NULL</small>"]
-    DROP0 --> REP0["RecoveryReport<br/><small>recovered, abandoned_removed</small>"]
+    DROP0 --> REP0["RecoveryReport<br/><small>recovered, abandoned_removed,<br/>still_writing</small>"]
     FIN --> REP0
+    LATER --> REP0
 ```
 
 ```mermaid
 flowchart TB
     START["reconcile(db, recordings_dir, ffmpeg)"] --> ROWS["list_recordings()<br/><small>finished rows only; unfinished ones<br/>are recover_unfinished's business</small>"]
     START --> FILES["List *.mp4 / *.mkv in the recordings dir<br/><small>never a remux temp file: *.faststart.tmp,<br/>or *.faststart.tmp.mp4 from older builds</small>"]
+    START --> TMPS["List remux temp files<br/><small>*.faststart.tmp, *.faststart.tmp.mp4</small>"]
+    TMPS --> C3{"Open elsewhere?<br/><small>a remux still writing it</small>"}
+    C3 -->|"no"| SWEEP["Delete it<br/><small>a crash or a failed replace left it</small>"]
+    C3 -->|"yes"| LEAVE["Leave it for the remux"]
     ROWS --> C1{"Row's file<br/>still exists?"}
     C1 -->|"no"| DROP["Delete the row<br/><small>user deleted the MP4</small>"]
     C1 -->|"yes"| KEEP["Leave the row alone"]

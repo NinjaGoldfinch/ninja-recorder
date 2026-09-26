@@ -26,6 +26,17 @@
 //! as it always has. A repaired file is then remuxed like any other, because
 //! a clean stop remuxes too, until the review player is shown to seek an
 //! `mfra` file (DEVELOPMENT.md §2.5).
+//!
+//! **Recovery does not touch a file something still has open** (#307). A
+//! capture worker that outlived its daemon kept recording into the file the
+//! next daemon was repairing, which cut live footage off its end and then
+//! failed the remux's replace. Each file is opened exclusively first
+//! (`in_use`), for a bounded wait; one still held after that is left, row and
+//! all, for the next start.
+//!
+//! **The folder scan sweeps the remux's temp files** too: a remux a crash or
+//! a failed replace left behind is a copy as large as the recording, and no
+//! row names it, so nothing else would ever delete it.
 
 use super::{Db, DbError, NewRecording};
 use crate::mp4::Summary;
@@ -53,6 +64,10 @@ pub struct RecoveryReport {
     /// Rows whose file is gone, deleted. A recording that never wrote a
     /// frame, or whose file the user removed before the daemon came back.
     pub abandoned_removed: usize,
+    /// Rows left unfinished because their file was still open elsewhere,
+    /// most likely by a capture worker the dead daemon left running. The
+    /// next start tries them again.
+    pub still_writing: usize,
 }
 
 /// Finishes the rows a dead daemon left open, from what their files can be
@@ -71,6 +86,16 @@ pub struct RecoveryReport {
 /// a default is a confident wrong answer where NULL is a true one. The
 /// markers stay untouched: they are what this whole path exists to keep.
 pub fn recover_unfinished(db: &Db, ffmpeg: Option<&Path>) -> Result<RecoveryReport, DbError> {
+    recover_unfinished_with(db, ffmpeg, &mut super::in_use::wait_for_writer)
+}
+
+/// [`recover_unfinished`], with the question "has the writer let go of this
+/// file yet?" handed in, so the tests can answer it.
+fn recover_unfinished_with(
+    db: &Db,
+    ffmpeg: Option<&Path>,
+    writer_gone: &mut dyn FnMut(&Path) -> bool,
+) -> Result<RecoveryReport, DbError> {
     let mut report = RecoveryReport::default();
 
     for row in db.unfinished_recordings()? {
@@ -83,6 +108,27 @@ pub fn recover_unfinished(db: &Db, ffmpeg: Option<&Path>) -> Result<RecoveryRepo
             report.abandoned_removed += 1;
             continue;
         };
+        // Before anything reads the file for keeps: a file still being
+        // written has neither a final length nor a final mtime, and cutting
+        // its "torn" tail would cut footage that is still arriving (#307).
+        // Left unfinished, the row stays hidden and the next start asks
+        // again; its file is skipped by the import pass meanwhile, because
+        // `find_by_path` finds the row.
+        if !writer_gone(path) {
+            warn!(
+                "db",
+                "recovery skipped {}: it is still open in another process after {} s, most \
+                 likely a capture worker the last daemon left running; it will be recovered \
+                 on a later start",
+                path.display(),
+                super::in_use::WAIT.as_secs()
+            );
+            report.still_writing += 1;
+            continue;
+        }
+        // Re-read now that the writer is gone: it may have written more while
+        // recovery waited.
+        let metadata = path.metadata().unwrap_or(metadata);
         // The file's mtime, not now, and read before the remux rewrites the
         // file: the recording ended when the daemon died, which may have
         // been days ago, and `finished_at` ordering a recovered recording
@@ -285,7 +331,14 @@ pub fn reconcile(
         for entry in std::fs::read_dir(recordings_dir)? {
             let entry = entry?;
             let path = entry.path();
-            if !path.is_file() || !is_video_file(&path) {
+            if !path.is_file() {
+                continue;
+            }
+            if is_remux_tmp(&path) {
+                sweep_remux_tmp(&path);
+                continue;
+            }
+            if !is_video_file(&path) {
                 continue;
             }
 
@@ -339,17 +392,41 @@ pub fn reconcile(
     Ok(report)
 }
 
+/// The remux's temp file, `recorder::remux::tmp_path`: `<stem>.faststart.tmp`.
+const REMUX_TMP_SUFFIX: &str = ".faststart.tmp";
 /// Builds before #233 named the remux's temp file `<stem>.faststart.tmp.mp4`,
 /// so one a crash left behind would pass the extension check below. The name
 /// is ours and never a recording, so it is refused by name.
 const LEGACY_REMUX_TMP_SUFFIX: &str = ".faststart.tmp.mp4";
 
+/// Whether `path` is a remux temp file, in either name.
+fn is_remux_tmp(path: &Path) -> bool {
+    path.file_name().and_then(|name| name.to_str()).is_some_and(|name| {
+        let name = name.to_lowercase();
+        name.ends_with(REMUX_TMP_SUFFIX) || name.ends_with(LEGACY_REMUX_TMP_SUFFIX)
+    })
+}
+
+/// Deletes a remux temp file nothing is writing.
+///
+/// The scan also runs on demand, and a clean stop's remux may be writing its
+/// temp file right then; that one is open, so it is left for the remux to
+/// replace or delete itself (#307). Only the exclusive open is asked, with no
+/// wait: a temp file in use now is the next scan's to sweep.
+fn sweep_remux_tmp(path: &Path) {
+    if !super::in_use::is_free(path) {
+        info!("db", "left remux temp file {}: a remux is still writing it", path.display());
+        return;
+    }
+    match std::fs::remove_file(path) {
+        Ok(()) => info!("db", "removed a stale remux temp file {}", path.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => warn!("db", "could not remove stale {}: {e}", path.display()),
+    }
+}
+
 fn is_video_file(path: &Path) -> bool {
-    let legacy_tmp = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.to_lowercase().ends_with(LEGACY_REMUX_TMP_SUFFIX));
-    if legacy_tmp {
+    if is_remux_tmp(path) {
         return false;
     }
     path.extension()
@@ -896,6 +973,90 @@ mod tests {
         let report = reconcile(&db, &dir, None).unwrap();
         assert_eq!(report.imported, 0);
         assert!(db.list_recordings().unwrap().is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The folder scan deletes a remux temp file nothing is writing, in the
+    /// current name and the legacy one, whether or not any row names its
+    /// recording: a clean stop's failed replace leaves one beside a finished
+    /// recording, which recovery never visits (#307).
+    #[test]
+    fn the_scan_sweeps_stale_remux_temp_files() {
+        let db = Db::open_temporary().unwrap();
+        let dir = temp_dir("sweep-tmp");
+        let recording = dir.join("game.mp4");
+        std::fs::write(&recording, b"a finished recording").unwrap();
+        let tmp = crate::recorder::remux::tmp_path(&recording);
+        std::fs::write(&tmp, b"a whole remuxed copy").unwrap();
+        let legacy = dir.join("older.faststart.tmp.mp4");
+        std::fs::write(&legacy, b"half a remux").unwrap();
+
+        let report = reconcile(&db, &dir, None).unwrap();
+        assert_eq!(report.imported, 1, "only the recording");
+        assert!(!tmp.exists());
+        assert!(!legacy.exists());
+        assert!(recording.exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn remux_temp_names_are_recognised() {
+        assert!(is_remux_tmp(Path::new("/r/game.faststart.tmp")));
+        assert!(is_remux_tmp(Path::new("/r/GAME.FASTSTART.TMP")));
+        assert!(is_remux_tmp(Path::new("/r/game.faststart.tmp.mp4")));
+        assert!(!is_remux_tmp(Path::new("/r/game.mp4")));
+        assert!(!is_remux_tmp(Path::new("/r/game.tmp")));
+    }
+
+    /// #307: a file still open for writing after the wait is not touched at
+    /// all. Its row stays unfinished and hidden, its bytes and its temp file
+    /// stay as they are, and a later start, with the writer gone, recovers it.
+    #[test]
+    fn recovery_leaves_a_file_still_being_written_for_later() {
+        let db = Db::open_temporary().unwrap();
+        let dir = temp_dir("recover-in-use");
+        let file = dir.join("recording-5.mp4");
+        std::fs::write(&file, b"still growing").unwrap();
+        let tmp = crate::recorder::remux::tmp_path(&file);
+        std::fs::write(&tmp, b"not ours to judge yet").unwrap();
+        let id = db.begin_recording(&file.to_string_lossy(), 1_000).unwrap();
+
+        let mut asked = Vec::new();
+        let report = recover_unfinished_with(&db, None, &mut |p| {
+            asked.push(p.to_path_buf());
+            false
+        })
+        .unwrap();
+        assert_eq!(report, RecoveryReport { still_writing: 1, ..Default::default() });
+        assert_eq!(asked, [file.clone()]);
+        assert_eq!(std::fs::read(&file).unwrap(), b"still growing");
+        assert!(tmp.exists());
+        assert!(db.list_recordings().unwrap().is_empty(), "still hidden");
+        assert_eq!(db.unfinished_recordings().unwrap().len(), 1, "and still unfinished");
+
+        // The import pass leaves it alone too: its row is found by path.
+        assert_eq!(reconcile(&db, &dir, None).unwrap().imported, 0);
+
+        let report = recover_unfinished_with(&db, None, &mut |_| true).unwrap();
+        assert_eq!(report.recovered, 1);
+        assert_eq!(db.list_recordings().unwrap()[0].id, id);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A row whose file is gone is removed without waiting on anything.
+    #[test]
+    fn recovery_does_not_wait_on_a_missing_file() {
+        let db = Db::open_temporary().unwrap();
+        let dir = temp_dir("recover-gone-no-wait");
+        db.begin_recording(&dir.join("gone.mp4").to_string_lossy(), 1_000).unwrap();
+
+        let report =
+            recover_unfinished_with(&db, None, &mut |_| panic!("asked about a missing file"))
+                .unwrap();
+        assert_eq!(report.abandoned_removed, 1);
 
         std::fs::remove_dir_all(&dir).ok();
     }
