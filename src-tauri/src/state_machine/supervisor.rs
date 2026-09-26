@@ -1393,21 +1393,8 @@ impl Supervisor {
         self.dispatch(StateEvent::CaptureLost);
         // Said either way, so a run that does not resume shows why in the log
         // rather than simply going quiet.
-        let (state, polling) = (self.machine.lock().unwrap().state.clone(), self.is_polling());
-        match (state, polling) {
-            (GameState::WaitingForGame, true) => info!(
-                "state_machine",
-                "resuming the game into a new recording at the next Live Client poll"
-            ),
-            (GameState::WaitingForGame, false) => info!(
-                "state_machine",
-                "not resuming: this game's capture restarts are spent; waiting for it to end"
-            ),
-            (state, _) => info!(
-                "state_machine",
-                "not resuming: the game moved on while the recording was finished ({state:?})"
-            ),
-        }
+        let state = self.machine.lock().unwrap().state.clone();
+        info!("state_machine", "{}", resume_note(&state, self.is_polling()));
     }
 
     /// Whether the Live Client poll is running, for the log line above.
@@ -1892,6 +1879,31 @@ fn timestamp_millis() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// What happens to the game after a lost capture's recording is finished,
+/// for the log line that follows it, from the state the machine is in by then
+/// and whether the Live Client poll is still running.
+///
+/// `Recording` already is the resume: the poll runs on its own task, and its
+/// `LiveClientUp` can land while the finish is still returning (#299's box run
+/// saw exactly that), so it must not read as the game having moved on.
+fn resume_note(state: &GameState, polling: bool) -> String {
+    match (state, polling) {
+        (GameState::Recording, _) => {
+            "the game was resumed into a new recording by the Live Client poll".to_string()
+        }
+        (GameState::WaitingForGame, true) => {
+            "resuming the game into a new recording at the next Live Client poll".to_string()
+        }
+        (GameState::WaitingForGame, false) => {
+            "not resuming: this game's capture restarts are spent; waiting for it to end"
+                .to_string()
+        }
+        (state, _) => {
+            format!("not resuming: the game ended while the recording was finished ({state:?})")
+        }
+    }
 }
 
 /// How many polls apart `Recorder::collect_output` is called while recording:
@@ -2628,6 +2640,26 @@ mod tests {
     }
 
     // --- a capture lost mid-game (#299) ------------------------------------
+
+    /// The line after a lost capture's finish says what actually happened:
+    /// a poll that already restarted the recording is a resume, not a game
+    /// that moved on, and only the real non-resumes say "not resuming".
+    #[test]
+    fn the_resume_note_reads_the_state_the_finish_left() {
+        for polling in [true, false] {
+            let note = resume_note(&GameState::Recording, polling);
+            assert!(note.contains("was resumed"), "{note}");
+            assert!(!note.contains("not resuming"), "{note}");
+        }
+        assert!(resume_note(&GameState::WaitingForGame, true).starts_with("resuming"));
+        assert!(
+            resume_note(&GameState::WaitingForGame, false).contains("restarts are spent")
+        );
+        for state in [GameState::Finalizing, GameState::ClientRunning, GameState::Idle] {
+            let note = resume_note(&state, true);
+            assert!(note.starts_with("not resuming"), "{note}");
+        }
+    }
 
     /// Stands in for the own backend whose capture worker is killed mid-game:
     /// setting `lost` is the worker dying, the test then calls the installed
