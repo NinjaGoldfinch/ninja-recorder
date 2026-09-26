@@ -77,6 +77,7 @@ stateDiagram-v2
     WaitingForGame --> Idle: lockfile gone<br/>▸ Stop watch + poll
     WaitingForGame --> Recording: Live Client Data reachable<br/>▸ StartRecording
     Recording --> Finalizing: phase EndOfGame<br/>or Live Client Data gone<br/>▸ StopRecording
+    Recording --> WaitingForGame: capture lost (worker died)<br/>▸ StopRecording<br/>(+ StopLiveClientPoll once<br/>3 restarts are spent)
     Finalizing --> ClientRunning: FinalizeComplete
     Finalizing --> Idle: FinalizeComplete<br/>+ client vanished
 ```
@@ -94,6 +95,7 @@ supervisor is the only thing that executes them, so "what should happen" and
 | `GameflowPhase` | `lcu::gameflow::watch` | LCU WebSocket, falling back to 1 s polling. Both read the *current* phase on connect, not just changes to it. The socket lasts two to three minutes and is re-established; see below |
 | `LiveClientUp` / `LiveClientDown` | `live_client::poller::watch` | 1 Hz. `Down` needs 5 consecutive *transport* failures, ~5 s; backoff to 10 s only once down |
 | `FinalizeComplete` | the supervisor itself, after `stop()` and teardown | once per game |
+| `CaptureLost` | the supervisor, when `Recorder::capture_lost` reports the recording's capture gone: asked the moment the own backend's worker pipe closes (`Recorder::watch_capture`), and on every Live Client poll as a net under that | at most once per recording |
 
 Alongside those, one request that drives no transition: entering
 `WaitingForGame` also fires a single `GET /lol-gameflow/v1/session` to learn
@@ -157,6 +159,9 @@ starting or stopping is skipped rather than waited for.
 | Practice Tool | Reports the same `InProgress`/`Reconnect` phases, so it is not special-cased |
 | Dodge / cancelled champ select | `WaitingForGame` bounces back to `ClientRunning` without ever recording |
 | Client restart during finalize | Handled regardless of ordering against `FinalizeComplete` |
+| Capture worker dies mid-game (#299) | `CaptureLost` → `WaitingForGame` at once, stopping the recording: the file is repaired and the row finished by id with the file's own length and an "ended early" problem. The watchers stay up, so the next poll records the rest of the game into a second recording |
+| Capture worker keeps dying | Restarted at most 3 times per game (`MAX_CAPTURE_RESTARTS`); the next loss also stops the Live Client poll, so the game is waited out in `WaitingForGame` and its end returns to `ClientRunning`. Refilled for the next game |
+| Capture lost as the game ends | Whichever event arrives first wins; `CaptureLost` outside `Recording` is a no-op, and the recorder reports a loss only once |
 
 Two cases are **not** verified, both because they need a live client on real
 hardware, and neither comes up in ordinary play: **spectator mode** (no phase

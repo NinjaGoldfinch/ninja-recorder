@@ -1177,6 +1177,11 @@ impl Supervisor {
             recorder.collect_output();
         }
 
+        // The backend's watch (`capture_watch`) is what notices a lost
+        // capture at once; this is the net under it, a second later at most,
+        // should that call never come. `try_lock` for the reason above.
+        self.check_capture(false);
+
         for marker in added {
             // `None` even though a row now exists. The row is deliberately not
             // a library entry until it is finished, so handing out its id
@@ -1198,7 +1203,7 @@ impl Supervisor {
     /// recorder's actual state diverge. Known gap, logged loudly rather
     /// than silently wrong; not expected to occur outside that manual
     /// double-start collision.
-    fn start_recording(&self) {
+    fn start_recording(self: &Arc<Self>) {
         if !crate::retention::has_room_to_record(&self.recordings_dir) {
             error!("state_machine", "refusing to start recording: insufficient free disk space");
             self.emit(SupervisorEvent::RecordingFailed(
@@ -1238,6 +1243,9 @@ impl Supervisor {
         // the `match`, which asks nothing more of the recorder.
         let started = {
             let mut recorder = self.recorder.lock().unwrap();
+            // Before every start rather than once: the box can be replaced
+            // with another backend between games (`daemon::backends`).
+            recorder.watch_capture(self.capture_watch());
             recorder.start(config).map(|()| recorder.backend_name())
         };
         match started {
@@ -1342,6 +1350,58 @@ impl Supervisor {
         }
     }
 
+    /// What the recorder is given to call when it notices the recording in
+    /// flight may have lost its capture (`Recorder::watch_capture`): the own
+    /// backend calls it from the capture worker's reply thread the moment the
+    /// worker's pipe closes (#299).
+    ///
+    /// The check runs elsewhere, because the caller must not wait: stopping a
+    /// recording remuxes it, under the recorder lock, and the caller is the
+    /// thread that reads the worker's replies. **On the async runtime's
+    /// blocking pool, not a plain thread**, because the finalize it runs calls
+    /// the callbacks `lib.rs` and the daemon install, and those spawn tasks: on
+    /// a thread with no runtime that panicked under the recorder lock and left
+    /// every later start unable to take it (#299). Holds the supervisor
+    /// weakly, because the recorder that holds this closure is held by the
+    /// supervisor.
+    fn capture_watch(self: &Arc<Self>) -> crate::recorder::CaptureWatch {
+        let supervisor = Arc::downgrade(self);
+        Arc::new(move || {
+            let Some(supervisor) = supervisor.upgrade() else { return };
+            tauri::async_runtime::spawn_blocking(move || supervisor.check_capture(true));
+        })
+    }
+
+    /// Asks the recorder whether the recording in flight has lost its
+    /// capture, and if it has, sends `CaptureLost` through the machine,
+    /// which finishes the recording now and records the rest of the game
+    /// into a fresh one. `wait` says whether to wait for the recorder lock
+    /// or skip the check when it is held.
+    ///
+    /// The recorder reports a loss once, so this and the poll's check cannot
+    /// both act on the same one. The lock is released before the dispatch,
+    /// whose stop takes it again.
+    fn check_capture(self: &Arc<Self>, wait: bool) {
+        let recorder = if wait { self.recorder.lock().ok() } else { self.recorder.try_lock().ok() };
+        let lost = recorder.and_then(|mut recorder| recorder.capture_lost());
+        let Some(why) = lost else { return };
+        warn!(
+            "state_machine",
+            "the capture stopped while the game was still running ({why}); finishing \
+             the recording now"
+        );
+        self.dispatch(StateEvent::CaptureLost);
+        // Said either way, so a run that does not resume shows why in the log
+        // rather than simply going quiet.
+        let state = self.machine.lock().unwrap().state.clone();
+        info!("state_machine", "{}", resume_note(&state, self.is_polling()));
+    }
+
+    /// Whether the Live Client poll is running, for the log line above.
+    fn is_polling(&self) -> bool {
+        self.live_client_task.lock().unwrap().is_some()
+    }
+
     /// Executes `Action::StopRecording`: stops the recorder, then writes
     /// the recording + its markers to the VOD library DB (DEVELOPMENT.md
     /// §4). A DB write failure is logged but doesn't lose the in-memory
@@ -1374,11 +1434,16 @@ impl Supervisor {
         // recorder's shutdown and ffmpeg remux, which takes seconds on a long
         // game, and every one of them would be counted as footage the library
         // claims the file contains.
-        let duration_s = session
+        let elapsed_s = session
             .as_ref()
             .map(|s| s.record_started_at.elapsed().as_secs_f64());
         match self.recorder.lock().unwrap().stop() {
             Ok(output) => {
+                // The file's own length when the backend knows the recording
+                // stopped short of this stop (#299): a capture worker that
+                // died at 2:58 of a game stopped at 3:46 made a 2:58 file,
+                // and the library should say so.
+                let duration_s = output.duration_s.or(elapsed_s);
                 let path = output.path;
                 // What the recording lost to a failure, stored with the row
                 // and said once the row is written (#10).
@@ -1814,6 +1879,31 @@ fn timestamp_millis() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// What happens to the game after a lost capture's recording is finished,
+/// for the log line that follows it, from the state the machine is in by then
+/// and whether the Live Client poll is still running.
+///
+/// `Recording` already is the resume: the poll runs on its own task, and its
+/// `LiveClientUp` can land while the finish is still returning (#299's box run
+/// saw exactly that), so it must not read as the game having moved on.
+fn resume_note(state: &GameState, polling: bool) -> String {
+    match (state, polling) {
+        (GameState::Recording, _) => {
+            "the game was resumed into a new recording by the Live Client poll".to_string()
+        }
+        (GameState::WaitingForGame, true) => {
+            "resuming the game into a new recording at the next Live Client poll".to_string()
+        }
+        (GameState::WaitingForGame, false) => {
+            "not resuming: this game's capture restarts are spent; waiting for it to end"
+                .to_string()
+        }
+        (state, _) => {
+            format!("not resuming: the game ended while the recording was finished ({state:?})")
+        }
+    }
 }
 
 /// How many polls apart `Recorder::collect_output` is called while recording:
@@ -2473,6 +2563,7 @@ mod tests {
                 path,
                 audio: crate::recorder::audio::AudioLayout { sources: vec![], tracks: vec![] },
                 problems: vec![refused_game_audio()],
+                duration_s: None,
             })
         }
 
@@ -2545,6 +2636,184 @@ mod tests {
             })
             .collect();
         assert_eq!(finalized, vec![&vec![refused_game_audio()]]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- a capture lost mid-game (#299) ------------------------------------
+
+    /// The line after a lost capture's finish says what actually happened:
+    /// a poll that already restarted the recording is a resume, not a game
+    /// that moved on, and only the real non-resumes say "not resuming".
+    #[test]
+    fn the_resume_note_reads_the_state_the_finish_left() {
+        for polling in [true, false] {
+            let note = resume_note(&GameState::Recording, polling);
+            assert!(note.contains("was resumed"), "{note}");
+            assert!(!note.contains("not resuming"), "{note}");
+        }
+        assert!(resume_note(&GameState::WaitingForGame, true).starts_with("resuming"));
+        assert!(
+            resume_note(&GameState::WaitingForGame, false).contains("restarts are spent")
+        );
+        for state in [GameState::Finalizing, GameState::ClientRunning, GameState::Idle] {
+            let note = resume_note(&state, true);
+            assert!(note.starts_with("not resuming"), "{note}");
+        }
+    }
+
+    /// Stands in for the own backend whose capture worker is killed mid-game:
+    /// setting `lost` is the worker dying, the test then calls the installed
+    /// watch the way the worker's reply thread does, and the stop that
+    /// follows reports a file shorter than the time since `start`, as a
+    /// repaired one is.
+    #[derive(Default)]
+    struct DyingRecorder {
+        dir: PathBuf,
+        recording: bool,
+        /// Set by the test: the worker has died.
+        lost: Arc<std::sync::atomic::AtomicBool>,
+        reported: bool,
+        starts: Arc<Mutex<usize>>,
+        watch: Arc<Mutex<Option<crate::recorder::CaptureWatch>>>,
+    }
+
+    const FILE_LENGTH_S: f64 = 178.0;
+
+    fn worker_died() -> crate::recorder::CaptureProblem {
+        crate::recorder::CaptureProblem::EndedEarly {
+            reason: "the capture worker stopped at 2:58: pid 7 exited with code 1".into(),
+        }
+    }
+
+    impl Recorder for DyingRecorder {
+        fn start(&mut self, _config: crate::recorder::RecordConfig) -> Result<(), RecorderError> {
+            self.recording = true;
+            self.lost.store(false, std::sync::atomic::Ordering::SeqCst);
+            self.reported = false;
+            *self.starts.lock().unwrap() += 1;
+            Ok(())
+        }
+
+        fn stop(&mut self) -> Result<crate::recorder::RecordingOutput, RecorderError> {
+            self.recording = false;
+            let path = self.dir.join(format!("dying-{}.mp4", self.starts.lock().unwrap()));
+            std::fs::create_dir_all(&self.dir)?;
+            std::fs::write(&path, b"not really an mp4")?;
+            let lost = self.lost.swap(false, std::sync::atomic::Ordering::SeqCst);
+            Ok(crate::recorder::RecordingOutput {
+                path,
+                audio: crate::recorder::audio::AudioLayout { sources: vec![], tracks: vec![] },
+                problems: if lost { vec![worker_died()] } else { vec![] },
+                duration_s: lost.then_some(FILE_LENGTH_S),
+            })
+        }
+
+        fn is_recording(&self) -> bool {
+            self.recording
+        }
+
+        fn backend_name(&self) -> String {
+            "dying".to_string()
+        }
+
+        fn watch_capture(&mut self, watch: crate::recorder::CaptureWatch) {
+            *self.watch.lock().unwrap() = Some(watch);
+        }
+
+        fn capture_lost(&mut self) -> Option<String> {
+            let lost = self.lost.load(std::sync::atomic::Ordering::SeqCst);
+            if !self.recording || !lost || self.reported {
+                return None;
+            }
+            self.reported = true;
+            Some("capture worker pid 7 exited with code 1".into())
+        }
+    }
+
+    /// Waits for `done` for up to five seconds: the watch runs the check on a
+    /// thread of its own, as it must off the worker's reply thread.
+    fn eventually(done: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !done() {
+            assert!(Instant::now() < deadline, "never happened");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// The worker dies mid-game: the recording is finished then, not at the
+    /// end of the game. The state leaves `Recording`, the row is finished by
+    /// id with the file's length rather than the wall clock's, the problem is
+    /// told and published, and the next poll records the rest of the game.
+    #[test]
+    fn a_capture_lost_mid_game_is_finished_at_once_and_the_game_recorded_on() {
+        let dir = std::env::temp_dir().join(format!("ninja-dying-{}", timestamp_millis()));
+        let starts = Arc::new(Mutex::new(0));
+        let watch = Arc::new(Mutex::new(None));
+        let lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (sup, seen, told) = supervisor_recording_with(Box::new(DyingRecorder {
+            dir: dir.clone(),
+            lost: Arc::clone(&lost),
+            starts: Arc::clone(&starts),
+            watch: Arc::clone(&watch),
+            ..Default::default()
+        }));
+        // Shaped like the daemon's: it spawns onto the ambient runtime, which
+        // panics on a thread that has none. The first box run of #299 did
+        // exactly that from the capture check's thread, under the recorder
+        // lock, poisoning it so that the resume never started.
+        let trims = Arc::new(Mutex::new(Vec::new()));
+        // This thread stands in for the daemon's watcher tasks, which run on
+        // the runtime; the capture check's thread gets no such help from it.
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let _on_the_runtime = runtime.enter();
+        {
+            let trims = Arc::clone(&trims);
+            sup.set_trim_requester(Box::new(move |id| {
+                tokio::spawn(async {});
+                trims.lock().unwrap().push(id);
+            }));
+        }
+        sup.dispatch(present());
+        sup.dispatch(StateEvent::GameflowPhase(GameflowPhase::InProgress));
+        sup.dispatch(StateEvent::LiveClientUp);
+        assert_eq!(sup.status().state, GameState::Recording);
+        let opened = sup.db.unfinished_recordings().unwrap()[0].id;
+
+        // A poll while the capture is fine changes nothing.
+        sup.check_capture(true);
+        assert_eq!(sup.status().state, GameState::Recording);
+
+        // The worker dies, and its reply thread calls the watch.
+        lost.store(true, std::sync::atomic::Ordering::SeqCst);
+        let installed = watch.lock().unwrap().clone().expect("start installed the watch");
+        installed();
+
+        // The whole finalize, to the trim it asks for last, ran on a thread
+        // with a runtime.
+        eventually(|| trims.lock().unwrap().as_slice() == [opened]);
+        assert!(told.lock().unwrap().iter().any(|e| matches!(e, SupervisorEvent::Finalized(..))));
+        assert!(!sup.recorder.is_poisoned(), "the finalize panicked under the recorder lock");
+        assert_eq!(sup.status().state, GameState::WaitingForGame, "no longer Recording");
+        assert!(sup.current_recording().is_none());
+
+        let rows = sup.db.list_recordings().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, opened, "finished by id");
+        assert_eq!(rows[0].duration_s, Some(FILE_LENGTH_S), "the file's length, not the clock's");
+        assert_eq!(diagnostics_of(&sup).capture_problems, vec![worker_died()]);
+        assert_eq!(capture_problems(&seen).len(), 1);
+
+        // A second report of the same loss (the poll's net) does nothing.
+        sup.check_capture(false);
+        assert_eq!(sup.status().state, GameState::WaitingForGame);
+
+        // The next poll starts a fresh recording of the rest of the game.
+        sup.dispatch(StateEvent::LiveClientUp);
+        assert_eq!(sup.status().state, GameState::Recording);
+        assert_eq!(*starts.lock().unwrap(), 2);
+        sup.dispatch(StateEvent::GameflowPhase(GameflowPhase::EndOfGame));
+        let rows = sup.db.list_recordings().unwrap();
+        assert_eq!(rows.len(), 2, "the rest of the game is a recording of its own");
         std::fs::remove_dir_all(&dir).ok();
     }
 

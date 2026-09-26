@@ -62,6 +62,7 @@ impl Recorder for StubRecorder {
             path: dest,
             audio: AudioPreset::Game.layout(),
             problems: Vec::new(),
+            duration_s: None,
         })
     }
 
