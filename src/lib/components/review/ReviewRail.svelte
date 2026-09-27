@@ -20,13 +20,15 @@ interface Props {
   markers: readonly MarkerRow[];
   beyond: readonly MarkerRow[];
   onseek: (videoTimeS: number) => void;
+  /** Where the player is, for the Events tab's current row. */
+  currentTimeS: number;
   /** The game clock at the playhead, for the form's clock button. */
   gameClockNow: () => number | null;
   /** The player's "note at the playhead", for the form's stamp button. */
   onstamp: () => void;
 }
 
-const { open, markers, beyond, onseek, gameClockNow, onstamp }: Props = $props();
+const { open, markers, beyond, onseek, currentTimeS, gameClockNow, onstamp }: Props = $props();
 
 let form = $state<ReturnType<typeof ReviewForm>>();
 
@@ -90,6 +92,6 @@ const STATUS_COPY = {
     aria-labelledby="rail-tab-events"
     hidden={tab !== "events"}
   >
-    <MarkerList {markers} {beyond} {onseek} />
+    <MarkerList {markers} {beyond} {onseek} {currentTimeS} />
   </div>
 </aside>

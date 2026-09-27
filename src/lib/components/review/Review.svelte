@@ -694,6 +694,7 @@ $effect(() => {
     markers={review.markers}
     beyond={review.footage.beyond}
     onseek={seekTo}
+    currentTimeS={playhead}
     {gameClockNow}
     onstamp={() => void noteAtPlayhead()}
   />

@@ -1783,13 +1783,13 @@ building a window re-entrantly from inside a WebView2 IPC callback and getting a
 blank window, applies to windows created from a command, which `setup` is not.
 A window created later from a tray click will have to respect it.
 
-**The default size is derived from the frontend, not picked by eye.** The
-content column stops at `--content-max: 1120px`; add the container's padding
-and room for a scrollbar and 1200 is the narrowest inner width at which it
-reaches full width, so anything narrower squeezes every view and anything wider
-only adds background. The 900 height clears the review player and its timeline.
-The marker list under them is left to scroll, because a window tall enough to
-show it as well would not fit on a 1080p desktop.
+**The default size is derived from the frontend, not picked by eye.** At
+1340×850 the content column (`--content-max: 1120px`) opens at full width with
+a margin either side, and the height leaves room for the taskbar and the title
+bar on a 1080p desktop (#315). It is also the size the review view is laid out
+for: the player, its timeline and the review rail beside them all fit with
+nothing below the fold, and the marker list is a tab in that rail rather than a
+list under the player (#321, [docs/frontend.md](docs/frontend.md)).
 
 Verified on macOS against the real binary: a default start registers a GUI
 window, a windowless start stays running, `--daemon` exited 2 while it was

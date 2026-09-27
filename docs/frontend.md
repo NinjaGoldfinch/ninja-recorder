@@ -41,7 +41,7 @@ flowchart TB
     SETV["lib/components/settings/<br/><small>Settings, Appearance, BackgroundTray,<br/>Notifications, AudioSettings, Storage,<br/>Advanced, About, Update, UpdateNotes, SettingRow</small>"]
     SETS["lib/stores/settings.svelte.ts<br/><small>owns: autostart, audio, capture backend,<br/>retention, the folder, mirrored prefs</small>"]
     UPD["lib/stores/update.svelte.ts<br/><small>owns: the update status</small>"]
-    TL["lib/timeline/<br/><small>window, clusters, graph, stem,<br/>markers, navigate · pure, tested</small>"]
+    TL["lib/timeline/<br/><small>window, clusters, graph, stem,<br/>markers, events, navigate · pure, tested</small>"]
     LIBP["lib/library/<br/><small>filters, sort, stats, scoreboard,<br/>problems · pure, tested</small>"]
     SETP["lib/settings/<br/><small>notes, backfill, retention, audio,<br/>capture, update, about · pure, tested</small>"]
     REVP["lib/review/<br/><small>hotkeys, playback, rail,<br/>clock, facts · pure, tested</small>"]
@@ -536,6 +536,13 @@ flowchart LR
   nothing in the schema changes until then. The player reaches the form through
   `ReviewRail.noteAt`, a component export, which is the one call that crosses
   inward from the player to the form.
+- **The Events tab is the marker list, made for a rail** (#326). Filter chips
+  narrow it to fights, deaths or objectives, each with its count. A burst of
+  the same event collapses into one row ("Voidgrubs ×3"), but only when the
+  label matches, so two different kills a few seconds apart stay two rows. The
+  row the playhead most recently passed is lit and scrolled into view while
+  the video plays, unless the pointer is over the list. `timeline/events.ts`
+  holds all three decisions.
 - **Loads race, and the newer one wins.** Opening one VOD after another starts
   two loads; `gameReview` counts them and drops any answer that is not the
   latest's, so a slow daemon cannot put the previous game's review beside the

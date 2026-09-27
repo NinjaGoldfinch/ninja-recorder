@@ -478,10 +478,52 @@ body:has(.review-view:not([hidden])) .app-bar-inner {
 }
 
 .rail-events .marker-list {
+  flex: 1;
   max-height: none;
   border: none;
   border-radius: 0;
   background: none;
+}
+
+.event-filters {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  background-color: var(--bg-surface);
+}
+
+.event-filter {
+  padding: 0.2em 0.65em;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.event-filter[aria-pressed="true"] {
+  border-color: var(--accent);
+  background-color: var(--accent-soft);
+  color: var(--text);
+}
+
+.event-filter-count {
+  margin-left: 0.15em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-subtle);
+}
+
+.marker-count {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The row the playhead most recently passed. */
+.marker-list li.current {
+  background-color: var(--accent-soft);
 }
 
 /* Too narrow for the two side by side: the rail goes under the player and
