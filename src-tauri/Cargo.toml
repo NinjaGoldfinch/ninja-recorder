@@ -293,7 +293,7 @@ windows = { version = "0.62", features = [
 # `windows_core::` paths, so the crate it names has to be a direct
 # dependency, at the version `windows` itself uses: already in the lock
 # through `windows`, so no new crate and no new licence.
-windows-core = "0.62.2"
+windows-core = "0.100.0"
 
 # Full DWARF for our own crate is what fills `target/` — 30k codegen-unit
 # objects at ~500 KB of debug info each, ~8 GB before this. Line tables keep
