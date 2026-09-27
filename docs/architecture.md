@@ -589,7 +589,12 @@ or the database. Only then does the daemon open `daemon.log`, open the library,
 run the startup reconcile and retention passes, start the supervisor, and begin
 accepting. Shutdown reverses it: stop accepting, publish `DaemonShuttingDown`,
 then finalize whatever recording is in flight, because a game is worth more
-than a fast exit.
+than a fast exit, then release the capture backend. The release is what sends
+a worker `Release` and waits for it to exit on its own, so a clean stop logs
+`capture worker exiting (Released)` in `worker.log` and `exited cleanly
+(code 0)` in `daemon.log`. The daemon gives it five seconds (`RELEASE_GRACE`)
+and then exits anyway, and the kill-on-close job ends whatever is left, which
+is also what happens to a worker when the daemon crashes (#293).
 
 **One endpoint, no separate mutex.** `rpc::Listener::bind` returns
 `Ok(None)` when a daemon already owns the address: `first_pipe_instance` says so

@@ -3837,6 +3837,16 @@ one worth the wait. Killing a daemon mid-game leaves a fragmented MP4 with no
 row, recoverable only by the next startup's reconcile and stripped of its
 markers, so a clean stop finalizes first and exits second.
 
+Between the two it releases the capture backend (#293). Until then it did not,
+and the kill-on-close job ended the worker at exit: nothing was lost, since the
+recording had been finalized, but the worker never ran its own `Release`, and a
+clean quit looked like a crash in both logs. The release is bounded at the
+daemon, not only in the backend, because the own backend allows a worker 30 s
+to exit and a wedged driver should not hold a quit that long: after five
+seconds the daemon exits anyway and the job does what it always did. It runs on
+a plain thread rather than `spawn_blocking`, because dropping the runtime waits
+for blocking tasks and would undo the bound.
+
 ### The UI opens its log before the builder, for the same reason
 
 The daemon's ordering above was corrected first, and the UI was left as it was:

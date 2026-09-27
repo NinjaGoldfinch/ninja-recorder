@@ -388,6 +388,31 @@ mod tests {
         assert!(worker.shut_down(Duration::from_secs(5)).contains("exited cleanly"));
     }
 
+    /// `shut_down` sends `Release` itself, before closing the pipe, and waits
+    /// for the worker to exit on its own: this worker exits 0 only if the
+    /// line it reads is a `Release`, and 9 on anything else or on EOF (#293).
+    #[test]
+    fn a_shutdown_sends_release_and_waits_for_a_clean_exit() {
+        let script = format!(
+            r#"read l; echo '{HELLO}'; read l || exit 9; case "$l" in *'"release"'*) exit 0;; esac; exit 9"#
+        );
+        let worker = spawn(&script).expect("handshake");
+        let how = worker.shut_down(Duration::from_secs(5));
+        assert!(how.contains("exited cleanly"), "{how}");
+    }
+
+    /// A worker that ignores `Release` and its closed pipe is killed at the
+    /// timeout, not waited on: the fallback a clean stop keeps.
+    #[test]
+    fn a_worker_that_ignores_release_is_killed_at_the_timeout() {
+        let script = format!("read l; echo '{HELLO}'; trap '' TERM; while :; do sleep 1; done");
+        let worker = spawn(&script).expect("handshake");
+        let started = Instant::now();
+        let how = worker.shut_down(Duration::from_millis(200));
+        assert!(!how.contains("exited cleanly"), "{how}");
+        assert!(started.elapsed() < Duration::from_secs(10), "waited for the worker");
+    }
+
     #[test]
     fn a_wrong_protocol_is_refused_at_spawn() {
         let script = r#"read l; echo '{"type":"hello","protocol":99,"pid":1,"version":"x"}'"#;
