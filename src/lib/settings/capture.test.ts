@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CaptureBackendStatus } from "../contract/types";
-import { refusalNote, unavailableNotes } from "./capture";
+import { automaticNote, refusalNote, softwareNote, unavailableNotes } from "./capture";
 
 const NOT_BUILT = "the own capture backend is not in this build yet";
 
@@ -8,7 +8,9 @@ const NOT_BUILT = "the own capture backend is not in this build yet";
 function today(over: Partial<CaptureBackendStatus> = {}): CaptureBackendStatus {
   return {
     configured: "libobs",
+    automatic: false,
     active: "libobs (idle)",
+    software_encoding: false,
     options: [
       { backend: "libobs", unavailable: null },
       { backend: "own", unavailable: NOT_BUILT },
@@ -44,5 +46,64 @@ describe("refusalNote", () => {
     const note = refusalNote(today({ configured: "own", active: `unavailable (${NOT_BUILT})` }));
     expect(note).toContain("Nothing will be recorded");
     expect(note).toContain(NOT_BUILT);
+  });
+});
+
+describe("softwareNote", () => {
+  it("is quiet while the backend encodes in hardware", () => {
+    expect(softwareNote(today({ configured: "own", active: "own (ready: NVENC)" }))).toBeNull();
+  });
+
+  // DEVELOPMENT.md §2.4: the software fallback is allowed only if the user is
+  // told, and the flag is what says so, not the wording of `active`.
+  it("says the recording costs more CPU when the daemon flags software encoding", () => {
+    const note = softwareNote(
+      today({
+        configured: "own",
+        active: "own (software encoding: H264 Encoder MFT, because no hardware GPU was found)",
+        software_encoding: true,
+      }),
+    );
+    expect(note).toContain("encoding video in software");
+    expect(note).toContain("more CPU");
+  });
+});
+
+describe("automaticNote", () => {
+  it("is quiet once a choice is saved", () => {
+    expect(automaticNote(today())).toBeNull();
+  });
+
+  it("says Own is the automatic pick where it can be built", () => {
+    const status = today({
+      configured: "own",
+      automatic: true,
+      options: [
+        { backend: "libobs", unavailable: null },
+        { backend: "own", unavailable: null },
+      ],
+    });
+    expect(automaticNote(status)).toBe("Automatic: Own, the default.");
+  });
+
+  // Below the floor with nothing saved: the daemon records on libobs, and the row
+  // says so with the daemon's reason for Own.
+  it("says libobs is the automatic pick, and why, where Own cannot be built", () => {
+    expect(automaticNote(today({ automatic: true }))).toBe(
+      `Automatic: libobs, because ${NOT_BUILT}.`,
+    );
+  });
+
+  it("leaves it to the refusal when nothing can be built", () => {
+    const status = today({
+      configured: "own",
+      automatic: true,
+      options: [
+        { backend: "libobs", unavailable: "the libobs worker is not beside the executable" },
+        { backend: "own", unavailable: NOT_BUILT },
+      ],
+    });
+    expect(automaticNote(status)).toBeNull();
+    expect(refusalNote(status)).toContain("neither capture backend is available");
   });
 });

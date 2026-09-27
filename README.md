@@ -21,6 +21,12 @@ backend): that last one being what eventually lets the licence change.
 > TypeScript, the frontend is Svelte 5 throughout with the vanilla shell gone,
 > and the capture backend no longer injects into the game.
 >
+> **The own capture backend is the default.** Recordings are made by Option B
+> (WGC, Media Foundation and our own MP4 writer) on Windows 10 2004 and later
+> and on Windows 11. An older Windows records on libobs unless something else
+> is saved, and libobs stays selectable in Settings → Advanced for one release
+> as the fallback.
+>
 > As of `v2.0.0-alpha.40` the whole loop has run on a live ranked game on
 > Windows: the client detected, the game captured, markers placed, the row in
 > the library, playback and seeking in the review player, notifications raised
@@ -55,7 +61,7 @@ verified on Windows.
 | WS | What | Gated by | Effort | Status |
 |---|---|---|---|---|
 | **WS0** | Baseline measurement: install size, idle RAM by Private Bytes | none | 1 wk, part-time | In progress, 2 of 3 |
-| **WS1** | Capture backend: P0c go/no-go spike, then Option B; trimmed libobs as fallback | none (spike); gate (build) | 3 wk + 4 wk | In progress; every remaining task needs the Windows box |
+| **WS1** | Capture backend: P0c go/no-go spike, then Option B; trimmed libobs as fallback | none (spike); gate (build) | 3 wk + 4 wk | In progress; Option B built (WS1.6) and the default since #243 |
 | **WS2** | Generated contract: commands *and* events declared once in Rust | none | 2–3 wk | Complete |
 | **WS3** | Daemon / UI split over named-pipe JSON-RPC | WS2, WS6 | 3 wk | Code complete, verified 26 of 28 |
 | **WS4** | Svelte 5 strangler migration, player last as an imperative island | WS2 | 5–6 wk | Complete and verified |

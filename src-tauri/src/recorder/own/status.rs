@@ -103,6 +103,22 @@ impl Status {
             Status::Unavailable { reason } => format!("own (unavailable: {reason})"),
         }
     }
+
+    /// Whether the Settings notice about software encoding stays up, given
+    /// what it was and this new status: `Recorder::software_encoding`.
+    ///
+    /// Sticky across `Idle` and `Unavailable`, which say nothing about the
+    /// encoder, so the notice outlives the League client closing (the worker
+    /// ends then, and the status goes back to `Idle`): the machine is the same
+    /// one next game, and Settings is usually opened after a game rather than
+    /// during it. Only an encoder being brought up changes the answer.
+    pub fn software_encoding(&self, was: bool) -> bool {
+        match self {
+            Status::Software { .. } => true,
+            Status::Ready { .. } => false,
+            Status::Idle | Status::Unavailable { .. } => was,
+        }
+    }
 }
 
 /// Checks what was activated against what [`select::rank`] chose.
@@ -303,6 +319,21 @@ mod tests {
             Status::from_choice(&choice, &[]).backend_name(),
             "own (unavailable: nothing)"
         );
+    }
+
+    /// DEVELOPMENT.md §2.4: the software fallback is shown in the UI, and
+    /// the notice lasts until an encoder bring-up says otherwise.
+    #[test]
+    fn the_software_notice_follows_the_encoder_and_ignores_idle() {
+        let software = Status::Software { encoder: "x".into(), reason: "y".into() };
+        let ready = Status::Ready { encoder: "x".into() };
+        let unavailable = Status::Unavailable { reason: "z".into() };
+        assert!(software.software_encoding(false));
+        assert!(!ready.software_encoding(true));
+        for was in [false, true] {
+            assert_eq!(Status::Idle.software_encoding(was), was);
+            assert_eq!(unavailable.software_encoding(was), was);
+        }
     }
 
     #[test]

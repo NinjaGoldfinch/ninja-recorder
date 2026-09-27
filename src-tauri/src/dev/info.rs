@@ -80,9 +80,10 @@ pub struct DevRecorderView {
     /// `Recorder::backend_name` of the backend actually live, e.g.
     /// `own (ready: NVIDIA ...)` or `libobs (idle)`.
     pub backend: String,
-    /// The `capture_backend` setting, `libobs` or `own`. It can differ from
-    /// the live backend only when the build cannot construct the chosen one,
-    /// and then `backend` says why.
+    /// The `capture_backend` setting: `libobs`, `own`, or `unset` when
+    /// nothing is saved (the daemon then picks own where it can be built,
+    /// else libobs). A saved one can differ from the live backend only when
+    /// the build cannot construct it, and then `backend` says why.
     pub configured: String,
     /// The file the recording in flight is written to.
     pub current_file: Option<String>,
@@ -127,7 +128,11 @@ pub fn dev_health(
         }
     };
 
-    let configured = ctx.db.get_capture_backend().map_err(|e| e.to_string())?.as_pref();
+    let configured = ctx
+        .db
+        .get_capture_backend()
+        .map_err(|e| e.to_string())?
+        .map_or("unset", crate::recorder::backend::CaptureBackend::as_pref);
     // One lock for every recorder field, so they describe the same moment.
     // Taken after the supervisor's status is read, never around it: the
     // supervisor takes its own locks and then this one.
