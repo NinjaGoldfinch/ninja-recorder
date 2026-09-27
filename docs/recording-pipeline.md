@@ -607,7 +607,10 @@ and nothing at all when it is empty:
   library row and the review page read afterwards;
 - hands it to the notifier with `Finalized`, which shows "Recording saved
   without game audio: … Please report this with your Windows version" instead
-  of "Recording saved";
+  of "Recording saved". A problem the backend recognised as the user's or the
+  machine's doing (a device disconnected, the microphone blocked in Windows'
+  privacy settings) is said in plain words with its fix, and without the
+  report line (DEVELOPMENT.md §2.6, #296);
 - publishes `captureProblems` with the row's id, after `recordingStopped`, for
   the strip in an open window.
 

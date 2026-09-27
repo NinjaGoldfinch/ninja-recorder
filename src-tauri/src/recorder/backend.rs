@@ -103,10 +103,12 @@ pub struct CaptureBackendStatus {
     /// `libobs (ready)` or `unavailable (…)`. The two differ when the
     /// configured backend was refused, and this is how the row finds out.
     pub active: String,
-    /// The live backend is encoding video in software
-    /// (`Recorder::software_encoding`), so recording costs noticeably more
-    /// CPU. The row shows a notice while it is true (DEVELOPMENT.md §2.4).
-    pub software_encoding: bool,
+    /// Why the live backend is encoding video in software, or `null` when it
+    /// is not (`Recorder::software_encoding`): recording then costs
+    /// noticeably more CPU, and the row shows a notice with this reason while
+    /// it is set (DEVELOPMENT.md §2.4). The same reason `active` gives after
+    /// "because", so the two lines cannot disagree (#296).
+    pub software_encoding: Option<String>,
     /// Every backend this build knows about, available or not, in the order
     /// the control lists them.
     pub options: Vec<CaptureBackendOption>,

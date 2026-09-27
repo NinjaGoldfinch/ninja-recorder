@@ -422,7 +422,23 @@ kill_diff: number,
  */
 cs_diff: number, };
 
-export type CaptureProblem = { "kind": "sourceFailed", source: string, reason: string, } | { "kind": "sourceEnded", source: string, reason: string, } | { "kind": "endedEarly", reason: string, } | { "kind": "notStarted", reason: string, } | { "kind": "notSaved", reason: string, };
+export type CaptureProblem = { "kind": "sourceFailed", source: string, reason: string, explained?: Explained, } | { "kind": "sourceEnded", source: string, reason: string, explained?: Explained, } | { "kind": "endedEarly", reason: string, explained?: Explained, } | { "kind": "notStarted", reason: string, } | { "kind": "notSaved", reason: string, };
+
+export type Explained = { 
+/**
+ * What happened, as a phrase: `the microphone was disconnected`.
+ */
+text: string, 
+/**
+ * What to do about it, as a sentence, when there is something to do.
+ */
+fix: string | null, 
+/**
+ * Whether it is worth a bug report. `false` for what the user or their
+ * machine did (a device unplugged, a privacy setting), which no report
+ * can fix; `true` for what should not happen, which only a report can.
+ */
+report: boolean, };
 
 export type AudioInputDevice = { 
 /**
@@ -466,11 +482,13 @@ automatic: boolean,
  */
 active: string, 
 /**
- * The live backend is encoding video in software
- * (`Recorder::software_encoding`), so recording costs noticeably more
- * CPU. The row shows a notice while it is true (DEVELOPMENT.md §2.4).
+ * Why the live backend is encoding video in software, or `null` when it
+ * is not (`Recorder::software_encoding`): recording then costs
+ * noticeably more CPU, and the row shows a notice with this reason while
+ * it is set (DEVELOPMENT.md §2.4). The same reason `active` gives after
+ * "because", so the two lines cannot disagree (#296).
  */
-software_encoding: boolean, 
+software_encoding: string | null, 
 /**
  * Every backend this build knows about, available or not, in the order
  * the control lists them.

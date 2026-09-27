@@ -299,7 +299,7 @@ const MOCKS: Record<string, unknown> = {
     configured: "libobs",
     automatic: false,
     active: "libobs (idle)",
-    software_encoding: false,
+    software_encoding: null,
     options: [
       { backend: "libobs", unavailable: null },
       { backend: "own", unavailable: "the own capture backend records on Windows only" },

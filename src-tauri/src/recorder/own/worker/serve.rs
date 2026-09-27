@@ -236,7 +236,11 @@ mod tests {
     }
 
     fn unplugged() -> CaptureProblem {
-        CaptureProblem::SourceEnded { source: "microphone".into(), reason: "unplugged".into() }
+        CaptureProblem::SourceEnded {
+            source: "microphone".into(),
+            reason: "unplugged".into(),
+            explained: crate::recorder::own::problem::explain("microphone", "(0x88890004)"),
+        }
     }
 
     fn lines(requests: &[Request]) -> Vec<u8> {

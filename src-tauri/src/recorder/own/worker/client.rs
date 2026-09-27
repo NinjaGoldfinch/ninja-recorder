@@ -333,13 +333,25 @@ fn pass_software_override(command: &mut Command, forced: bool) {
     }
 }
 
-/// `exited with code 3`, `exited with exit code: 0xc0000005`, `was killed by
-/// signal 9`: whatever the platform can say.
+/// `exited with code 3`, `exited with code 0xc0000005`, `ended without an
+/// exit code (signal: 9)`: whatever the platform can say, once. The status's
+/// own text only repeats a code (`exit code: 1` on Windows), so it is kept
+/// for the one case with no code to give (#296).
 fn ended(status: ExitStatus) -> String {
     match status.code() {
-        Some(0) => "exited cleanly (code 0)".to_string(),
-        Some(code) => format!("exited with code {code} ({status})"),
+        Some(code) => exit_code(code),
         None => format!("ended without an exit code ({status})"),
+    }
+}
+
+/// An exit code as the log and the stored diagnostics name it: decimal, or
+/// hex for a negative one, which on Windows is an NTSTATUS (`0xc0000005`, an
+/// access violation) and is only searchable in that form.
+fn exit_code(code: i32) -> String {
+    match code {
+        0 => "exited cleanly (code 0)".to_string(),
+        code if code < 0 => format!("exited with code {:#010x}", code as u32),
+        code => format!("exited with code {code}"),
     }
 }
 
@@ -348,6 +360,14 @@ fn ended(status: ExitStatus) -> String {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    /// #296: "exited with code 1 (exit code: 1)" said the code twice.
+    #[test]
+    fn an_exit_code_is_said_once() {
+        assert_eq!(exit_code(1), "exited with code 1");
+        assert_eq!(exit_code(0), "exited cleanly (code 0)");
+        assert_eq!(exit_code(-1_073_741_819), "exited with code 0xc0000005");
+    }
 
     const HELLO: &str = r#"{"type":"hello","protocol":1,"pid":1,"version":"x"}"#;
 

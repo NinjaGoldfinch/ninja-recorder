@@ -46,7 +46,7 @@ use crate::recorder::own::mix::TrackMix;
 use crate::recorder::own::plan::{self, CapturePlan, source_name};
 use crate::recorder::own::problem::{self, SourceError};
 use crate::recorder::own::root::{self, Proc};
-use crate::recorder::own::stats::{AudioStop, Opened, SourceStop};
+use crate::recorder::own::stats::{AudioStop, Opened, Outcome, SourceStop};
 use crate::{info, warn};
 
 /// How long a stop waits for the audio packets of the last video tick,
@@ -159,12 +159,16 @@ impl AudioTracks {
                 };
                 super::start(&name, target, tx).map(|source| (source, what, pid))
             });
+            // Not there is not a failure (#296): an absence is left out,
+            // said at INFO, and never called failed.
+            let failed = source.as_ref().err().is_some_and(|e| problem::is_failure(kind, e.stage));
             report.push(Opened {
                 name: name.clone(),
-                outcome: source
-                    .as_ref()
-                    .map(|(_, what, _)| what.clone())
-                    .map_err(|e| e.reason.clone()),
+                outcome: match &source {
+                    Ok((_, what, _)) => Outcome::Opened(what.clone()),
+                    Err(e) if failed => Outcome::Failed(e.reason.clone()),
+                    Err(e) => Outcome::Absent(e.reason.clone()),
+                },
             });
             if let Err(e) = &source
                 && let Some(problem) = problem::not_opened(kind, e)
@@ -186,10 +190,18 @@ impl AudioTracks {
                     });
                     opened.push(true);
                 }
-                Err(e) => {
+                Err(e) if failed => {
                     warn!(
                         "recorder",
                         "own backend: no {name} audio; it is left out of the recording: {e}"
+                    );
+                    opened.push(false);
+                }
+                Err(e) => {
+                    info!(
+                        "recorder",
+                        "own backend: no {name} audio, which is not there to capture; it is \
+                         left out of the recording: {e}"
                     );
                     opened.push(false);
                 }

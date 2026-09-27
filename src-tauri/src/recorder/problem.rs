@@ -28,22 +28,60 @@ use serde::{Deserialize, Serialize};
 ///
 /// `source` names an audio source the way the log does: `game`,
 /// `microphone`, `desktop`, or an application's executable (`Discord.exe`).
+///
+/// `reason` is always the technical text, for the log and the stored
+/// diagnostics. `explained`, when the failure is one this app recognises
+/// (`own::problem` decides), is what a person is told instead (#296). It is
+/// left off the wire when there is none, so a problem stored before it
+/// existed reads back unchanged.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum CaptureProblem {
     /// A source the preset names, which was there to capture, did not open.
     /// The file has no such audio at all, and the rest of it is as normal.
-    SourceFailed { source: String, reason: String },
+    SourceFailed {
+        source: String,
+        reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        explained: Option<Explained>,
+    },
     /// A source that opened stopped before the recording did, and is silence
     /// from then on in every track it feeds.
-    SourceEnded { source: String, reason: String },
+    SourceEnded {
+        source: String,
+        reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        explained: Option<Explained>,
+    },
     /// The recording stopped before the game did (the GPU device was lost, a
     /// write failed, the capture worker died). What was written is kept.
-    EndedEarly { reason: String },
+    EndedEarly {
+        reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        explained: Option<Explained>,
+    },
     /// Nothing was recorded: the backend refused to start.
     NotStarted { reason: String },
     /// The recording could not be finished, and nothing was kept.
     NotSaved { reason: String },
+}
+
+/// A failure in words a person can act on, without the call that failed or
+/// its HRESULT: those stay in the problem's `reason`, for the log and a bug
+/// report.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+pub struct Explained {
+    /// What happened, as a phrase: `the microphone was disconnected`.
+    pub text: String,
+    /// What to do about it, as a sentence, when there is something to do.
+    pub fix: Option<String>,
+    /// Whether it is worth a bug report. `false` for what the user or their
+    /// machine did (a device unplugged, a privacy setting), which no report
+    /// can fix; `true` for what should not happen, which only a report can.
+    pub report: bool,
 }
 
 impl CaptureProblem {
@@ -52,10 +90,32 @@ impl CaptureProblem {
         match self {
             CaptureProblem::SourceFailed { reason, .. }
             | CaptureProblem::SourceEnded { reason, .. }
-            | CaptureProblem::EndedEarly { reason }
+            | CaptureProblem::EndedEarly { reason, .. }
             | CaptureProblem::NotStarted { reason }
             | CaptureProblem::NotSaved { reason } => reason,
         }
+    }
+
+    /// What a person is told instead of the reason, if anything.
+    pub fn explained(&self) -> Option<&Explained> {
+        match self {
+            CaptureProblem::SourceFailed { explained, .. }
+            | CaptureProblem::SourceEnded { explained, .. }
+            | CaptureProblem::EndedEarly { explained, .. } => explained.as_ref(),
+            CaptureProblem::NotStarted { .. } | CaptureProblem::NotSaved { .. } => None,
+        }
+    }
+
+    /// The reason as a person is told it: the explanation when there is one,
+    /// the technical reason when there is not.
+    pub fn told(&self) -> &str {
+        self.explained().map_or_else(|| self.reason(), |e| e.text.as_str())
+    }
+
+    /// Whether this is worth asking for a bug report about: anything not
+    /// explained as the user's or the machine's own doing.
+    pub fn wants_report(&self) -> bool {
+        self.explained().is_none_or(|e| e.report)
     }
 
     /// Whether the recording itself is gone, as against missing a part.
@@ -152,14 +212,34 @@ pub fn notification(
         (false, false) => format!("Recording saved without {}", join_and(&missing)),
         (false, true) => format!("Recording ended early, without {}", join_and(&missing)),
     };
-    let reasons: Vec<String> =
-        problems.iter().map(|p| format!("{}: {}.", p.headline(), trim_stop(p.reason()))).collect();
-    let body = format!(
-        "{name}. {} Please report this with your Windows version ({}).",
-        reasons.join(" "),
-        build_phrase(windows_build)
-    );
+    // Each problem as it is told, each fix once, and the report request only
+    // when something is not the user's or the machine's own doing (#296).
+    let mut sentences: Vec<String> = Vec::new();
+    for p in problems {
+        sentences.push(format!("{}: {}.", p.headline(), trim_stop(p.told())));
+    }
+    for fix in fixes(problems) {
+        sentences.push(fix.to_string());
+    }
+    let mut body = format!("{name}. {}", sentences.join(" "));
+    if problems.iter().any(CaptureProblem::wants_report) {
+        body.push_str(&format!(
+            " Please report this with your Windows version ({}).",
+            build_phrase(windows_build)
+        ));
+    }
     Some((title, body))
+}
+
+/// Every problem's fix, each said once, in the order the problems came.
+fn fixes(problems: &[CaptureProblem]) -> Vec<&str> {
+    let mut fixes: Vec<&str> = Vec::new();
+    for fix in problems.iter().filter_map(|p| p.explained()?.fix.as_deref()) {
+        if !fixes.contains(&fix) {
+            fixes.push(fix);
+        }
+    }
+    fixes
 }
 
 /// The message for a start the backend refused, for the existing "Recording
@@ -188,7 +268,19 @@ mod tests {
     use super::*;
 
     fn failed(source: &str, reason: &str) -> CaptureProblem {
-        CaptureProblem::SourceFailed { source: source.into(), reason: reason.into() }
+        CaptureProblem::SourceFailed { source: source.into(), reason: reason.into(), explained: None }
+    }
+
+    fn ended(source: &str, reason: &str) -> CaptureProblem {
+        CaptureProblem::SourceEnded { source: source.into(), reason: reason.into(), explained: None }
+    }
+
+    fn early(reason: &str) -> CaptureProblem {
+        CaptureProblem::EndedEarly { reason: reason.into(), explained: None }
+    }
+
+    fn explained(text: &str, fix: Option<&str>, report: bool) -> Option<Explained> {
+        Some(Explained { text: text.into(), fix: fix.map(Into::into), report })
     }
 
     #[test]
@@ -207,9 +299,9 @@ mod tests {
     #[test]
     fn each_problem_has_a_headline() {
         assert_eq!(failed("game", "x").headline(), "No game audio");
-        let ended = CaptureProblem::SourceEnded { source: "microphone".into(), reason: "x".into() };
+        let ended = ended("microphone", "x");
         assert_eq!(ended.headline(), "Microphone audio stopped part-way");
-        assert_eq!(CaptureProblem::EndedEarly { reason: "x".into() }.headline(), "The recording ended early");
+        assert_eq!(early("x").headline(), "The recording ended early");
         assert!(CaptureProblem::NotStarted { reason: "x".into() }.is_whole());
         assert!(CaptureProblem::NotSaved { reason: "x".into() }.is_whole());
         assert!(!failed("game", "x").is_whole());
@@ -236,7 +328,7 @@ mod tests {
     fn one_notification_covers_every_problem() {
         let problems = [
             failed("game", "refused (0x80070005)"),
-            CaptureProblem::SourceEnded { source: "Discord.exe".into(), reason: "gone.".into() },
+            ended("Discord.exe", "gone."),
         ];
         let (title, body) = notification("r", &problems, None).unwrap();
         assert_eq!(title, "Recording saved without game audio and Discord audio");
@@ -248,11 +340,65 @@ mod tests {
 
     #[test]
     fn an_early_end_is_the_title_when_it_happens() {
-        let early = CaptureProblem::EndedEarly { reason: "the GPU device was lost".into() };
+        let early = early("the GPU device was lost");
         let (title, _) = notification("r", std::slice::from_ref(&early), Some(1)).unwrap();
         assert_eq!(title, "Recording ended early");
         let (title, _) = notification("r", &[early, failed("microphone", "x")], Some(1)).unwrap();
         assert_eq!(title, "Recording ended early, without microphone audio");
+    }
+
+    /// #296: a recognised failure is told in its own words, with its fix,
+    /// and without the call, the HRESULT or the report request when it is
+    /// the user's or the machine's doing.
+    #[test]
+    fn an_explained_problem_is_told_plainly_and_asks_for_no_report() {
+        let fix = "Turn on \"Let desktop apps access your microphone\" in Settings.";
+        let mic = CaptureProblem::SourceFailed {
+            source: "microphone".into(),
+            reason: "IAudioClient::Initialize (the microphone) failed: Access is denied. (0x80070005)"
+                .into(),
+            explained: explained("Windows is blocking microphone access", Some(fix), false),
+        };
+        let (title, body) = notification("r", std::slice::from_ref(&mic), Some(26_200)).unwrap();
+        assert_eq!(title, "Recording saved without microphone audio");
+        assert_eq!(
+            body,
+            "r. No microphone audio: Windows is blocking microphone access. Turn on \"Let desktop \
+             apps access your microphone\" in Settings."
+        );
+        assert!(!mic.wants_report());
+        assert_eq!(mic.told(), "Windows is blocking microphone access");
+        assert!(mic.reason().contains("0x80070005"), "the reason keeps the HRESULT");
+
+        // The fix is said once however many problems it covers, and anything
+        // unexplained beside them still asks for a report.
+        let gone = CaptureProblem::SourceEnded {
+            source: "microphone".into(),
+            reason: "y".into(),
+            explained: explained("the microphone was disconnected", Some(fix), false),
+        };
+        let (_, body) = notification("r", &[mic.clone(), gone.clone()], None).unwrap();
+        assert_eq!(body.matches(fix).count(), 1, "{body}");
+        assert!(!body.contains("report"), "{body}");
+        let (_, body) = notification("r", &[mic, gone, failed("game", "z")], None).unwrap();
+        assert!(body.ends_with("Please report this with your Windows version (an unknown Windows build)."));
+    }
+
+    /// An explanation can still ask for a report: a worker crash is told in
+    /// plain words and is still a bug.
+    #[test]
+    fn an_explained_bug_still_asks_for_a_report() {
+        let worker = CaptureProblem::EndedEarly {
+            reason: "the capture worker stopped at 2:58: capture worker pid 7 exited with code 1".into(),
+            explained: explained("the capture worker stopped unexpectedly at 2:58", None, true),
+        };
+        let (_, body) = notification("r", &[worker], Some(1)).unwrap();
+        assert_eq!(
+            body,
+            "r. The recording ended early: the capture worker stopped unexpectedly at 2:58. Please \
+             report this with your Windows version (Windows build 1)."
+        );
+        assert!(!body.contains("pid"), "{body}");
     }
 
     #[test]
@@ -283,14 +429,19 @@ mod tests {
     fn the_wire_shape_is_tagged_camel_case() {
         let json = serde_json::to_value(failed("game", "r")).unwrap();
         assert_eq!(json, serde_json::json!({"kind": "sourceFailed", "source": "game", "reason": "r"}));
-        let json = serde_json::to_value(CaptureProblem::EndedEarly { reason: "r".into() }).unwrap();
+        let json = serde_json::to_value(early("r")).unwrap();
         assert_eq!(json, serde_json::json!({"kind": "endedEarly", "reason": "r"}));
         for problem in [
             failed("Discord.exe", "a\nb"),
-            CaptureProblem::SourceEnded { source: "microphone".into(), reason: "c".into() },
-            CaptureProblem::EndedEarly { reason: "d".into() },
+            ended("microphone", "c"),
+            early("d"),
             CaptureProblem::NotStarted { reason: "e".into() },
             CaptureProblem::NotSaved { reason: "f".into() },
+            CaptureProblem::SourceEnded {
+                source: "microphone".into(),
+                reason: "g".into(),
+                explained: explained("h", Some("i"), false),
+            },
         ] {
             let back: CaptureProblem =
                 serde_json::from_str(&serde_json::to_string(&problem).unwrap()).unwrap();

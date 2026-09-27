@@ -10,7 +10,7 @@ function today(over: Partial<CaptureBackendStatus> = {}): CaptureBackendStatus {
     configured: "libobs",
     automatic: false,
     active: "libobs (idle)",
-    software_encoding: false,
+    software_encoding: null,
     options: [
       { backend: "libobs", unavailable: null },
       { backend: "own", unavailable: NOT_BUILT },
@@ -55,17 +55,39 @@ describe("softwareNote", () => {
   });
 
   // DEVELOPMENT.md §2.4: the software fallback is allowed only if the user is
-  // told, and the flag is what says so, not the wording of `active`.
-  it("says the recording costs more CPU when the daemon flags software encoding", () => {
+  // told, and the daemon's field is what says so, not the wording of `active`.
+  it("says the recording costs more CPU when the daemon reports software encoding", () => {
     const note = softwareNote(
       today({
         configured: "own",
         active: "own (software encoding: H264 Encoder MFT, because no hardware GPU was found)",
-        software_encoding: true,
+        software_encoding: "no hardware GPU was found",
       }),
     );
-    expect(note).toContain("encoding video in software");
-    expect(note).toContain("more CPU");
+    expect(note).toBe(
+      "Recording is encoding video in software, because no hardware GPU was found. It uses " +
+        "noticeably more CPU than a graphics card's encoder, which can cost frame rate in game.",
+    );
+  });
+
+  // #296: forced on a devtools build, the notice blamed "no usable hardware
+  // encoder" under an "In use now" line that said it was forced.
+  it("gives the daemon's reason, the one the In use now line gives, not a fixed one", () => {
+    const forced = "forced by NINJA_OWN_FORCE_SOFTWARE_ENCODER (devtools)";
+    const note = softwareNote(
+      today({
+        configured: "own",
+        active: `own (software encoding: H264 Encoder MFT, because ${forced})`,
+        software_encoding: forced,
+      }),
+    );
+    expect(note).toContain(`in software, because ${forced}. It uses`);
+    expect(note).not.toContain("no usable hardware encoder");
+  });
+
+  it("is quiet for an empty reason, and ends one sentence with one full stop", () => {
+    expect(softwareNote(today({ software_encoding: "" }))).toBeNull();
+    expect(softwareNote(today({ software_encoding: "no GPU." }))).toContain("because no GPU. It");
   });
 });
 
