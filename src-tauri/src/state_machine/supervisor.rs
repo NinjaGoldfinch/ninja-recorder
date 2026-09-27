@@ -275,6 +275,26 @@ pub struct RecordingDiagnostics {
     /// not diagnosable without. `None` off Windows, and on older rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub windows_build: Option<u32>,
+
+    /// Polls the endpoint answered but that could not be read as a snapshot
+    /// (#305). Not counted in `polls`. Left out when zero, so a clean
+    /// recording's JSON is what it always was.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub unreadable_polls: usize,
+    /// Whether an unreadable poll came **after the last sample** (#305):
+    /// whether the stretch from the last sample to the end of the file was
+    /// still game, rather than the post-game screen it otherwise looks like.
+    ///
+    /// The trim cuts a post-game tail only on `Some(false)`
+    /// (`trim::TailEvidence`), and the player does not clip one on
+    /// `Some(true)`. `None` is a row from before this existed, or a recording
+    /// that never polled at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unreadable_at_end: Option<bool>,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 struct RecordingSession {
@@ -310,6 +330,18 @@ struct RecordingSession {
     /// `allPlayers` at all. Overwriting with one of those would trade a
     /// real scoreboard for the absence of one.
     scoreboard: Option<live_client::Scoreboard>,
+    /// Whether the endpoint answered with something unreadable after the
+    /// last sample was taken (#305).
+    ///
+    /// Set by every unreadable response and cleared by every new sample, so
+    /// at finalize it says whether the stretch between the last sample and
+    /// the end of the file was *game*. Stored as
+    /// `RecordingDiagnostics::unreadable_at_end`, which the trim reads:
+    /// without it, that stretch looks exactly like the post-game screen and
+    /// is cut off.
+    unreadable_since_sample: bool,
+    /// Every unreadable poll while recording, for the diagnostics.
+    unreadable_polls: usize,
     /// Diagnostic counters, for `RecordingDiagnostics` at finalize.
     polls: usize,
     first_game_time_s: Option<f64>,
@@ -675,6 +707,7 @@ impl Supervisor {
     /// Sent *after* the markers and samples are in, because the trim is
     /// expressed as a rebase of exactly those rows — the same path
     /// `dev_trim_lead_in` takes for a recording made before this existed.
+    /// The diagnostics are in too, and the tail cut reads them (#305).
     fn request_trim(&self, recording_id: i64) {
         if let Some(request) = self.trim_requester.lock().unwrap().as_ref() {
             request(recording_id);
@@ -1016,6 +1049,10 @@ impl Supervisor {
                 },
                 {
                     let sup = Arc::clone(&sup);
+                    move || sup.on_unreadable_poll()
+                },
+                {
+                    let sup = Arc::clone(&sup);
                     move || sup.dispatch(StateEvent::LiveClientDown)
                 },
             )
@@ -1058,6 +1095,11 @@ impl Supervisor {
         let samples_before = session.samples.len();
         let added = session.ingest(&snapshot, elapsed_s);
         let new_sample = session.sample_added_since(samples_before);
+        // A sample after an unreadable stretch moves the last known moment of
+        // the game past it, so the stretch no longer sits in the tail (#305).
+        if new_sample.is_some() {
+            session.unreadable_since_sample = false;
+        }
         // The identity is fetched once per game by a task that races the
         // first polls, so it is picked up here rather than at `start`, and
         // absorbed rather than assigned: a client that drops out later must
@@ -1177,6 +1219,11 @@ impl Supervisor {
             recorder.collect_output();
         }
 
+        // The backend's watch (`capture_watch`) is what notices a lost
+        // capture at once; this is the net under it, a second later at most,
+        // should that call never come. `try_lock` for the reason above.
+        self.check_capture(false);
+
         for marker in added {
             // `None` even though a row now exists. The row is deliberately not
             // a library entry until it is finished, so handing out its id
@@ -1190,6 +1237,17 @@ impl Supervisor {
         }
     }
 
+    /// Every poll the endpoint answered but that could not be read as a
+    /// snapshot (#305). The game is alive, so nothing ends; what changes is
+    /// that the recording's tail after the last sample is now known to be
+    /// game, which the finalize stores for the trim and the player.
+    fn on_unreadable_poll(&self) {
+        if let Some(session) = self.session.lock().unwrap().as_mut() {
+            session.unreadable_since_sample = true;
+            session.unreadable_polls += 1;
+        }
+    }
+
     /// Executes `Action::StartRecording`. The state machine has already
     /// optimistically transitioned to `Recording` by the time this runs —
     /// if `Recorder::start` fails here (only reachable today via the dev
@@ -1198,7 +1256,7 @@ impl Supervisor {
     /// recorder's actual state diverge. Known gap, logged loudly rather
     /// than silently wrong; not expected to occur outside that manual
     /// double-start collision.
-    fn start_recording(&self) {
+    fn start_recording(self: &Arc<Self>) {
         if !crate::retention::has_room_to_record(&self.recordings_dir) {
             error!("state_machine", "refusing to start recording: insufficient free disk space");
             self.emit(SupervisorEvent::RecordingFailed(
@@ -1234,14 +1292,20 @@ impl Supervisor {
         let expected_path = config.expected_output_path();
         // The backend's name is read under the same lock as the start, so the
         // line below names the one that started this recording rather than
-        // whatever is in the box a moment later. The guard is dropped before
-        // the `match`, which asks nothing more of the recorder.
+        // whatever is in the box a moment later. The audio layout likewise,
+        // for the row below. The guard is dropped before the `match`, which
+        // asks nothing more of the recorder.
         let started = {
             let mut recorder = self.recorder.lock().unwrap();
-            recorder.start(config).map(|()| recorder.backend_name())
+            // Before every start rather than once: the box can be replaced
+            // with another backend between games (`daemon::backends`).
+            recorder.watch_capture(self.capture_watch());
+            recorder
+                .start(config)
+                .map(|()| (recorder.backend_name(), recorder.current_audio()))
         };
         match started {
-            Ok(backend) => {
+            Ok((backend, audio)) => {
                 // Said here as well as by the backend, so the log names what
                 // recorded this game without depending on libobs's own output
                 // reaching a file (#221).
@@ -1259,10 +1323,22 @@ impl Supervisor {
                 //
                 // A failure here is logged and carried: recording without
                 // crash-safe markers is worth more than not recording.
-                let recording_id = match self
-                    .db
-                    .begin_recording(&expected_path.display().to_string(), started_at_millis)
-                {
+                //
+                // The audio layout goes in with it (#311), so a recording
+                // that startup recovery finishes still offers its stems.
+                // The finalize rewrites it from what `stop` reports.
+                let audio_tracks_json = audio.and_then(|layout| {
+                    serde_json::to_string(&layout)
+                        .inspect_err(|e| {
+                            warn!("state_machine", "could not encode the audio track layout: {e}")
+                        })
+                        .ok()
+                });
+                let recording_id = match self.db.begin_recording(
+                    &expected_path.display().to_string(),
+                    started_at_millis,
+                    audio_tracks_json.as_deref(),
+                ) {
                     Ok(id) => Some(id),
                     Err(e) => {
                         error!(
@@ -1297,6 +1373,8 @@ impl Supervisor {
                     align: AlignmentTracker::new(),
                     live: LiveSummary::default(),
                     scoreboard: None,
+                    unreadable_since_sample: false,
+                    unreadable_polls: 0,
                     polls: 0,
                     first_game_time_s: None,
                     last_game_time_s: None,
@@ -1342,6 +1420,58 @@ impl Supervisor {
         }
     }
 
+    /// What the recorder is given to call when it notices the recording in
+    /// flight may have lost its capture (`Recorder::watch_capture`): the own
+    /// backend calls it from the capture worker's reply thread the moment the
+    /// worker's pipe closes (#299).
+    ///
+    /// The check runs elsewhere, because the caller must not wait: stopping a
+    /// recording remuxes it, under the recorder lock, and the caller is the
+    /// thread that reads the worker's replies. **On the async runtime's
+    /// blocking pool, not a plain thread**, because the finalize it runs calls
+    /// the callbacks `lib.rs` and the daemon install, and those spawn tasks: on
+    /// a thread with no runtime that panicked under the recorder lock and left
+    /// every later start unable to take it (#299). Holds the supervisor
+    /// weakly, because the recorder that holds this closure is held by the
+    /// supervisor.
+    fn capture_watch(self: &Arc<Self>) -> crate::recorder::CaptureWatch {
+        let supervisor = Arc::downgrade(self);
+        Arc::new(move || {
+            let Some(supervisor) = supervisor.upgrade() else { return };
+            tauri::async_runtime::spawn_blocking(move || supervisor.check_capture(true));
+        })
+    }
+
+    /// Asks the recorder whether the recording in flight has lost its
+    /// capture, and if it has, sends `CaptureLost` through the machine,
+    /// which finishes the recording now and records the rest of the game
+    /// into a fresh one. `wait` says whether to wait for the recorder lock
+    /// or skip the check when it is held.
+    ///
+    /// The recorder reports a loss once, so this and the poll's check cannot
+    /// both act on the same one. The lock is released before the dispatch,
+    /// whose stop takes it again.
+    fn check_capture(self: &Arc<Self>, wait: bool) {
+        let recorder = if wait { self.recorder.lock().ok() } else { self.recorder.try_lock().ok() };
+        let lost = recorder.and_then(|mut recorder| recorder.capture_lost());
+        let Some(why) = lost else { return };
+        warn!(
+            "state_machine",
+            "the capture stopped while the game was still running ({why}); finishing \
+             the recording now"
+        );
+        self.dispatch(StateEvent::CaptureLost);
+        // Said either way, so a run that does not resume shows why in the log
+        // rather than simply going quiet.
+        let state = self.machine.lock().unwrap().state.clone();
+        info!("state_machine", "{}", resume_note(&state, self.is_polling()));
+    }
+
+    /// Whether the Live Client poll is running, for the log line above.
+    fn is_polling(&self) -> bool {
+        self.live_client_task.lock().unwrap().is_some()
+    }
+
     /// Executes `Action::StopRecording`: stops the recorder, then writes
     /// the recording + its markers to the VOD library DB (DEVELOPMENT.md
     /// §4). A DB write failure is logged but doesn't lose the in-memory
@@ -1374,11 +1504,16 @@ impl Supervisor {
         // recorder's shutdown and ffmpeg remux, which takes seconds on a long
         // game, and every one of them would be counted as footage the library
         // claims the file contains.
-        let duration_s = session
+        let elapsed_s = session
             .as_ref()
             .map(|s| s.record_started_at.elapsed().as_secs_f64());
         match self.recorder.lock().unwrap().stop() {
             Ok(output) => {
+                // The file's own length when the backend knows the recording
+                // stopped short of this stop (#299): a capture worker that
+                // died at 2:58 of a game stopped at 3:46 made a 2:58 file,
+                // and the library should say so.
+                let duration_s = output.duration_s.or(elapsed_s);
                 let path = output.path;
                 // What the recording lost to a failure, stored with the row
                 // and said once the row is written (#10).
@@ -1453,6 +1588,8 @@ impl Supervisor {
                     samples: samples.len(),
                     capture_problems: problems.clone(),
                     windows_build,
+                    unreadable_polls: session.as_ref().map_or(0, |s| s.unreadable_polls),
+                    unreadable_at_end: session.as_ref().map(|s| s.unreadable_since_sample),
                 };
                 let diagnostics_json = match serde_json::to_string(&diagnostics) {
                     Ok(json) => Some(json),
@@ -1814,6 +1951,31 @@ fn timestamp_millis() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// What happens to the game after a lost capture's recording is finished,
+/// for the log line that follows it, from the state the machine is in by then
+/// and whether the Live Client poll is still running.
+///
+/// `Recording` already is the resume: the poll runs on its own task, and its
+/// `LiveClientUp` can land while the finish is still returning (#299's box run
+/// saw exactly that), so it must not read as the game having moved on.
+fn resume_note(state: &GameState, polling: bool) -> String {
+    match (state, polling) {
+        (GameState::Recording, _) => {
+            "the game was resumed into a new recording by the Live Client poll".to_string()
+        }
+        (GameState::WaitingForGame, true) => {
+            "resuming the game into a new recording at the next Live Client poll".to_string()
+        }
+        (GameState::WaitingForGame, false) => {
+            "not resuming: this game's capture restarts are spent; waiting for it to end"
+                .to_string()
+        }
+        (state, _) => {
+            format!("not resuming: the game ended while the recording was finished ({state:?})")
+        }
+    }
 }
 
 /// How many polls apart `Recorder::collect_output` is called while recording:
@@ -2205,6 +2367,8 @@ mod tests {
             align: AlignmentTracker::new(),
             live: LiveSummary::default(),
             scoreboard: None,
+            unreadable_since_sample: false,
+            unreadable_polls: 0,
             polls: 0,
             first_game_time_s: None,
             last_game_time_s: None,
@@ -2473,6 +2637,7 @@ mod tests {
                 path,
                 audio: crate::recorder::audio::AudioLayout { sources: vec![], tracks: vec![] },
                 problems: vec![refused_game_audio()],
+                duration_s: None,
             })
         }
 
@@ -2548,6 +2713,184 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    // --- a capture lost mid-game (#299) ------------------------------------
+
+    /// The line after a lost capture's finish says what actually happened:
+    /// a poll that already restarted the recording is a resume, not a game
+    /// that moved on, and only the real non-resumes say "not resuming".
+    #[test]
+    fn the_resume_note_reads_the_state_the_finish_left() {
+        for polling in [true, false] {
+            let note = resume_note(&GameState::Recording, polling);
+            assert!(note.contains("was resumed"), "{note}");
+            assert!(!note.contains("not resuming"), "{note}");
+        }
+        assert!(resume_note(&GameState::WaitingForGame, true).starts_with("resuming"));
+        assert!(
+            resume_note(&GameState::WaitingForGame, false).contains("restarts are spent")
+        );
+        for state in [GameState::Finalizing, GameState::ClientRunning, GameState::Idle] {
+            let note = resume_note(&state, true);
+            assert!(note.starts_with("not resuming"), "{note}");
+        }
+    }
+
+    /// Stands in for the own backend whose capture worker is killed mid-game:
+    /// setting `lost` is the worker dying, the test then calls the installed
+    /// watch the way the worker's reply thread does, and the stop that
+    /// follows reports a file shorter than the time since `start`, as a
+    /// repaired one is.
+    #[derive(Default)]
+    struct DyingRecorder {
+        dir: PathBuf,
+        recording: bool,
+        /// Set by the test: the worker has died.
+        lost: Arc<std::sync::atomic::AtomicBool>,
+        reported: bool,
+        starts: Arc<Mutex<usize>>,
+        watch: Arc<Mutex<Option<crate::recorder::CaptureWatch>>>,
+    }
+
+    const FILE_LENGTH_S: f64 = 178.0;
+
+    fn worker_died() -> crate::recorder::CaptureProblem {
+        crate::recorder::CaptureProblem::EndedEarly {
+            reason: "the capture worker stopped at 2:58: pid 7 exited with code 1".into(),
+        }
+    }
+
+    impl Recorder for DyingRecorder {
+        fn start(&mut self, _config: crate::recorder::RecordConfig) -> Result<(), RecorderError> {
+            self.recording = true;
+            self.lost.store(false, std::sync::atomic::Ordering::SeqCst);
+            self.reported = false;
+            *self.starts.lock().unwrap() += 1;
+            Ok(())
+        }
+
+        fn stop(&mut self) -> Result<crate::recorder::RecordingOutput, RecorderError> {
+            self.recording = false;
+            let path = self.dir.join(format!("dying-{}.mp4", self.starts.lock().unwrap()));
+            std::fs::create_dir_all(&self.dir)?;
+            std::fs::write(&path, b"not really an mp4")?;
+            let lost = self.lost.swap(false, std::sync::atomic::Ordering::SeqCst);
+            Ok(crate::recorder::RecordingOutput {
+                path,
+                audio: crate::recorder::audio::AudioLayout { sources: vec![], tracks: vec![] },
+                problems: if lost { vec![worker_died()] } else { vec![] },
+                duration_s: lost.then_some(FILE_LENGTH_S),
+            })
+        }
+
+        fn is_recording(&self) -> bool {
+            self.recording
+        }
+
+        fn backend_name(&self) -> String {
+            "dying".to_string()
+        }
+
+        fn watch_capture(&mut self, watch: crate::recorder::CaptureWatch) {
+            *self.watch.lock().unwrap() = Some(watch);
+        }
+
+        fn capture_lost(&mut self) -> Option<String> {
+            let lost = self.lost.load(std::sync::atomic::Ordering::SeqCst);
+            if !self.recording || !lost || self.reported {
+                return None;
+            }
+            self.reported = true;
+            Some("capture worker pid 7 exited with code 1".into())
+        }
+    }
+
+    /// Waits for `done` for up to five seconds: the watch runs the check on a
+    /// thread of its own, as it must off the worker's reply thread.
+    fn eventually(done: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !done() {
+            assert!(Instant::now() < deadline, "never happened");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// The worker dies mid-game: the recording is finished then, not at the
+    /// end of the game. The state leaves `Recording`, the row is finished by
+    /// id with the file's length rather than the wall clock's, the problem is
+    /// told and published, and the next poll records the rest of the game.
+    #[test]
+    fn a_capture_lost_mid_game_is_finished_at_once_and_the_game_recorded_on() {
+        let dir = std::env::temp_dir().join(format!("ninja-dying-{}", timestamp_millis()));
+        let starts = Arc::new(Mutex::new(0));
+        let watch = Arc::new(Mutex::new(None));
+        let lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (sup, seen, told) = supervisor_recording_with(Box::new(DyingRecorder {
+            dir: dir.clone(),
+            lost: Arc::clone(&lost),
+            starts: Arc::clone(&starts),
+            watch: Arc::clone(&watch),
+            ..Default::default()
+        }));
+        // Shaped like the daemon's: it spawns onto the ambient runtime, which
+        // panics on a thread that has none. The first box run of #299 did
+        // exactly that from the capture check's thread, under the recorder
+        // lock, poisoning it so that the resume never started.
+        let trims = Arc::new(Mutex::new(Vec::new()));
+        // This thread stands in for the daemon's watcher tasks, which run on
+        // the runtime; the capture check's thread gets no such help from it.
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let _on_the_runtime = runtime.enter();
+        {
+            let trims = Arc::clone(&trims);
+            sup.set_trim_requester(Box::new(move |id| {
+                tokio::spawn(async {});
+                trims.lock().unwrap().push(id);
+            }));
+        }
+        sup.dispatch(present());
+        sup.dispatch(StateEvent::GameflowPhase(GameflowPhase::InProgress));
+        sup.dispatch(StateEvent::LiveClientUp);
+        assert_eq!(sup.status().state, GameState::Recording);
+        let opened = sup.db.unfinished_recordings().unwrap()[0].id;
+
+        // A poll while the capture is fine changes nothing.
+        sup.check_capture(true);
+        assert_eq!(sup.status().state, GameState::Recording);
+
+        // The worker dies, and its reply thread calls the watch.
+        lost.store(true, std::sync::atomic::Ordering::SeqCst);
+        let installed = watch.lock().unwrap().clone().expect("start installed the watch");
+        installed();
+
+        // The whole finalize, to the trim it asks for last, ran on a thread
+        // with a runtime.
+        eventually(|| trims.lock().unwrap().as_slice() == [opened]);
+        assert!(told.lock().unwrap().iter().any(|e| matches!(e, SupervisorEvent::Finalized(..))));
+        assert!(!sup.recorder.is_poisoned(), "the finalize panicked under the recorder lock");
+        assert_eq!(sup.status().state, GameState::WaitingForGame, "no longer Recording");
+        assert!(sup.current_recording().is_none());
+
+        let rows = sup.db.list_recordings().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, opened, "finished by id");
+        assert_eq!(rows[0].duration_s, Some(FILE_LENGTH_S), "the file's length, not the clock's");
+        assert_eq!(diagnostics_of(&sup).capture_problems, vec![worker_died()]);
+        assert_eq!(capture_problems(&seen).len(), 1);
+
+        // A second report of the same loss (the poll's net) does nothing.
+        sup.check_capture(false);
+        assert_eq!(sup.status().state, GameState::WaitingForGame);
+
+        // The next poll starts a fresh recording of the rest of the game.
+        sup.dispatch(StateEvent::LiveClientUp);
+        assert_eq!(sup.status().state, GameState::Recording);
+        assert_eq!(*starts.lock().unwrap(), 2);
+        sup.dispatch(StateEvent::GameflowPhase(GameflowPhase::EndOfGame));
+        let rows = sup.db.list_recordings().unwrap();
+        assert_eq!(rows.len(), 2, "the rest of the game is a recording of its own");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// A clean recording says nothing, and its diagnostics keep the shape
     /// they always had: no empty list, no build.
     #[test]
@@ -2570,6 +2913,14 @@ mod tests {
         let d: RecordingDiagnostics = serde_json::from_str(old).unwrap();
         assert!(d.capture_problems.is_empty());
         assert_eq!(d.windows_build, None);
+        // Nor the #305 pair, and "not known" is what it reads as: not a clean
+        // end, which would let the trim cut a tail nobody measured.
+        assert_eq!(d.unreadable_polls, 0);
+        assert_eq!(d.unreadable_at_end, None);
+        assert_eq!(
+            crate::trim::TailEvidence::from_diagnostics(Some(old)),
+            crate::trim::TailEvidence::Unknown
+        );
     }
 
     /// A start the backend refuses is a toast naming the build, and a
@@ -2630,6 +2981,74 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    // --- The trim hears how the polls ended (#305) ------------------------
+
+    /// Drives one recording through `polls` and returns what its stored
+    /// diagnostics tell the trim about its end.
+    fn tail_evidence_after(
+        polls: impl Fn(&Arc<Supervisor>),
+    ) -> (crate::trim::TailEvidence, RecordingDiagnostics) {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+        polls(&sup);
+        sup.stop_recording();
+        std::fs::remove_dir_all(&dir).ok();
+
+        let row = &sup.db.list_recordings().unwrap()[0];
+        let tail = crate::trim::TailEvidence::from_diagnostics(row.diagnostics_json.as_deref());
+        (tail, diagnostics_of(&sup))
+    }
+
+    /// #305 as it happened: the polls went unreadable mid-game and stayed
+    /// that way to the end. The stretch after the last sample is game, and
+    /// the trim is told so.
+    #[test]
+    fn unreadable_polls_at_the_end_reach_the_trim() {
+        let (tail, diagnostics) = tail_evidence_after(|sup| {
+            sup.on_snapshot(snapshot(10.0, &[]));
+            sup.on_snapshot(snapshot(11.0, &[]));
+            sup.on_unreadable_poll();
+            sup.on_unreadable_poll();
+        });
+        assert_eq!(tail, crate::trim::TailEvidence::Unreadable);
+        assert_eq!(diagnostics.unreadable_polls, 2);
+        assert_eq!(diagnostics.unreadable_at_end, Some(true));
+    }
+
+    /// A readable sample after an unreadable stretch moves the end of the
+    /// game past it, so the tail is clean again.
+    #[test]
+    fn a_sample_after_unreadable_polls_clears_them() {
+        let (tail, _) = tail_evidence_after(|sup| {
+            sup.on_snapshot(snapshot(10.0, &[]));
+            sup.on_unreadable_poll();
+            sup.on_snapshot(snapshot(12.0, &[]));
+        });
+        assert_eq!(tail, crate::trim::TailEvidence::Clean);
+    }
+
+    /// A readable poll whose clock has stopped — the end-of-game screen —
+    /// takes no sample, so it cannot clear an unreadable stretch before it.
+    #[test]
+    fn a_frozen_clock_does_not_clear_unreadable_polls() {
+        let (tail, _) = tail_evidence_after(|sup| {
+            sup.on_snapshot(snapshot(10.0, &[]));
+            sup.on_unreadable_poll();
+            sup.on_snapshot(snapshot(10.0, &[]));
+        });
+        assert_eq!(tail, crate::trim::TailEvidence::Unreadable);
+    }
+
+    /// The ordinary game: every poll read, then the endpoint went away.
+    #[test]
+    fn a_clean_game_reaches_the_trim_as_clean() {
+        let (tail, _) = tail_evidence_after(|sup| {
+            sup.on_snapshot(snapshot(10.0, &[]));
+            sup.on_snapshot(snapshot(11.0, &[]));
+        });
+        assert_eq!(tail, crate::trim::TailEvidence::Clean);
+    }
+
     // --- A killed daemon keeps its markers (#150) -------------------------
 
     /// **The bug, reproduced.** Markers used to live in `session.markers`
@@ -2673,6 +3092,91 @@ mod tests {
             "an unfinished recording is not a library entry"
         );
         assert_eq!(sup.db.unfinished_recordings().unwrap().len(), 1);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Reports one layout at the start and another at the stop, as a backend
+    /// whose microphone stopped existing mid-game would.
+    struct ShrinkingRecorder {
+        dir: PathBuf,
+        recording: bool,
+    }
+
+    fn with_discord() -> crate::recorder::audio::AudioLayout {
+        crate::recorder::audio::AudioPreset::GameMicDiscord { mic_device_id: None }.layout()
+    }
+
+    fn without_discord() -> crate::recorder::audio::AudioLayout {
+        crate::recorder::audio::AudioPreset::GameMic { mic_device_id: None }.layout()
+    }
+
+    impl Recorder for ShrinkingRecorder {
+        fn start(&mut self, _config: crate::recorder::RecordConfig) -> Result<(), RecorderError> {
+            self.recording = true;
+            Ok(())
+        }
+
+        fn stop(&mut self) -> Result<crate::recorder::RecordingOutput, RecorderError> {
+            self.recording = false;
+            let path = self.dir.join("shrinking.mp4");
+            std::fs::create_dir_all(&self.dir)?;
+            std::fs::write(&path, b"not really an mp4")?;
+            Ok(crate::recorder::RecordingOutput {
+                path,
+                audio: without_discord(),
+                problems: vec![],
+                duration_s: None,
+            })
+        }
+
+        fn is_recording(&self) -> bool {
+            self.recording
+        }
+
+        fn backend_name(&self) -> String {
+            "shrinking".to_string()
+        }
+
+        fn current_audio(&self) -> Option<crate::recorder::audio::AudioLayout> {
+            self.recording.then(with_discord)
+        }
+    }
+
+    fn layout_of(json: Option<&str>) -> crate::recorder::audio::AudioLayout {
+        serde_json::from_str(json.expect("a stored layout")).unwrap()
+    }
+
+    /// #311: the row a recording opens carries the layout the backend
+    /// reported at the start, so a daemon killed mid-game leaves a row that
+    /// startup recovery can finish with its stems intact.
+    #[test]
+    fn a_killed_daemon_leaves_the_audio_layout_on_the_row() {
+        let dir = std::env::temp_dir().join(format!("ninja-shrinking-{}", timestamp_millis()));
+        let (sup, _, _) =
+            supervisor_recording_with(Box::new(ShrinkingRecorder { dir: dir.clone(), recording: false }));
+        sup.start_recording();
+
+        // The daemon dies here. No finalize, ever.
+
+        let open = sup.db.unfinished_recordings().unwrap();
+        assert_eq!(layout_of(open[0].audio_tracks_json.as_deref()), with_discord());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The finalize still has the last word: what `stop` reports is what the
+    /// file holds, and it replaces what the start said.
+    #[test]
+    fn the_finalize_rewrites_the_audio_layout_the_start_stored() {
+        let dir = std::env::temp_dir().join(format!("ninja-shrinking-fin-{}", timestamp_millis()));
+        let (sup, _, _) =
+            supervisor_recording_with(Box::new(ShrinkingRecorder { dir: dir.clone(), recording: false }));
+        sup.start_recording();
+        sup.stop_recording();
+
+        let rows = sup.db.list_recordings().unwrap();
+        assert_eq!(layout_of(rows[0].audio_tracks_json.as_deref()), without_discord());
 
         std::fs::remove_dir_all(&dir).ok();
     }

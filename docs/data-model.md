@@ -284,8 +284,18 @@ user's own account of their sessions.
 `recordings.audio_tracks_json` holds a serialized `AudioLayout`: the ordered
 track list and the sources feeding each one ([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#25-multi-track-audio)).
 A `recording_audio_tracks` table would be the orthodox shape, and it would buy
-nothing here: the value is written once, always read whole, never queried by
-predicate, and at most six rows long.
+nothing here: the value is always read whole, never queried by predicate, and
+at most six rows long.
+
+It is written when the row is opened, from the layout the backend reports once
+`start` returns (`Recorder::current_audio`), and rewritten at finalize from
+what `stop` reports, which wins where the two differ (#311). Before that it was
+written only at finalize, so a recording finished by startup recovery had no
+layout, and the review player offered only its first track. Recovery fills a
+layout that is still NULL, for a row begun by a build that stored none, from
+the file's audio track count: the current preset's labels when its layout has
+that many tracks, otherwise `Everything` and `Track 2`, `Track 3`, and so on,
+with no sources. It never replaces one the start stored.
 
 The upsert in `insert_recording` treats it specially:
 
@@ -325,6 +335,8 @@ So a finalize records:
 | `markers`, `samples` | What the finalize wrote. Disagreeing with the tables means an insert failed |
 | `capture_problems` | What the recording lost to a capture failure (#10): a list of tagged `CaptureProblem`s (`sourceFailed`, `sourceEnded`, `endedEarly`), each with the failing call's own message and HRESULT. **Left out when empty**, so a clean recording's JSON is what it was before, and a row from before it reads as empty. A source the preset names that simply was not there (Discord not running) is not in it |
 | `windows_build` | The Windows build the recording was made on, without which a capture problem is not a bug report. Left out when it could not be read, and off Windows |
+| `unreadable_polls` | Polls the Live Client endpoint answered but that could not be read as a snapshot (#305), not counted in `polls`. Left out when zero |
+| `unreadable_at_end` | Whether an unreadable poll came **after the last sample**, which is whether the stretch from the last sample to the end of the file was still game (#305). **Read by two things**: the trim cuts a post-game tail only when this is `false` (`trim::TailEvidence`), and the review player does not clip the tail when it is `true`. Absent on a row from before it existed, which the trim reads as "not known" and cuts no tail from |
 
 **Deliberately not a copy of the row.** Everything here is something the
 columns cannot say. Duration, size, path and the audio layout are already
@@ -520,6 +532,13 @@ Writing it as rows rather than interpolating onto the 1 Hz ones keeps the
 frames' own timestamps, and means a recording can carry a gold curve even
 when the live poller never came up.
 
+The one gold row that is not a frame is the first: when the recording started
+between two frames, as it always does by a fraction of a second, a row at
+`video_time_s = 0` is interpolated between them so the curve reaches the left
+edge (#292; see `docs/recording-pipeline.md`). Its `video_time_s - game_time_s`
+is the alignment offset exactly, since `sample_alignment_offset` reads the
+earliest row and a rerun must recover the same one.
+
 Every diff is stored **pre-signed from the recording player's point of
 view**, with `our_team` alongside, so the sign convention is auditable in the
 data rather than being an unwritten frontend assumption. `our_team` is `NULL`
@@ -544,7 +563,9 @@ stateDiagram-v2
     Recovered --> [*]: reconcile
     note right of Open
         Hidden from the library.
-        Markers, samples, the
+        The audio layout is
+        written at the start;
+        markers, samples, the
         match summary and the
         scoreboard are written
         here, as the polls
@@ -587,11 +608,11 @@ leaves it alone.
 
 | Writer | Method | `finished_at` |
 |---|---|---|
-| Supervisor, at start | `begin_recording` | NULL, and upserts on `path` so a leftover row is reclaimed |
+| Supervisor, at start | `begin_recording` | NULL, and upserts on `path` so a leftover row is reclaimed. Writes the audio layout too |
 | Supervisor, per poll | `update_live_summary` | untouched: the row stays hidden while it fills in, summary columns, scoreboard and game identity alike |
 | Supervisor, at finalize | `finish_recording` | set, and matched **by id** |
 | `reconcile`, importing | `insert_recording` | set from the file's mtime |
-| `recover_unfinished` | `recover_recording` | set from the file's mtime |
+| `recover_unfinished` | `recover_recording` | set from the file's mtime. Fills a NULL audio layout from the file's track count |
 
 The finalize matches by id rather than upserting on `path` because the path a
 recording starts with is a prediction (`RecordConfig::expected_output_path`)
@@ -626,7 +647,8 @@ the bug that motivated all of this.
 Recovery also repairs the file (#233). A killed recording is a fragmented MP4
 that never reached the faststart remux a clean stop runs, so it came back
 playable but with no scrub bar. `recovery_action` decides from the file's own
-boxes, because an unfinished row's `audio_tracks_json` is still NULL, and the
+boxes, which are the fact where the row's `audio_tracks_json` is a claim (and
+NULL on a row an older build began), and the
 remux runs before the duration probe so the probe reads the file the library
 will play. A failed remux leaves the file as it was, and no failure along
 the way stops the row being finished. The one change made without ffmpeg is
@@ -646,12 +668,30 @@ own-backend stop is, until the review player is shown to seek an `mfra` file
 ([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#decision-the-own-backend-writes-its-own-mp4)).
 Either rewrite puts the mtime the kill left back afterwards.
 
+**Nothing is rewritten while something still has the file open** (#307). A
+capture worker that outlived its daemon went on writing the file recovery was
+repairing, which cut live footage off its end and then failed the remux's
+replace. Recovery now opens each file exclusively first (`db::in_use`, a
+`share_mode(0)` open on Windows) and retries for up to ten seconds; a file
+still held after that is left alone, row and all, and counted as
+`still_writing`, so the next start recovers it once the writer is gone. Its
+file is not imported meanwhile, because its row still exists.
+
+**A remux temp file never outlives its remux.** `remux_faststart` deletes
+`<stem>.faststart.tmp` on every failure, the final replace included, and the
+folder scan deletes any `*.faststart.tmp` (or the older `*.faststart.tmp.mp4`)
+it finds that nothing has open. The scan also runs on demand, and a clean
+stop's remux may be writing its temp file right then; that one is open, so it
+is left.
+
 ```mermaid
 flowchart TB
     START["recover_unfinished(db, ffmpeg)<br/><small>daemon startup only</small>"] --> OPEN["unfinished_recordings()<br/><small>finished_at IS NULL</small>"]
     OPEN --> C0{"File still<br/>on disk?"}
     C0 -->|"no"| DROP0["Delete the row<br/><small>nothing to show, nothing to keep</small>"]
-    C0 -->|"yes"| MTIME["Read the mtime<br/><small>before anything rewrites the file</small>"]
+    C0 -->|"yes"| BUSY{"Still open elsewhere?<br/><small>exclusive open, retried<br/>for up to 10 s</small>"}
+    BUSY -->|"yes"| LATER["Leave the row unfinished<br/><small>a worker the dead daemon left writing;<br/>the next start tries again</small>"]
+    BUSY -->|"no"| MTIME["Read the mtime<br/><small>before anything rewrites the file</small>"]
     MTIME --> STALE["Delete a stale *.faststart.tmp beside it<br/><small>a remux the dead daemon never finished</small>"]
     STALE --> OWN{"mp4::write::repair<br/><small>ours? (the own backend's writer)</small>"}
     OWN -->|"yes: torn tail cut,<br/>mfra and mehd written,<br/>mtime put back"| READ
@@ -664,19 +704,28 @@ flowchart TB
     TRUNC --> FF
     FF -->|"yes"| REMUX["recorder::remux::remux_faststart<br/><small>audio track count from the moov;<br/>time taken logged; mtime put back</small>"]
     FF -->|"no"| PROBE0
-    REMUX -->|"ok, or failed and<br/>original kept"| PROBE0
+    REMUX -->|"ok, or failed: original kept,<br/>temp file deleted"| PROBE0
     ACT -->|"Leave<br/><small>complete, unfragmented</small>"| PROBE0
     ACT -->|"Unplayable<br/><small>no whole fragment,<br/>or not an MP4</small>"| PROBE0
     PROBE0["probe::duration_s<br/><small>the session clock died with the daemon</small>"]
-    PROBE0 --> FIN["recover_recording<br/><small>duration_s, size_bytes, finished_at from mtime.<br/>Markers untouched; champion and KDA stay NULL</small>"]
-    DROP0 --> REP0["RecoveryReport<br/><small>recovered, abandoned_removed</small>"]
+    PROBE0 --> LAYOUT{"Row has an<br/>audio layout?"}
+    LAYOUT -->|"yes: begin_recording<br/>stored it"| FIN
+    LAYOUT -->|"no: an older build<br/>began it"| GUESS["recovered_layout<br/><small>from the moov's audio track count:<br/>the preset's labels if the count matches,<br/>else Everything, Track 2 …; none if no audio<br/>or no whole moov</small>"]
+    GUESS --> FIN
+    FIN["recover_recording<br/><small>duration_s, size_bytes, finished_at from mtime;<br/>audio layout only where it was NULL.<br/>Markers untouched; champion and KDA stay NULL</small>"]
+    DROP0 --> REP0["RecoveryReport<br/><small>recovered, abandoned_removed,<br/>still_writing</small>"]
     FIN --> REP0
+    LATER --> REP0
 ```
 
 ```mermaid
 flowchart TB
     START["reconcile(db, recordings_dir, ffmpeg)"] --> ROWS["list_recordings()<br/><small>finished rows only; unfinished ones<br/>are recover_unfinished's business</small>"]
     START --> FILES["List *.mp4 / *.mkv in the recordings dir<br/><small>never a remux temp file: *.faststart.tmp,<br/>or *.faststart.tmp.mp4 from older builds</small>"]
+    START --> TMPS["List remux temp files<br/><small>*.faststart.tmp, *.faststart.tmp.mp4</small>"]
+    TMPS --> C3{"Open elsewhere?<br/><small>a remux still writing it</small>"}
+    C3 -->|"no"| SWEEP["Delete it<br/><small>a crash or a failed replace left it</small>"]
+    C3 -->|"yes"| LEAVE["Leave it for the remux"]
     ROWS --> C1{"Row's file<br/>still exists?"}
     C1 -->|"no"| DROP["Delete the row<br/><small>user deleted the MP4</small>"]
     C1 -->|"yes"| KEEP["Leave the row alone"]

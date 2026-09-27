@@ -511,6 +511,16 @@ async fn start(paths: Paths) -> Result<Option<Started>, DaemonError> {
     if log_file.is_none() {
         eprintln!("[log] could not open a log file; this session logs to stderr only");
     }
+    // A panic on any thread goes into `daemon.log` as well as to stderr, which
+    // a release build has nowhere to put. Without this a thread that panics
+    // (#299's resume did, in a callback outside the runtime) leaves the daemon
+    // quietly doing less, and the log simply stops.
+    let report = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic| {
+        let thread = std::thread::current();
+        error!("daemon", "thread '{}' panicked: {panic}", thread.name().unwrap_or("unnamed"));
+        report(panic);
+    }));
 
     let endpoint = rpc::endpoint(&paths.data);
     let listener = match rpc::Listener::bind(&endpoint) {
@@ -616,12 +626,16 @@ async fn start(paths: Paths) -> Result<Option<Started>, DaemonError> {
     // the library. At this point in startup there is nothing recording to
     // confuse it with. The on-demand rescan deliberately does not call this.
     match db::reconcile::recover_unfinished(&db, paths.ffmpeg.as_deref()) {
-        Ok(report) if report.recovered > 0 || report.abandoned_removed > 0 => {
+        Ok(report)
+            if report.recovered > 0 || report.abandoned_removed > 0 || report.still_writing > 0 =>
+        {
             info!(
                 "db",
-                "startup recovery: finished {} interrupted recording(s), removed {} with no file",
+                "startup recovery: finished {} interrupted recording(s), removed {} with no \
+                 file, left {} still being written",
                 report.recovered,
-                report.abandoned_removed
+                report.abandoned_removed,
+                report.still_writing
             );
             events.publish(Event::LibraryChanged { reason: LibraryChangeReason::Reconciled });
         }
@@ -833,20 +847,29 @@ async fn accept_until_shutdown(
 /// Each must return immediately: they are called from inside `stop_recording`,
 /// under the recorder lock, where blocking would hold up the 1 Hz status poll
 /// and the start of the next game.
+///
+/// **And each spawns through a handle taken here, never `tokio::spawn`.** A
+/// finalize is not always on the runtime: the one a lost capture triggers
+/// (#299) runs on a plain thread, where `tokio::spawn` panics for want of a
+/// runtime, under the recorder lock, poisoning it. That is how the first
+/// build of #299's resume stopped dead after the first recording. Must be
+/// called on the runtime, as `start` does.
 fn wire_finalize_work(
     supervisor: &Arc<state_machine::Supervisor>,
     events: &snapshot::Stream,
     db: &Arc<db::Db>,
     ffmpeg: Option<PathBuf>,
 ) {
+    let runtime = tokio::runtime::Handle::current();
     if let Some(ffmpeg) = ffmpeg {
         let db = Arc::clone(db);
         let events = events.clone();
+        let runtime = runtime.clone();
         supervisor.set_trim_requester(Box::new(move |recording_id| {
             let db = Arc::clone(&db);
             let ffmpeg = ffmpeg.clone();
             let events = events.clone();
-            tokio::task::spawn_blocking(move || match trim::trim_recording(&db, &ffmpeg, recording_id) {
+            runtime.spawn_blocking(move || match trim::trim_recording(&db, &ffmpeg, recording_id) {
                 Ok(report) => {
                     // `head_removed_s` is a *measured* difference rather than a
                     // decision, so a recording that began at or after the game
@@ -885,10 +908,11 @@ fn wire_finalize_work(
     {
         let db = Arc::clone(db);
         let events = events.clone();
+        let runtime = runtime.clone();
         supervisor.set_summary_resumer(Box::new(move |lockfile| {
             let db = Arc::clone(&db);
             let events = events.clone();
-            tokio::spawn(async move {
+            runtime.spawn(async move {
                 let now_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as i64)
@@ -908,7 +932,7 @@ fn wire_finalize_work(
         supervisor.set_summary_fetcher(Box::new(move |request| {
             let db = Arc::clone(&db);
             let events = events.clone();
-            tokio::spawn(async move {
+            runtime.spawn(async move {
                 if match_summary::patch(&db, &request).await {
                     // Nothing else will say so: the row changed minutes after
                     // the library last looked at it.
@@ -1014,6 +1038,10 @@ mod tests {
             "!macro NSIS_HOOK_PREINSTALL",
             "!macro NSIS_HOOK_PREUNINSTALL",
             r#"!define NR_WORKER "libobs\extprocess_recorder.exe""#,
+            // The template deletes only the files it bundled, and fails
+            // silently on one the worker still has loaded (#308).
+            "!macro NSIS_HOOK_POSTUNINSTALL",
+            r#"RMDir /r "$INSTDIR\libobs""#,
         ] {
             assert!(hooks.contains(needle), "installer-hooks.nsh lost {needle:?}");
         }

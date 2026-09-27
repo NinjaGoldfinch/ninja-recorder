@@ -8,6 +8,7 @@ import {
   MIN_SKIP_S,
   measureGameEnd,
   measureGameStart,
+  unreadableAtEnd,
   viewingWindow,
   windowFraction,
 } from "./window";
@@ -164,6 +165,22 @@ describe("windowFraction", () => {
 
   it("is zero rather than NaN for an empty window", () => {
     expect(windowFraction(42, { start: 0, end: 0, span: 0 })).toBe(0);
+  });
+});
+
+describe("unreadableAtEnd", () => {
+  it("is true only when the diagnostics say so", () => {
+    expect(unreadableAtEnd('{"unreadable_polls":42,"unreadable_at_end":true}')).toBe(true);
+    expect(unreadableAtEnd('{"unreadable_at_end":false}')).toBe(false);
+  });
+
+  it("keeps the old window for anything that does not say", () => {
+    // A row from before #305, an imported row, and a blob that does not parse.
+    expect(unreadableAtEnd('{"polls":80}')).toBe(false);
+    expect(unreadableAtEnd(null)).toBe(false);
+    expect(unreadableAtEnd(undefined)).toBe(false);
+    expect(unreadableAtEnd("not json")).toBe(false);
+    expect(unreadableAtEnd("null")).toBe(false);
   });
 });
 

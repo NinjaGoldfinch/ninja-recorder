@@ -54,6 +54,9 @@
 //!   counters.
 //! - `status` — the even frame size, whether the encoder that was activated
 //!   is the one `select` chose, and the backend's name.
+//! - `watch` — whether the captured game window is still there (polled,
+//!   because WGC's `Closed` never fired on the box), and when to look for
+//!   the window a reconnected game opens (#302).
 //! - `worker` — the capture worker (`--capture-worker`, #241): the process
 //!   the session runs in, its protocol, its loop, when it exists, and the
 //!   daemon's client for it.
@@ -108,6 +111,8 @@ pub mod select;
 pub mod stats;
 #[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
 pub mod status;
+#[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
+pub mod watch;
 // Compiled everywhere, like the pure modules: the protocol, the worker's loop
 // and the lifetime rule are tested on any host. Off Windows `--capture-worker`
 // still runs, and refuses every request with the reason.

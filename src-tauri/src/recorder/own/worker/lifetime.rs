@@ -12,7 +12,10 @@
 //!   `start` in between (the client came back) forgets it.
 //! - **A worker that has died is not respawned mid-recording.** The recording
 //!   it was writing is recovered from the disk at `stop`, and the next
-//!   `prepare` or `start` spawns a fresh one.
+//!   `prepare` or `start` spawns a fresh one. Since #299 that `stop` comes at
+//!   once: the supervisor hears of the death from the worker's reply thread,
+//!   stops the recording, and the `prepare` and `start` of the second
+//!   recording of the same game follow straight after.
 //!
 //! So the worker never runs without League, and never outlives the recording
 //! that was in flight when League went away.

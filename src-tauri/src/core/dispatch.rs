@@ -961,7 +961,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(objective["status"], "active");
-        let recording = ctx.db.begin_recording("C:/vods/a.mp4", 1000).unwrap();
+        let recording = ctx.db.begin_recording("C:/vods/a.mp4", 1000, None).unwrap();
         ctx.db.start_game(Some(recording), 1000).unwrap();
 
         let game = dispatch(&ctx, "open_game_for_recording", json!({ "recordingId": recording }))

@@ -34,7 +34,7 @@ sequenceDiagram
     G-->>S: first successful /allgamedata
     S->>S: WaitingForGame → Recording
     S->>R: start(RecordConfig)
-    S->>D: begin_recording (row opened, finished_at NULL)
+    S->>D: begin_recording (row opened, finished_at NULL, audio layout from current_audio)
     S->>D: start_game (game, block, objective snapshot)
     S->>S: record started_at + first gameTime → TimeAlignment
 
@@ -46,6 +46,10 @@ sequenceDiagram
         S->>S: scoreboard (last good) → items, spells, runes
         S->>S: GameIdentity::absorb → game id, queue
         S->>D: write them as they arrive (so a crash keeps them)
+        opt the response is unreadable (not a 404)
+            G-->>S: something that does not parse
+            S->>S: mark the session "unreadable since the last sample"<br/>(first one of the game saved to logs/)
+        end
     end
 
     C-->>S: phase = EndOfGame (or 2999 stops responding)
@@ -77,6 +81,7 @@ stateDiagram-v2
     WaitingForGame --> Idle: lockfile gone<br/>▸ Stop watch + poll
     WaitingForGame --> Recording: Live Client Data reachable<br/>▸ StartRecording
     Recording --> Finalizing: phase EndOfGame<br/>or Live Client Data gone<br/>▸ StopRecording
+    Recording --> WaitingForGame: capture lost (worker died)<br/>▸ StopRecording<br/>(+ StopLiveClientPoll once<br/>3 restarts are spent)
     Finalizing --> ClientRunning: FinalizeComplete
     Finalizing --> Idle: FinalizeComplete<br/>+ client vanished
 ```
@@ -94,6 +99,7 @@ supervisor is the only thing that executes them, so "what should happen" and
 | `GameflowPhase` | `lcu::gameflow::watch` | LCU WebSocket, falling back to 1 s polling. Both read the *current* phase on connect, not just changes to it. The socket lasts two to three minutes and is re-established; see below |
 | `LiveClientUp` / `LiveClientDown` | `live_client::poller::watch` | 1 Hz. `Down` needs 5 consecutive *transport* failures, ~5 s; backoff to 10 s only once down |
 | `FinalizeComplete` | the supervisor itself, after `stop()` and teardown | once per game |
+| `CaptureLost` | the supervisor, when `Recorder::capture_lost` reports the recording's capture gone: asked the moment the own backend's worker pipe closes (`Recorder::watch_capture`), and on every Live Client poll as a net under that | at most once per recording |
 
 Alongside those, one request that drives no transition: entering
 `WaitingForGame` also fires a single `GET /lol-gameflow/v1/session` to learn
@@ -157,6 +163,9 @@ starting or stopping is skipped rather than waited for.
 | Practice Tool | Reports the same `InProgress`/`Reconnect` phases, so it is not special-cased |
 | Dodge / cancelled champ select | `WaitingForGame` bounces back to `ClientRunning` without ever recording |
 | Client restart during finalize | Handled regardless of ordering against `FinalizeComplete` |
+| Capture worker dies mid-game (#299) | `CaptureLost` → `WaitingForGame` at once, stopping the recording: the file is repaired and the row finished by id with the file's own length and an "ended early" problem. The watchers stay up, so the next poll records the rest of the game into a second recording |
+| Capture worker keeps dying | Restarted at most 3 times per game (`MAX_CAPTURE_RESTARTS`); the next loss also stops the Live Client poll, so the game is waited out in `WaitingForGame` and its end returns to `ClientRunning`. Refilled for the next game |
+| Capture lost as the game ends | Whichever event arrives first wins; `CaptureLost` outside `Recording` is a no-op, and the recorder reports a loss only once |
 
 Two cases are **not** verified, both because they need a live client on real
 hardware, and neither comes up in ordinary play: **spectator mode** (no phase
@@ -254,14 +263,37 @@ failures across fifteen seconds instead of five.
 
 The dev portal can also record that socket's whole output to disk without filtering (`dev::events`, [dev-portal.md](dev-portal.md)). It is a second connection rather than a tap on this one, because this watch's lifetime belongs to the state machine and a debug tool has no business in the path that decides when recordings start.
 
-Underneath both, the event list is parsed **entry by entry**: an event whose
-shape we cannot read is dropped and the rest of the snapshot survives. The
-events array is the only part of `AllGameData` that both grows during a game
-and can fail to deserialize (everything in `allPlayers` is defaulted) so it
-is the one place a shape nobody here has seen can arrive mid-game and take
-the payload with it. `Stolen` and `KillStreak` additionally accept whichever
-spelling the client uses, since Riot has historically sent booleans in this
-API as the strings `"True"`/`"False"`.
+Underneath both, **every list in a snapshot** is parsed leniently
+(`events::lenient_list`): an entry whose shape we cannot read is dropped and
+the rest of the snapshot survives. This used to be true of the event list
+alone, on the theory that everything in `allPlayers` was defaulted, but
+`default` only covers a *missing* key. In #305 a list arrived as a JSON
+object 38 seconds into a Practice Tool game, and every poll for the rest of
+the game failed to parse: no markers, no samples, no scoreboard. So
+`allPlayers`, each player's `items`, each event's `Assisters`, and the stored
+scoreboard's `players`, `items`, `spells` and `spell_ids` all accept an array,
+an object (read as its values, in numeric key order when the keys are
+numbers), or null, missing or a scalar (read as empty). The first coercion of
+each field is logged once, at warn, naming the field. `Stolen` and
+`KillStreak` additionally accept whichever spelling the client uses, since
+Riot has historically sent booleans in this API as the strings
+`"True"`/`"False"`.
+
+**A response that still fails names where.** `client::parse_all_game_data`
+parses through `serde_path_to_error`, so the warning reads
+`failed to parse response json at allPlayers[0].items: …` rather than "line
+237 column 12" of a response nobody kept. The poller also writes **the first
+unreadable response of each game** to `logs/live-client-unreadable.json`
+(overwritten by the next game that has one, capped at 1 MiB), so a report from
+a real box comes with the payload.
+
+**An unreadable stretch is game, and the trim is told so.** The poller reports
+each unreadable response (not a 404, which is the API saying the game is over)
+to the supervisor, which marks the session until the next sample. At finalize
+the mark is stored as `RecordingDiagnostics::unreadable_at_end`, and the trim
+cuts a post-game tail only when it is `false`: the last sample is the last
+*readable* moment, and in #305 the tail measured from it was 43 seconds of
+real gameplay ([DEVELOPMENT.md §5.4](../DEVELOPMENT.md)).
 
 **That leniency is load-bearing right now, not defensive.** It was written
 from documentation, and the captured game confirms it: `Stolen` arrives as the
@@ -541,7 +573,7 @@ flowchart TB
     A --> B{"ok?"}
     B -->|"no"| Z["log; keep last_finalized empty<br/><small>toast; captureProblems: notSaved</small>"]
     B -->|"yes"| C["stat file for size_bytes<br/><small>+ serialize the reported audio layout</small>"]
-    C --> D2["assemble RecordingDiagnostics<br/><small>polls, ever_matched, offset, backend,<br/>capture_problems, windows_build</small>"]
+    C --> D2["assemble RecordingDiagnostics<br/><small>polls, ever_matched, offset, backend,<br/>capture_problems, windows_build,<br/>unreadable_polls, unreadable_at_end</small>"]
     D2 --> D["db.finish_recording(id)<br/><small>by id: the row was opened at start.<br/>insert_recording only when there is no id</small>"]
     D -->|"err"| E["log; recording_id = None<br/><small>UI shows DB WRITE FAILED</small>"]
     D -->|"ok"| F0["delete_markers<br/><small>the ones written during the game</small>"]
@@ -557,6 +589,7 @@ flowchart TB
     J2 --> J3["publish recordingStopped,<br/>then captureProblems if it lost anything"]
     J3 --> K["request_summary(recording_id, game_id)"]
     K -.->|"only if both are known"| L["deferred LCU patch<br/><small>off this path; see below</small>"]
+    K --> T["request_trim(recording_id)<br/><small>off this path; the post-game tail only<br/>if unreadable_at_end is false (#305)</small>"]
     style Z fill:#ffebee,stroke:#c62828
     style E fill:#fff3e0,stroke:#ef6c00
 ```
@@ -794,7 +827,22 @@ per-participant `totalGold` per frame, and lands as its own sparser rows in
 The frames carry a game clock, so they go through the same game-time →
 video-time alignment the 1 Hz samples did, recovered from an existing sample
 row. A recording with no samples gets no gold: there is no alignment to place
-frames through. A custom or practice game gets none either, since it never
+frames through.
+
+A frame from before the recording started is outside the video, but it is not
+thrown away (#292). Capture starts when Live Client Data first answers, a
+fraction of a second after the game clock, so the offset is always slightly
+negative and the 0:00 frame always lands just before the video; dropping it
+left the chart blank until 1:00. `match_summary::place_gold_frames` keeps
+every frame inside the video and, when there is a frame on each side of the
+start, adds a point at video time 0 with its gold interpolated linearly
+between them. A mid-game start (#198) is the same rule between whichever two
+minutes straddle it. Nothing is added when a frame lands exactly on 0, or when
+no frame precedes the start. Frames after the video's end are kept, as they
+always were. A curve written before this fix still starts at 1:00: Fill in
+only asks for a curve when a row has none, so it does not rewrite these.
+
+A custom or practice game gets none either, since it never
 reaches match history, and that renders as "no gold data for this recording",
 never as a flat zero line, because a zero line reads as "you were even".
 

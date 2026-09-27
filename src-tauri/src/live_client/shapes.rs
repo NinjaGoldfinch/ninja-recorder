@@ -220,15 +220,17 @@ pub const EVENT_FIELDS: &[ModelledField] = &[
     ModelledField { key: "EventTime", expects: JsonType::Number, tolerated: false },
     ModelledField { key: "KillerName", expects: JsonType::String, tolerated: false },
     ModelledField { key: "VictimName", expects: JsonType::String, tolerated: false },
-    ModelledField { key: "Assisters", expects: JsonType::Array, tolerated: false },
+    // `lenient_list` (#305): an object is read as its values, anything else
+    // as empty.
+    ModelledField { key: "Assisters", expects: JsonType::Array, tolerated: true },
     ModelledField { key: "Recipient", expects: JsonType::String, tolerated: false },
     ModelledField { key: "Acer", expects: JsonType::String, tolerated: false },
     ModelledField { key: "AcingTeam", expects: JsonType::String, tolerated: false },
     ModelledField { key: "DragonType", expects: JsonType::String, tolerated: false },
     ModelledField { key: "TurretKilled", expects: JsonType::String, tolerated: false },
     ModelledField { key: "InhibKilled", expects: JsonType::String, tolerated: false },
-    // The two with lenient readers. `flexible_i64` and `flexible_bool` both
-    // end in `_ => None`, so any type at all is swallowed.
+    // `flexible_i64` and `flexible_bool` both end in `_ => None`, so any type
+    // at all is swallowed.
     ModelledField { key: "KillStreak", expects: JsonType::Number, tolerated: true },
     ModelledField { key: "Stolen", expects: JsonType::Bool, tolerated: true },
     ModelledField { key: "Result", expects: JsonType::String, tolerated: false },

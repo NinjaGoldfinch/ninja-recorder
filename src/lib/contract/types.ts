@@ -529,7 +529,24 @@ capture_problems?: Array<CaptureProblem>,
  * The Windows build this was recorded on, which a capture problem is
  * not diagnosable without. `None` off Windows, and on older rows.
  */
-windows_build?: number | null, };
+windows_build?: number | null, 
+/**
+ * Polls the endpoint answered but that could not be read as a snapshot
+ * (#305). Not counted in `polls`. Left out when zero, so a clean
+ * recording's JSON is what it always was.
+ */
+unreadable_polls?: number, 
+/**
+ * Whether an unreadable poll came **after the last sample** (#305):
+ * whether the stretch from the last sample to the end of the file was
+ * still game, rather than the post-game screen it otherwise looks like.
+ *
+ * The trim cuts a post-game tail only on `Some(false)`
+ * (`trim::TailEvidence`), and the player does not clip one on
+ * `Some(true)`. `None` is a row from before this existed, or a recording
+ * that never polled at all.
+ */
+unreadable_at_end?: boolean | null, };
 
 export type SessionMarker = { video_time_s: number, kind: MarkerKind, game_time_s: number, 
 /**
