@@ -22,9 +22,19 @@ interface Props {
   onseek: (videoTimeS: number) => void;
   /** The game clock at the playhead, for the form's clock button. */
   gameClockNow: () => number | null;
+  /** The player's "note at the playhead", for the form's stamp button. */
+  onstamp: () => void;
 }
 
-const { open, markers, beyond, onseek, gameClockNow }: Props = $props();
+const { open, markers, beyond, onseek, gameClockNow, onstamp }: Props = $props();
+
+let form = $state<ReturnType<typeof ReviewForm>>();
+
+/** Shows the Review tab and starts a note at `stamp` in it. */
+export async function noteAt(stamp: string): Promise<boolean> {
+  tab = "review";
+  return (await form?.noteAt(stamp)) ?? false;
+}
 
 type Tab = "review" | "events";
 let tab = $state<Tab>("review");
@@ -70,7 +80,7 @@ const STATUS_COPY = {
     aria-labelledby="rail-tab-review"
     hidden={tab !== "review"}
   >
-    <ReviewForm {gameClockNow} />
+    <ReviewForm bind:this={form} {gameClockNow} {onstamp} />
   </div>
 
   <div

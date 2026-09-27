@@ -505,6 +505,67 @@ describe("theatre mode", () => {
   });
 });
 
+describe("notes while watching", () => {
+  afterEach(() => localStorage.clear());
+
+  const notesBox = (el: HTMLElement) =>
+    vi.waitFor(() => {
+      const found = el.querySelector<HTMLTextAreaElement>('[aria-label="Notes"]');
+      if (!found) throw new Error("form not loaded");
+      return found;
+    });
+
+  it("n pauses and starts a note at the playhead, ready to type", async () => {
+    const el = render();
+    await open([marker(60)]);
+    const notes = await notesBox(el);
+    video(el).currentTime = 125;
+    await video(el).play();
+    key("n");
+    await vi.waitFor(() => expect(notes.value).toBe("2:05 "));
+    expect(video(el).paused).toBe(true);
+    expect(document.activeElement).toBe(notes);
+  });
+
+  it("opens the rail from theatre mode to take the note", async () => {
+    const el = render();
+    await open();
+    const notes = await notesBox(el);
+    key("t");
+    await Promise.resolve();
+    expect(el.querySelector<HTMLElement>(".review-rail")?.hidden).toBe(true);
+    key("n");
+    await vi.waitFor(() => expect(notes.value).not.toBe(""));
+    expect(el.querySelector<HTMLElement>(".review-rail")?.hidden).toBe(false);
+  });
+
+  it("the stamp button does the same as n", async () => {
+    const el = render();
+    await open();
+    const notes = await notesBox(el);
+    el.querySelector<HTMLButtonElement>(".stamp-btn")?.click();
+    await vi.waitFor(() => expect(notes.value).toBe("0:00 "));
+  });
+
+  it("Escape hands the keys back to the player, and Ctrl+Space plays from a field", async () => {
+    const el = render();
+    await open();
+    const notes = await notesBox(el);
+    notes.focus();
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: " ", ctrlKey: true, bubbles: true }),
+    );
+    await Promise.resolve();
+    expect(video(el).paused).toBe(false);
+
+    key("Escape");
+    expect(document.activeElement).not.toBe(notes);
+    key(" ");
+    await Promise.resolve();
+    expect(video(el).paused).toBe(true);
+  });
+});
+
 describe("closing", () => {
   it("tears the session down and goes back to the library", async () => {
     const el = render();

@@ -18,9 +18,9 @@
 -->
 
 <script lang="ts">
-import { untrack } from "svelte";
+import { tick, untrack } from "svelte";
 import { assetUrl, call } from "../../../bridge";
-import { vodHeading } from "../../../format";
+import { formatTime, vodHeading } from "../../../format";
 import { showView } from "../../../router";
 import type { AudioLayout } from "../../../types";
 import { recordedWithout } from "../../library/problems";
@@ -36,13 +36,14 @@ import { toast } from "../../stores/toast.svelte";
 import type { MetricKey } from "../../timeline/graph";
 import { nextMarker } from "../../timeline/navigate";
 import { stemCorrection } from "../../timeline/stem";
-import { clamp } from "../../timeline/window";
+import { clamp, displayTime } from "../../timeline/window";
 import PlayerControls from "./PlayerControls.svelte";
 import ReviewRail from "./ReviewRail.svelte";
 import Timeline from "./Timeline.svelte";
 
 let video = $state<HTMLVideoElement>();
 let playerWrap = $state<HTMLElement>();
+let rail = $state<ReturnType<typeof ReviewRail>>();
 
 /** The player's own state. None of it belongs in the store. */
 let playhead = $state(0);
@@ -322,6 +323,27 @@ function gameClockNow(): number | null {
   return gameClockAt(video.currentTime, review.samples, review.markers);
 }
 
+/**
+ * Pauses and starts a note at the current game time: the `n` key and the
+ * notes' stamp button. Opens the rail if theatre mode had it folded away,
+ * because a note nobody can see being written is not one.
+ *
+ * Falls back to the time the player shows when the recording has nothing to
+ * read the game clock from; a note's stamp is for finding the moment again,
+ * and the player's clock does that.
+ */
+async function noteAtPlayhead() {
+  if (!video) return;
+  video.pause();
+  if (!railOpen) {
+    railOpen = true;
+    saveRailOpen(true);
+    await tick();
+  }
+  const at = gameClockNow() ?? displayTime(video.currentTime, review.window);
+  await rail?.noteAt(formatTime(at));
+}
+
 function toggleRail() {
   railOpen = !railOpen;
   saveRailOpen(railOpen);
@@ -443,7 +465,7 @@ $effect(() => {
       onArrowControl: active?.tagName === "SELECT",
       menuOpen,
     };
-    const action = hotkeyAction(e.key, ctx);
+    const action = hotkeyAction(e.key, ctx, e.ctrlKey);
     if (action === null) return;
     e.preventDefault();
 
@@ -477,6 +499,12 @@ $effect(() => {
         break;
       case "toggleRail":
         toggleRail();
+        break;
+      case "noteAtPlayhead":
+        void noteAtPlayhead();
+        break;
+      case "leaveField":
+        (document.activeElement as HTMLElement | null)?.blur();
         break;
       case "closeMenu":
         menuOpen = false;
@@ -655,16 +683,18 @@ $effect(() => {
     />
 
     <p class="hint review-keys">
-      Space play/pause &middot; &larr; &rarr; seek 5s &middot; [ ] markers &middot; d / D deaths
-      &middot; f fullscreen &middot; m mute &middot; t theatre
+      Space play &middot; &larr; &rarr; 5s &middot; [ ] markers &middot; d / D deaths &middot; n note
+      &middot; Esc back to video &middot; t theatre &middot; f fullscreen &middot; m mute
     </p>
   </div>
 
   <ReviewRail
+    bind:this={rail}
     open={railOpen}
     markers={review.markers}
     beyond={review.footage.beyond}
     onseek={seekTo}
     {gameClockNow}
+    onstamp={() => void noteAtPlayhead()}
   />
 </div>

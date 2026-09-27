@@ -526,7 +526,16 @@ flowchart LR
   the tab bar, where it is visible from either tab.
 - **The player's hotkeys stand down while a field has focus**, as they always
   have (`review/hotkeys.ts`, `typing`), so the form can sit beside a player
-  that answers Space and the arrows.
+  that answers Space and the arrows. Two keys still work from inside a field:
+  Ctrl+Space plays and pauses, and Escape hands focus back to the player.
+- **`n` starts a note at the playhead** (#325). It pauses, opens the rail if
+  theatre mode had folded it away, and starts a new line in Notes stamped with
+  the game time (`reviewform/fields.ts`, `withStamp`), with the cursor after
+  the stamp. The "+ Timestamp" button does the same. The stamp is plain text in
+  `free_notes`. Notes as separate timed rows on the timeline wait for #251, and
+  nothing in the schema changes until then. The player reaches the form through
+  `ReviewRail.noteAt`, a component export, which is the one call that crosses
+  inward from the player to the form.
 - **Loads race, and the newer one wins.** Opening one VOD after another starts
   two loads; `gameReview` counts them and drops any answer that is not the
   latest's, so a slow daemon cannot put the previous game's review beside the

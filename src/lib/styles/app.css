@@ -2359,6 +2359,23 @@ button.small {
   color: var(--text-subtle);
 }
 
+.review-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+
+.review-section-head h3 {
+  margin: 0;
+}
+
+.stamp-btn {
+  padding: 0.15em 0.6em;
+  font-size: var(--fs-sm);
+}
+
 .review-section h3 + .field-hint {
   margin-top: 0;
 }

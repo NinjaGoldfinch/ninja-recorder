@@ -21,6 +21,8 @@ export type HotkeyAction =
   | "nextDeath"
   | "prevDeath"
   | "toggleRail"
+  | "noteAtPlayhead"
+  | "leaveField"
   | "closeMenu";
 
 /** What the page is doing, as far as a keystroke is concerned. */
@@ -45,8 +47,15 @@ export const SEEK_STEP_S = 5;
  *
  * Null means "not ours": the caller must not `preventDefault` on it.
  */
-export function hotkeyAction(key: string, ctx: HotkeyContext): HotkeyAction | null {
-  if (!ctx.reviewOpen || ctx.typing) return null;
+export function hotkeyAction(key: string, ctx: HotkeyContext, ctrl = false): HotkeyAction | null {
+  if (!ctx.reviewOpen) return null;
+
+  // **The two keys that work while typing**, so notes can be written without
+  // reaching for the mouse. Ctrl+Space plays and pauses from inside a field,
+  // where plain Space is a space. Escape hands focus back to the player,
+  // after which every other key here answers again.
+  if (key === " " && ctrl) return "togglePlay";
+  if (ctx.typing) return key === "Escape" ? "leaveField" : null;
 
   // **Space is the browser's own way to press a focused button or open a
   // focused select**, so stealing it would break every control in the row the
@@ -82,6 +91,8 @@ export function hotkeyAction(key: string, ctx: HotkeyContext): HotkeyAction | nu
       return "nextDeath";
     case "t":
       return "toggleRail";
+    case "n":
+      return "noteAtPlayhead";
     case "Escape":
       // **Guarded on the menu being open** so this never shadows the user
       // agent's own Escape-exits-fullscreen.

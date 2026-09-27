@@ -14,7 +14,8 @@
 -->
 
 <script lang="ts">
-import { formatClock, parseClock, parseCount } from "../../reviewform/fields";
+import { tick } from "svelte";
+import { formatClock, parseClock, parseCount, withStamp } from "../../reviewform/fields";
 import { GAME_CHOICES, LANE_CHOICES, MENTAL_CHOICES } from "../../reviewform/ratings";
 import {
   addTakeaway,
@@ -34,9 +35,30 @@ interface Props {
    * only wants it when the clock button is pressed.
    */
   gameClockNow?: () => number | null;
+  /** Asks the player for a note at the playhead, the same as the `n` key. */
+  onstamp?: () => void;
 }
 
-const { gameClockNow = () => null }: Props = $props();
+const { gameClockNow = () => null, onstamp }: Props = $props();
+
+let notesBox = $state<HTMLTextAreaElement>();
+
+/**
+ * Starts a note at `stamp` and puts the cursor after it. Called by the player
+ * (through the rail) for the `n` key and the stamp button. False when no game
+ * is loaded, so there is no notes box to write in.
+ */
+export async function noteAt(stamp: string): Promise<boolean> {
+  if (!gameReview.current) return false;
+  const next = withStamp(gameReview.draft.free_notes, stamp);
+  edit({ free_notes: next });
+  await tick();
+  if (!notesBox) return false;
+  notesBox.focus();
+  notesBox.setSelectionRange(next.length, next.length);
+  notesBox.scrollTop = notesBox.scrollHeight;
+  return true;
+}
 
 // Text boxes keep what was typed, even when it does not parse yet, so a
 // half-typed "2:" is not wiped by the next render. They are reset from the
@@ -258,11 +280,22 @@ const deathsHint = $derived.by(() => {
     </section>
 
     <section class="review-section review-notes-section">
-      <h3>Notes</h3>
+      <div class="review-section-head">
+        <h3>Notes</h3>
+        {#if onstamp}
+          <button
+            type="button"
+            class="ghost stamp-btn"
+            title="Pause and start a note at the current game time (n)"
+            onclick={onstamp}>+ Timestamp</button
+          >
+        {/if}
+      </div>
       <textarea
+        bind:this={notesBox}
         class="review-notes"
         aria-label="Notes"
-        placeholder="Anything worth remembering about this game."
+        placeholder="Press n while watching to start a note at that moment. Ctrl+Space plays and pauses while you type."
         value={gameReview.draft.free_notes}
         oninput={(e) => edit({ free_notes: e.currentTarget.value })}
       ></textarea>
