@@ -285,8 +285,8 @@ button:disabled {
 }
 
 /* Everything above and below the player that has to stay on screen with
- * it: the app bar, the container's top padding, the view header, and the
- * whole timeline down past the ruler. One number, in one place, because
+ * it: the app bar, the container's padding, the review header, the whole
+ * timeline down past the ruler, and the key hint under it. One number, in one place, because
  * the only reason it exists is to be adjusted when that furniture
  * changes.
  *
@@ -295,7 +295,7 @@ button:disabled {
  * slightly smaller player; being a rem under puts the ruler back under the
  * fold, which is the whole thing this exists to prevent. */
 .review-view {
-  --player-chrome: 18rem;
+  --player-chrome: 20rem;
   /* The rail's width, and everything above and below it that it has to
    * leave room for so it ends at the bottom of the window: the app bar, the
    * container's padding and the review header. Measured, like the chrome
@@ -311,6 +311,12 @@ button:disabled {
 .container:has(> .review-view:not([hidden])),
 body:has(.review-view:not([hidden])) .app-bar-inner {
   max-width: var(--review-max);
+}
+
+/* Nothing follows the review's last line, so the page's usual bottom margin
+ * would only be a strip for the window to scroll into. */
+.container:has(> .review-view:not([hidden])) {
+  padding-bottom: var(--sp-4);
 }
 
 .review-header {
@@ -341,8 +347,28 @@ body:has(.review-view:not([hidden])) .app-bar-inner {
   align-items: start;
 }
 
+/* Theatre mode: the rail is folded away and the player column takes the
+ * width. The player's own height cap still binds, so the ruler stays above
+ * the fold and the video centres in the extra room. */
+.review-layout.rail-closed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.review-rail[hidden] {
+  display: none;
+}
+
 .review-main {
   min-width: 0;
+}
+
+.rail-toggle {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.rail-toggle[aria-pressed="true"] {
+  color: var(--accent);
 }
 
 .review-keys {

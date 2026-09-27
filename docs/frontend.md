@@ -44,7 +44,7 @@ flowchart TB
     TL["lib/timeline/<br/><small>window, clusters, graph, stem,<br/>markers, navigate · pure, tested</small>"]
     LIBP["lib/library/<br/><small>filters, sort, stats, scoreboard,<br/>problems · pure, tested</small>"]
     SETP["lib/settings/<br/><small>notes, backfill, retention, audio,<br/>capture, update, about · pure, tested</small>"]
-    REVP["lib/review/<br/><small>hotkeys, playback<br/>pure, tested</small>"]
+    REVP["lib/review/<br/><small>hotkeys, playback, rail<br/>pure, tested</small>"]
     RFV["lib/components/reviewform/<br/><small>ReviewForm, RatingControl</small>"]
     RFS["lib/stores/gameReview.svelte.ts<br/><small>owns: the open game, its draft review,<br/>the autosave queue</small>"]
     OBV["lib/components/objectives/<br/><small>Objectives</small>"]
@@ -592,6 +592,14 @@ the window leaves it (`--rail-chrome`, measured the same way as
 the page scroll away from the player. At the default 1340×850 window that is a
 924×520 player and a 352px rail, with nothing below the fold. Below 1100px wide
 the rail drops under the player, and the page scrolls to it.
+
+**Theatre mode folds the rail away** (the ◧ button in the review header, or
+`t`), and the player column takes the width. The player's height cap still
+binds, so at 1340×850 the video grows to 942×530 and centres rather than
+pushing the ruler down. The rail is hidden, not unmounted, so a half-typed
+field survives it. Whether the rail is open is a layout preference of this
+window's alone, so `review/rail.ts` keeps it in `localStorage` rather than in
+SQLite with the real preferences.
 
 ### The player clips both ends
 

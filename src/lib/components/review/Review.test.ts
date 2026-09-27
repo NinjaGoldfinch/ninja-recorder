@@ -427,6 +427,57 @@ describe("the review rail", () => {
   });
 });
 
+describe("theatre mode", () => {
+  afterEach(() => localStorage.clear());
+
+  const rail = (el: HTMLElement) => el.querySelector<HTMLElement>(".review-rail");
+
+  it("folds the rail away with the button and brings it back with t", async () => {
+    const el = render();
+    await open();
+    await Promise.resolve();
+    expect(rail(el)?.hidden).toBe(false);
+
+    el.querySelector<HTMLButtonElement>(".rail-toggle")?.click();
+    await Promise.resolve();
+    expect(rail(el)?.hidden).toBe(true);
+    expect(el.querySelector(".review-layout")?.classList.contains("rail-closed")).toBe(true);
+    expect(el.querySelector(".rail-toggle")?.getAttribute("aria-pressed")).toBe("true");
+
+    key("t");
+    await Promise.resolve();
+    expect(rail(el)?.hidden).toBe(false);
+  });
+
+  it("is remembered for the next VOD", async () => {
+    let el = render();
+    await open();
+    key("t");
+    await Promise.resolve();
+    await svelte.unmount(instance as Record<string, unknown>, { outro: false });
+    instance = null;
+
+    el = render();
+    await open();
+    await Promise.resolve();
+    expect(rail(el)?.hidden).toBe(true);
+  });
+
+  it("does not fold the rail while typing in it", async () => {
+    const el = render();
+    await open();
+    const notes = await vi.waitFor(() => {
+      const found = el.querySelector<HTMLTextAreaElement>('[aria-label="Notes"]');
+      if (!found) throw new Error("form not loaded");
+      return found;
+    });
+    notes.focus();
+    key("t");
+    await Promise.resolve();
+    expect(rail(el)?.hidden).toBe(false);
+  });
+});
+
 describe("closing", () => {
   it("tears the session down and goes back to the library", async () => {
     const el = render();

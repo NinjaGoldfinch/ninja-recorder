@@ -21,6 +21,7 @@ describe("hotkeyAction", () => {
     expect(hotkeyAction("[", ctx())).toBe("prevMarker");
     expect(hotkeyAction("d", ctx())).toBe("prevDeath");
     expect(hotkeyAction("D", ctx())).toBe("nextDeath");
+    expect(hotkeyAction("t", ctx())).toBe("toggleRail");
   });
 
   it("does nothing outside the review view", () => {

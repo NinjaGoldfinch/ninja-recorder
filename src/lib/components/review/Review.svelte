@@ -27,6 +27,7 @@ import { recordedWithout } from "../../library/problems";
 import { laneOpponent } from "../../library/scoreboard";
 import { type HotkeyContext, hotkeyAction, SEEK_STEP_S } from "../../review/hotkeys";
 import { parseAudioLayout, videoErrorReport } from "../../review/playback";
+import { railOpenSaved, saveRailOpen } from "../../review/rail";
 import { closeReview, openReviewForRecording } from "../../stores/gameReview.svelte";
 import { closeRecording, review, setDuration } from "../../stores/review.svelte";
 import { toast } from "../../stores/toast.svelte";
@@ -47,6 +48,9 @@ let paused = $state(true);
 let rate = $state(1);
 let fullscreen = $state(false);
 let menuOpen = $state(false);
+/** Whether the review rail is beside the player, or folded away so the player
+ *  has the width (theatre mode). Remembered across VODs. */
+let railOpen = $state(railOpenSaved());
 /** Whether the settings menu was open when the current click started.
  *
  * Not `$state`: nothing renders from it. It exists so that dismissing the menu
@@ -307,6 +311,11 @@ function toggleFullscreen() {
   else playerWrap.requestFullscreen().catch(() => {});
 }
 
+function toggleRail() {
+  railOpen = !railOpen;
+  saveRailOpen(railOpen);
+}
+
 function jump(direction: 1 | -1, predicate?: (m: { kind: string }) => boolean) {
   if (!video) return;
   const target = nextMarker(review.markers, video.currentTime, direction, predicate);
@@ -450,6 +459,9 @@ $effect(() => {
       case "prevDeath":
         jump(-1, (m) => m.kind === "death");
         break;
+      case "toggleRail":
+        toggleRail();
+        break;
       case "closeMenu":
         menuOpen = false;
         break;
@@ -519,13 +531,21 @@ $effect(() => {
 <div class="review-header">
   <button type="button" class="back-btn" onclick={close}>&larr; Back</button>
   <h2>{heading}</h2>
+  <button
+    type="button"
+    class="icon-btn rail-toggle"
+    aria-pressed={!railOpen}
+    aria-label={railOpen ? "Hide the review panel" : "Show the review panel"}
+    title={railOpen ? "Theatre mode: hide the review panel (t)" : "Show the review panel (t)"}
+    onclick={toggleRail}>◧</button
+  >
 </div>
 
 {#if without}
   <p class="review-without" role="note">{without.full}</p>
 {/if}
 
-<div class="review-layout">
+<div class="review-layout" class:rail-closed={!railOpen}>
   <div class="review-main">
     <div class="player-wrap" bind:this={playerWrap}>
       <!-- svelte-ignore a11y_media_has_caption -->
@@ -613,9 +633,14 @@ $effect(() => {
 
     <p class="hint review-keys">
       Space play/pause &middot; &larr; &rarr; seek 5s &middot; [ ] markers &middot; d / D deaths
-      &middot; f fullscreen &middot; m mute
+      &middot; f fullscreen &middot; m mute &middot; t theatre
     </p>
   </div>
 
-  <ReviewRail markers={review.markers} beyond={review.footage.beyond} onseek={seekTo} />
+  <ReviewRail
+    open={railOpen}
+    markers={review.markers}
+    beyond={review.footage.beyond}
+    onseek={seekTo}
+  />
 </div>

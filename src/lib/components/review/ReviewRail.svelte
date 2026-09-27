@@ -2,9 +2,10 @@
   The right-hand rail beside the player (WS9 P1): the review form and the
   event list, one tab each.
 
-  **Both panels stay mounted and are hidden, not destroyed.** The form keeps
-  half-typed text that does not parse yet, and the list keeps its scroll
-  position; an `{#if}` would throw both away every time the tab changed.
+  **Both panels stay mounted and are hidden, not destroyed**, and so does the
+  rail itself in theatre mode. The form keeps half-typed text that does not
+  parse yet, and the list keeps its scroll position; an `{#if}` would throw
+  both away every time the tab changed or the rail was folded.
 -->
 
 <script lang="ts">
@@ -14,12 +15,14 @@ import ReviewForm from "../reviewform/ReviewForm.svelte";
 import MarkerList from "./MarkerList.svelte";
 
 interface Props {
+  /** False in theatre mode: the rail is folded away and the player widens. */
+  open: boolean;
   markers: readonly MarkerRow[];
   beyond: readonly MarkerRow[];
   onseek: (videoTimeS: number) => void;
 }
 
-const { markers, beyond, onseek }: Props = $props();
+const { open, markers, beyond, onseek }: Props = $props();
 
 type Tab = "review" | "events";
 let tab = $state<Tab>("review");
@@ -32,7 +35,7 @@ const STATUS_COPY = {
 } as const;
 </script>
 
-<aside class="review-rail" aria-label="Review">
+<aside class="review-rail" aria-label="Review" hidden={!open}>
   <div class="rail-tabs" role="tablist">
     <button
       type="button"

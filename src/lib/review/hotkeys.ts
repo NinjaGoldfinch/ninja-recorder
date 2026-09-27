@@ -20,6 +20,7 @@ export type HotkeyAction =
   | "prevMarker"
   | "nextDeath"
   | "prevDeath"
+  | "toggleRail"
   | "closeMenu";
 
 /** What the page is doing, as far as a keystroke is concerned. */
@@ -79,6 +80,8 @@ export function hotkeyAction(key: string, ctx: HotkeyContext): HotkeyAction | nu
       return "prevDeath";
     case "D":
       return "nextDeath";
+    case "t":
+      return "toggleRail";
     case "Escape":
       // **Guarded on the menu being open** so this never shadows the user
       // agent's own Escape-exits-fullscreen.
