@@ -323,7 +323,7 @@ The main window is created in Rust now rather than by `tauri.conf.json`, and
 argv selects the mode. Verified off Windows; the Windows behaviour of a windowless
 process is what needs confirming.
 
-- [ ] A normal start still opens the window at 1160x800 with an 880x600
+- [ ] A normal start still opens the window at 1340x850 with a 960x640
       minimum, titled `ninja-recorder`.
 - [x] `ninja-recorder.exe --hidden` opens a window like any other start.
       **The flag was removed at 2.0.0** (#71), so it is an unknown argument
