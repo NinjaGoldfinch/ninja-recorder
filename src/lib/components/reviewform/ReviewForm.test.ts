@@ -91,6 +91,10 @@ beforeEach(async () => {
 
 afterEach(async () => {
   if (instance) await svelte.unmount(instance, { outro: false });
+  // Each test imports a fresh store, but an unflushed autosave timer from the
+  // old one still fires, into the shared client mock and a later test's
+  // `save_game_review` expectations. Closing flushes it here instead.
+  await store.closeReview();
   host.remove();
   instance = null;
 });
