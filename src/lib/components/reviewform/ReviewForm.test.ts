@@ -95,9 +95,12 @@ afterEach(async () => {
   instance = null;
 });
 
-async function open(): Promise<HTMLElement> {
-  await store.openReviewForRecording(3);
-  instance = svelte.mount(ReviewForm, { target: host });
+async function open(
+  facts = { deaths: null as number | null },
+  props: Record<string, unknown> = {},
+): Promise<HTMLElement> {
+  await store.openReviewForRecording(3, facts);
+  instance = svelte.mount(ReviewForm, { target: host, props });
   await settle();
   return host;
 }
@@ -211,7 +214,73 @@ describe("ratings", () => {
   });
 });
 
+describe("filling in what the recording knows", () => {
+  it("pre-selects the result and the stats' deaths, tagged auto, without saving", async () => {
+    const el = await open({ deaths: 4 });
+    expect(radio(el, "Game", "Loss").getAttribute("aria-checked")).toBe("true");
+    expect(el.querySelectorAll(".auto-tag")).toHaveLength(2);
+    const deaths = el.querySelector<HTMLInputElement>("#review-deaths");
+    expect(deaths?.value).toBe("4");
+    // Opening a VOD writes nothing.
+    await store.flushReview();
+    expect(client.save_game_review).not.toHaveBeenCalled();
+  });
+
+  it("saves the pre-filled answers with the first real edit", async () => {
+    const el = await open({ deaths: 4 });
+    radio(el, "Lane", "Win").click();
+    await store.flushReview();
+    expect(lastSaved()).toEqual(
+      expect.objectContaining({ game_rating: "loss", deaths: 4, lane_rating: "win" }),
+    );
+  });
+
+  it("drops the tag once the user changes the answer", async () => {
+    const el = await open({ deaths: 4 });
+    radio(el, "Game", "Win").click();
+    await settle();
+    expect(el.querySelectorAll(".auto-tag")).toHaveLength(1);
+    expect(store.gameReview.isAuto("game_rating")).toBe(false);
+  });
+
+  it("leaves a saved review exactly as it was saved", async () => {
+    client.get_game_review.mockResolvedValue(
+      fixture({
+        review: {
+          game_rating: null,
+          lane_rating: null,
+          mental_rating: null,
+          first_clear_ms: null,
+          smites_at_clear: null,
+          deaths: null,
+          free_notes: "",
+        },
+      }),
+    );
+    const el = await open({ deaths: 4 });
+    expect(radio(el, "Game", "Loss").getAttribute("aria-checked")).toBe("false");
+    expect(el.querySelector<HTMLInputElement>("#review-deaths")?.value).toBe("");
+    expect(el.querySelector(".auto-tag")).toBeNull();
+  });
+});
+
 describe("the number fields", () => {
+  it("fills the clear time from the game clock at the playhead", async () => {
+    const el = await open(undefined, { gameClockNow: () => 192.7 });
+    el.querySelector<HTMLButtonElement>(".clock-btn")?.click();
+    await settle();
+    expect(el.querySelector<HTMLInputElement>("#review-clear")?.value).toBe("3:12");
+    await store.flushReview();
+    expect(lastSaved().first_clear_ms).toBe(192_000);
+  });
+
+  it("does nothing with the clock when there is no game time to read", async () => {
+    const el = await open(undefined, { gameClockNow: () => null });
+    el.querySelector<HTMLButtonElement>(".clock-btn")?.click();
+    await settle();
+    expect(el.querySelector<HTMLInputElement>("#review-clear")?.value).toBe("");
+  });
+
   it("saves a clear time typed as m:ss in milliseconds", async () => {
     const el = await open();
     const [clear] = el.querySelectorAll<HTMLInputElement>(".review-numbers input");
@@ -297,14 +366,28 @@ describe("takeaways", () => {
     expect(box.value).toBe("");
   });
 
+  it("adds one on Enter, and keeps Shift+Enter for a new line", async () => {
+    client.add_takeaway.mockResolvedValue(takeaway(9, { body: "Hover grubs" }));
+    const el = await open();
+    const box = el.querySelector<HTMLTextAreaElement>('[aria-label="New takeaway"]');
+    if (!box) throw new Error("no takeaway box");
+    type(box, "Hover grubs");
+    await settle();
+    box.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true }),
+    );
+    await settle();
+    expect(client.add_takeaway).not.toHaveBeenCalled();
+    box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await settle();
+    expect(client.add_takeaway).toHaveBeenCalledWith({ kind: "game", id: 7 }, "Hover grubs");
+  });
+
   it("promotes one and then shows it as promoted", async () => {
     client.get_game_review.mockResolvedValue(fixture({ takeaways: [takeaway(1)] }));
     client.promote_takeaway.mockResolvedValue({ id: 40 });
     const el = await open();
-    const promote = [...el.querySelectorAll("button")].find(
-      (b) => b.textContent === "Promote to objective",
-    );
-    promote?.click();
+    el.querySelector<HTMLButtonElement>('[aria-label="Promote to objective"]')?.click();
     await settle();
     expect(client.promote_takeaway).toHaveBeenCalledWith(1, "other");
     expect(el.querySelector(".review-takeaways")?.textContent).toContain("Promoted");

@@ -44,11 +44,24 @@ let store: typeof import("../../stores/review.svelte");
 type Svelte = typeof import("svelte");
 let svelte: Svelte;
 
-/** Typed loosely on purpose: only these five fields are read here. */
+/** Typed loosely on purpose, but with every field the heading and its facts
+ *  read, as a real row always has. */
 const row = {
   id: 1,
   path: "C:/vods/1.mp4",
+  started_at: 0,
+  duration_s: null,
+  queue: null,
+  game_mode: null,
   champion: "Ahri",
+  win: null,
+  kda_k: null,
+  kda_d: null,
+  kda_a: null,
+  cs: null,
+  tier: null,
+  division: null,
+  lp_after: null,
   audio_tracks_json: null as string | null,
   scoreboard_json: null as string | null,
 };
@@ -132,6 +145,20 @@ describe("loading a recording", () => {
     await open();
     await Promise.resolve();
     expect(el.querySelector("h2")?.textContent).toContain("Ahri");
+  });
+
+  it("lists what is known about the game beside the heading", async () => {
+    const el = render();
+    call.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    await store.openRecording({ ...row, queue: 420, kda_k: 9, kda_d: 2, kda_a: 11 } as never);
+    await Promise.resolve();
+    const facts = el.querySelector(".review-facts")?.textContent ?? "";
+    expect(facts).toContain("Ranked Solo");
+    expect(facts).toContain("9 / 2 / 11");
+    // The deaths reach the review too, for pre-filling it.
+    await vi.waitFor(() =>
+      expect(el.querySelector<HTMLInputElement>("#review-deaths")?.value).toBe("2"),
+    );
   });
 
   it("says nothing about capture for a clean recording", async () => {

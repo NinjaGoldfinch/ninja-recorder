@@ -11,14 +11,21 @@ interface Props {
   label: string;
   choices: Choice<T>[];
   value: T | null;
+  /** The lit answer was filled in from the recording, not chosen. */
+  auto?: boolean;
   onchange: (next: T | null) => void;
 }
 
-const { label, choices, value, onchange }: Props = $props();
+const { label, choices, value, auto = false, onchange }: Props = $props();
 </script>
 
-<div class="setting-row">
-  <span class="setting-label">{label}</span>
+<div class="rating-row">
+  <span class="rating-label"
+    >{label}
+    {#if auto && value !== null}
+      <span class="auto-tag" title="From the match result. Click to change it.">auto</span>
+    {/if}</span
+  >
   <div class="segmented rating" role="radiogroup" aria-label={label}>
     {#each choices as choice (choice.value)}
       <button

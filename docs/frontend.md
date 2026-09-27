@@ -44,12 +44,12 @@ flowchart TB
     TL["lib/timeline/<br/><small>window, clusters, graph, stem,<br/>markers, navigate · pure, tested</small>"]
     LIBP["lib/library/<br/><small>filters, sort, stats, scoreboard,<br/>problems · pure, tested</small>"]
     SETP["lib/settings/<br/><small>notes, backfill, retention, audio,<br/>capture, update, about · pure, tested</small>"]
-    REVP["lib/review/<br/><small>hotkeys, playback, rail<br/>pure, tested</small>"]
+    REVP["lib/review/<br/><small>hotkeys, playback, rail,<br/>clock, facts · pure, tested</small>"]
     RFV["lib/components/reviewform/<br/><small>ReviewForm, RatingControl</small>"]
     RFS["lib/stores/gameReview.svelte.ts<br/><small>owns: the open game, its draft review,<br/>the autosave queue</small>"]
     OBV["lib/components/objectives/<br/><small>Objectives</small>"]
     OBS["lib/stores/objectives.svelte.ts<br/><small>owns: the objectives list and its tab</small>"]
-    RFP["lib/reviewform/<br/><small>fields, ratings, autosave, sheet<br/>pure, tested</small>"]
+    RFP["lib/reviewform/<br/><small>fields, ratings, autosave, autofill,<br/>sheet · pure, tested</small>"]
     BRIDGE["bridge.ts<br/><small>composition root: picks a transport,<br/>exposes the generated client</small>"]
     TRANSPORT["lib/transport/<br/><small>pipe.ts (live) · mock.ts<br/>invoke.ts kept for the dev portal</small>"]
     CONTRACT["lib/contract/<br/><small>GENERATED from Rust</small>"]
@@ -542,6 +542,18 @@ flowchart LR
 - **A blank box means "not entered", never zero.** For deaths, that is what
   lets the form fall back to the death markers the recording counted.
   `reviewform/fields.ts` holds those rules, and the clear time's `m:ss` shape.
+- **A review never saved starts from what the recording knows.**
+  `reviewform/autofill.ts` sets the game rating to the result and deaths to
+  the end-of-game stats, in the draft only. Nothing is written until a real
+  edit, and each answer is tagged "auto" until it is changed
+  ([DEVELOPMENT.md §20](../DEVELOPMENT.md#20-vod-review-ws9-the-provisional-p0-defaults)).
+- **The clear time can be taken from the footage.** Pause on the clear and
+  press ⏱: `review/clock.ts` turns the playhead into game time, using the
+  nearest sample or marker because both carry both clocks. The form asks for
+  that time through a callback when the button is pressed, rather than
+  receiving the playhead as a prop, which would re-render it every frame.
+- **The heading carries the game's facts.** `review/facts.ts` lists the date,
+  length, queue, KDA, CS and rank, and each is shown only if it is known.
 - **The spreadsheet is parsed here, not in the daemon.** The Objectives
   view reads the chosen CSV and `reviewform/sheet.ts` turns it into typed rows.
   The local timezone, DST included, is only known on this side, and it is

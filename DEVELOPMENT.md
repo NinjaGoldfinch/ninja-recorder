@@ -4052,3 +4052,20 @@ retention and the user's Delete), and a review has to outlive its VOD. It also
 has to exist for a spreadsheet row that was never recorded. The other two
 questions are answered or not needed by P0: events reuse `markers` (#249), and
 there is no widget until P2 (#252).
+
+**P1 pre-fills what the recording already knows** (#324,
+`reviewform/autofill.ts`). The game rating starts at the match result, and
+deaths starts at the end-of-game stats rather than the death-marker count,
+because the markers are only as complete as the poll that saw them. Three rules
+keep this from putting words in the user's mouth:
+
+- **Only a review that has never been saved is filled.** A saved review is the
+  user's, and that includes the fields they left blank.
+- **The pre-fill goes into the draft, not into the database.** Opening a VOD
+  writes nothing. The pre-filled answers are saved with the first real edit, so
+  a VOD that was only watched never gets a review nobody wrote.
+- **Each pre-filled answer is tagged "auto"** until the user changes it.
+
+The clear-time clock button fills in the game clock at the playhead. It is a
+faster way of entering the time by hand, not a derived value, so #248 stays
+open.

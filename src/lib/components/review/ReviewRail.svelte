@@ -20,9 +20,11 @@ interface Props {
   markers: readonly MarkerRow[];
   beyond: readonly MarkerRow[];
   onseek: (videoTimeS: number) => void;
+  /** The game clock at the playhead, for the form's clock button. */
+  gameClockNow: () => number | null;
 }
 
-const { open, markers, beyond, onseek }: Props = $props();
+const { open, markers, beyond, onseek, gameClockNow }: Props = $props();
 
 type Tab = "review" | "events";
 let tab = $state<Tab>("review");
@@ -68,7 +70,7 @@ const STATUS_COPY = {
     aria-labelledby="rail-tab-review"
     hidden={tab !== "review"}
   >
-    <ReviewForm />
+    <ReviewForm {gameClockNow} />
   </div>
 
   <div

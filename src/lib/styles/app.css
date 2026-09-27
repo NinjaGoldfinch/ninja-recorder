@@ -326,14 +326,37 @@ body:has(.review-view:not([hidden])) .app-bar-inner {
   margin-bottom: var(--sp-3);
 }
 
+/* The heading and its facts share one line, and the facts give way first. */
+.review-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
 .review-header h2 {
   margin: 0;
+  flex-shrink: 0;
   font-size: var(--fs-lg);
   letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.review-facts {
+  margin: 0;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.review-facts span + span::before {
+  content: "·";
+  margin: 0 0.45em;
+  color: var(--text-subtle);
 }
 
 /* The player and the timeline on the left, the review rail on the right. The
@@ -437,6 +460,8 @@ body:has(.review-view:not([hidden])) .app-bar-inner {
 
 .rail-panel {
   flex: 1;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
   overflow-y: auto;
   padding: var(--sp-3) var(--sp-4);
@@ -457,23 +482,6 @@ body:has(.review-view:not([hidden])) .app-bar-inner {
   border: none;
   border-radius: 0;
   background: none;
-}
-
-/* The form's sections are cards on a page of their own; in the rail, which is
- * already the card, they are sections divided by a rule. */
-.review-rail .settings-group {
-  margin: 0;
-  padding: var(--sp-3) 0;
-  border: none;
-  border-top: 1px solid var(--border);
-  border-radius: 0;
-  background: none;
-  box-shadow: none;
-}
-
-.review-rail .settings-group:first-child {
-  border-top: none;
-  padding-top: 0;
 }
 
 /* Too narrow for the two side by side: the rail goes under the player and
@@ -2244,48 +2252,122 @@ button.small {
   font-weight: 600;
 }
 
-.review-game-title {
+/* The review form in the rail. Sections are divided by a rule rather than
+ * boxed, because the rail is already the box. It is a column at least as tall
+ * as the rail, so the notes can take whatever height the rest leaves. */
+.review-form {
+  flex: 1 0 auto;
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
+  flex-direction: column;
+}
+
+.review-section {
+  padding: var(--sp-3) 0;
+  border-top: 1px solid var(--border);
+}
+
+.review-section:first-child {
+  padding-top: 0;
+  border-top: none;
+}
+
+.review-section h3 {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--text-subtle);
+}
+
+.rating-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: var(--sp-3);
-  margin: 0;
+  padding: var(--sp-1) 0;
+}
+
+.rating-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
   font-weight: 550;
+  font-size: var(--fs-md);
 }
 
-.result-pill {
-  padding: 0.1em 0.6em;
+.rating-row .segmented button {
+  padding: 0.25em 0.65em;
+}
+
+/* Says the answer came from the recording, not from the user, until the
+ * user changes it. */
+.auto-tag {
+  padding: 0 0.45em;
   border-radius: var(--r-pill);
-  font-size: var(--fs-sm);
+  background-color: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-xs);
   font-weight: 600;
-}
-
-.result-pill[data-outcome="win"] {
-  background-color: var(--win-bg);
-  color: var(--win-fg);
-}
-
-.result-pill[data-outcome="loss"] {
-  background-color: var(--loss-bg);
-  color: var(--loss-fg);
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
 }
 
 .review-numbers {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
-  gap: var(--sp-4);
-  padding-top: var(--sp-3);
-  border-top: 1px solid var(--border);
+  grid-template-columns: 1.5fr 1fr 1fr;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
 }
 
 .review-numbers .field {
   display: grid;
   gap: var(--sp-1);
   align-content: start;
+  min-width: 0;
+}
+
+.field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.review-numbers input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.field-with-button {
+  display: flex;
+  gap: var(--sp-1);
+}
+
+.clock-btn {
+  flex-shrink: 0;
 }
 
 .review-numbers .field.invalid input {
   border-color: var(--loss-fg);
+}
+
+.field-hint {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--text-subtle);
+}
+
+.review-section h3 + .field-hint {
+  margin-top: 0;
+}
+
+.review-section .review-checklist li,
+.review-section .review-takeaways li {
+  gap: var(--sp-2);
+  padding: var(--sp-1) 0;
+  font-size: var(--fs-md);
 }
 
 .review-checklist,
@@ -2333,15 +2415,38 @@ button.small {
   margin-top: var(--sp-3);
 }
 
+.review-section .takeaway-add {
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+/* One line until there is more to say; grows with what is typed. */
+.takeaway-add textarea {
+  resize: none;
+  field-sizing: content;
+  min-height: 2.2em;
+  max-height: 8em;
+}
+
 .takeaway-add textarea,
 .objective-add input {
   flex: 1;
 }
 
+/* The notes take whatever height the rest of the rail leaves. */
+.review-notes-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 0;
+}
+
 .review-notes {
+  flex: 1;
   width: 100%;
+  min-height: 6rem;
   box-sizing: border-box;
-  resize: vertical;
+  resize: none;
 }
 
 .objective-list {

@@ -24,7 +24,9 @@ import { vodHeading } from "../../../format";
 import { showView } from "../../../router";
 import type { AudioLayout } from "../../../types";
 import { recordedWithout } from "../../library/problems";
-import { laneOpponent } from "../../library/scoreboard";
+import { laneOpponent, selfPlayer } from "../../library/scoreboard";
+import { gameClockAt } from "../../review/clock";
+import { reviewFacts } from "../../review/facts";
 import { type HotkeyContext, hotkeyAction, SEEK_STEP_S } from "../../review/hotkeys";
 import { parseAudioLayout, videoErrorReport } from "../../review/playback";
 import { railOpenSaved, saveRailOpen } from "../../review/rail";
@@ -81,6 +83,9 @@ const heading = $derived(
     ? vodHeading(review.recording, laneOpponent(review.recording)?.champion ?? null)
     : "",
 );
+
+// When, how long, which queue and how it went, under the heading.
+const facts = $derived(review.recording ? reviewFacts(review.recording) : []);
 
 // What a capture failure cost this recording (#10), with every reason: the
 // library row's line in full. Text only; the reasons are untrusted.
@@ -311,6 +316,12 @@ function toggleFullscreen() {
   else playerWrap.requestFullscreen().catch(() => {});
 }
 
+/** The game clock where the player is: read on demand, never tracked. */
+function gameClockNow(): number | null {
+  if (!video) return null;
+  return gameClockAt(video.currentTime, review.samples, review.markers);
+}
+
 function toggleRail() {
   railOpen = !railOpen;
   saveRailOpen(railOpen);
@@ -400,7 +411,12 @@ $effect(() => {
 
   // Untracked: the load writes the review store, and nothing it touches
   // should make this effect reload the video.
-  untrack(() => void openReviewForRecording(id));
+  untrack(
+    () =>
+      void openReviewForRecording(id, {
+        deaths: row.kda_d ?? selfPlayer(row)?.deaths ?? null,
+      }),
+  );
   startApplied = false;
   videoError = null;
   detachStem();
@@ -530,7 +546,14 @@ $effect(() => {
 
 <div class="review-header">
   <button type="button" class="back-btn" onclick={close}>&larr; Back</button>
-  <h2>{heading}</h2>
+  <div class="review-title">
+    <h2>{heading}</h2>
+    {#if facts.length > 0}
+      <p class="review-facts">
+        {#each facts as fact, i (i)}<span>{fact}</span>{/each}
+      </p>
+    {/if}
+  </div>
   <button
     type="button"
     class="icon-btn rail-toggle"
@@ -642,5 +665,6 @@ $effect(() => {
     markers={review.markers}
     beyond={review.footage.beyond}
     onseek={seekTo}
+    {gameClockNow}
   />
 </div>
