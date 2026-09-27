@@ -90,11 +90,6 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  // A test that edits without flushing leaves the autosave timer running, and
-  // `resetModules` does not stop it: it fires into whichever test is running
-  // when it expires, against the same `client` mock. Flushed here, the save
-  // lands before the next test resets the mocks.
-  await store.flushReview();
   if (instance) await svelte.unmount(instance, { outro: false });
   host.remove();
   instance = null;
