@@ -7636,7 +7636,7 @@ licence files it publishes.
 
 Packages:
   @tauri-apps/api 2.11.1 (Apache-2.0 OR MIT)
-  svelte 5.57.0 (MIT)
+  svelte 5.57.1 (MIT)
 
 ------------------------------------------------------------------------------
 @tauri-apps/api 2.11.1
@@ -7849,7 +7849,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-svelte 5.57.0
+svelte 5.57.1
 
 Licence: MIT
 Repository: https://github.com/sveltejs/svelte.git
