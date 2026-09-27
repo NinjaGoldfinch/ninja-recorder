@@ -42,7 +42,7 @@ use windows::Win32::Graphics::Dxgi::Common::{
 use windows::core::Interface;
 
 use super::device::Device;
-use crate::recorder::own::fit::{self, Placement, Rect, Size};
+use crate::recorder::own::fit::{self, Insets, Placement, Rect, Size};
 use crate::{info, warn};
 
 /// How many size changes one recording logs before it stops saying so. A
@@ -381,6 +381,10 @@ pub enum Placed {
 /// window through resizes (see `fit`).
 pub struct Fitter {
     output: Size,
+    /// The game window's frame, taken off every frame so only its client
+    /// area is recorded (`fit::source_rect`, #314). `None` for a window with
+    /// no frame, which is borderless and fullscreen.
+    insets: Option<Insets>,
     /// Our own copy of a frame that needs scaling, at the frame's texture
     /// size. The video processor reads this, never WGC's texture: WGC's pool
     /// is recreated on a resize and recycles its buffers as soon as a frame
@@ -401,6 +405,7 @@ impl Fitter {
     pub fn new(output: Size) -> Fitter {
         Fitter {
             output,
+            insets: None,
             staging: None,
             processor: None,
             unavailable: None,
@@ -418,9 +423,15 @@ impl Fitter {
         Fitter { unavailable: Some(why.to_string()), ..Fitter::new(output) }
     }
 
-    /// Puts `source`, whose picture is the top-left `content` of it, into
-    /// `slot`, which is output-sized. [`Placed::Skipped`] leaves the slot as
-    /// it was.
+    /// The window frame to take off every frame from now on (see
+    /// `fit::client_insets`), as the session last measured it.
+    pub fn set_insets(&mut self, insets: Option<Insets>) {
+        self.insets = insets;
+    }
+
+    /// Puts `source`, whose picture is the top-left `content` of it less the
+    /// window's frame ([`Fitter::set_insets`]), into `slot`, which is
+    /// output-sized. [`Placed::Skipped`] leaves the slot as it was.
     pub fn place(
         &mut self,
         device: &Device,
@@ -429,17 +440,18 @@ impl Fitter {
         slot: &ID3D11Texture2D,
     ) -> Result<Placed, String> {
         let texture = texture_size(source);
-        let placement = fit::place(content, texture, self.output);
-        self.note(content, placement);
+        let from = fit::source_rect(content, self.insets);
+        let placement = fit::place(from, texture, self.output);
+        self.note(from.size(), placement);
         match placement {
             Placement::Skip => Ok(Placed::Skipped),
             Placement::Copy => {
-                copy_top_left(device, slot, source, self.output);
+                copy_region(device, slot, source, from, self.output);
                 Ok(Placed::Copied)
             }
             Placement::Scale(to) => {
                 if self.unavailable.is_none() {
-                    match self.scale(device, source, texture, content, slot, to) {
+                    match self.scale(device, source, texture, from, slot, to) {
                         Ok(()) => return Ok(Placed::Scaled),
                         // A lost device is not the processor's fault: the
                         // session's loop sees it and ends the recording.
@@ -457,9 +469,9 @@ impl Fitter {
                     }
                 }
                 fill_black(device, slot)?;
-                let w = content.width.min(self.output.width);
-                let h = content.height.min(self.output.height);
-                copy_top_left(device, slot, source, Size::new(w, h));
+                let w = from.width.min(self.output.width);
+                let h = from.height.min(self.output.height);
+                copy_region(device, slot, source, from, Size::new(w, h));
                 Ok(Placed::Cropped)
             }
         }
@@ -470,7 +482,7 @@ impl Fitter {
         device: &Device,
         source: &ID3D11Texture2D,
         texture: Size,
-        content: Size,
+        from: Rect,
         slot: &ID3D11Texture2D,
         to: Rect,
     ) -> Result<(), String> {
@@ -492,7 +504,6 @@ impl Fitter {
                 Some(Processor::new(device, texture, self.output, DXGI_FORMAT_B8G8R8A8_UNORM)?);
         }
         let processor = self.processor.as_mut().expect("just built");
-        let from = Rect { left: 0, top: 0, width: content.width, height: content.height };
         processor.blit(&staging, from, slot, to)
     }
 
@@ -540,7 +551,8 @@ impl Fitter {
         let (w, h) = (self.output.width, self.output.height);
         info!(
             "recorder",
-            "own backend: the game window is now {}x{}; into the {w}x{h} recording it is {what}{}",
+            "own backend: the game window's picture is now {}x{}; into the {w}x{h} recording it is \
+             {what}{}",
             content.width,
             content.height,
             if self.lines == SIZE_LINES { " (further size changes are not logged)" } else { "" }
@@ -548,14 +560,27 @@ impl Fitter {
     }
 }
 
-/// Copies the top-left `size` of `source` into the top-left of `slot`. The
-/// caller keeps `size` within both.
-fn copy_top_left(device: &Device, slot: &ID3D11Texture2D, source: &ID3D11Texture2D, size: Size) {
-    let region =
-        D3D11_BOX { left: 0, top: 0, front: 0, right: size.width, bottom: size.height, back: 1 };
+/// Copies `size` of `source`, from `from`'s top-left corner, into the
+/// top-left of `slot`. The caller keeps the region within both.
+fn copy_region(
+    device: &Device,
+    slot: &ID3D11Texture2D,
+    source: &ID3D11Texture2D,
+    from: Rect,
+    size: Size,
+) {
+    let region = D3D11_BOX {
+        left: from.left,
+        top: from.top,
+        front: 0,
+        right: from.left + size.width,
+        bottom: from.top + size.height,
+        back: 1,
+    };
     // SAFETY: both textures are live on this device and share a format, and
-    // the box lies within both (`fit::place` checked the source; the size is
-    // at most the output's, which is the slot's).
+    // the box lies within both: `fit::place` checked `from` against the
+    // source texture, `size` is no larger than `from`, and it is at most the
+    // output's, which is the slot's.
     unsafe { device.context.CopySubresourceRegion(slot, 0, 0, 0, 0, source, 0, Some(&region)) };
 }
 
