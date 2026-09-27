@@ -104,6 +104,7 @@ macro_rules! all_boundary_types {
             crate::live_client::events::ScoreboardRunes,
             crate::live_client::events::TeamDiff,
             crate::recorder::CaptureProblem,
+            crate::recorder::Explained,
             crate::recorder::audio::AudioInputDevice,
             crate::recorder::audio::AudioLayout,
             crate::recorder::audio::AudioPreset,
@@ -189,7 +190,7 @@ mod tests {
             }};
         }
         let n = all_boundary_types!(check);
-        assert_eq!(n, 58, "the boundary type list changed; update the count deliberately");
+        assert_eq!(n, 59, "the boundary type list changed; update the count deliberately");
     }
 
     /// The decision above, made executable. Rendering with ts-rs's default

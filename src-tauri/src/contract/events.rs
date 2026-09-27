@@ -571,6 +571,7 @@ mod tests {
             problems: vec![crate::recorder::CaptureProblem::SourceFailed {
                 source: "game".into(),
                 reason: "<b>refused</b> (0x80070005)".into(),
+                explained: None,
             }],
         };
         assert_eq!(event.topic(), Topic::Recording);

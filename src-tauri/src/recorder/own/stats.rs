@@ -31,9 +31,21 @@ fn file_name(path: &Path) -> String {
 pub struct Opened {
     /// `game`, `microphone`, `desktop`, or the application's executable.
     pub name: String,
-    /// What it captures (`PID 1234, the game window's owner, …`, or the
-    /// endpoint) when it opened; why not when it did not.
-    pub outcome: Result<String, String>,
+    pub outcome: Outcome,
+}
+
+/// What became of a planned source at start.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// It opened: what it captures (`PID 1234, the game window's owner, …`,
+    /// or the endpoint).
+    Opened(String),
+    /// It was not there to capture (Discord not running, no microphone
+    /// plugged in), and why: the preset meeting a machine without it, which
+    /// is not a failure (`own::problem::is_failure`, #296).
+    Absent(String),
+    /// It was there and would not open, and why.
+    Failed(String),
 }
 
 /// The start line: `own: recording <file>: <W>x<H> from <adapter>, encoder
@@ -59,8 +71,9 @@ pub fn render_start(
         let each: Vec<String> = sources
             .iter()
             .map(|s| match &s.outcome {
-                Ok(what) => format!("{}={what}", s.name),
-                Err(why) => format!("{}=failed ({why})", s.name),
+                Outcome::Opened(what) => format!("{}={what}", s.name),
+                Outcome::Absent(why) => format!("{}=left out ({why})", s.name),
+                Outcome::Failed(why) => format!("{}=failed ({why})", s.name),
             })
             .collect();
         each.join(", ")
@@ -276,14 +289,14 @@ mod tests {
         let sources = vec![
             Opened {
                 name: "game".into(),
-                outcome: Ok("PID 4242 (the game window's owner, named League of Legends.exe)"
+                outcome: Outcome::Opened("PID 4242 (the game window's owner, named League of Legends.exe)"
                     .into()),
             },
-            Opened { name: "microphone".into(), outcome: Ok("default".into()) },
-            Opened { name: "desktop".into(), outcome: Ok("default output".into()) },
+            Opened { name: "microphone".into(), outcome: Outcome::Opened("default".into()) },
+            Opened { name: "desktop".into(), outcome: Outcome::Opened("default output".into()) },
             Opened {
                 name: "Discord.exe".into(),
-                outcome: Ok("PID 77 (the top of Discord.exe's tree (6 processes))".into()),
+                outcome: Outcome::Opened("PID 77 (the top of Discord.exe's tree (6 processes))".into()),
             },
         ];
         let line = render_start(
@@ -314,7 +327,7 @@ mod tests {
                 encoder: "the software H.264 MFT".into(),
                 reason: "no hardware H.264 encoder matches a hardware adapter".into(),
             },
-            &[Opened { name: "game".into(), outcome: Ok("PID 1".into()) }],
+            &[Opened { name: "game".into(), outcome: Outcome::Opened("PID 1".into()) }],
             &layout(&["Game"]),
         );
         assert!(line.contains(
@@ -330,16 +343,41 @@ mod tests {
             (1920, 1080),
             "AMD Radeon RX 6800",
             &Status::Ready { encoder: "AMDh264Encoder".into() },
-            &[Opened {
-                name: "Discord.exe".into(),
-                outcome: Err("no Discord.exe process is running".into()),
-            }],
+            &[
+                Opened {
+                    name: "microphone".into(),
+                    outcome: Outcome::Failed("Access is denied. (0x80070005)".into()),
+                },
+                Opened {
+                    name: "Discord.exe".into(),
+                    outcome: Outcome::Absent("no Discord.exe process is running".into()),
+                },
+            ],
             &AudioLayout { sources: Vec::new(), tracks: Vec::new() },
         );
         assert!(line.ends_with(
-            "sources: Discord.exe=failed (no Discord.exe process is running); tracks: none \
-             (video only)"
+            "sources: microphone=failed (Access is denied. (0x80070005)), Discord.exe=left out \
+             (no Discord.exe process is running); tracks: none (video only)"
         ));
+    }
+
+    /// #296: Discord not running is the preset meeting a machine without
+    /// it, not a failure, and the start line does not call it one.
+    #[test]
+    fn an_absent_source_is_left_out_not_failed() {
+        let line = render_start(
+            path(),
+            (2, 2),
+            "a",
+            &Status::Ready { encoder: "e".into() },
+            &[Opened {
+                name: "Discord.exe".into(),
+                outcome: Outcome::Absent("no Discord.exe process is running".into()),
+            }],
+            &AudioLayout { sources: Vec::new(), tracks: Vec::new() },
+        );
+        assert!(line.contains("Discord.exe=left out (no Discord.exe process is running)"), "{line}");
+        assert!(!line.contains("failed"), "{line}");
     }
 
     #[test]

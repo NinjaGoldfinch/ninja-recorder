@@ -11,10 +11,12 @@
  *
  * **Every reason is untrusted text.** It is what a Windows call said, with its
  * HRESULT, and it is only ever interpolated by Svelte as text. Nothing here
- * builds markup, and nothing that renders these uses `{@html}`.
+ * builds markup, and nothing that renders these uses `{@html}`. When the
+ * daemon recognised the failure it also sends `explained`, plain words and a
+ * fix, which are said instead; the reason stays in the stored diagnostics.
  */
 
-import type { CaptureProblem, Event } from "../contract/types";
+import type { CaptureProblem, Event, Explained } from "../contract/types";
 
 /** The event the strip is shown from. */
 export type CaptureProblemsEvent = Extract<Event, { type: "captureProblems" }>;
@@ -74,8 +76,36 @@ function joinAnd(items: string[]): string {
   return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
+/** The explanation the daemon attached, if the problem kind carries one. */
+function explainedOf(problem: CaptureProblem): Explained | undefined {
+  return "explained" in problem ? problem.explained : undefined;
+}
+
+/**
+ * The reason as a person is told it: the daemon's plain words when it
+ * recognised the failure (#296), the technical reason when it did not.
+ */
+export function toldReason(problem: CaptureProblem): string {
+  return explainedOf(problem)?.text ?? problem.reason;
+}
+
+/**
+ * Whether a problem is worth a bug report: anything the daemon did not
+ * explain as the user's or the machine's own doing, a device unplugged or a
+ * privacy setting.
+ */
+export function wantsReport(problem: CaptureProblem): boolean {
+  return explainedOf(problem)?.report ?? true;
+}
+
+/** Every fix the problems carry, each once, as sentences after the notice. */
+function fixes(problems: CaptureProblem[]): string {
+  const each = problems.map((p) => explainedOf(p)?.fix).filter((f): f is string => !!f);
+  return [...new Set(each)].map((f) => ` ${f}`).join("");
+}
+
 function withReasons(problems: CaptureProblem[]): string {
-  return problems.map((p) => `${lossLabel(p)} (${trimStop(p.reason)})`).join("; ");
+  return problems.map((p) => `${lossLabel(p)} (${trimStop(toldReason(p))})`).join("; ");
 }
 
 function buildPhrase(build: number | null): string {
@@ -87,16 +117,19 @@ function buildPhrase(build: number | null): string {
  * nothing to say.
  *
  * A game that was not recorded at all is an error; one that was saved with a
- * part missing is a warning. Either way it ends by asking for a report with
- * the Windows build, because the failures this carries are the ones that
- * should not happen and are only fixable with that report.
+ * part missing is a warning. It ends by asking for a report with the Windows
+ * build when anything it carries should not happen and is only fixable with
+ * that report. A failure the daemon recognised as the user's or the
+ * machine's doing (a microphone unplugged, or blocked in Windows' privacy
+ * settings) is said in plain words, with its fix, and asks for nothing (#296).
  */
 export function noticeFor(event: CaptureProblemsEvent): CaptureNotice | null {
   const problems = event.problems.filter((p) => KINDS.has(p.kind));
   if (problems.length === 0) return null;
-  const report =
-    ` If this keeps happening, please report it with your Windows version ` +
-    `(${buildPhrase(event.windowsBuild)}).`;
+  const report = problems.some(wantsReport)
+    ? ` If this keeps happening, please report it with your Windows version ` +
+      `(${buildPhrase(event.windowsBuild)}).`
+    : "";
   const whole = problems.find((p) => p.kind === "notStarted" || p.kind === "notSaved");
   if (whole) {
     const lead =
@@ -107,17 +140,33 @@ export function noticeFor(event: CaptureProblemsEvent): CaptureNotice | null {
   }
   return {
     kind: "warn",
-    text: `The last recording was saved without ${withReasons(problems)}.${report}`,
+    text: `The last recording was saved without ${withReasons(problems)}.${fixes(problems)}${report}`,
   };
 }
 
-/** A value that is a well-formed `CaptureProblem`, from JSON nobody vouched for. */
+/** A value that is a well-formed `Explained`, from JSON nobody vouched for. */
+function isExplained(value: unknown): value is Explained {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.text === "string" &&
+    (v.fix === null || typeof v.fix === "string") &&
+    typeof v.report === "boolean"
+  );
+}
+
+/**
+ * A value that is a well-formed `CaptureProblem`, from JSON nobody vouched
+ * for. An `explained` that is there must be well-formed too: a malformed one
+ * could otherwise drop the report request on a failure nobody explained.
+ */
 function isProblem(value: unknown): value is CaptureProblem {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
   if (typeof v.kind !== "string" || !KINDS.has(v.kind) || typeof v.reason !== "string") {
     return false;
   }
+  if (v.explained !== undefined && !isExplained(v.explained)) return false;
   return (v.kind !== "sourceFailed" && v.kind !== "sourceEnded") || typeof v.source === "string";
 }
 
@@ -147,6 +196,6 @@ export function recordedWithout(diagnosticsJson: string | null): RecordedWithout
   if (problems.length === 0) return null;
   return {
     short: `Recorded without ${joinAnd(problems.map(lossLabel))}`,
-    full: `Recorded without ${withReasons(problems)}.`,
+    full: `Recorded without ${withReasons(problems)}.${fixes(problems)}`,
   };
 }

@@ -249,7 +249,7 @@ describe("retention", () => {
 });
 
 describe("the capture backend", () => {
-  const status = (software_encoding: boolean) => ({
+  const status = (software_encoding: string | null) => ({
     configured: "own",
     automatic: false,
     active: "own (idle)",
@@ -268,11 +268,13 @@ describe("the capture backend", () => {
   });
 
   it("refreshes once read, so the software notice can appear", async () => {
-    call.mockResolvedValueOnce(status(false)).mockResolvedValueOnce(status(true));
+    call
+      .mockResolvedValueOnce(status(null))
+      .mockResolvedValueOnce(status("no hardware GPU was found"));
     await store.loadCaptureBackend();
-    expect(store.settings.captureBackend?.software_encoding).toBe(false);
+    expect(store.settings.captureBackend?.software_encoding).toBeNull();
     await store.refreshCaptureBackend();
     expect(call).toHaveBeenLastCalledWith("get_capture_backend");
-    expect(store.settings.captureBackend?.software_encoding).toBe(true);
+    expect(store.settings.captureBackend?.software_encoding).toBe("no hardware GPU was found");
   });
 });

@@ -211,7 +211,10 @@ tell the daemon to quit while it may be recording.
 shape: "The last recording was saved without game audio (the failing call and
 its HRESULT). If this keeps happening, please report it with your Windows
 version (Windows build 19045)", or, for a game that was not recorded at all,
-the same as an error. Unlike the recorder strip it is an event rather than a
+the same as an error. A problem the daemon recognised carries `explained`
+(#296), and the strip says its plain words and fix instead, asking for a
+report only if something it carries wants one: "The last recording was saved
+without part of the microphone audio (the microphone was disconnected)." Unlike the recorder strip it is an event rather than a
 state, so it does not clear itself: it stays until it is dismissed, and the
 next problem replaces it. The recording keeps the same list in its
 `diagnostics_json`, and `library/problems.ts` turns that into the library row's
@@ -948,7 +951,8 @@ raises a toast. The row says that a change applies from the next recording.
 **The software-encoding notice.** When `CaptureBackendStatus` has
 `software_encoding` set, the row shows a warning callout
 (`settings/capture.ts`'s `softwareNote`) that recording is encoding in
-software and costs more CPU: the UI's third of DEVELOPMENT.md §2.4's rule that
+software, because of the reason that field carries (the one "In use now"
+gives, #296), and costs more CPU: the UI's third of DEVELOPMENT.md §2.4's rule that
 the own backend's software fallback is never silent. The own backend only
 learns its encoder when the League client opens, long after the view first
 reads the status, so `status.svelte.ts` calls `refreshCaptureBackend` on every

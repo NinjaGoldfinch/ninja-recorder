@@ -227,10 +227,15 @@ Implemented in `src-tauri/src/recorder/`: `Recorder`, `RecordConfig`, `RecorderE
     and the reason, its `backend_name` (which is what
     `RecordingDiagnostics::backend` records) reads `own (software encoding:
     <encoder>, because <reason>)`, and since #243 Settings → Advanced shows
-    a notice about the extra CPU. The notice is driven by a flag, not by
-    parsing that name: `Recorder::software_encoding` (default `false`, and
-    only `OwnRecorder` overrides it) reaches the UI as
-    `CaptureBackendStatus::software_encoding`. It is sticky across the
+    a notice about the extra CPU. The notice is driven by its own field,
+    not by parsing that name: `Recorder::software_encoding` (the reason, or
+    `None`; only `OwnRecorder` overrides it) reaches the UI as
+    `CaptureBackendStatus::software_encoding`. It carries the same reason
+    `backend_name` gives after "because", so the notice cannot blame a
+    missing hardware encoder under an "In use now" line that says software
+    was forced (#296). The `warn` line is written once per decision, not
+    once per answer: the supervisor pre-warms on every dispatch, and a warm
+    worker answers each with the status it already has. It is sticky across the
     client closing (`own::status::Status::software_encoding`), because the
     worker's status goes back to idle then and Settings is usually opened
     after a game; only a new encoder bring-up changes it. The UI re-reads the
@@ -561,6 +566,24 @@ release and devtools builds alike, three ways:
   `diagnostics_json`: "Recorded without game audio" in the library row's
   empty slack column, with every reason in its tooltip and in full on the
   review page, so it is still there for a window that was closed at the time.
+
+**Not every failure is a bug, and only a bug asks for a report** (#296). The
+first Windows runs asked the user to report a headset they had unplugged, and
+a microphone they had blocked in Windows' privacy settings. `own::problem::
+explain` recognises those by their HRESULT and attaches `explained` to the
+problem: plain words ("the microphone was disconnected", "Windows is blocking
+microphone access"), a fix where there is one ("Turn on *Let desktop apps
+access your microphone* in Settings → Privacy & security → Microphone"), and
+whether a report is worth asking for. The notification, the strip and the
+line on the recording say those words instead of the call and its HRESULT,
+and drop "Please report" when nothing they carry wants it. The technical
+reason is kept in the problem regardless, so `daemon.log` and
+`diagnostics_json` still have it. Recognised so far: `AUDCLNT_E_DEVICE_INVALIDATED`
+(0x88890004) on any source, and `E_ACCESSDENIED` (0x80070005) on the
+microphone only, because on a process loopback it is the Windows 10 case
+above and still a bug. A dead capture worker is explained too, as "the
+capture worker stopped unexpectedly", without its pid and exit code; that one
+still asks for a report.
 
 **The distinction that makes this bearable is failure against absence.** A
 preset names sources the machine may simply not have: Discord not running, no
@@ -2538,7 +2561,7 @@ worker that dies before it answers `Stop` leaves its stop line nowhere;
 The values below show the shape and are not a measurement:
 
 ```text
-[recorder] own: recording 2026-09-26_12-00-00.mp4: 1920x1080 from NVIDIA GeForce RTX 3070, encoder NVIDIA H.264 Encoder MFT [VEN_10DE] (hardware), sources: game=PID 4242 (the game window's owner, named League of Legends.exe), microphone=default, Discord.exe=failed (no Discord.exe process is running); tracks: Everything
+[recorder] own: recording 2026-09-26_12-00-00.mp4: 1920x1080 from NVIDIA GeForce RTX 3070, encoder NVIDIA H.264 Encoder MFT [VEN_10DE] (hardware), sources: game=PID 4242 (the game window's owner, named League of Legends.exe), microphone=default, Discord.exe=left out (no Discord.exe process is running); tracks: Everything
 [recorder] own: stopped 2026-09-26_12-00-00.mp4: 1800.000 s, 108000 ticks, 0.41% repeated, worst tick 0.62 f late; per source: game clock=qpc raw=-12.35 ppm slips=7 gaps=0 holds=3, microphone clock=device slips=0 gaps=1 holds=0; mix clipped 0; 1836.0 MB; 900 fragments; finalize ok
 [recorder] own: remux 2026-09-26_12-00-00.mp4: ok in 812 ms
 ```
@@ -2549,8 +2572,12 @@ substitution shows) and whether it is hardware or the **software fallback,
 with the reason**. Then every source the plan named: what it opened
 (`PID <n> (<how the root was chosen>)` for a process-loopback source,
 `default` or the configured device id for the microphone, `default output`
-for the desktop), or `failed (<why>)`; and the labels of the tracks the file
-holds, or `none (video only)`.
+for the desktop), `left out (<why>)` for one that was not there to capture
+(Discord not running, no microphone plugged in), or `failed (<why>)` for one
+that was there and would not open; and the labels of the tracks the file
+holds, or `none (video only)`. The split is §2.6's failure against absence:
+until #296 the line said `failed` for both, and logged an absence at `WARN`;
+an absence is now `INFO`.
 
 **Stop.** The video first: its length (ticks over 60 fps), the ticks written,
 the share that **repeated** the tick before because no new picture had arrived

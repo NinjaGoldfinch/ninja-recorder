@@ -2003,7 +2003,12 @@ restart the app when you are done.
       `daemon-devtools.log` has `NINJA_OWN_FORCE_SOFTWARE_ENCODER=1: the
       capture worker will encode in SOFTWARE` when the worker is spawned, and
       `own backend: software H.264 encoding with <encoder>: forced by
-      NINJA_OWN_FORCE_SOFTWARE_ENCODER (devtools)` at each start;
+      NINJA_OWN_FORCE_SOFTWARE_ENCODER (devtools)` **once** when the worker
+      brings the encoder up (not twice in the same millisecond, #296), with
+      the start line naming the encoder `(software fallback: forced by …)`;
+      Settings → Advanced's notice says "because forced by
+      NINJA_OWN_FORCE_SOFTWARE_ENCODER (devtools)", the same reason as the
+      "In use now" line above it;
       `worker-devtools.log` has `… using the SOFTWARE H.264 encoder although
       <hardware encoder> would have been used` and a warm line reading
       `encoder own (software encoding: …, because forced by …)`. The start
@@ -2242,19 +2247,26 @@ a devtools one. Own backend, Practice Tool, the window open.
 
 - [ ] **An absence says nothing.** Preset **Game + mic + Discord** with Discord
       **closed**. One game. No strip, no "without" toast (just "Recording
-      saved"), no line on the row; `worker.log` has `no Discord.exe audio`.
+      saved"), no line on the row; `worker.log` has `no Discord.exe audio` at
+      `INFO`, and the start line says `Discord.exe=left out (…)`, not
+      `failed` (#296).
 - [ ] **A failure says it.** Settings → Privacy & security → Microphone → turn
       **Let desktop apps access your microphone** off. Preset **Game + mic**.
       One game. The toast reads "Recording saved without microphone audio",
-      names the failing call with its HRESULT (`0x80070005` expected) and the
-      Windows build; the strip says the same with a Dismiss button; the row
-      says "Recorded without microphone audio" with the reason in its tooltip;
-      the review page shows the full line. Paste the toast's text and the
-      `own backend: No microphone audio: …` line. Turn the permission back on.
+      says "Windows is blocking microphone access" and how to turn it back on,
+      and does **not** ask for a report or show the HRESULT (#296); the strip
+      says the same with a Dismiss button; the row says "Recorded without
+      microphone audio" with the reason in its tooltip; the review page shows
+      the full line. The `own backend: No microphone audio: …` line in the log
+      still names the call and `0x80070005`. Paste the toast's text and that
+      line. Turn the permission back on.
 - [ ] **Part-way.** Preset **Game + mic** with a USB microphone; unplug it a
-      minute in. The row says "Recorded without part of the microphone audio".
+      minute in. The row says "Recorded without part of the microphone audio
+      (the microphone was disconnected)", and the strip asks for no report.
 - [ ] **An early end.** §11.7's worker kill: the toast is "Recording ended
-      early", naming the worker's exit code.
+      early" and says "the capture worker stopped unexpectedly at <time>",
+      still asking for a report; the worker's pid and exit code are in
+      `daemon.log` and `diagnostics_json`, not the toast (#296).
 - [ ] **Windows 10 (19041 to 19045)**, if a box is available: a game on the
       Game preset. Either game audio works (§11.3) or the notice names the
       refused process-loopback activation. Paste whichever it is into #237.

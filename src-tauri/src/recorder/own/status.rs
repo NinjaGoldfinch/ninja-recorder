@@ -104,19 +104,37 @@ impl Status {
         }
     }
 
-    /// Whether the Settings notice about software encoding stays up, given
-    /// what it was and this new status: `Recorder::software_encoding`.
+    /// Why the Settings notice about software encoding is up, or `None` when
+    /// it is not, given what it was and this new status:
+    /// `Recorder::software_encoding`. The reason is the one `backend_name`
+    /// gives, so the notice and the "In use now" line cannot disagree about
+    /// why (#296).
     ///
     /// Sticky across `Idle` and `Unavailable`, which say nothing about the
     /// encoder, so the notice outlives the League client closing (the worker
     /// ends then, and the status goes back to `Idle`): the machine is the same
     /// one next game, and Settings is usually opened after a game rather than
     /// during it. Only an encoder being brought up changes the answer.
-    pub fn software_encoding(&self, was: bool) -> bool {
+    pub fn software_encoding(&self, was: Option<String>) -> Option<String> {
         match self {
-            Status::Software { .. } => true,
-            Status::Ready { .. } => false,
+            Status::Software { reason, .. } => Some(reason.clone()),
+            Status::Ready { .. } => None,
             Status::Idle | Status::Unavailable { .. } => was,
+        }
+    }
+
+    /// The log line for a software fallback, when `self` is one that `was`
+    /// did not already announce: once per decision (#296). The supervisor
+    /// pre-warms on every dispatch, and a warm worker answers each `Prepare`
+    /// with the status it already has, so logging every answer wrote the same
+    /// line twice in the same millisecond. A `start` after the pre-warm has
+    /// nothing new to say either; its summary line names the encoder anyway.
+    pub fn software_announcement(&self, was: &Status) -> Option<String> {
+        match self {
+            Status::Software { encoder, reason } if self != was => {
+                Some(format!("own backend: software H.264 encoding with {encoder}: {reason}"))
+            }
+            _ => None,
         }
     }
 }
@@ -328,12 +346,43 @@ mod tests {
         let software = Status::Software { encoder: "x".into(), reason: "y".into() };
         let ready = Status::Ready { encoder: "x".into() };
         let unavailable = Status::Unavailable { reason: "z".into() };
-        assert!(software.software_encoding(false));
-        assert!(!ready.software_encoding(true));
-        for was in [false, true] {
-            assert_eq!(Status::Idle.software_encoding(was), was);
-            assert_eq!(unavailable.software_encoding(was), was);
+        assert_eq!(software.software_encoding(None), Some("y".into()));
+        assert_eq!(software.software_encoding(Some("old".into())), Some("y".into()));
+        assert_eq!(ready.software_encoding(Some("y".into())), None);
+        for was in [None, Some("y".to_string())] {
+            assert_eq!(Status::Idle.software_encoding(was.clone()), was);
+            assert_eq!(unavailable.software_encoding(was.clone()), was);
         }
+    }
+
+    /// #296: forced software encoding said its reason; the notice must say
+    /// the same one, not "no usable hardware encoder".
+    #[test]
+    fn the_software_notice_carries_the_reason_the_status_names() {
+        let forced = Status::Software {
+            encoder: "H264 Encoder MFT".into(),
+            reason: crate::recorder::own::select::FORCED_SOFTWARE_REASON.into(),
+        };
+        let reason = forced.software_encoding(None).unwrap();
+        assert!(forced.backend_name().ends_with(&format!("because {reason})")), "{reason}");
+    }
+
+    /// #296: one line per decision, not one per answer to the same question.
+    #[test]
+    fn a_software_fallback_is_announced_once_per_decision() {
+        let software = Status::Software { encoder: "MS".into(), reason: "forced".into() };
+        assert_eq!(
+            software.software_announcement(&Status::Idle).as_deref(),
+            Some("own backend: software H.264 encoding with MS: forced")
+        );
+        // The second pre-warm, and the start after it: nothing new.
+        assert_eq!(software.software_announcement(&software), None);
+        // A different decision is announced.
+        let other = Status::Software { encoder: "MS".into(), reason: "no hardware GPU".into() };
+        assert!(other.software_announcement(&software).is_some());
+        assert!(software.software_announcement(&Status::Ready { encoder: "NV".into() }).is_some());
+        // Hardware is never announced as software.
+        assert_eq!(Status::Ready { encoder: "NV".into() }.software_announcement(&Status::Idle), None);
     }
 
     #[test]

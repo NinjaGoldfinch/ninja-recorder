@@ -46,14 +46,17 @@ export function unavailableNotes(status: CaptureBackendStatus): string[] {
  * DEVELOPMENT.md §2.4: the own backend encodes with Microsoft's software H.264
  * encoder when no usable hardware one exists, and that is allowed only if it
  * is never silent. The log and the recording's diagnostics carry the encoder
- * and the reason; this is the part a user sees. Driven by the daemon's flag,
- * not by reading `active`, whose wording is free to change.
+ * and the reason; this is the part a user sees. Driven by the daemon's field,
+ * not by reading `active`, whose wording is free to change, but the reason is
+ * the one `active` gives: the notice once said "no usable hardware encoder"
+ * under a line saying software had been forced (#296).
  */
 export function softwareNote(status: CaptureBackendStatus): string | null {
-  if (!status.software_encoding) return null;
+  const reason = status.software_encoding?.trim().replace(/\.+$/, "");
+  if (!reason) return null;
   return (
-    "Recording is encoding video in software, because no usable hardware encoder " +
-    "was found. It uses noticeably more CPU than a graphics card's encoder, " +
+    `Recording is encoding video in software, because ${reason}. ` +
+    "It uses noticeably more CPU than a graphics card's encoder, " +
     "which can cost frame rate in game."
   );
 }

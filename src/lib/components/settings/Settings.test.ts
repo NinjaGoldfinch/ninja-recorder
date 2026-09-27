@@ -56,7 +56,7 @@ function backendStatus(over: Record<string, unknown> = {}) {
     configured: "libobs",
     automatic: false,
     active: "libobs (idle)",
-    software_encoding: false,
+    software_encoding: null,
     options: BOTH_BUILT,
     ...over,
   };
@@ -304,8 +304,10 @@ describe("the capture backend", () => {
     stubBackend({
       get_capture_backend: backendStatus({
         configured: "own",
-        active: "own (software encoding: H264 Encoder MFT, because no hardware GPU was found)",
-        software_encoding: true,
+        active:
+          "own (software encoding: H264 Encoder MFT, because forced by " +
+          "NINJA_OWN_FORCE_SOFTWARE_ENCODER (devtools))",
+        software_encoding: "forced by NINJA_OWN_FORCE_SOFTWARE_ENCODER (devtools)",
       }),
     });
     const el = render();
@@ -314,6 +316,9 @@ describe("the capture backend", () => {
       n.textContent?.includes("encoding video in software"),
     );
     expect(notice?.textContent).toContain("more CPU");
+    // #296: the reason the In use now line gives, not "no usable hardware".
+    expect(notice?.textContent).toContain("because forced by NINJA_OWN_FORCE_SOFTWARE_ENCODER");
+    expect(notice?.textContent).not.toContain("no usable hardware encoder");
   });
 
   // Below the floor with nothing saved: libobs records, and the row says why.
