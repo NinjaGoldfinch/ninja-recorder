@@ -200,7 +200,7 @@ libobs-recorder = { git = "https://github.com/NinjaGoldfinch/libobs-recorder.git
 # not be selected anyway; saying so is what stops a future non-Windows daemon
 # quietly acquiring a GTK dependency.
 tray-icon = { version = "0.24", default-features = false }
-muda = { version = "0.19", default-features = false }
+muda = { version = "0.20", default-features = false }
 # Win32_Media_Audio + the COM/property-store features are the microphone
 # picker (recorder/devices.rs): IMMDeviceEnumerator to list input endpoints,
 # IPropertyStore + PKEY_Device_FriendlyName for their display names. Done
