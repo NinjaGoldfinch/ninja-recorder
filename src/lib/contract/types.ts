@@ -345,8 +345,10 @@ players: Array<ScoreboardPlayer>,
  */
 our_team: string | null, 
 /**
- * Ours only: the live API gives the full rune page for the active
- * player and a reduced one for everybody else.
+ * Our page. Every player's is on `ScoreboardPlayer::runes` now, and
+ * this is still written because it is the only page every board
+ * already on disk carries: a reader takes ours from the player first
+ * and falls back to this.
  */
 our_runes: ScoreboardRunes | null, };
 
@@ -395,7 +397,34 @@ spells: Array<string>,
  * other — converting would need the CDN, in a path that otherwise
  * only talks to the League client.
  */
-spell_ids?: Array<number>, };
+spell_ids?: Array<number>, 
+/**
+ * Slot 6, the trinket, named on its own so the row can put it in the
+ * same box on every row (#346). `items` is flattened, so without this
+ * the trinket is only "probably the last id", and an empty slot 5 makes
+ * it indistinguishable from an item.
+ *
+ * **Also still inside `items`**, so a build that predates this field
+ * reads a newer board exactly as before. `None` when the slot was empty,
+ * and on every board written before it existed.
+ */
+trinket?: number | null, 
+/**
+ * Match history's `roleBoundItem`: the role quest's slot. Boots for a
+ * bot laner; for every other role a quest-reward token that costs
+ * nothing and is not on the map, which the row does not draw.
+ *
+ * **Match history only.** The Live Client reports slots 0-6 and nothing
+ * for this one, so a board captured live never has it and a board the
+ * LCU rebuilt is the one that does.
+ */
+role_item?: number | null, 
+/**
+ * This player's keystone and trees. Every player now, not just us:
+ * both sources carry all ten. `Scoreboard::our_runes` stays beside it,
+ * because every board already on disk has that and nothing here.
+ */
+runes?: ScoreboardRunes | null, };
 
 export type ScoreboardRunes = { keystone_id: number, keystone: string, primary_tree_id: number, secondary_tree_id: number, };
 

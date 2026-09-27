@@ -205,12 +205,29 @@ struct ParticipantStats {
     item4: Option<i64>,
     #[serde(default)]
     item5: Option<i64>,
-    /// The trinket.
+    /// The trinket (`live_client::events::TRINKET_SLOT`).
     #[serde(default)]
     item6: Option<i64>,
+    /// The role quest's slot, on every participant. Boots for a bot laner;
+    /// for every other role a zero-gold quest-reward token (1206 mid, 1208
+    /// support, 1209 jungle, 1220 top in the 16.19 capture). Read as given,
+    /// and the row decides what to draw. `0` is empty, as for `item0`-`6`.
+    #[serde(rename = "roleBoundItem", default)]
+    role_bound_item: Option<i64>,
 }
 
 impl ParticipantStats {
+    /// `item6`, or `None` for an empty slot.
+    fn trinket(&self) -> Option<i64> {
+        self.item6.filter(|id| *id > 0)
+    }
+
+    /// `roleBoundItem`, or `None` for an empty slot or a document that
+    /// predates the role quests.
+    fn role_item(&self) -> Option<i64> {
+        self.role_bound_item.filter(|id| *id > 0)
+    }
+
     /// The inventory in slot order, with the empty slots dropped.
     ///
     /// Riot writes `0` into a slot nothing is in, and zero is not an item
@@ -708,6 +725,11 @@ pub struct ParticipantSummary {
     /// thing that can name a lane opponent — see `ScoreboardPlayer::position`.
     pub position: Option<String>,
     pub items: Vec<i64>,
+    /// `item6` on its own. Also still in `items`: see
+    /// `ScoreboardPlayer::trinket`.
+    pub trinket: Option<i64>,
+    /// `roleBoundItem`. See `ScoreboardPlayer::role_item`.
+    pub role_item: Option<i64>,
     pub spell_ids: Vec<i64>,
     pub keystone_id: Option<i64>,
     pub primary_tree_id: Option<i64>,
@@ -739,7 +761,7 @@ pub struct ParticipantSummary {
 /// broken in that case, and nobody re-checks a row that looks fine.
 ///
 /// Live Client Data reports the position the game assigned and is unaffected —
-/// it wins wherever it exists (`match_summary::prefer_live_positions`). This
+/// it wins wherever it exists (`match_summary::prefer_live_fields`). This
 /// only governs what the LCU may contribute when it is the only source left.
 fn discard_implausible_positions(summaries: &mut [ParticipantSummary]) {
     let sides: Vec<Option<String>> = summaries
@@ -792,6 +814,8 @@ fn participants(me: &CurrentSummoner, game: &GameDto) -> Vec<ParticipantSummary>
             assists: p.stats.assists,
             cs: p.stats.cs(),
             items: p.stats.items(),
+            trinket: p.stats.trinket(),
+            role_item: p.stats.role_item(),
             spell_ids: [p.spell1_id, p.spell2_id]
                 .into_iter()
                 .flatten()
@@ -950,6 +974,122 @@ mod tests {
         let enemy = players.iter().find(|p| p.champion_id == 84).unwrap();
         assert!(!enemy.items.contains(&0));
         assert_eq!(enemy.items.len(), 6, "one of the seven slots was empty");
+    }
+
+    // --- the paired game (#346) ---------------------------------------
+
+    /// Ranked game 711444953, from match history. Its live half is
+    /// `fixtures/live-client/allgamedata-paired.json`: the same game, which
+    /// is what lets `the_two_sources_agree_on_the_same_game` exist.
+    fn paired_game() -> GameDto {
+        let json = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/lcu/match-history-paired.json"
+        ));
+        serde_json::from_str(json).unwrap()
+    }
+
+    /// The same synthetic identity `real_me` uses: participant 2.
+    fn paired_players() -> Vec<ParticipantSummary> {
+        participants(&real_me(), &paired_game())
+    }
+
+    fn by_champion(players: &[ParticipantSummary], champion_id: i64) -> &ParticipantSummary {
+        players.iter().find(|p| p.champion_id == champion_id).unwrap()
+    }
+
+    /// `item6` is the trinket for all ten, and it is kept in `items` too, so
+    /// a board read by an older build still carries it.
+    #[test]
+    fn the_trinket_is_item6() {
+        let players = paired_players();
+        assert_eq!(players.len(), 10);
+        for player in &players {
+            let trinket = player.trinket.expect("every player carried a trinket");
+            assert!([3340, 3363, 3364].contains(&trinket), "{trinket} is not a trinket");
+            assert_eq!(player.items.last(), Some(&trinket));
+        }
+    }
+
+    /// An empty slot is `0` in place. Twitch (29) ended with slot 5 empty, and
+    /// flattening drops it, which is exactly why the trinket needs its own
+    /// field: `items` alone cannot say it was slot 6.
+    #[test]
+    fn an_empty_slot_does_not_move_the_trinket() {
+        let players = paired_players();
+        let twitch = by_champion(&players, 29);
+        assert_eq!(twitch.items, vec![1086, 6676, 3031, 2512, 3035, 3340]);
+        assert_eq!(twitch.trinket, Some(3340));
+    }
+
+    /// `roleBoundItem` is on every participant: real boots for a bot laner,
+    /// a zero-gold quest token for everyone else. It is stored as given, and
+    /// the row decides what to draw.
+    #[test]
+    fn the_role_slot_is_read_for_every_participant() {
+        let players = paired_players();
+        // Kalista (429) and Twitch (29): Gluttonous and Berserker's Greaves.
+        assert_eq!(by_champion(&players, 429).role_item, Some(3008));
+        assert_eq!(by_champion(&players, 29).role_item, Some(3006));
+        // Us, on Viego (234): the jungle token, which is not an item to draw.
+        assert_eq!(by_champion(&players, 234).role_item, Some(1209));
+        assert!(players.iter().all(|p| p.role_item.is_some()));
+    }
+
+    /// Every participant's page, not just ours: `runes_of` used to be called
+    /// for us alone, and the document always had all ten.
+    #[test]
+    fn every_participant_has_a_rune_page() {
+        let players = paired_players();
+        assert!(players.iter().all(|p| p.keystone_id.is_some()));
+        // Qiyana (246), the lane opponent: First Strike, Inspiration/Domination.
+        let qiyana = by_champion(&players, 246);
+        assert_eq!(
+            (qiyana.keystone_id, qiyana.primary_tree_id, qiyana.secondary_tree_id),
+            (Some(8369), Some(8300), Some(8100))
+        );
+    }
+
+    /// **Both sources, the same game.** For each player, the live capture and
+    /// match history must agree on the trinket, the page, and the items the
+    /// live capture saw. A disagreement here is a parser reading the wrong
+    /// slot or the wrong field, on real data, before it reaches a row.
+    ///
+    /// Joined on team and KDA, not champion: match history gives ids and the
+    /// live capture names, and the two are only mapped at runtime. All ten
+    /// KDA lines in this game are distinct within a team.
+    #[test]
+    fn the_two_sources_agree_on_the_same_game() {
+        let live: crate::live_client::AllGameData = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/live-client/allgamedata-paired.json"
+        )))
+        .unwrap();
+        let live = crate::live_client::events::scoreboard(&live).unwrap();
+        let lcu = paired_players();
+        assert_eq!(live.players.len(), lcu.len());
+
+        for seen in &live.players {
+            let kda = (seen.kills, seen.deaths, seen.assists);
+            let mut matches = lcu.iter().filter(|p| {
+                p.team.as_deref() == Some(seen.team.as_str()) && (p.kills, p.deaths, p.assists) == kda
+            });
+            let (Some(rebuilt), None) = (matches.next(), matches.next()) else {
+                panic!("{} {kda:?} does not match exactly one participant", seen.champion);
+            };
+
+            assert_eq!(seen.trinket, rebuilt.trinket, "{}: trinket", seen.champion);
+            assert_eq!(seen.items, rebuilt.items, "{}: items", seen.champion);
+            let page = seen.runes.as_ref().expect("a live page for every player");
+            assert_eq!(
+                (Some(page.keystone_id), Some(page.primary_tree_id), Some(page.secondary_tree_id)),
+                (rebuilt.keystone_id, rebuilt.primary_tree_id, rebuilt.secondary_tree_id),
+                "{}: runes",
+                seen.champion
+            );
+            // The one field only match history has.
+            assert_eq!(seen.role_item, None, "{}: the live capture has no role slot", seen.champion);
+        }
     }
 
     use super::*;
