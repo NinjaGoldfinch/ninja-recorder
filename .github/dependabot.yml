@@ -37,12 +37,6 @@ updates:
       # `tauri-utils` versions.
       tauri:
         patterns: ["tauri", "tauri-*"]
-      # `windows-core` is a direct dependency only because `#[implement]`
-      # expands to `windows_core::` paths, and it has to be the version
-      # `windows` itself uses (see Cargo.toml). Bumped alone it pulls in a
-      # second copy that the `windows` interfaces are not built on (#339).
-      windows:
-        patterns: ["windows", "windows-core"]
       # The daemon's tray. `tray-icon` takes its own `muda`'s menu types, so
       # bumping `muda` alone does not compile on Windows (#330), and Linux CI
       # never builds this code to say so. Before `rust-minor`, because a
@@ -56,6 +50,15 @@ updates:
       # cut by hand when the fork changes, so moving the pin is a manual
       # decision, and WS8 deletes the dependency — see docs/provenance.md.
       - dependency-name: libobs-recorder
+      # A direct dependency only because `#[implement]` expands to
+      # `windows_core::` paths, and it has to be the version `windows` itself
+      # uses (see Cargo.toml). windows-rs now releases it without a matching
+      # `windows` (0.100 against 0.62), so it would be offered alone every
+      # month (#339, #348), and a group cannot stop that: a group PR carries
+      # only the members that have an update. It moves by hand, in the same
+      # PR as `windows`. When `windows` is bumped alone, expect the Windows
+      # compile to fail at the `#[implement]` sites until it is.
+      - dependency-name: windows-core
     commit-message:
       prefix: "deps"
 

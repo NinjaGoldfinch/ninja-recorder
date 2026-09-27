@@ -292,7 +292,8 @@ windows = { version = "0.62", features = [
 # `#[implement]` (the own backend's sample-release callback) expands to
 # `windows_core::` paths, so the crate it names has to be a direct
 # dependency, at the version `windows` itself uses: already in the lock
-# through `windows`, so no new crate and no new licence.
+# through `windows`, so no new crate and no new licence. Dependabot ignores it,
+# so bump it by hand whenever `windows` moves.
 windows-core = "0.62.2"
 
 # Full DWARF for our own crate is what fills `target/` — 30k codegen-unit
