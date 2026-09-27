@@ -37,6 +37,12 @@ updates:
       # `tauri-utils` versions.
       tauri:
         patterns: ["tauri", "tauri-*"]
+      # The daemon's tray. `tray-icon` takes its own `muda`'s menu types, so
+      # bumping `muda` alone does not compile on Windows (#330), and Linux CI
+      # never builds this code to say so. Before `rust-minor`, because a
+      # dependency goes to the first group it matches.
+      tray:
+        patterns: ["tray-icon", "muda"]
       rust-minor:
         update-types: ["minor", "patch"]
     ignore:

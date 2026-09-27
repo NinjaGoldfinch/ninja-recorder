@@ -192,15 +192,21 @@ libobs-recorder = { git = "https://github.com/NinjaGoldfinch/libobs-recorder.git
 
 # The daemon's tray and its menu, on the daemon's own Win32 message loop
 # (`daemon/pump.rs`). These are the crates Tauri itself wraps, by the same
-# authors, and both are already in the tree through it, so naming them here
-# adds no crate and no licence.
+# authors and under the same MIT/Apache-2.0 licence.
+#
+# **The two move together.** `tray-icon` re-exports `muda`'s menu types and
+# `TrayIconBuilder::with_menu` takes its own `muda`'s `ContextMenu`, so a
+# `muda` bump without the matching `tray-icon` fails with "`muda::Menu`:
+# `tray_icon::menu::ContextMenu` is not satisfied" (#330). They can run ahead
+# of Tauri's copies, which the UI process uses and the daemon does not: while
+# they do, the lockfile carries both versions of each.
 #
 # `default-features = false` because the defaults are the Linux ones (gtk,
 # libappindicator, libxdo). This whole section is Windows-only, so they would
 # not be selected anyway; saying so is what stops a future non-Windows daemon
 # quietly acquiring a GTK dependency.
-tray-icon = { version = "0.24", default-features = false }
-muda = { version = "0.19", default-features = false }
+tray-icon = { version = "0.25", default-features = false }
+muda = { version = "0.20", default-features = false }
 # Win32_Media_Audio + the COM/property-store features are the microphone
 # picker (recorder/devices.rs): IMMDeviceEnumerator to list input endpoints,
 # IPropertyStore + PKEY_Device_FriendlyName for their display names. Done
