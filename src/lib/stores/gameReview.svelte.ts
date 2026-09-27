@@ -1,5 +1,5 @@
 /**
- * The game open in the review form (WS9 P0).
+ * The game open in the review rail beside the player (WS9 P0, moved by P1).
  *
  * **This store moves on command results, not on events.** The rest of the
  * app's state is fed by the daemon's event stream (see `index.ts`), but no
@@ -12,7 +12,6 @@
  */
 
 import { client } from "../../bridge";
-import { showView } from "../../router";
 import type { GameReview, ObjectiveCategory, ReviewInput, Takeaway } from "../contract/types";
 import { createAutosave, type SaveStatus } from "../reviewform/autosave";
 import { toast } from "./toast.svelte";
@@ -59,28 +58,38 @@ export const gameReview = {
   },
 };
 
-/** Open the review for a recording, making its game first if it has none. */
-export async function openReviewForRecording(recordingId: number): Promise<void> {
-  try {
-    const gameId = await client.open_game_for_recording(recordingId);
-    await loadGame(gameId);
-    showView("game");
-  } catch (err) {
-    toast(`Couldn't open the review: ${err}`, "error");
-  }
-}
+/**
+ * Which load is the latest. Opening one VOD after another in quick succession
+ * races two loads, and the slower one must not replace the newer game.
+ */
+let generation = 0;
 
-export async function loadGame(gameId: number): Promise<void> {
-  // Anything unsaved belongs to the game being left, so it is written first.
-  await autosave.flush();
-  loading = true;
+/**
+ * Load the review for a recording, making its game first if it has none.
+ *
+ * It switches no view: the review lives in the player's rail, so the player
+ * opening a recording is what calls this.
+ */
+export async function openReviewForRecording(recordingId: number): Promise<void> {
+  const mine = ++generation;
   try {
+    // Anything unsaved belongs to the game being left, so it is written
+    // before that game is replaced.
+    await autosave.flush();
+    if (mine !== generation) return;
+    current = null;
+    loading = true;
+    const gameId = await client.open_game_for_recording(recordingId);
+    if (mine !== generation) return;
     const loaded = await client.get_game_review(gameId);
+    if (mine !== generation) return;
     current = loaded;
     draft = { ...(loaded?.review ?? EMPTY) };
     status = "saved";
+  } catch (err) {
+    if (mine === generation) toast(`Couldn't open the review: ${err}`, "error");
   } finally {
-    loading = false;
+    if (mine === generation) loading = false;
   }
 }
 
@@ -96,9 +105,15 @@ export function flushReview(): Promise<void> {
   return autosave.flush();
 }
 
+/** Write anything unsaved, then let the game go: on closing the player. */
 export async function closeReview(): Promise<void> {
+  const mine = ++generation;
   await autosave.flush();
-  showView("library");
+  if (mine !== generation) return;
+  current = null;
+  draft = { ...EMPTY };
+  status = "saved";
+  loading = false;
 }
 
 /** Optimistic: the box ticks at once and unticks again if the save fails. */
@@ -162,6 +177,7 @@ export async function promoteTakeaway(
 /** Test seam: back to a freshly loaded module. */
 export function resetGameReviewForTests(): void {
   autosave.cancel();
+  generation = 0;
   current = null;
   draft = { ...EMPTY };
   status = "saved";

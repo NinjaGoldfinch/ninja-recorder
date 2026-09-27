@@ -1,23 +1,20 @@
 <!--
-  The review form for one game (WS9 P0): the right-hand rail of the review
-  screen, without the video. P1 puts it beside the player.
+  The review form for one game (WS9 P0), in the rail beside the player since
+  P1 (`review/ReviewRail.svelte`).
 
   Every field saves itself: the review is edited as a draft and written whole
   after a short pause (`reviewform/autosave.ts`), and ticks and takeaways are
-  saved as they happen. The indicator in the header says which state the draft
-  is in.
+  saved as they happen. The rail's tab bar says which state the draft is in.
 
   **No `{@html}`.** Objective and takeaway text is the user's, and the header's
-  champion names come from a scoreboard; default interpolation escapes all of it.
+  hints come from the recording; default interpolation escapes all of it.
 -->
 
 <script lang="ts">
-import { formatDateTime } from "../../../format";
 import { formatClock, parseClock, parseCount } from "../../reviewform/fields";
 import { GAME_CHOICES, LANE_CHOICES, MENTAL_CHOICES } from "../../reviewform/ratings";
 import {
   addTakeaway,
-  closeReview,
   deleteTakeaway,
   edit,
   gameReview,
@@ -25,13 +22,6 @@ import {
   setTicked,
 } from "../../stores/gameReview.svelte";
 import RatingControl from "./RatingControl.svelte";
-
-const STATUS_COPY = {
-  saved: "Saved",
-  unsaved: "Unsaved changes",
-  saving: "Saving…",
-  error: "Not saved",
-} as const;
 
 // Text boxes keep what was typed, even when it does not parse yet, so a
 // half-typed "2:" is not wiped by the next render. They are reset from the
@@ -90,29 +80,7 @@ const deathsHint = $derived.by(() => {
 });
 </script>
 
-<div class="view-header">
-  <button type="button" class="back-btn" onclick={() => void closeReview()}>&larr; Back</button>
-  <h2>Review</h2>
-  <span class="save-status" data-status={gameReview.status} role="status" aria-live="polite"
-    >{STATUS_COPY[gameReview.status]}</span
-  >
-</div>
-
 {#if gameReview.current}
-  {@const game = gameReview.current.game}
-  <section class="settings-group review-form-head">
-    <p class="review-game-title">
-      <span>{formatDateTime(game.started_at)}</span>
-      {#if game.result}
-        <span class="result-pill" data-outcome={game.result}
-          >{game.result === "win" ? "Win" : "Loss"}</span
-        >
-      {/if}
-      <span>{game.champion ?? "Unknown champion"}</span>
-      {#if game.matchup}<span class="hint">vs {game.matchup}</span>{/if}
-    </p>
-  </section>
-
   <section class="settings-group">
     <h3>Ratings</h3>
     <RatingControl

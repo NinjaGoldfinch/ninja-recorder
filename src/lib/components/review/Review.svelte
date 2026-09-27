@@ -11,9 +11,14 @@
   The position is published into `playhead` from the rAF loop so the timeline
   can draw it. That is one number crossing the boundary in one direction, which
   is the smallest seam that still lets the timeline be declarative.
+
+  The review form and the event list sit beside the player in `ReviewRail`
+  (WS9 P1), so notes are written with the footage on screen. Opening a
+  recording loads its game review too, and closing writes it first.
 -->
 
 <script lang="ts">
+import { untrack } from "svelte";
 import { assetUrl, call } from "../../../bridge";
 import { vodHeading } from "../../../format";
 import { showView } from "../../../router";
@@ -22,14 +27,15 @@ import { recordedWithout } from "../../library/problems";
 import { laneOpponent } from "../../library/scoreboard";
 import { type HotkeyContext, hotkeyAction, SEEK_STEP_S } from "../../review/hotkeys";
 import { parseAudioLayout, videoErrorReport } from "../../review/playback";
+import { closeReview, openReviewForRecording } from "../../stores/gameReview.svelte";
 import { closeRecording, review, setDuration } from "../../stores/review.svelte";
 import { toast } from "../../stores/toast.svelte";
 import type { MetricKey } from "../../timeline/graph";
 import { nextMarker } from "../../timeline/navigate";
 import { stemCorrection } from "../../timeline/stem";
 import { clamp } from "../../timeline/window";
-import MarkerList from "./MarkerList.svelte";
 import PlayerControls from "./PlayerControls.svelte";
+import ReviewRail from "./ReviewRail.svelte";
 import Timeline from "./Timeline.svelte";
 
 let video = $state<HTMLVideoElement>();
@@ -363,6 +369,9 @@ function close() {
     video.load();
   }
   closeRecording();
+  // Not awaited: the save is flushed in the background, and the library does
+  // not need to wait for it to show.
+  void closeReview();
   showView("library");
 }
 
@@ -379,8 +388,10 @@ $effect(() => {
   // Read so the effect re-runs when the recording changes and not when its
   // markers do.
   const id = row.id;
-  void id;
 
+  // Untracked: the load writes the review store, and nothing it touches
+  // should make this effect reload the video.
+  untrack(() => void openReviewForRecording(id));
   startApplied = false;
   videoError = null;
   detachStem();
@@ -514,93 +525,97 @@ $effect(() => {
   <p class="review-without" role="note">{without.full}</p>
 {/if}
 
-<div class="player-wrap" bind:this={playerWrap}>
-  <!-- svelte-ignore a11y_media_has_caption -->
-  <video
-    id="review-video"
-    bind:this={video}
-    onclick={() => {
-      // Click-to-toggle, as `review.ts` had it. The guard is the whole
-      // subtlety: a click that dismissed the settings menu started on a frame
-      // the user was not aiming at.
-      if (menuWasOpenOnPointerDown) return;
-      togglePlay();
-    }}
-    onloadedmetadata={onLoadedMetadata}
-    onerror={onVideoError}
-    onplay={() => {
-      paused = false;
-      startLoop();
-      void resumeStem();
-    }}
-    onpause={() => {
-      paused = true;
-      stopLoop();
-      stem?.pause();
-      // One last update, so the bar lands where the video actually stopped.
-      if (video) playhead = video.currentTime;
-    }}
-    onseeked={() => {
-      if (video) playhead = video.currentTime;
-      void resumeStem();
-    }}
-    ontimeupdate={stopAtWindowEnd}
-    onratechange={() => {
-      if (video) rate = video.playbackRate;
-    }}
-  ></video>
+<div class="review-layout">
+  <div class="review-main">
+    <div class="player-wrap" bind:this={playerWrap}>
+      <!-- svelte-ignore a11y_media_has_caption -->
+      <video
+        id="review-video"
+        bind:this={video}
+        onclick={() => {
+          // Click-to-toggle, as `review.ts` had it. The guard is the whole
+          // subtlety: a click that dismissed the settings menu started on a frame
+          // the user was not aiming at.
+          if (menuWasOpenOnPointerDown) return;
+          togglePlay();
+        }}
+        onloadedmetadata={onLoadedMetadata}
+        onerror={onVideoError}
+        onplay={() => {
+          paused = false;
+          startLoop();
+          void resumeStem();
+        }}
+        onpause={() => {
+          paused = true;
+          stopLoop();
+          stem?.pause();
+          // One last update, so the bar lands where the video actually stopped.
+          if (video) playhead = video.currentTime;
+        }}
+        onseeked={() => {
+          if (video) playhead = video.currentTime;
+          void resumeStem();
+        }}
+        ontimeupdate={stopAtWindowEnd}
+        onratechange={() => {
+          if (video) rate = video.playbackRate;
+        }}
+      ></video>
 
-  {#if videoError}
-    <div class="video-error">
-      <p>{videoError.message}</p>
-      <code>{videoError.detail}</code>
+      {#if videoError}
+        <div class="video-error">
+          <p>{videoError.message}</p>
+          <code>{videoError.detail}</code>
+        </div>
+      {/if}
+
+      <PlayerControls
+        atS={Math.max(0, playhead - review.window.start)}
+        totalS={review.window.span}
+        {paused}
+        muted={userMuted}
+        volume={userVolume}
+        {rate}
+        {fullscreen}
+        {layout}
+        {selectedTrack}
+        {menuOpen}
+        ontoggleplay={togglePlay}
+        ontogglemute={toggleMute}
+        onvolume={setVolume}
+        onrate={setRate}
+        ontrack={(i) => void selectTrack(i)}
+        ontogglefullscreen={toggleFullscreen}
+        onmenu={(open) => (menuOpen = open)}
+        onscrub={moveScrub}
+        onscrubstart={startScrub}
+      />
     </div>
-  {/if}
 
-  <PlayerControls
-    atS={Math.max(0, playhead - review.window.start)}
-    totalS={review.window.span}
-    {paused}
-    muted={userMuted}
-    volume={userVolume}
-    {rate}
-    {fullscreen}
-    {layout}
-    {selectedTrack}
-    {menuOpen}
-    ontoggleplay={togglePlay}
-    ontogglemute={toggleMute}
-    onvolume={setVolume}
-    onrate={setRate}
-    ontrack={(i) => void selectTrack(i)}
-    ontogglefullscreen={toggleFullscreen}
-    onmenu={(open) => (menuOpen = open)}
-    onscrub={moveScrub}
-    onscrubstart={startScrub}
-  />
+    <!--
+      Only the markers the file reaches are drawn. A crashed recording carries
+      markers for moments past its own end, and `windowFraction` clamps, so drawing
+      them would pile a stack of unrelated events onto the final frame. They are
+      listed instead: see `splitByFootage`.
+    -->
+    <Timeline
+      markers={review.footage.inside}
+      samples={review.samples}
+      metric={review.metric}
+      window={review.window}
+      currentTimeS={playhead}
+      onmetric={(m: MetricKey) => (review.metric = m)}
+      onseek={seekTo}
+      onscrub={moveScrub}
+      onscrubstart={startScrub}
+    />
+
+    <p class="hint review-keys">
+      Space play/pause &middot; &larr; &rarr; seek 5s &middot; [ ] markers &middot; d / D deaths
+      &middot; f fullscreen &middot; m mute
+    </p>
+  </div>
+
+  <ReviewRail markers={review.markers} beyond={review.footage.beyond} onseek={seekTo} />
 </div>
-
-<!--
-  Only the markers the file reaches are drawn. A crashed recording carries
-  markers for moments past its own end, and `windowFraction` clamps, so drawing
-  them would pile a stack of unrelated events onto the final frame. They are
-  listed instead: see `splitByFootage`.
--->
-<Timeline
-  markers={review.footage.inside}
-  samples={review.samples}
-  metric={review.metric}
-  window={review.window}
-  currentTimeS={playhead}
-  onmetric={(m: MetricKey) => (review.metric = m)}
-  onseek={seekTo}
-  onscrub={moveScrub}
-  onscrubstart={startScrub}
-/>
-
-<MarkerList markers={review.markers} beyond={review.footage.beyond} onseek={seekTo} />
-
-<p class="hint">
-  Space play/pause &middot; &larr; &rarr; seek 5s &middot; [ ] markers &middot; d / D deaths
-  &middot; f fullscreen &middot; m mute
-</p>

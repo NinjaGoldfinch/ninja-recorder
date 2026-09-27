@@ -16,8 +16,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  */
 
 const call = vi.hoisted(() => vi.fn());
+/** The review rail's game, answered by a fake daemon. */
+const client = vi.hoisted(() => ({
+  open_game_for_recording: vi.fn(),
+  get_game_review: vi.fn(),
+  save_game_review: vi.fn(),
+}));
 vi.mock("../../../bridge", () => ({
   call,
+  client,
   hasDevCommands: vi.fn().mockResolvedValue(false),
   assetUrl: (p: string) => p,
 }));
@@ -61,6 +68,25 @@ beforeEach(async () => {
   call.mockReset();
   call.mockResolvedValue([]);
   showView.mockReset();
+  for (const fn of Object.values(client)) fn.mockReset();
+  client.open_game_for_recording.mockResolvedValue(70);
+  client.get_game_review.mockResolvedValue({
+    game: {
+      id: 70,
+      recording_id: 1,
+      started_at: 0,
+      ended_at: null,
+      block_id: null,
+      champion: "Ahri",
+      matchup: null,
+      result: "win",
+    },
+    review: null,
+    death_markers: null,
+    objectives: [],
+    takeaways: [],
+  });
+  client.save_game_review.mockResolvedValue(null);
 
   svelte = await import("svelte");
   store = await import("../../stores/review.svelte");
@@ -354,6 +380,50 @@ describe("audio tracks", () => {
     // Or the combined mix and the isolated stem would play on top of each
     // other.
     expect(video(el).muted).toBe(true);
+  });
+});
+
+describe("the review rail", () => {
+  it("loads the recording's game review beside the player", async () => {
+    const el = render();
+    await open();
+    await vi.waitFor(() => expect(client.get_game_review).toHaveBeenCalledWith(70));
+    expect(client.open_game_for_recording).toHaveBeenCalledWith(1);
+    expect(el.querySelector(".review-rail #rail-panel-review")?.hasAttribute("hidden")).toBe(false);
+    await vi.waitFor(() => expect(el.querySelector('[aria-label="Notes"]')).not.toBeNull());
+  });
+
+  it("lists the events in their own tab, and seeks from them", async () => {
+    const el = render();
+    await open([marker(60), marker(120)]);
+    await Promise.resolve();
+    const events = el.querySelector<HTMLButtonElement>("#rail-tab-events");
+    expect(events?.textContent).toContain("2");
+    events?.click();
+    await Promise.resolve();
+    expect(el.querySelector("#rail-panel-events")?.hasAttribute("hidden")).toBe(false);
+    expect(el.querySelector("#rail-panel-review")?.hasAttribute("hidden")).toBe(true);
+    el.querySelectorAll<HTMLElement>(".marker-list li")[1]?.click();
+    expect(video(el).currentTime).toBe(120);
+  });
+
+  it("writes an unsaved review when the player closes", async () => {
+    const el = render();
+    await open();
+    const notes = await vi.waitFor(() => {
+      const found = el.querySelector<HTMLTextAreaElement>('[aria-label="Notes"]');
+      if (!found) throw new Error("form not loaded");
+      return found;
+    });
+    notes.value = "ward earlier";
+    notes.dispatchEvent(new Event("input", { bubbles: true }));
+    el.querySelector<HTMLButtonElement>(".back-btn")?.click();
+    await vi.waitFor(() =>
+      expect(client.save_game_review).toHaveBeenCalledWith(
+        70,
+        expect.objectContaining({ free_notes: "ward earlier" }),
+      ),
+    );
   });
 });
 

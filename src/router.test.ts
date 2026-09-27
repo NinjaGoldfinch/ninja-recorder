@@ -171,7 +171,9 @@ describe("initRouting", () => {
     expect(router.currentView()).toBe("library");
   });
 
-  it("refuses to open straight into the review form, which needs a game", () => {
+  it("ignores the review form's old fragment, which is no longer a view", () => {
+    // The form moved into the player's rail; `#game` must not strand a window
+    // on a section that no longer exists.
     window.location.hash = "#game";
     router.initRouting();
     expect(router.currentView()).toBe("library");

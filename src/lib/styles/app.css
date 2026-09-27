@@ -296,6 +296,176 @@ button:disabled {
  * fold, which is the whole thing this exists to prevent. */
 .review-view {
   --player-chrome: 18rem;
+  /* The rail's width, and everything above and below it that it has to
+   * leave room for so it ends at the bottom of the window: the app bar, the
+   * container's padding and the review header. Measured, like the chrome
+   * above, and a little generous for the same reason. */
+  --rail-width: 22rem;
+  --rail-chrome: 10rem;
+}
+
+/* The review view gets the wider column, and so does the app bar above it,
+ * so the two stay aligned. `:has` rather than a class set from the router:
+ * the `hidden` attribute is already the one statement of which view is
+ * showing, and a second mechanism is one that can disagree with it. */
+.container:has(> .review-view:not([hidden])),
+body:has(.review-view:not([hidden])) .app-bar-inner {
+  max-width: var(--review-max);
+}
+
+.review-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-3);
+}
+
+.review-header h2 {
+  margin: 0;
+  font-size: var(--fs-lg);
+  letter-spacing: -0.01em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The player and the timeline on the left, the review rail on the right. The
+ * left column takes whatever the rail leaves, and `minmax(0, …)` lets it
+ * shrink below the timeline's content width rather than pushing the rail off
+ * the side. */
+.review-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--rail-width);
+  gap: var(--sp-4);
+  align-items: start;
+}
+
+.review-main {
+  min-width: 0;
+}
+
+.review-keys {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-sm);
+}
+
+/* The rail is exactly as tall as the window leaves it, and its panels scroll
+ * inside it, so the form and the events never push the page into scrolling
+ * away from the player. */
+.review-rail {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - var(--rail-chrome));
+  min-height: 24rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background-color: var(--bg-surface);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+
+.rail-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.rail-tabs [role="tab"] {
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  padding: var(--sp-2) var(--sp-2);
+  margin-bottom: -1px;
+  font-size: var(--fs-md);
+  font-weight: 550;
+  color: var(--text-muted);
+}
+
+.rail-tabs [role="tab"]:hover {
+  color: var(--text);
+  background: none;
+}
+
+.rail-tabs [role="tab"][aria-selected="true"] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.rail-count {
+  margin-left: 0.2em;
+  padding: 0 0.45em;
+  border-radius: var(--r-pill);
+  background-color: var(--bg-surface-2);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-subtle);
+}
+
+.rail-tabs .save-status {
+  padding-right: var(--sp-1);
+}
+
+.rail-panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-3) var(--sp-4);
+}
+
+.rail-panel[hidden] {
+  display: none;
+}
+
+/* The event list fills the rail rather than capping itself: the rail is the
+ * scroll container now, and the list's own frame would be a box in a box. */
+.rail-events {
+  padding: 0;
+}
+
+.rail-events .marker-list {
+  max-height: none;
+  border: none;
+  border-radius: 0;
+  background: none;
+}
+
+/* The form's sections are cards on a page of their own; in the rail, which is
+ * already the card, they are sections divided by a rule. */
+.review-rail .settings-group {
+  margin: 0;
+  padding: var(--sp-3) 0;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.review-rail .settings-group:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+/* Too narrow for the two side by side: the rail goes under the player and
+ * the page scrolls to it, which is the one layout where that is acceptable,
+ * because there is no room to show both anyway. */
+@media (max-width: 1100px) {
+  .review-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .review-rail {
+    height: auto;
+    max-height: none;
+  }
+
+  .rail-panel {
+    overflow-y: visible;
+  }
 }
 
 .player-wrap {

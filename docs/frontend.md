@@ -36,7 +36,7 @@ flowchart TB
     LIBV["lib/components/library/<br/><small>Library, Row, Toolbar, StatsBar,<br/>Loadout, Matchup, Slot, RowActions</small>"]
     LIBS["lib/stores/library.svelte.ts<br/><small>owns: the row set + every control</small>"]
     ICONS["lib/stores/icons.svelte.ts<br/><small>owns: when art has arrived</small>"]
-    REVV["lib/components/review/<br/><small>Review (imperative island), Timeline,<br/>PlayerControls, MarkerList, MarkerTimes</small>"]
+    REVV["lib/components/review/<br/><small>Review (imperative island), Timeline,<br/>PlayerControls, ReviewRail, MarkerList,<br/>MarkerTimes</small>"]
     REVS["lib/stores/review.svelte.ts<br/><small>owns: which recording, its markers,<br/>samples and window</small>"]
     SETV["lib/components/settings/<br/><small>Settings, Appearance, BackgroundTray,<br/>Notifications, AudioSettings, Storage,<br/>Advanced, About, Update, UpdateNotes, SettingRow</small>"]
     SETS["lib/stores/settings.svelte.ts<br/><small>owns: autostart, audio, capture backend,<br/>retention, the folder, mirrored prefs</small>"]
@@ -486,7 +486,7 @@ would throw away an order the user chose.
 
 ## Views
 
-Five top-level sections in one document, toggled by `router.ts`. Before it
+Four top-level sections in one document, toggled by `router.ts`. Before it
 existed, each view flipped its own and its sibling's `hidden` attribute from
 two files that knew nothing about each other.
 
@@ -494,9 +494,7 @@ two files that knew nothing about each other.
 stateDiagram-v2
     [*] --> library
     library --> review: click a VOD card
-    review --> library: back
-    library --> game: 📝 on a VOD card
-    game --> library: back (saves first)
+    review --> library: back (saves the review first)
     library --> objectives: objectives button
     objectives --> library: back
     library --> settings: settings button
@@ -506,17 +504,39 @@ stateDiagram-v2
 
 ### The review form (WS9)
 
-`game` is the review form for one game and `objectives` the list it reviews
-against. **The form is its own view in P0, not a rail beside the player.** P0
-builds nothing video-related, and a separate view keeps the form clear of the
-player's document-level hotkeys, which only answer while `review` is showing.
-P1 moves it next to the player.
+The review form for one game lives in the **rail beside the player**
+(`review/ReviewRail.svelte`), and `objectives` is the list it reviews against.
+P0 shipped the form as a view of its own, `game`, opened from a 📝 button on
+each library row; P1 (#322) folded it into the player and removed both, so
+opening a VOD is the only way in and the footage is on screen while notes are
+written (#321 has the layout, and the alternatives it beat).
+
+```mermaid
+flowchart LR
+    ROW["library row<br/>click"] --> OPEN["review.openRecording<br/>+ showView('review')"]
+    OPEN --> PLAYER["Review.svelte<br/>loads the file"]
+    PLAYER -->|same effect, untracked| LOAD["gameReview.openReviewForRecording<br/>flush · open_game_for_recording · get_game_review"]
+    LOAD --> RAIL["ReviewRail<br/>Review tab: ReviewForm<br/>Events tab: MarkerList"]
+    BACK["← Back"] --> CLOSE["closeRecording + closeReview<br/>(flushes, then drops the game)"]
+```
+
+- **The rail has two tabs, and both stay mounted.** Review holds the form and
+  Events holds the marker list. A hidden tab keeps its half-typed text and its
+  scroll position, which an `{#if}` would throw away. The save status sits in
+  the tab bar, where it is visible from either tab.
+- **The player's hotkeys stand down while a field has focus**, as they always
+  have (`review/hotkeys.ts`, `typing`), so the form can sit beside a player
+  that answers Space and the arrows.
+- **Loads race, and the newer one wins.** Opening one VOD after another starts
+  two loads; `gameReview` counts them and drops any answer that is not the
+  latest's, so a slow daemon cannot put the previous game's review beside the
+  next game's footage.
 
 - **The whole review is saved at once.** The form edits a draft, and
   `reviewform/autosave.ts` writes all of it 600 ms after the last change. It
   never runs two saves at once, and the last value typed is always the last
-  value written. The header shows Saved, Unsaved changes, Saving… or Not
-  saved. Leaving the form, or opening another game, flushes first.
+  value written. The rail's tab bar shows Saved, Unsaved changes, Saving… or
+  Not saved. Closing the player, or opening another game, flushes first.
 - **Ticks and takeaways save as they happen.** A tick is optimistic and
   reverts if the save fails.
 - **A blank box means "not entered", never zero.** For deaths, that is what
@@ -538,7 +558,7 @@ curve is not optional furniture: it is how a position in the game is read off
 the timeline at all, and having to scroll to it defeats the widget.
 
 So the player is capped, and **the cap is a `max-width`, not a `max-height`**.
-`.player-wrap` takes the vertical space left over after the app bar, the view
+`.player-wrap` takes the vertical space left over after the app bar, the review
 header and the whole timeline, and multiplies it by the recording's own aspect
 ratio; `review.ts` publishes that ratio as `--player-ratio` on `loadedmetadata`,
 falling back to the same 16/9 the video's `aspect-ratio` placeholder already
@@ -563,6 +583,15 @@ Two details that are load-bearing rather than tidy:
 On a tall window the cap never binds, because the content column's own width is
 the smaller of the two, so this changes nothing for anyone who was not scrolling
 in the first place.
+
+**The review rail keeps to the same fold.** The review view widens to
+`--review-max` (the app bar's content follows it, so the two stay aligned), and
+splits into the player column and a `--rail-width` rail. The rail is as tall as
+the window leaves it (`--rail-chrome`, measured the same way as
+`--player-chrome`) and its panels scroll inside it, so a long form never makes
+the page scroll away from the player. At the default 1340×850 window that is a
+924×520 player and a 352px rail, with nothing below the fold. Below 1100px wide
+the rail drops under the player, and the page scrolls to it.
 
 ### The player clips both ends
 
@@ -896,7 +925,7 @@ a shipped build.
 | `check_for_update` | nothing | settings → About → "Check now" |
 | `install_update` | nothing | settings → About → "Install and restart"; ends the process |
 | `start_recording` / `stop_recording` / `is_recording` | nothing | registered but unreferenced by the main UI, and since #282 by the dev portal's panels too: they reach the daemon's recorder around the supervisor ([dev-portal.md](dev-portal.md#the-recorder-panel-has-no-manual-controls)). Only the Commands panel can still invoke them |
-| `open_game_for_recording` | the game's id | review form, opened from a library row; makes the game for a recording from before WS9 |
+| `open_game_for_recording` | the game's id | review rail, whenever the player opens a recording; makes the game for a recording from before WS9 |
 | `get_game_review` / `save_game_review` | `GameReview \| null` / nothing | review form: load, then the debounced autosave of the whole `ReviewInput` |
 | `set_objective_ticked` | nothing | review form → "Reviewing against" |
 | `add_takeaway` / `delete_takeaway` / `promote_takeaway` | `Takeaway` / nothing / `Objective` | review form → Takeaways |
@@ -1104,8 +1133,9 @@ above records.
 tray needs: a `#settings` URL fragment read once at startup, for a window the
 tray has just created, and a `navigate` event for a window that already exists.
 A `#review` fragment is ignored, because the review view with no recording
-loaded is not a state worth restoring into. `#game` is ignored for the same
-reason; `#objectives` opens that list.
+loaded is not a state worth restoring into. `#game`, the review form's
+fragment before it moved into the player, is no longer a view and is ignored
+like any other unknown fragment; `#objectives` opens that list.
 
 ## The root, and how it mounts
 
