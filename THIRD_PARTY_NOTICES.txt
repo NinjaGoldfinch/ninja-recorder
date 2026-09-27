@@ -19,7 +19,7 @@ The ninja-recorder binary links the Rust crates below. They are grouped by
 licence text: each text is printed once, after the crates it covers.
 
 Licences in use:
-  MIT License (286)
+  MIT License (288)
   Unicode License v3 (19)
   ISC License (18)
   Apache License 2.0 (7)
@@ -3329,6 +3329,7 @@ MIT License
 
 Used by:
   keyboard-types 0.7.0 <https://github.com/pyfisch/keyboard-types>
+  keyboard-types 0.8.3 <https://github.com/rust-windowing/keyboard-types>
 
 Copyright (c) 2017 Pyfisch
 
@@ -5388,6 +5389,7 @@ MIT License
 
 Used by:
   muda 0.19.3 <https://github.com/tauri-apps/muda>
+  muda 0.20.0 <https://github.com/tauri-apps/muda>
   tray-icon 0.24.2 <https://github.com/tauri-apps/tray-icon>
 
 MIT License
