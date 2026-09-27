@@ -28,7 +28,7 @@
 //! switched off from the Startup tab reads as disabled, which is what
 //! DEVELOPMENT.md §12 means by the registry being the source of truth.
 
-use auto_launch::{AutoLaunch, AutoLaunchBuilder};
+use auto_launch::{AutoLaunch, AutoLaunchBuilder, WindowsEnableMode};
 
 use crate::core::Autostart;
 use crate::launch;
@@ -75,6 +75,11 @@ impl RegistryAutostart {
             .set_app_name(APP_NAME)
             .set_app_path(exe)
             .set_args(&launch::autostart_args())
+            // HKCU only, which is all 0.5 ever wrote. 0.6 defaults to
+            // `Dynamic`, which tries `HKLM\...\Run` first and falls back on
+            // access denied: an elevated daemon would then start itself at
+            // every user's login, under an entry nobody else can turn off.
+            .set_windows_enable_mode(WindowsEnableMode::CurrentUser)
             .build()
             .map(RegistryAutostart)
             .map_err(|e| format!("cannot prepare the login entry: {e}"))
