@@ -936,7 +936,7 @@ mod tests {
     #[test]
     fn deleting_a_recording_keeps_its_game_and_review() {
         let db = db();
-        let recording = db.begin_recording("C:/vods/a.mp4", 1000).unwrap();
+        let recording = db.begin_recording("C:/vods/a.mp4", 1000, None).unwrap();
         db.insert_markers(recording, &[NewMarker {
             game_time_s: 60.0,
             video_time_s: 65.0,
@@ -1001,7 +1001,7 @@ mod tests {
     #[test]
     fn a_recording_and_a_riot_game_each_have_at_most_one_game() {
         let db = db();
-        let recording = db.begin_recording("C:/vods/a.mp4", 1000).unwrap();
+        let recording = db.begin_recording("C:/vods/a.mp4", 1000, None).unwrap();
         exec(&db, &format!("INSERT INTO games (recording_id, riot_game_id, started_at) VALUES ({recording}, 7, 0)"))
             .unwrap();
         assert!(is_constraint_error(exec(
@@ -1199,7 +1199,7 @@ mod tests {
     #[test]
     fn the_header_reads_through_to_the_recording_and_survives_its_deletion() {
         let db = db();
-        let recording = db.begin_recording("C:/vods/a.mp4", 1000).unwrap();
+        let recording = db.begin_recording("C:/vods/a.mp4", 1000, None).unwrap();
         let game = db.start_game(Some(recording), 1000).unwrap();
         db.finish_game(game, &GameFacts {
             champion: Some("Lee Sin".into()),
@@ -1229,7 +1229,7 @@ mod tests {
     #[test]
     fn deaths_prefill_counts_death_markers_and_is_unknown_without_any_markers() {
         let db = db();
-        let recording = db.begin_recording("C:/vods/a.mp4", 0).unwrap();
+        let recording = db.begin_recording("C:/vods/a.mp4", 0, None).unwrap();
         let game = db.start_game(Some(recording), 0).unwrap();
         assert_eq!(db.get_game_review(game).unwrap().unwrap().death_markers, None);
 
