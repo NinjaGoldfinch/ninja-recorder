@@ -148,6 +148,21 @@ pub trait Recorder: Send {
         None
     }
 
+    /// The audio layout the recording in flight is writing, or `None` when
+    /// nothing is recording or the backend cannot say.
+    ///
+    /// Known from the moment `start` returns, and stored with the row the
+    /// supervisor opens then (#311), so a recording that startup recovery
+    /// finishes after a daemon crash still has a track menu. `stop`'s
+    /// `RecordingOutput::audio` is still the fact the finalize writes over
+    /// it: a backend may learn more between the two.
+    ///
+    /// Default `None`, which leaves the row's layout NULL until finalize,
+    /// as it always was.
+    fn current_audio(&self) -> Option<AudioLayout> {
+        None
+    }
+
     /// Whether this backend's out-of-process capture worker is up: `None`
     /// for a backend that has no worker (the stub, a `FailedRecorder`).
     ///

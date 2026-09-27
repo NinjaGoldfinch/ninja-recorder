@@ -34,7 +34,7 @@ sequenceDiagram
     G-->>S: first successful /allgamedata
     S->>S: WaitingForGame → Recording
     S->>R: start(RecordConfig)
-    S->>D: begin_recording (row opened, finished_at NULL)
+    S->>D: begin_recording (row opened, finished_at NULL, audio layout from current_audio)
     S->>D: start_game (game, block, objective snapshot)
     S->>S: record started_at + first gameTime → TimeAlignment
 
