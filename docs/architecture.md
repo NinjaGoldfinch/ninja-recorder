@@ -88,7 +88,8 @@ flowchart TB
 | `recorder/own/mux.rs` | Encoded samples into the file through `mp4::write`: created at the first keyframe (whose SPS and PPS the `moov` needs), 100 ns times to 90 kHz and to each AAC track's rate, a video frame held until the next gives its duration, and a fragment closed before every keyframe after the first | `Mux`, `to_timescale`, `flush_before` |
 | `recorder/own/nv12.rs` | BGRA to NV12 on the CPU, BT.709 studio range, for a device with no video processor (the CI runner, a GPU-less VM) | `bgra_to_nv12`, `frame_len` |
 | `recorder/own/pcm.rs` | Endpoint sample formats to stereo f32 for the mixer (or i16), and the mix back to i16 | `to_stereo_f32`, `f32_to_i16` |
-| `recorder/own/problem.rs` | Which capture outcomes are failures to tell the user about (#10): a source lost while *finding* what to capture is an absence (Discord not running, no microphone), except the game; one lost while *opening* it, or that stops part-way, is a failure; so is an early end of the whole recording. `SourceError` carries the stage from `own/win/audio` | `is_failure`, `not_opened`, `ended`, `stop_problem`, `SourceError`, `Stage` |
+| `recorder/own/problem.rs` | Which capture outcomes are failures to tell the user about (#10): a source lost while *finding* what to capture is an absence (Discord not running, no microphone), except the game; one lost while *opening* it, or that stops part-way, is a failure; so is an early end of the whole recording. `SourceError` carries the stage from `own/win/audio`; `outages` names the spans a lost device was silent for | `is_failure`, `not_opened`, `ended`, `outages`, `stop_problem`, `SourceError`, `Stage` |
+| `recorder/own/reattach.rs` | What a microphone or desktop source does when its device goes away mid-recording (#298): which HRESULTs are waited out (`AUDCLNT_E_DEVICE_INVALIDATED`, `_SERVICE_NOT_RUNNING`, `_RESOURCES_INVALIDATED`), when the next reopen is due, whether a "Windows default" source moves to a new default, and how long each gap was | `recoverable`, `Retry`, `follows_default`, `Outage`, `silent_for` |
 | `recorder/own/plan.rs` | A preset's `AudioLayout` to a `CapturePlan`: the sources to open, each once, and what each written track sums (every track since #239; the Desktop mix is the desktop alone, and the game feeds only its stem). `realised_layout` drops a source that failed to open with its stem and reindexes, so `stop` reports the file that exists; `describe` is how the log names each track (`a:0 "Everything" (game + microphone)`) | `plan`, `CapturePlan`, `realised_layout`, `describe`, `TRACKS_WRITTEN` |
 | `recorder/own/root.rs` | Which process tree a process-loopback capture targets, from a process snapshot: the game (the window's owner, checked against `League of Legends.exe`), or the top of an application's tree (Discord, since #238). Reused parent PIDs are caught by creation time | `game_root`, `application_root` |
 | `recorder/own/select.rs` | Which H.264 encoder: hardware by adapter vendor (NVIDIA → AMD → Intel), the software MFT only as a marked fallback; the Windows build floor (19041, OBS's, untested on Windows 10) and its devtools-only override; a preset's checked audio layout (every preset since #238) | `rank`, `Choice`, `availability`, `floor_ignored`, `audio_layout` |
@@ -234,6 +235,25 @@ out with any stem it alone fed; with none, the recording is video only, and
 `stop` reports no audio track
 ([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#the-own-backend-captures-each-source-itself),
 [§16](../DEVELOPMENT.md#the-qpc-question-and-how-a-recording-answers-it)).
+
+A microphone or desktop whose device goes away mid-recording (a wireless
+headset switched off, a USB microphone unplugged) does not end its thread
+(#298). The capture call fails with `AUDCLNT_E_DEVICE_INVALIDATED`; the thread
+logs it, releases the stream, and opens the device again half a second later
+and then every second (every two after a minute), as Microsoft's "Recovering
+from an Invalid-Device Error" describes: a configured microphone by its
+endpoint id, "Windows default" as whatever the default for its role is now.
+Its channel stays open throughout, so the tracks see only a quiet stretch the
+mixer's watermark has already filled with silence, and the reopened device's
+first packet is marked a discontinuity, the mark a restarted game's gets, so
+it is placed where its stamp says. A default source also polls the default
+once a second and moves to a new one when Windows picks it, which is what
+brings a replugged headset back after the source fell back to the webcam's
+microphone. `own::reattach` makes those decisions; the gaps come back in the
+thread's summary at stop, and a device that went away is reported with the
+spans it was silent for (`from 0:08 to 0:21`, or `from 0:08 on` if it never
+came back). Process-loopback sources are not reopened this way: they follow
+their process.
 
 ```mermaid
 sequenceDiagram

@@ -20,9 +20,12 @@
 //!
 //! A source that opened and then stopped before the recording did is always a
 //! failure too ([`ended`]), and so is a recording the worker could not see
-//! through to its stop ([`stop_problem`]).
+//! through to its stop ([`stop_problem`]). A microphone or desktop whose device
+//! went away is reopened when it comes back (`reattach`), and the problem then
+//! names the spans it was silent for ([`outages`]).
 
 use super::plan::source_name;
+use super::reattach::Outage;
 use crate::recorder::audio::AudioSourceKind;
 use crate::recorder::problem::CaptureProblem;
 
@@ -88,6 +91,35 @@ pub fn not_opened(kind: &AudioSourceKind, error: &SourceError) -> Option<Capture
 /// before the recording did.
 pub fn ended(name: &str, reason: &str) -> CaptureProblem {
     CaptureProblem::SourceEnded { source: name.to_string(), reason: reason.to_string() }
+}
+
+/// What an endpoint source's device going away cost a recording whose tick 0
+/// is `origin` on the performance counter (#298), or `None` if it never went.
+///
+/// Still a `SourceEnded`, because for each span it names the source *is*
+/// missing from the file, but the reason says which spans: `silent from 0:08
+/// to 0:21` for a device that came back, `from 0:08 on` for one that did not.
+/// The failing call is the last loss's, the one that decided how the
+/// recording ends.
+pub fn outages(name: &str, outages: &[Outage], origin: i64) -> Option<CaptureProblem> {
+    let (last, earlier) = outages.split_last()?;
+    let at = |hns: i64| clock((hns - origin) as f64 / 10_000_000.0);
+    let span = |o: &Outage| match o.back {
+        Some(back) => format!("from {} to {}", at(o.lost), at(back)),
+        None => format!("from {} on", at(o.lost)),
+    };
+    let spans = if earlier.is_empty() {
+        span(last)
+    } else {
+        let earlier: Vec<String> = earlier.iter().map(span).collect();
+        format!("{} and {}", earlier.join(", "), span(last))
+    };
+    let how = if last.back.is_some() {
+        "its device went away and was captured again when it came back"
+    } else {
+        "its device went away and did not come back"
+    };
+    Some(ended(name, &format!("silent {spans}: {how} ({})", last.reason)))
 }
 
 /// What the daemon heard back from a stop, reduced to what decides whether the
@@ -225,6 +257,64 @@ mod tests {
                 reason: "GetNextPacketSize failed: (0x88890004)".into()
             }
         );
+    }
+
+    const ORIGIN: i64 = 1_000 * 10_000_000;
+    const INVALIDATED: &str = "GetNextPacketSize failed: (0x88890004)";
+
+    /// A loss `lost_s` into the recording, back `back_s` in if it came back.
+    fn outage(lost_s: i64, back_s: Option<i64>, reason: &str) -> Outage {
+        Outage {
+            lost: ORIGIN + lost_s * 10_000_000,
+            back: back_s.map(|s| ORIGIN + s * 10_000_000),
+            reason: reason.into(),
+        }
+    }
+
+    #[test]
+    fn a_device_that_never_went_is_no_problem() {
+        assert_eq!(outages("microphone", &[], ORIGIN), None);
+    }
+
+    /// The case #298 was opened for: switched off at 0:08, back at 0:21.
+    #[test]
+    fn a_device_that_came_back_says_which_span_was_silent() {
+        assert_eq!(
+            outages("microphone", &[outage(8, Some(21), INVALIDATED)], ORIGIN),
+            Some(CaptureProblem::SourceEnded {
+                source: "microphone".into(),
+                reason: "silent from 0:08 to 0:21: its device went away and was captured again \
+                         when it came back (GetNextPacketSize failed: (0x88890004))"
+                    .into()
+            })
+        );
+    }
+
+    #[test]
+    fn a_device_that_never_came_back_is_silent_to_the_end() {
+        let Some(CaptureProblem::SourceEnded { source, reason }) =
+            outages("desktop", &[outage(8, Some(21), "a"), outage(182, None, INVALIDATED)], ORIGIN)
+        else {
+            panic!()
+        };
+        assert_eq!(source, "desktop");
+        assert_eq!(
+            reason,
+            "silent from 0:08 to 0:21 and from 3:02 on: its device went away and did not come \
+             back (GetNextPacketSize failed: (0x88890004))"
+        );
+        let Some(CaptureProblem::SourceEnded { reason, .. }) = outages(
+            "microphone",
+            &[outage(1, Some(2), "a"), outage(3, Some(4), "b"), outage(5, Some(9), "c")],
+            ORIGIN,
+        ) else {
+            panic!()
+        };
+        assert!(
+            reason.starts_with("silent from 0:01 to 0:02, from 0:03 to 0:04 and from 0:05 to 0:09:"),
+            "{reason}"
+        );
+        assert!(reason.ends_with("(c)"), "{reason}");
     }
 
     #[test]

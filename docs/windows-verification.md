@@ -1801,16 +1801,30 @@ Discord**, in a voice channel with someone talking.
       and microphone), not three.
 
 **A microphone unplugged mid-game** (the own-backend half of §4's row). On
-Game + mic with a USB microphone:
+Game + mic with a USB microphone or a wireless headset:
 
-- [ ] **Nothing stalls.** Unplug it a minute in. The game keeps recording, the
-      recording stops normally at the end of the game, and it plays to the
-      end with the game audible throughout and your voice up to the unplug.
-- [ ] **Logged once.** `worker-devtools.log` has exactly one `the microphone audio
-      capture ended before the recording did (…); it is silence in the mix
-      from here` line, with the reason (expect `AUDCLNT_E_DEVICE_INVALIDATED`,
-      0x88890004), and the stop line for the microphone says the capture ended
-      with an error. Paste both.
+- [ ] **Nothing stalls.** Unplug it (or switch the headset off) a minute in.
+      The game keeps recording, the recording stops normally at the end of
+      the game, and it plays to the end with the game audible throughout.
+- [ ] **Logged once.** `worker-devtools.log` has exactly one `the microphone
+      audio device went away (…); it is silence in every track it feeds until
+      it comes back` line, with the reason (expect
+      `AUDCLNT_E_DEVICE_INVALIDATED`, 0x88890004). Paste it.
+- [ ] **It comes back** (#298). Plug it back in (or switch the headset on)
+      about ten seconds later. Within a second or two the log has `own
+      backend: microphone came back (<device name>); captured again after N s
+      of silence`, and your voice is in the recording again from there, in
+      sync, with silence only for the time it was away. On "Windows default"
+      Windows may first fall back to another microphone (a webcam's): expect
+      `came back (<that device>)` at once, and then `microphone audio moved
+      to the new default device: …` when the headset is back. Paste the lines.
+- [ ] **The same for the desktop**, on a Desktop preset with the headset as
+      the default output: switch it off and on again. The desktop track
+      carries on from the speakers Windows falls back to, and returns to the
+      headset with `desktop audio moved to the new default device`.
+- [ ] **Left unplugged**, the voice stops at the unplug and the stop line for
+      the microphone says `device lost 1 times (… s silent, the last never
+      came back)`.
 - [ ] **The layout still names the microphone**: it was in the mix until it
       went, so `audio_tracks_json` is unchanged (`Everything`, two sources).
 
@@ -1827,6 +1841,8 @@ Game + mic with a USB microphone:
 | 11.5: Discord not running: recorded, left out, logged, row over two sources | | |
 | 11.5: microphone unplugged: no stall, plays to the end | | |
 | 11.5: microphone unplugged: one line with the reason (paste) | | |
+| 11.5: microphone replugged after ~10 s: `came back` line, voice resumes in sync (paste) | | |
+| 11.5: desktop's output device off and on: desktop track follows it back (paste) | | |
 
 ### 11.6 The capture worker (#241)
 
@@ -2036,7 +2052,11 @@ a devtools one. Own backend, Practice Tool, the window open.
       the review page shows the full line. Paste the toast's text and the
       `own backend: No microphone audio: …` line. Turn the permission back on.
 - [ ] **Part-way.** Preset **Game + mic** with a USB microphone; unplug it a
-      minute in. The row says "Recorded without part of the microphone audio".
+      minute in. The row says "Recorded without part of the microphone audio",
+      and the reason names the span: `silent from 1:00 on: its device went
+      away and did not come back (…)`. Plug it back in during a second game
+      and the reason says `silent from 1:00 to 1:10: … captured again when it
+      came back` (#298).
 - [ ] **An early end.** §11.7's worker kill: the toast is "Recording ended
       early", naming the worker's exit code.
 - [ ] **Windows 10 (19041 to 19045)**, if a box is available: a game on the

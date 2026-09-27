@@ -26,22 +26,32 @@
 //! Both are polled every few milliseconds, as the spike polled them, rather
 //! than event-driven: the keep-alive has to be topped up on the same cadence
 //! anyway.
+//!
+//! **A default source follows the default** (#298). About once a second a
+//! "Windows default" endpoint asks `GetDefaultAudioEndpoint` which device
+//! that is now, and says so when it is another one (`Capture::moved`), so the
+//! source thread can move to it: a headset plugged back in is the default
+//! again, and a source left on the device Windows fell back to would record
+//! nothing the user hears. A configured device never moves; when it goes
+//! away it is opened again by its id (`own::reattach`).
 
-use std::time::Duration;
+use std::cell::Cell;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
-    AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, IAudioCaptureClient,
-    IAudioClient, IAudioRenderClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
-    eCapture, eCommunications, eConsole, eRender,
+    AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, EDataFlow, ERole,
+    IAudioCaptureClient, IAudioClient, IAudioRenderClient, IMMDevice, IMMDeviceEnumerator,
+    MMDeviceEnumerator, eCapture, eCommunications, eConsole, eRender,
 };
 use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
 use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree, STGM_READ};
 use windows::core::{PCWSTR, PWSTR};
 
-use super::{Capture, Raw, float_format, read_packet};
+use super::{Capture, Failure, Raw, float_format, read_packet};
 use crate::recorder::own::problem::SourceError;
+use crate::recorder::own::reattach;
 
 /// 100 ms of endpoint buffer, polled every 5 ms: generous enough that a slow
 /// poll never overflows it, which would be a discontinuity we caused.
@@ -95,6 +105,22 @@ pub struct Endpoint {
     /// What was opened, for the log: which device, by name and id, and how
     /// it was chosen.
     description: String,
+    /// The device's friendly name, for the line that says it came back.
+    name: String,
+    /// For a "Windows default" source: the enumerator, the role it asks the
+    /// default for, the endpoint id it opened, and when it last asked
+    /// (`Capture::moved`). `None` for a configured device, and for a default
+    /// whose id could not be read, which then stays where it is.
+    follow: Option<Follow>,
+}
+
+/// What a default source needs to notice its default moving.
+struct Follow {
+    enumerator: IMMDeviceEnumerator,
+    flow: EDataFlow,
+    role: ERole,
+    opened: String,
+    checked: Cell<Instant>,
 }
 
 /// Copies a COM-allocated wide string out, then frees it.
@@ -115,14 +141,16 @@ unsafe fn take_pwstr(ptr: PWSTR) -> Option<String> {
     out
 }
 
-/// The device's endpoint id and friendly name, for the log.
-fn identify(device: &IMMDevice) -> (String, String) {
+/// The device's endpoint id, if it can be read.
+fn endpoint_id(device: &IMMDevice) -> Option<String> {
     // SAFETY: `device` is live; `GetId` hands over a CoTaskMemAlloc-ed
     // string, which `take_pwstr` frees.
-    let id = unsafe { device.GetId() }
-        .ok()
-        .and_then(|id| unsafe { take_pwstr(id) })
-        .unwrap_or_else(|| "(no id)".to_string());
+    unsafe { device.GetId() }.ok().and_then(|id| unsafe { take_pwstr(id) })
+}
+
+/// The device's endpoint id and friendly name, for the log.
+fn identify(device: &IMMDevice) -> (String, String) {
+    let id = endpoint_id(device).unwrap_or_else(|| "(no id)".to_string());
     // SAFETY: `device` is live, and so is the store it opens. The
     // `PROPVARIANT` is ours and windows-rs clears it on drop; the string
     // `PropVariantToStringAlloc` returns is CoTaskMemAlloc-ed and ours.
@@ -136,24 +164,35 @@ fn identify(device: &IMMDevice) -> (String, String) {
     (id, name)
 }
 
-/// Opens the device for `kind`, and says how it was chosen.
+/// The role a "Windows default" `kind` asks the default for, or `None` for a
+/// configured device.
+fn default_role(kind: &Kind) -> Option<(EDataFlow, ERole)> {
+    match kind {
+        Kind::Microphone(None) => Some((eCapture, eCommunications)),
+        Kind::Microphone(Some(_)) => None,
+        Kind::Desktop => Some((eRender, eConsole)),
+    }
+}
+
+/// Opens the device for `kind`, and says how it was chosen. The enumerator
+/// comes back too, for a default source to ask with later.
 ///
 /// **No device is an absence, not a failure** (`own::problem`): a machine
 /// with no microphone, or with the configured one unplugged, records without
 /// it and says so in the log only. So the lookups fail as `Find`, and the
 /// enumerator, which every machine has, fails as `Open`.
-fn device(kind: &Kind) -> Result<(IMMDevice, &'static str), SourceError> {
+fn device(kind: &Kind) -> Result<(IMMDeviceEnumerator, IMMDevice, &'static str), SourceError> {
     // SAFETY: COM is initialised (MTA) on this thread, and the CLSID and the
     // interface are a matching pair.
     let enumerator: IMMDeviceEnumerator =
         unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }
             .map_err(|e| format!("could not create the device enumerator: {e}"))?;
-    match kind {
+    let (device, how) = match kind {
         Kind::Microphone(None) => {
             // SAFETY: `enumerator` is live.
             let device = unsafe { enumerator.GetDefaultAudioEndpoint(eCapture, eCommunications) }
                 .map_err(|e| SourceError::find(format!("there is no default microphone: {e}")))?;
-            Ok((device, "the default communications microphone"))
+            (device, "the default communications microphone")
         }
         Kind::Microphone(Some(id)) => {
             let wide: Vec<u16> = id.encode_utf16().chain(std::iter::once(0)).collect();
@@ -162,15 +201,16 @@ fn device(kind: &Kind) -> Result<(IMMDevice, &'static str), SourceError> {
             let device = unsafe { enumerator.GetDevice(PCWSTR(wide.as_ptr())) }.map_err(|e| {
                 SourceError::find(format!("the configured microphone {id} is not there: {e}"))
             })?;
-            Ok((device, "the configured microphone"))
+            (device, "the configured microphone")
         }
         Kind::Desktop => {
             // SAFETY: `enumerator` is live.
             let device = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }
                 .map_err(|e| SourceError::find(format!("there is no default output device: {e}")))?;
-            Ok((device, "the default output, in loopback"))
+            (device, "the default output, in loopback")
         }
-    }
+    };
+    Ok((enumerator, device, how))
 }
 
 /// An `IAudioClient` on `device`, initialised shared for 48 kHz stereo float
@@ -191,7 +231,7 @@ impl Endpoint {
     /// keep-alive stream for the desktop. No device is a `Find` failure; any
     /// other is an `Open` one ([`device`]).
     pub fn open(kind: Kind) -> Result<Endpoint, SourceError> {
-        let (device, how) = device(&kind)?;
+        let (enumerator, device, how) = device(&kind)?;
         let (id, name) = identify(&device);
         let loopback = matches!(kind, Kind::Desktop);
         let what = if loopback { "the output device in loopback" } else { "the microphone" };
@@ -217,11 +257,10 @@ impl Endpoint {
             "{how}, {name} ({id}){}",
             if keep_alive.is_some() { ", kept running by a silent stream" } else { "" }
         );
-        Ok(Endpoint { client, capture, keep_alive, description })
-    }
-
-    pub fn describe(&self) -> &str {
-        &self.description
+        let follow = default_role(&kind).zip(endpoint_id(&device)).map(|((flow, role), opened)| {
+            Follow { enumerator, flow, role, opened, checked: Cell::new(Instant::now()) }
+        });
+        Ok(Endpoint { client, capture, keep_alive, description, name, follow })
     }
 
     /// Starts the keep-alive, full of silence, and then the capture.
@@ -248,8 +287,33 @@ impl Capture for Endpoint {
         true
     }
 
-    fn next(&self) -> Result<Option<Raw>, String> {
+    fn next(&self) -> Result<Option<Raw>, Failure> {
         read_packet(&self.capture)
+    }
+
+    fn describe(&self) -> Option<&str> {
+        Some(&self.description)
+    }
+
+    fn device(&self) -> Option<&str> {
+        Some(&self.name)
+    }
+
+    /// Asks which device the default for this source's role is, at most once
+    /// every `reattach::DEFAULT_CHECK`, and whether it is another one now.
+    fn moved(&self) -> bool {
+        let Some(follow) = &self.follow else {
+            return false;
+        };
+        if follow.checked.get().elapsed() < reattach::DEFAULT_CHECK {
+            return false;
+        }
+        follow.checked.set(Instant::now());
+        // SAFETY: the enumerator is live, on the thread that made it.
+        let current = unsafe { follow.enumerator.GetDefaultAudioEndpoint(follow.flow, follow.role) }
+            .ok()
+            .and_then(|device| endpoint_id(&device));
+        reattach::follows_default(&follow.opened, current.as_deref())
     }
 
     fn stop(&self) {

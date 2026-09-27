@@ -497,7 +497,8 @@ source's packets on the video's clock with its own `clock::Aligner`
   behind now has passed its end; a source with nothing for it contributes
   silence. That one rule covers a silent game (process loopback may send
   nothing), Discord's tree with nobody speaking, and a microphone unplugged
-  mid-game, whose thread ends and is logged once. No source can hold the mix,
+  mid-game, whose thread waits for it to come back (#298) and sends nothing
+  meanwhile. No source can hold the mix,
   or the video, back, and nothing is mixed past the video written so far.
 - **The Desktop preset's mix is the desktop alone.** Desktop capture already
   contains the game, so summing the game in too would play it twice; the
@@ -564,6 +565,18 @@ window being there is what started the recording; a source lost while
 failure, and so is one that stops part-way. So is a recording that ends before
 the game does (the GPU device lost, a write failing, the worker dying), a start
 the backend refuses, and a stop that keeps nothing.
+
+**A device that comes back is reattached, and the gap is still reported**
+(#298). A microphone or desktop whose endpoint is invalidated mid-recording is
+opened again when it returns, by the recovery Microsoft documents for
+`AUDCLNT_E_DEVICE_INVALIDATED`, so a headset switched off for ten seconds costs
+ten seconds, not the rest of the game. The problem stays a `SourceEnded`,
+because those seconds are missing from the file, but its reason names the
+spans (`silent from 0:08 to 0:21`) rather than claiming the source is gone
+from 0:08 on; that kept the contract's types unchanged. Polling the default
+once a second was chosen over an `IMMNotificationClient`: the thread already
+wakes every 5 ms, the question is one call, and it needs no COM object
+implemented on a callback thread.
 
 **It travels as data, not text.** `CaptureProblem` is one tagged enum that
 crosses the worker's pipe (as optional fields on `Started` and `Stopped`, so
