@@ -335,7 +335,11 @@ fn pump(
             // A stamp the engine itself flags as wrong is no stamp, and does
             // not get to decide the clock.
             let stamp = (!raw.timestamp_error).then_some(raw.qpc);
+            let substituted = stamper.substituted;
             let (hns, hole, clock) = stamper.stamp(raw.frames, stamp, raw.arrival);
+            // On QPC, a substituted stamp is the packet's arrival less its
+            // length: an estimate. On device time every stamp is the count.
+            let estimated = clock == AudioClock::Qpc && stamper.substituted > substituted;
             if !*decided && stamper.clock().is_some() {
                 *decided = true;
                 log_first(name, &raw, stamper);
@@ -347,6 +351,7 @@ fn pump(
                 hns,
                 frames: raw.frames,
                 discontinuity: raw.discontinuity || hole,
+                estimated,
                 pcm: raw.pcm,
                 clock,
             };

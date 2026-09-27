@@ -2588,7 +2588,9 @@ before. Then per source, from its aligner: the clock it ran on, the raw drift
 in ppm (QPC clock only: on the device clock the audio is stamped from its own
 sample count, so there is nothing to compare, and it is left out rather than
 printed as a meaningless number), slips (single frames dropped or repeated to
-hold it on QPC), gaps (holes over 50 ms filled with silence), holds (silence
+hold it on QPC), gaps (holes filled with silence at once: over 50 ms, at a
+discontinuity, or a jump), `jumps=N` when there were any (holes or overlaps
+nothing flagged, #297), holds (silence
 written because the source was quiet), and `ended early` for one whose capture
 died before the recording did. Then the samples the mix clipped, the file's
 size after the finalize, the **fragments** the file was closed with, and
@@ -3310,6 +3312,22 @@ its first packet**, and says which way it went:
   holds it there by slipping single frames, as the spike did. One bad stamp
   later on costs that packet's placement, stamped from its arrival instead,
   and is counted, not the recording's clock.
+- **Slips are for drift, and only drift.** One frame per 10 ms packet holds
+  up to about 2000 ppm within half a millisecond, which is fifty times what a
+  sound card is off by, so audio more than 5 ms off its stamps is not drift.
+  The box showed process loopback losing 10 to 50 ms of samples with nothing
+  flagged (#297: -600 and -1546 ppm "drift" from one step each, while the
+  microphone in the same recordings read a few ppm), and a reconnected game's
+  new source starting 49 ms off the old one's line (#313, -2446 ppm and 2354
+  slips). Both were walked back one frame per packet, the audio off by the
+  step for seconds meanwhile, and both were counted as drift. Now a packet
+  flagged as a discontinuity, and the first real stamp of a restarted source,
+  are placed exactly, as a source that joins late is; a step past 5 ms that
+  holds for three packets in a row (one stray stamp does not) is filled with
+  silence or cut at once and counted as a **jump**; and every hole the
+  aligner fills or cuts is left out of the raw figure, so `raw=` stays a
+  statement about two clocks. The stamps were already what the aligner
+  steered by; this only changes how fast it gets there.
 - **Otherwise the source goes to device time** for the rest of the recording
   (`clock::DeviceTimeline`): anchored once, at the first packet's arrival less
   its own length, and then stamped from the sample count. Nothing is slipped,

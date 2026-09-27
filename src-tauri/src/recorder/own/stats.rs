@@ -134,8 +134,13 @@ pub struct SourceStop {
     pub raw_ppm: Option<f64>,
     /// Single frames dropped or repeated to hold the audio on QPC.
     pub slips: u64,
-    /// Holes past the gap threshold, filled with silence.
+    /// Holes filled with silence at once: past the gap threshold, at a
+    /// discontinuity, or a jump.
     pub gaps: u64,
+    /// Of the gaps and overlaps, those nothing flagged: the stamps left the
+    /// sample count by more than 5 ms and stayed there (`clock::AlignStats`).
+    /// A source that ran short, realigned and left out of `raw_ppm`.
+    pub jumps: u64,
     /// Times silence was written because no packet had come.
     pub holds: u64,
     /// The capture ended on an error of its own before the recording did.
@@ -151,6 +156,7 @@ impl SourceStop {
             raw_ppm: aligner.raw_ppm(),
             slips: s.slips_dropped + s.slips_repeated,
             gaps: s.gaps,
+            jumps: s.jumps,
             holds: s.holds,
             ended_early,
         }
@@ -211,8 +217,12 @@ pub fn render_stop(
                         (AudioClock::Qpc, None) => " raw=unmeasured".to_string(),
                         (AudioClock::Device, _) => String::new(),
                     };
+                    // Only when there were any: a clean source's line is
+                    // unchanged, and one that ran short says so.
+                    let jumps =
+                        if s.jumps > 0 { format!(" jumps={}", s.jumps) } else { String::new() };
                     format!(
-                        "{} clock={}{raw} slips={} gaps={} holds={}{}",
+                        "{} clock={}{raw} slips={} gaps={}{jumps} holds={}{}",
                         s.name,
                         s.clock.name(),
                         s.slips,
@@ -412,6 +422,7 @@ mod tests {
             raw_ppm: Some(-12.345),
             slips: 7,
             gaps: 1,
+            jumps: 0,
             holds: 3,
             ended_early: false,
         }
@@ -430,6 +441,7 @@ mod tests {
                         raw_ppm: None,
                         slips: 0,
                         gaps: 2,
+                        jumps: 0,
                         holds: 0,
                         ended_early: true,
                     },
@@ -469,6 +481,20 @@ mod tests {
         };
         let line = render_stop(path(), 60, &stop, &Ok(()), Some(0));
         assert!(line.contains("game clock=qpc raw=unmeasured slips=7"), "{line}");
+        assert!(!line.contains("jumps"), "{line}");
+    }
+
+    #[test]
+    fn stop_names_the_jumps_of_a_source_that_ran_short() {
+        let mut source = qpc("game");
+        source.jumps = 2;
+        let stop = Stop {
+            cadence: Cadence { ticks: 1, ..Cadence::default() },
+            audio: Some(AudioStop { sources: vec![source], clipped: 0 }),
+            fragments: None,
+        };
+        let line = render_stop(path(), 60, &stop, &Ok(()), None);
+        assert!(line.contains("slips=7 gaps=1 jumps=2 holds=3"), "{line}");
         assert!(line.contains("0.017 s, 1 ticks, 0.00% repeated"), "{line}");
     }
 
@@ -516,8 +542,9 @@ mod tests {
         aligner.stats.slips_dropped = 2;
         aligner.stats.slips_repeated = 3;
         aligner.stats.gaps = 1;
+        aligner.stats.jumps = 1;
         aligner.stats.holds = 4;
         let s = SourceStop::from_aligner("game", &aligner, false);
-        assert_eq!((s.slips, s.gaps, s.holds, s.raw_ppm), (5, 1, 4, None));
+        assert_eq!((s.slips, s.gaps, s.jumps, s.holds, s.raw_ppm), (5, 1, 1, 4, None));
     }
 }

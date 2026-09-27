@@ -80,7 +80,7 @@ flowchart TB
 | `recorder/libobs/` | Windows capture backend (WGC + hardware encode). The fallback since #243, selectable for one release; WS8 deletes it | `LibObsRecorder` |
 | `recorder/window.rs` | Finding the League game window and its client size, for both Windows backends | `find_window`, `find_by_class`, `client_size` |
 | `recorder/own/` | Option B (WGC → D3D11 → Media Foundation), built through WS1.6 and **the default backend since #243**, on Windows build 19041+: the game window's video and every source the audio preset names (the game by process loopback; the microphone, the desktop and applications), every track of the preset's layout, the mix and each stem, in one file: the encoder MFTs driven directly, the file written by `mp4::write` | `OwnRecorder` |
-| `recorder/own/clock.rs` | The video tick grid on QPC, and placing audio packets on it: drift measured, corrected by slipping frames, or trusted from the device count when a source has no QPC stamps. Which of the two a source gets is decided from its first packet's stamp | `tick_time`, `ticks_due`, `Aligner`, `check_stamp`, `Stamper`, `DeviceTimeline` |
+| `recorder/own/clock.rs` | The video tick grid on QPC, and placing audio packets on it: drift measured and corrected by slipping frames, a step the stamps show but nothing flagged filled or cut at once, or trusted from the device count when a source has no QPC stamps. Which of the two a source gets is decided from its first packet's stamp | `tick_time`, `ticks_due`, `Aligner`, `check_stamp`, `Stamper`, `DeviceTimeline` |
 | `recorder/own/feed.rs` | One audio source's packets through its own `Aligner` into the mixer: never past the video, held with silence to the mixer's watermark while the source is quiet, padded to the last tick at stop | `Feed`, `Packet` |
 | `recorder/own/fit.rs` | Where a frame from a resized game window goes in the fixed-size output: scaled with its aspect kept, centred, black around it, even dimensions and offsets; which part of a frame is the picture (a Windowed game's title bar and borders measured as insets and cropped off, the whole frame otherwise); and whether a frame is copied, scaled or skipped | `letterbox`, `client_insets`, `source_rect`, `place`, `Placement` |
 | `recorder/own/mft.rs` | The bookkeeping of an asynchronous (hardware) encoder MFT: a `NeedInput` is one credit for one `ProcessInput`, a `HaveOutput` one `ProcessOutput` owed, frames that arrive with no credit wait in a bounded queue, and the drain ends on `DrainComplete` | `AsyncPump`, `Event` |
@@ -309,7 +309,9 @@ decisions. While black it looks for a game window every second, by the lookup
 Legends.exe`: that is a crashed game the player reconnected to, which the state
 machine keeps recording through. The picture comes back letterboxed if the new
 window is another size, and the game's process-loopback source is restarted on
-the new PID into the same tracks, which carried silence across the gap. A
+the new PID into the same tracks, which carried silence across the gap; each
+track's aligner re-anchors on the new source's first real stamp rather than
+slipping towards it (#313). A
 normal game end finds no window, and the black runs to `stop`. A lost GPU device
 (`DXGI_ERROR_DEVICE_REMOVED`, `_RESET`) does end it, with what was written
 finalized, and `stop` waits at most 20 s for the capture worker whatever

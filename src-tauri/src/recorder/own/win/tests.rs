@@ -135,6 +135,7 @@ fn tone_packets(origin: i64, hz: f64, amplitude: f64, from: i64, to: i64) -> Vec
                 hns: origin + first * clock::HNS_PER_SECOND / rate,
                 frames: (rate / 100) as u32,
                 discontinuity: false,
+                estimated: false,
                 pcm,
                 clock: clock::AudioClock::Qpc,
             }

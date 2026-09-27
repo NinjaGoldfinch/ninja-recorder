@@ -149,12 +149,20 @@ pub struct AlignStats {
     pub residual_worst: i64,
     pub slips_dropped: u64,
     pub slips_repeated: u64,
-    /// Holes wider than the gap threshold, filled with silence.
+    /// Holes filled with silence at once rather than slipped: wider than the
+    /// gap threshold, at a discontinuity, or a jump ([`AlignStats::jumps`]).
     pub gaps: u64,
     pub gap_samples: u64,
-    /// Overlaps wider than the gap threshold, dropped.
+    /// Overlaps dropped at once, on the same terms.
     pub overlaps: u64,
     pub overlap_samples: u64,
+    /// Of those gaps and overlaps, the ones nothing flagged, and how far the
+    /// stamps had moved: they left the sample count by more than the step
+    /// threshold and stayed there (#297). A process-loopback stream can lose
+    /// samples without `AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY`, and that is
+    /// a hole, not drift.
+    pub jumps: u64,
+    pub jump_samples: u64,
     /// Samples discarded because they were captured before the video began.
     pub lead_dropped: u64,
     /// Silence written at the start because audio began after the video.
@@ -178,8 +186,23 @@ pub struct Aligner {
     /// Samples received since the first counted packet.
     received_since_first: i64,
     first_position: Option<i64>,
+    /// Place packets exactly where their stamps say, with silence or a cut,
+    /// until one lands within the slip threshold: set by a discontinuity (a
+    /// glitch, a device-time re-anchor, or a source restarted on a new
+    /// process) and by a confirmed jump.
+    realign: bool,
+    /// Consecutive packets more than the step threshold off the line, all on
+    /// one side, and which side: `true` for audio short of its stamps.
+    off_line: u32,
+    off_short: bool,
     pub stats: AlignStats,
 }
+
+/// How many packets in a row must sit more than the step threshold off the
+/// line before it is a jump. One stamp taken from a packet's arrival can be
+/// that far out on its own and the next back on the line; a stream that lost
+/// samples stays out.
+const JUMP_PACKETS: u32 = 3;
 
 impl Aligner {
     pub fn new(rate: u32, clock: AudioClock) -> Self {
@@ -190,6 +213,9 @@ impl Aligner {
             raw_baseline: 0,
             received_since_first: 0,
             first_position: None,
+            realign: false,
+            off_line: 0,
+            off_short: false,
             stats: AlignStats::default(),
         }
     }
@@ -216,9 +242,23 @@ impl Aligner {
         i64::from(self.rate / 20).max(1)
     }
 
+    /// 5 ms. Slips hold real drift within the slip threshold, up to about
+    /// 2000 ppm, so audio this far off the line for [`JUMP_PACKETS`] packets
+    /// in a row is not drift: the stream jumped (#297). It is realigned at
+    /// once, like a gap, instead of by the 240 single-frame slips even a 5 ms
+    /// step would take, with the audio off by it for seconds meanwhile.
+    fn step_threshold(&self) -> i64 {
+        i64::from(self.rate / 200).max(1)
+    }
+
     /// Decide where a packet of `frames` goes. `rel_hns` is the QPC time of
     /// its first frame relative to the video origin (tick 0), which can be
     /// negative for audio captured before the first video frame.
+    ///
+    /// `discontinuity` re-anchors: the packet is placed exactly where its
+    /// stamp says, whatever the distance, as a source that joins late is,
+    /// and the step is not counted as drift. A source restarted on a new
+    /// process needs that as much as a flagged glitch does (#313).
     pub fn place(&mut self, frames: u32, rel_hns: i64, discontinuity: bool) -> Placement {
         let position = samples_at(rel_hns, self.rate);
         let end = position + i64::from(frames);
@@ -232,9 +272,13 @@ impl Aligner {
             };
         }
 
-        self.measure_raw(frames, position, rel_hns, discontinuity);
+        let offset = self.count(frames, position, rel_hns, discontinuity);
 
         let mut placement = Placement::default();
+        // Whether this packet is a raw-drift sample, and whether the baseline
+        // moves under it so the figure carries on from where it was.
+        let mut sample = true;
+        let mut rebaseline = discontinuity;
         if self.written == 0 && self.stats.lead_silence == 0 {
             // The first packet that reaches the file lines up with the origin
             // exactly, in either mode: drop what came before tick 0, or pad
@@ -249,23 +293,53 @@ impl Aligner {
         } else {
             // Holes and overlaps are handled in either mode: past the gap
             // threshold the stream stopped delivering or restarted, which is
-            // not drift. Slips below it are the QPC mode's alone.
+            // not drift. Jumps and slips below it are the QPC mode's alone.
             let error = self.written as i64 - position;
             let qpc = self.clock == AudioClock::Qpc;
-            if error < -self.gap_threshold() {
+            if discontinuity {
+                self.realign = true;
+            }
+            let mut jump = false;
+            if error.abs() <= self.step_threshold() || error.abs() > self.gap_threshold() {
+                self.off_line = 0;
+            } else if qpc && !self.realign {
+                let short = error < 0;
+                if self.off_short != short {
+                    self.off_line = 0;
+                    self.off_short = short;
+                }
+                self.off_line += 1;
+                if self.off_line >= JUMP_PACKETS {
+                    self.off_line = 0;
+                    self.realign = true;
+                    jump = true;
+                } else {
+                    // Drift or a jump, and not yet known which: left out of
+                    // the raw figure until it is.
+                    sample = false;
+                }
+            }
+            let exact = self.realign && error.abs() > self.slip_threshold();
+            if error < -self.gap_threshold() || (exact && error < 0) {
                 placement.silence = (-error) as u64;
                 self.stats.gaps += 1;
                 self.stats.gap_samples += placement.silence;
-            } else if error > self.gap_threshold() {
+                rebaseline = true;
+            } else if error > self.gap_threshold() || (exact && error > 0) {
                 placement.skip = error.min(i64::from(frames)) as u32;
                 self.stats.overlaps += 1;
                 self.stats.overlap_samples += u64::from(placement.skip);
+                rebaseline = true;
             } else if qpc && error > self.slip_threshold() && frames > 1 {
                 placement.skip = 1;
                 self.stats.slips_dropped += 1;
             } else if qpc && error < -self.slip_threshold() && frames > 0 {
                 placement.repeat = 1;
                 self.stats.slips_repeated += 1;
+            }
+            if jump {
+                self.stats.jumps += 1;
+                self.stats.jump_samples += error.unsigned_abs();
             }
         }
 
@@ -279,12 +353,22 @@ impl Aligner {
         if residual.abs() > self.stats.residual_worst.abs() {
             self.stats.residual_worst = residual;
         }
+        // An overlap longer than the packet leaves the rest to the next one.
+        if residual.abs() <= self.slip_threshold() {
+            self.realign = false;
+        }
 
+        if let Some(offset) = offset {
+            self.record_raw(offset, sample, rebaseline);
+        }
         self.written += placement.appended(frames);
         placement
     }
 
-    fn measure_raw(&mut self, frames: u32, position: i64, rel_hns: i64, discontinuity: bool) {
+    /// Counts a packet in, and returns the device clock against QPC at it:
+    /// the samples received before it less how far its stamp has moved since
+    /// the first packet, in samples. `None` for the first, the reference.
+    fn count(&mut self, frames: u32, position: i64, rel_hns: i64, discontinuity: bool) -> Option<i64> {
         self.stats.packets += 1;
         self.stats.received += u64::from(frames);
         self.stats.last_rel = rel_hns;
@@ -296,21 +380,30 @@ impl Aligner {
             self.first_position = Some(position);
             self.stats.first_rel = Some(rel_hns);
             self.received_since_first = i64::from(frames);
-            return;
+            return None;
         };
 
         let offset = self.received_since_first - (position - first);
-        if discontinuity {
-            // A glitch lost or repeated samples; that is a jump, not drift.
-            // Move the baseline so the raw figure carries on from where it was.
+        self.received_since_first += i64::from(frames);
+        Some(offset)
+    }
+
+    /// Records the raw drift at a packet. One the aligner filled or cut a
+    /// hole for, flagged or not, is a jump in the sample count and not drift:
+    /// the baseline moves so the raw figure carries on from where it was, and
+    /// the stop line's ppm stays a statement about two clocks (#297, #313).
+    fn record_raw(&mut self, offset: i64, sample: bool, rebaseline: bool) {
+        if rebaseline {
             self.raw_baseline = offset - self.stats.raw_drift_last;
+        }
+        if !sample {
+            return;
         }
         let drift = offset - self.raw_baseline;
         self.stats.raw_drift_last = drift;
         if drift.abs() > self.stats.raw_drift_worst.abs() {
             self.stats.raw_drift_worst = drift;
         }
-        self.received_since_first += i64::from(frames);
     }
 
     /// How much silence to append so the audio ends where the video does,
@@ -347,6 +440,8 @@ impl Aligner {
             self.stats.lead_silence = silence;
         }
         self.written = target;
+        // Whatever was off the line was measured from where the audio was.
+        self.off_line = 0;
         self.stats.holds += 1;
         self.stats.held_samples += silence;
         silence
@@ -768,6 +863,139 @@ mod tests {
         assert_eq!(a.stats.raw_drift_last, 0);
         let p = a.place(PACKET, hns_of(480 + 9_600 + 480), false);
         assert_eq!(p, Placement::default());
+    }
+
+    #[test]
+    fn an_unflagged_hole_past_the_gap_threshold_is_not_counted_as_drift_either() {
+        let mut a = Aligner::new(RATE, AudioClock::Qpc);
+        a.place(PACKET, 0, false);
+        // 200 ms go missing and nothing says so: a hole all the same.
+        assert_eq!(a.place(PACKET, hns_of(480 + 9_600), false).silence, 9_600);
+        a.place(PACKET, hns_of(480 + 9_600 + 480), false);
+        assert_eq!((a.stats.gaps, a.stats.raw_drift_last, a.stats.raw_drift_worst), (1, 0, 0));
+    }
+
+    /// #313: the game's source restarted on a new process mid-recording. The
+    /// new stream's stamps begin wherever it began, not where the old one
+    /// would have gone on to, and the first packet with a real stamp is
+    /// flagged. Before, an offset under the gap threshold was walked there by
+    /// single-frame slips and counted as drift: -2446 ppm and 2354 slips on
+    /// the box. Now it is placed exactly, as a source that joins late is.
+    #[test]
+    fn a_restarted_source_is_reanchored_not_slipped() {
+        // 30 ms after where the old stream would have been, 30 ms before it
+        // (an overlap longer than a packet), a step just past the jump
+        // threshold, one under the slip threshold, and a long outage.
+        for offset in [1_440i64, -1_440, 300, 10, 4 * i64::from(RATE)] {
+            let mut a = Aligner::new(RATE, AudioClock::Qpc);
+            for i in 0..1_000i64 {
+                a.place(PACKET, hns_of(i * 480), false);
+            }
+            let restart = 1_000 * 480 + offset;
+            for i in 0..3_000i64 {
+                a.place(PACKET, hns_of(restart + i * 480), i == 0);
+            }
+            let s = &a.stats;
+            assert_eq!(s.slips_dropped + s.slips_repeated, 0, "{offset}: {s:?}");
+            assert_eq!((s.raw_drift_last, s.raw_drift_worst, s.jumps), (0, 0, 0), "{offset}");
+            assert_eq!(s.residual_last, if offset == 10 { -10 } else { 0 }, "{offset}");
+            if offset != 10 {
+                assert_eq!(a.written(), (restart + 3_000 * 480) as u64, "{offset}");
+            }
+            assert_eq!(s.discontinuities, 1);
+        }
+    }
+
+    /// The restart as the session sees it: the old source goes quiet, the
+    /// mixer holds its feed with silence behind the video, and the new one
+    /// resumes a little past the hold, well inside the gap threshold.
+    #[test]
+    fn a_restart_after_a_hold_lands_where_its_stamp_says() {
+        let mut a = Aligner::new(RATE, AudioClock::Qpc);
+        for i in 0..100i64 {
+            a.place(PACKET, hns_of(i * 480), false);
+        }
+        a.hold(hns_of(48_000 + 4 * 48_000));
+        let restart = 48_000 + 4 * 48_000 + 960;
+        let p = a.place(PACKET, hns_of(restart), true);
+        assert_eq!(p, Placement { silence: 960, ..Placement::default() });
+        for i in 1..500i64 {
+            assert_eq!(a.place(PACKET, hns_of(restart + i * 480), false), Placement::default());
+        }
+        assert_eq!(a.stats.slips_dropped + a.stats.slips_repeated, 0);
+        assert_eq!(a.stats.raw_drift_worst, 0);
+    }
+
+    /// #297: the stamps step 10.9 ms past the sample count with nothing
+    /// flagged and stay there: samples went missing. It used to be closed by
+    /// 499 single-frame repeats over five seconds, and read as -600 ppm.
+    #[test]
+    fn an_unflagged_jump_is_filled_at_once_and_not_counted_as_drift() {
+        let jump = 523i64;
+        let mut a = Aligner::new(RATE, AudioClock::Qpc);
+        for i in 0..1_800i64 {
+            let late = if i >= 600 { jump } else { 0 };
+            a.place(PACKET, hns_of(i * 480 + late), false);
+        }
+        let s = &a.stats;
+        // Two packets to be sure it is not one bad stamp, one slip each.
+        assert_eq!(s.slips_repeated, u64::from(JUMP_PACKETS - 1));
+        assert_eq!((s.jumps, s.gaps, s.overlaps), (1, 1, 0));
+        assert_eq!(s.gap_samples, (jump - 2) as u64);
+        assert_eq!(s.jump_samples, s.gap_samples);
+        assert_eq!((s.raw_drift_last, s.raw_drift_worst, s.residual_last), (0, 0, 0));
+        assert!((s.residual_worst + jump).abs() <= 1, "{}", s.residual_worst);
+        assert_eq!(a.raw_ppm(), Some(0.0));
+        assert_eq!(a.written(), (1_800 * 480 + jump) as u64);
+    }
+
+    #[test]
+    fn a_jump_backwards_is_cut_at_once() {
+        let mut a = Aligner::new(RATE, AudioClock::Qpc);
+        for i in 0..1_000i64 {
+            let early = if i >= 300 { 600 } else { 0 };
+            a.place(PACKET, hns_of(i * 480 - early), false);
+        }
+        let s = &a.stats;
+        // 598 frames to cut, more than a packet: the next packet finishes it.
+        assert_eq!((s.jumps, s.overlaps, s.gaps), (1, 2, 0));
+        assert_eq!(s.overlap_samples, 600 - 2);
+        assert_eq!(s.slips_dropped, u64::from(JUMP_PACKETS - 1));
+        assert_eq!((s.raw_drift_last, s.residual_last), (0, 0));
+        assert_eq!(a.written(), 1_000 * 480 - 600);
+    }
+
+    /// One stamp far out on its own (say, one taken from its packet's
+    /// arrival) is not a jump: one slip, and it is no drift sample either.
+    #[test]
+    fn one_stray_stamp_is_not_a_jump() {
+        let mut a = Aligner::new(RATE, AudioClock::Qpc);
+        for i in 0..1_000i64 {
+            let late = if i == 500 { 400 } else { 0 };
+            a.place(PACKET, hns_of(i * 480 + late), false);
+        }
+        let s = &a.stats;
+        assert_eq!((s.jumps, s.gaps, s.overlaps, s.slips_repeated), (0, 0, 0, 1));
+        assert_eq!(s.raw_drift_worst, 0);
+    }
+
+    /// Real drift, even far past what a sound card is expected to show, is
+    /// still held by slips and measured: the jump rule never sees it,
+    /// because slips keep it within the slip threshold.
+    #[test]
+    fn drift_within_what_slips_can_hold_is_still_drift() {
+        let mut a = Aligner::new(RATE, AudioClock::Qpc);
+        for i in 0..6_000i64 {
+            let device_samples = i * i64::from(PACKET);
+            let rel = (device_samples as f64 / (1.0 - 1_500e-6) * HNS_PER_SECOND as f64
+                / f64::from(RATE)) as i64;
+            a.place(PACKET, rel, false);
+        }
+        let s = &a.stats;
+        assert_eq!((s.jumps, s.gaps), (0, 0));
+        assert!(s.slips_repeated > 4_000, "{}", s.slips_repeated);
+        let ppm = a.raw_ppm().unwrap();
+        assert!((ppm + 1_500.0).abs() < 5.0, "{ppm}");
     }
 
     #[test]
