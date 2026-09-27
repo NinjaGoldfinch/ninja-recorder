@@ -45,7 +45,7 @@ use windows::Win32::System::Variant::VT_BLOB;
 use windows::core::{Interface, PCWSTR, Ref, implement};
 
 use super::super::process::OwnedHandle;
-use super::{Capture, Raw, float_format, read_packet};
+use super::{Capture, Failure, Raw, float_format, read_packet};
 
 /// How long the activation may take before it counts as hung.
 const ACTIVATION_TIMEOUT_MS: u32 = 5_000;
@@ -221,7 +221,7 @@ impl Capture for Loopback {
         wait == WAIT_OBJECT_0
     }
 
-    fn next(&self) -> Result<Option<Raw>, String> {
+    fn next(&self) -> Result<Option<Raw>, Failure> {
         read_packet(&self.capture)
     }
 

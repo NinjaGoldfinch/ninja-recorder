@@ -13,8 +13,8 @@
 //! microphone, Discord not running, a game tree that cannot be found: each is
 //! logged, left out, and dropped from the layout `stop` reports along with
 //! any stem it alone fed (`plan::realised_layout`). Only when nothing opens is
-//! the file video only. **A source that dies mid-recording** (a microphone
-//! unplugged) is logged once, with the reason its thread gave, and is silence
+//! the file video only. **A source that dies mid-recording** (a process
+//! loopback that fails) is logged once, with the reason its thread gave, and is silence
 //! from then on, in the mix and in its stem: the mixer's watermark is what
 //! stops it holding anything up.
 //!
@@ -31,13 +31,20 @@
 //! carried it as silence while the game was gone, and the new source's
 //! packets are placed on the same timeline after it, re-anchored at its first
 //! real stamp (#313) rather than walked there one slipped frame at a time.
+//!
+//! **A microphone or desktop whose device goes away waits for it** (#298).
+//! Its thread keeps its channel open and reopens the device when it is back
+//! (`audio::capture`), so here it is only a quiet stretch; the gaps come back
+//! in the thread's summary at stop, and `problem::outages` turns them into a
+//! problem naming each silent span, `from 0:08 to 0:21`, or `from 0:08 on`
+//! for a device that never came back.
 
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::HWND;
 
-use super::super::process;
+use super::super::{device, process};
 use super::{SAMPLE_RATE, Source, Summary, Target};
 use crate::recorder::CaptureProblem;
 use crate::recorder::audio::{AudioLayout, AudioSourceKind};
@@ -46,6 +53,7 @@ use crate::recorder::own::feed::{Feed, Packet};
 use crate::recorder::own::mix::TrackMix;
 use crate::recorder::own::plan::{self, CapturePlan, source_name};
 use crate::recorder::own::problem::{self, SourceError};
+use crate::recorder::own::reattach;
 use crate::recorder::own::root::{self, Proc};
 use crate::recorder::own::stats::{AudioStop, Opened, Outcome, SourceStop};
 use crate::{info, warn};
@@ -96,6 +104,9 @@ pub struct AudioTracks {
     /// The sources that stopped before the recording did, in the order they
     /// were noticed (`problem::ended`).
     ended: Vec<CaptureProblem>,
+    /// Tick 0 on the performance counter, once it has arrived: where the
+    /// spans a lost device was silent for are counted from.
+    origin: Option<i64>,
 }
 
 /// Resolves `kind` to what its thread captures, and says what that is for
@@ -218,6 +229,7 @@ impl AudioTracks {
             layout: layout.clone(),
             mix: None,
             ended: Vec::new(),
+            origin: None,
         });
         (tracks, layout, report, problems)
     }
@@ -225,6 +237,7 @@ impl AudioTracks {
     /// The origin has arrived: packets can be placed from here on.
     pub fn begin(&mut self, origin: i64) {
         self.mix = Some(TrackMix::new(SAMPLE_RATE, origin, &self.layout));
+        self.origin = Some(origin);
     }
 
     /// Moves every packet that has arrived into the mixdown of each track
@@ -383,6 +396,12 @@ impl AudioTracks {
             {
                 self.ended.push(problem::ended(&input.name, why));
             }
+            // A device that went away: the spans it was silent for.
+            if let (Some(Ok(summary)), Some(origin)) = (&input.summary, self.origin)
+                && let Some(problem) = problem::outages(&input.name, &summary.outages, origin)
+            {
+                self.ended.push(problem);
+            }
             // Stopped on purpose: the channel closing now is not the source
             // dying.
             input.ended = true;
@@ -409,7 +428,11 @@ impl AudioTracks {
             let Some((t, lane)) = mix.first_lane(i) else { continue };
             let pad = finished[t].as_ref().ok().and_then(|p| p.get(lane)).copied().unwrap_or(0);
             let mixdown = mix.track(t);
-            let failed = matches!(input.summary, Some(Err(_)));
+            let failed = match &input.summary {
+                Some(Err(_)) => true,
+                Some(Ok(summary)) => summary.outages.last().is_some_and(|o| o.back.is_none()),
+                None => false,
+            };
             sources.push(SourceStop::from_aligner(&input.name, mixdown.feed(lane).aligner(), failed));
             let (late, missing) = (mixdown.mixer().late(lane), mixdown.mixer().missing(lane));
             log_source(input, mixdown.feed(lane), pad, late, missing);
@@ -471,8 +494,20 @@ fn log_source(input: &mut Input, feed: &Feed, padded: u64, late: u64, missing: u
     let source_line = match input.summary.take() {
         Some(Ok(sum)) => format!(
             "{} packets, {} flagged silent, {} discontinuities, {} stamps substituted, {} \
-             re-anchors",
-            sum.packets, sum.silent_packets, sum.discontinuities, sum.substituted, sum.reanchors
+             re-anchors; device lost {} times ({:.1} s silent{}), moved to a new default {} times",
+            sum.packets,
+            sum.silent_packets,
+            sum.discontinuities,
+            sum.substituted,
+            sum.reanchors,
+            sum.outages.len(),
+            reattach::silent_for(&sum.outages, device::qpc_hns()).as_secs_f64(),
+            if sum.outages.last().is_some_and(|o| o.back.is_none()) {
+                ", the last never came back"
+            } else {
+                ""
+            },
+            sum.moves
         ),
         Some(Err(e)) => format!("the capture ended with an error: {e}"),
         None => "the capture had already stopped".to_string(),

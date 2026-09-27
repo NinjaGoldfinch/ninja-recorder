@@ -18,6 +18,12 @@
 //! ask for and converts to whatever it is given, and the endpoints are
 //! opened with `AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM`, which puts the engine's
 //! own resampler in front of the capture.
+//!
+//! **A microphone or desktop whose device goes away comes back with it**
+//! (#298). Its thread releases the dead stream and opens the device again
+//! about once a second until it starts or the recording stops, and a
+//! "Windows default" source also moves to a new default when Windows picks
+//! one. The decisions are `own::reattach`'s; see [`capture`].
 
 mod endpoint;
 mod loopback;
@@ -27,6 +33,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Sender, SyncSender, sync_channel};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT,
@@ -39,6 +46,7 @@ use crate::recorder::own::clock::{self, AudioClock, Stamp, Stamper};
 use crate::recorder::own::feed::Packet;
 use crate::recorder::own::pcm::{self, SampleFormat};
 use crate::recorder::own::problem::SourceError;
+use crate::recorder::own::reattach::{self, Outage, Retry};
 use crate::{info, warn};
 
 pub use track::AudioTracks;
@@ -97,11 +105,12 @@ pub struct Raw {
 ///
 /// The same for every kind of source, since each was initialised with
 /// [`float_format`]. A removed device fails here, with
-/// `AUDCLNT_E_DEVICE_INVALIDATED`, which ends its thread.
-fn read_packet(capture: &IAudioCaptureClient) -> Result<Option<Raw>, String> {
+/// `AUDCLNT_E_DEVICE_INVALIDATED`, which an endpoint source waits out
+/// (`own::reattach`) and which ends any other.
+fn read_packet(capture: &IAudioCaptureClient) -> Result<Option<Raw>, Failure> {
     // SAFETY: the client is started and live.
     let available = unsafe { capture.GetNextPacketSize() }
-        .map_err(|e| format!("GetNextPacketSize failed: {e}"))?;
+        .map_err(|e| Failure::call("GetNextPacketSize failed", &e))?;
     if available == 0 {
         return Ok(None);
     }
@@ -124,7 +133,7 @@ fn read_packet(capture: &IAudioCaptureClient) -> Result<Option<Raw>, String> {
             Some(&mut qpc),
         )
     }
-    .map_err(|e| format!("GetBuffer failed: {e}"))?;
+    .map_err(|e| Failure::call("GetBuffer failed", &e))?;
     let arrival = device::qpc_hns();
 
     let silent = flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0;
@@ -139,7 +148,7 @@ fn read_packet(capture: &IAudioCaptureClient) -> Result<Option<Raw>, String> {
         pcm::to_stereo_f32(raw, SampleFormat::F32, CHANNELS, frames)
     };
     // SAFETY: releases exactly the packet GetBuffer handed out.
-    unsafe { capture.ReleaseBuffer(frames) }.map_err(|e| format!("ReleaseBuffer failed: {e}"))?;
+    unsafe { capture.ReleaseBuffer(frames) }.map_err(|e| Failure::call("ReleaseBuffer failed", &e))?;
 
     Ok(Some(Raw {
         frames,
@@ -153,16 +162,54 @@ fn read_packet(capture: &IAudioCaptureClient) -> Result<Option<Raw>, String> {
     }))
 }
 
+/// A capture call that failed: what it said, and its HRESULT, which is what
+/// decides whether the source waits for its device (`reattach::recoverable`).
+pub struct Failure {
+    pub reason: String,
+    pub hresult: u32,
+}
+
+impl Failure {
+    fn call(what: &str, e: &windows::core::Error) -> Failure {
+        Failure { reason: format!("{what}: {e}"), hresult: e.code().0 as u32 }
+    }
+}
+
+// The pure module spells the codes out; these are the SDK's own.
+const _: () = {
+    use windows::Win32::Media::Audio::{
+        AUDCLNT_E_DEVICE_INVALIDATED, AUDCLNT_E_RESOURCES_INVALIDATED, AUDCLNT_E_SERVICE_NOT_RUNNING,
+    };
+    assert!(AUDCLNT_E_DEVICE_INVALIDATED.0 as u32 == reattach::DEVICE_INVALIDATED);
+    assert!(AUDCLNT_E_SERVICE_NOT_RUNNING.0 as u32 == reattach::SERVICE_NOT_RUNNING);
+    assert!(AUDCLNT_E_RESOURCES_INVALIDATED.0 as u32 == reattach::RESOURCES_INVALIDATED);
+};
+
 /// A started capture, of whichever kind. Lives on its source thread only.
 trait Capture {
     /// Waits up to `ms` for a packet. `false` is a quiet stretch.
     fn wait(&self, ms: u32) -> bool;
     /// The next packet waiting, if any ([`read_packet`]).
-    fn next(&self) -> Result<Option<Raw>, String>;
+    fn next(&self) -> Result<Option<Raw>, Failure>;
     fn stop(&self);
+    /// What was opened, for the log: which device and how it was chosen.
+    fn describe(&self) -> Option<&str> {
+        None
+    }
+    /// The device's friendly name, for the line that says it came back.
+    fn device(&self) -> Option<&str> {
+        None
+    }
+    /// Whether a "Windows default" source's default has moved to another
+    /// device since it opened (`reattach::follows_default`). Asked on every
+    /// pass; the capture decides how often it really looks.
+    fn moved(&self) -> bool {
+        false
+    }
 }
 
 /// What one source thread captures.
+#[derive(Clone)]
 pub enum Target {
     /// A process tree by process loopback: the game from `root::game_root`,
     /// or an application from `root::application_root`.
@@ -174,9 +221,20 @@ pub enum Target {
     Desktop,
 }
 
-/// What a source did, reported when it stops.
+impl Target {
+    /// Whether this source waits for its device to come back rather than
+    /// ending with it: the endpoints do; a process-loopback source follows
+    /// its process (`own::reattach`).
+    fn reattaches(&self) -> bool {
+        matches!(self, Target::Microphone(_) | Target::Desktop)
+    }
+}
+
+/// What a source did, reported when it stops. Counts every device it
+/// captured from, when its device went away and came back.
 #[derive(Default)]
 pub struct Summary {
+    /// The clock of the last device it captured from.
     pub clock: Option<AudioClock>,
     pub packets: u64,
     pub silent_packets: u64,
@@ -185,6 +243,20 @@ pub struct Summary {
     pub substituted: u64,
     /// Device-mode re-anchors across a hole.
     pub reanchors: u64,
+    /// Each time its device went away (`own::reattach`), in order; the last
+    /// one open if it had not come back by the stop.
+    pub outages: Vec<Outage>,
+    /// Times a "Windows default" source moved to a new default device.
+    pub moves: u64,
+}
+
+impl Summary {
+    /// Adds what one device's stamper decided and counted.
+    fn absorb(&mut self, stamper: &Stamper) {
+        self.clock = stamper.clock().or(self.clock);
+        self.substituted += stamper.substituted;
+        self.reanchors += stamper.reanchors();
+    }
 }
 
 /// A running source thread.
@@ -195,9 +267,10 @@ pub struct Source {
 
 impl Source {
     /// Stops the capture and waits for the thread. `Err` if it ended on an
-    /// error of its own before it was asked to stop (a microphone unplugged,
-    /// say), with what it captured up to then lost from the summary but not
-    /// from the file.
+    /// error of its own before it was asked to stop (a process-loopback
+    /// source failing, say), with what it captured up to then lost from the
+    /// summary but not from the file. An endpoint whose device went away
+    /// waits for it instead, so it is `Ok`, with the gap in `outages`.
     pub fn stop(self) -> Result<Summary, String> {
         self.stop.store(true, Ordering::Release);
         self.thread.join().map_err(|_| "the audio thread panicked".to_string())?
@@ -257,28 +330,69 @@ fn thread_main(
 /// Opens and starts `target`. Everything that fails here is an `Open`
 /// failure except finding an endpoint device, which `endpoint` reports as a
 /// `Find` one (no microphone, no output device).
-fn open(name: &str, target: Target) -> Result<Box<dyn Capture>, SourceError> {
+fn open(target: &Target) -> Result<Box<dyn Capture>, SourceError> {
     Ok(match target {
         Target::Process(pid) => {
-            let source = loopback::Loopback::open(pid)?;
+            let source = loopback::Loopback::open(*pid)?;
             source.start()?;
             Box::new(source)
         }
         Target::Microphone(device_id) => {
-            let source = endpoint::Endpoint::open(endpoint::Kind::Microphone(device_id))?;
+            let source = endpoint::Endpoint::open(endpoint::Kind::Microphone(device_id.clone()))?;
             source.start()?;
-            info!("recorder", "own backend: {name} audio from {}", source.describe());
             Box::new(source)
         }
         Target::Desktop => {
             let source = endpoint::Endpoint::open(endpoint::Kind::Desktop)?;
             source.start()?;
-            info!("recorder", "own backend: {name} audio from {}", source.describe());
             Box::new(source)
         }
     })
 }
 
+/// One device's capture, and the stamper whose clock its packets are on. A
+/// device that replaces another gets a new one: which clock its stamps are
+/// on is its own question.
+struct Stream {
+    capture: Box<dyn Capture>,
+    stamper: Stamper,
+    /// Whether the clock line has been logged for this device.
+    decided: bool,
+    /// The first packet from a device that replaced another is a
+    /// discontinuity, so the aligner places it by its stamp rather than
+    /// reading the gap before it as drift: the same mark
+    /// `AudioTracks::restart_game` puts on a restarted game.
+    fresh: bool,
+}
+
+impl Stream {
+    fn new(capture: Box<dyn Capture>, fresh: bool, max_lead: i64) -> Stream {
+        Stream { capture, stamper: Stamper::new(SAMPLE_RATE, max_lead), decided: false, fresh }
+    }
+}
+
+/// How one device's capture ended.
+enum Pumped {
+    /// Asked to stop, or the session has gone.
+    Stopped,
+    /// A "Windows default" source's default is another device now.
+    Moved,
+    /// A call failed: the device went away, or something worse.
+    Failed(Failure),
+}
+
+/// How often a lost device's thread wakes to check for a stop and whether a
+/// retry is due. Only bounds how late either is noticed.
+const REOPEN_POLL: Duration = Duration::from_millis(50);
+
+/// Captures `target` until stopped. **An endpoint whose device goes away is
+/// waited for** (#298): the failed stream is released, the device is opened
+/// again on `reattach::Retry`'s schedule (the configured one by its id,
+/// "Windows default" as whatever the default is now), and the reopened
+/// device feeds the same channel, so the track sees a gap its mixer has
+/// already filled with silence and then the source again. A default source
+/// also moves when its default does. Any other failure ends the thread, as
+/// it always has.
 fn capture(
     name: &str,
     target: Target,
@@ -289,11 +403,11 @@ fn capture(
     // Render loopback is stamped with when the device will play a packet,
     // which is after the read; every other source is stamped in the past
     // (`clock::LOOPBACK_MAX_LEAD`).
-    let max_lead = match target {
+    let max_lead = match &target {
         Target::Desktop => clock::LOOPBACK_MAX_LEAD,
         Target::Process(_) | Target::Microphone(_) => clock::STAMP_MAX_LEAD,
     };
-    let source = match open(name, target) {
+    let first = match open(&target) {
         Ok(source) => source,
         Err(e) => {
             let why = e.reason.clone();
@@ -301,48 +415,139 @@ fn capture(
             return Err(why);
         }
     };
+    if let Some(what) = first.describe() {
+        info!("recorder", "own backend: {name} audio from {what}");
+    }
     let _ = ready.send(Ok(()));
 
-    let mut stamper = Stamper::new(SAMPLE_RATE, max_lead);
     let mut summary = Summary::default();
-    let mut decided = false;
-    let result =
-        pump(name, &*source, &mut stamper, &mut summary, &mut decided, packets, stop);
-    source.stop();
-    summary.clock = stamper.clock();
-    summary.substituted = stamper.substituted;
-    summary.reanchors = stamper.reanchors();
+    let mut stream = Stream::new(first, false, max_lead);
+    let result = loop {
+        match pump(name, &mut stream, &mut summary, packets, stop) {
+            Pumped::Stopped => {
+                stream.capture.stop();
+                summary.absorb(&stream.stamper);
+                break Ok(());
+            }
+            Pumped::Moved => {
+                // The new default opens before the old stream stops, so the
+                // source is never without one. One that will not open leaves
+                // the old running, and is asked again at the next check.
+                if let Ok(next) = open(&target) {
+                    info!(
+                        "recorder",
+                        "own backend: {name} audio moved to the new default device: {}",
+                        next.describe().unwrap_or("(undescribed)")
+                    );
+                    stream.capture.stop();
+                    summary.absorb(&stream.stamper);
+                    summary.moves += 1;
+                    stream = Stream::new(next, true, max_lead);
+                }
+            }
+            Pumped::Failed(failure) => {
+                stream.capture.stop();
+                summary.absorb(&stream.stamper);
+                if !target.reattaches() || !reattach::recoverable(Some(failure.hresult)) {
+                    break Err(failure.reason);
+                }
+                let lost = device::qpc_hns();
+                warn!(
+                    "recorder",
+                    "own backend: the {name} audio device went away ({}); it is silence in every \
+                     track it feeds until it comes back, which is tried every second",
+                    failure.reason
+                );
+                // Every interface on the lost device is released before the
+                // first retry, as Microsoft's recovery describes.
+                drop(stream);
+                match reopen(name, &target, stop) {
+                    Some((next, tries)) => {
+                        let back = device::qpc_hns();
+                        let outage = Outage { lost, back: Some(back), reason: failure.reason };
+                        info!(
+                            "recorder",
+                            "own backend: {name} came back ({}); captured again after {:.1} s of \
+                             silence (try {tries})",
+                            next.device().unwrap_or("(unnamed)"),
+                            outage.length().unwrap_or_default().as_secs_f64()
+                        );
+                        if let Some(what) = next.describe() {
+                            info!("recorder", "own backend: {name} audio from {what}");
+                        }
+                        summary.outages.push(outage);
+                        stream = Stream::new(next, true, max_lead);
+                    }
+                    None => {
+                        summary.outages.push(Outage { lost, back: None, reason: failure.reason });
+                        break Ok(());
+                    }
+                }
+            }
+        }
+    };
     result.map(|()| summary)
 }
 
+/// Opens `target` again on `reattach::Retry`'s schedule until it starts or
+/// the source is stopped. Returns the started capture and which try it was.
+/// The first failed try is logged, with what it said; the rest are not.
+fn reopen(name: &str, target: &Target, stop: &AtomicBool) -> Option<(Box<dyn Capture>, u32)> {
+    let began = Instant::now();
+    let mut retry = Retry::new();
+    while !stop.load(Ordering::Acquire) {
+        if retry.due(began.elapsed()) {
+            match open(target) {
+                Ok(capture) => return Some((capture, retry.attempts + 1)),
+                Err(e) => {
+                    if retry.attempts == 0 {
+                        info!("recorder", "own backend: {name} is not back yet ({e}); still trying");
+                    }
+                    retry.failed(began.elapsed());
+                }
+            }
+        }
+        std::thread::sleep(REOPEN_POLL);
+    }
+    None
+}
+
+/// Captures from one device until it stops, fails, or (for a default source)
+/// the default moves.
 fn pump(
     name: &str,
-    source: &dyn Capture,
-    stamper: &mut Stamper,
+    stream: &mut Stream,
     summary: &mut Summary,
-    decided: &mut bool,
     packets: &Sender<Packet>,
     stop: &AtomicBool,
-) -> Result<(), String> {
+) -> Pumped {
     while !stop.load(Ordering::Acquire) {
-        if !source.wait(WAIT_SLICE_MS) {
+        if stream.capture.moved() {
+            return Pumped::Moved;
+        }
+        if !stream.capture.wait(WAIT_SLICE_MS) {
             continue;
         }
-        while let Some(raw) = source.next()? {
+        loop {
+            let raw = match stream.capture.next() {
+                Ok(Some(raw)) => raw,
+                Ok(None) => break,
+                Err(failure) => return Pumped::Failed(failure),
+            };
             if raw.frames == 0 {
                 continue;
             }
             // A stamp the engine itself flags as wrong is no stamp, and does
             // not get to decide the clock.
             let stamp = (!raw.timestamp_error).then_some(raw.qpc);
-            let substituted = stamper.substituted;
-            let (hns, hole, clock) = stamper.stamp(raw.frames, stamp, raw.arrival);
+            let substituted = stream.stamper.substituted;
+            let (hns, hole, clock) = stream.stamper.stamp(raw.frames, stamp, raw.arrival);
             // On QPC, a substituted stamp is the packet's arrival less its
             // length: an estimate. On device time every stamp is the count.
-            let estimated = clock == AudioClock::Qpc && stamper.substituted > substituted;
-            if !*decided && stamper.clock().is_some() {
-                *decided = true;
-                log_first(name, &raw, stamper);
+            let estimated = clock == AudioClock::Qpc && stream.stamper.substituted > substituted;
+            if !stream.decided && stream.stamper.clock().is_some() {
+                stream.decided = true;
+                log_first(name, &raw, &stream.stamper);
             }
             summary.packets += 1;
             summary.silent_packets += u64::from(raw.silent);
@@ -350,18 +555,18 @@ fn pump(
             let packet = Packet {
                 hns,
                 frames: raw.frames,
-                discontinuity: raw.discontinuity || hole,
+                discontinuity: raw.discontinuity || hole || std::mem::take(&mut stream.fresh),
                 estimated,
                 pcm: raw.pcm,
                 clock,
             };
             if packets.send(packet).is_err() {
                 // The session has gone; nothing will read another packet.
-                return Ok(());
+                return Pumped::Stopped;
             }
         }
     }
-    Ok(())
+    Pumped::Stopped
 }
 
 /// The answer to the QPC question, once per source per recording: what the

@@ -44,6 +44,10 @@
 //! - `problem` — which capture outcomes are failures to tell someone about
 //!   (a source there and not capturable, one that stopped part-way, an early
 //!   end) and which are absences the preset allows (Discord not running).
+//! - `reattach` — what a microphone or desktop source does when its device
+//!   goes away mid-recording (#298): which failures it waits out, when it
+//!   tries the device again, when a default source moves to a new default,
+//!   and how long each gap was.
 //! - `root` — which process tree a process-loopback capture targets: the
 //!   game, or the top of an application's tree.
 //! - `select` — which H.264 encoder to use (hardware first, the software MFT
@@ -103,6 +107,8 @@ pub mod pcm;
 pub mod plan;
 #[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
 pub mod problem;
+#[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
+pub mod reattach;
 #[cfg_attr(not(test), allow(dead_code))]
 pub mod root;
 #[cfg_attr(not(test), allow(dead_code))]
