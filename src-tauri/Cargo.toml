@@ -240,6 +240,11 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
+    # The game window's extended frame bounds and its per-monitor DPI
+    # context, to crop a Windowed game's title bar (`own/win/capture.rs`,
+    # #314). `ClientToScreen` is under `Win32_Graphics_Gdi`, listed below.
+    "Win32_Graphics_Dwm",
+    "Win32_UI_HiDpi",
     # `timeBeginPeriod`, so the cadence loop sleeps to the millisecond.
     "Win32_Media",
     "Win32_Media_MediaFoundation",
@@ -266,7 +271,8 @@ windows = { version = "0.62", features = [
     # The status `GraphicsCaptureAccess::RequestAccessAsync` returns: the
     # method is gated on it.
     "Security_Authorization_AppCapabilityAccess",
-    # `WNDCLASSW`, for the window the own backend's WGC test captures.
+    # `WNDCLASSW`, for the window the own backend's WGC test captures; and
+    # `ClientToScreen`, for the game window's client area (#314).
     "Win32_Graphics_Gdi",
     # The process table the own backend's process-loopback root is chosen
     # from (`recorder/own/win/process.rs`, #237), as `spikes/p0c-audio` reads it;

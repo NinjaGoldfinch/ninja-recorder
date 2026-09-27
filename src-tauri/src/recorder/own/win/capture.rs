@@ -18,7 +18,14 @@ use windows::Graphics::Capture::{
 use windows::Graphics::DirectX::DirectXPixelFormat;
 use windows::Graphics::SizeInt32;
 use windows::Security::Authorization::AppCapabilityAccess::AppCapabilityAccessStatus;
-use windows::Win32::Foundation::{E_NOTIMPL, HWND};
+use windows::Win32::Foundation::{E_NOTIMPL, HWND, POINT, RECT};
+use windows::Win32::Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
+use windows::Win32::Graphics::Gdi::ClientToScreen;
+use windows::Win32::UI::HiDpi::{
+    DPI_AWARENESS_CONTEXT, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    SetThreadDpiAwarenessContext,
+};
+use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, IsIconic};
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_TEXTURE2D_DESC,
     D3D11_USAGE_DEFAULT, ID3D11Device, ID3D11Texture2D,
@@ -32,6 +39,7 @@ use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemIntero
 use windows::core::{HSTRING, IInspectable, Interface, Ref, implement};
 
 use super::device::Device;
+use crate::recorder::own::fit::ScreenRect;
 
 /// WGC's own pool depth. Two is what the spike ran with: frames are copied
 /// out of it at once, so a deeper pool would only add latency.
@@ -260,6 +268,114 @@ impl Capture {
 impl Drop for Capture {
     fn drop(&mut self) {
         self.close();
+    }
+}
+
+// --- The client area -------------------------------------------------------
+
+/// The captured window's two rectangles in screen pixels, for
+/// `fit::client_insets` (#314): first the one a WGC frame of it covers, then
+/// its client area. `None` while it has none worth measuring: minimised, or
+/// any call failed, which includes a window that has gone.
+///
+/// Written from Microsoft's documentation (the links below), not from any
+/// other implementation. docs/licensing.md, #50.
+///
+/// - **The window.** [`DwmGetWindowAttribute`][dwm] with
+///   `DWMWA_EXTENDED_FRAME_BOUNDS`, which [its row][attr] describes as "the
+///   extended frame bounds rectangle in screen space". That a WGC frame of a
+///   window covers exactly this rectangle is what #314 observed, not
+///   something Microsoft documents; the session logs the rectangle's size
+///   beside the frame's whenever it measures, so the box can confirm it.
+/// - **The client area.** [`GetClientRect`][client] gives its size, with the
+///   top-left at 0,0, and [`ClientToScreen`][c2s] moves that corner to screen
+///   coordinates.
+/// - **Units.** The [high-DPI guide][hidpi] warns that a DPI-unaware or
+///   system-aware thread may be handed values Windows has scaled into its own
+///   coordinate space, that which APIs do so "is not currently sufficiently
+///   documented", and to "make sure your thread is running in the DPI context
+///   you expect when interacting with the screen or individual windows". The
+///   capture worker declares no awareness, so the three calls run with the
+///   thread switched to per-monitor v2, which the guide says sees "the raw
+///   pixels of each display", the unit WGC frames are in; and, as the guide
+///   also says, switched back when done ([`SetThreadDpiAwarenessContext`][thread]).
+///
+/// [dwm]: https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/nf-dwmapi-dwmgetwindowattribute
+/// [attr]: https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute
+/// [client]: https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getclientrect
+/// [c2s]: https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-clienttoscreen
+/// [hidpi]: https://learn.microsoft.com/en-us/windows/win32/hidpi/high-dpi-desktop-application-development-on-windows
+/// [thread]: https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setthreaddpiawarenesscontext
+pub fn window_rects(window: HWND) -> Option<(ScreenRect, ScreenRect)> {
+    // SAFETY: `IsIconic` only reads window state and takes the handle by
+    // value; a handle that names no window is answered, not dereferenced.
+    if unsafe { IsIconic(window) }.as_bool() {
+        return None;
+    }
+    let _aware = PerMonitorAware::enter();
+
+    let mut bounds = RECT::default();
+    // SAFETY: `pvAttribute` points at a live, writable `RECT` and
+    // `cbAttribute` is its size, which is the type the attribute's page gives
+    // for `DWMWA_EXTENDED_FRAME_BOUNDS`. A stale handle fails the call.
+    unsafe {
+        DwmGetWindowAttribute(
+            window,
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            (&raw mut bounds).cast(),
+            size_of::<RECT>() as u32,
+        )
+    }
+    .ok()?;
+
+    let mut client = RECT::default();
+    // SAFETY: `client` is a live, writable `RECT` for the call; a stale
+    // handle fails the call rather than misbehaving.
+    unsafe { GetClientRect(window, &mut client) }.ok()?;
+    let mut origin = POINT { x: client.left, y: client.top };
+    // SAFETY: `origin` is a live, writable `POINT` for the call; failure is
+    // a zero return, not undefined behaviour.
+    if !unsafe { ClientToScreen(window, &mut origin) }.as_bool() {
+        return None;
+    }
+    let window = ScreenRect {
+        left: bounds.left,
+        top: bounds.top,
+        right: bounds.right,
+        bottom: bounds.bottom,
+    };
+    let client = ScreenRect {
+        left: origin.x,
+        top: origin.y,
+        right: origin.x.saturating_add(client.right.saturating_sub(client.left)),
+        bottom: origin.y.saturating_add(client.bottom.saturating_sub(client.top)),
+    };
+    Some((window, client))
+}
+
+/// The calling thread switched to per-monitor (v2) DPI awareness for as long
+/// as this lives, and back to what it was when it drops. A Windows that
+/// refuses the context leaves the thread as it was, and nothing is restored.
+struct PerMonitorAware(DPI_AWARENESS_CONTEXT);
+
+impl PerMonitorAware {
+    fn enter() -> PerMonitorAware {
+        // SAFETY: plain call with one of the documented constant contexts; it
+        // changes only this thread's awareness, and returns the old context,
+        // or null if it did nothing.
+        PerMonitorAware(unsafe {
+            SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
+        })
+    }
+}
+
+impl Drop for PerMonitorAware {
+    fn drop(&mut self) {
+        if !self.0.0.is_null() {
+            // SAFETY: the context `SetThreadDpiAwarenessContext` returned for
+            // this thread, handed back on the same thread.
+            unsafe { SetThreadDpiAwarenessContext(self.0) };
+        }
     }
 }
 

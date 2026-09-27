@@ -82,7 +82,7 @@ flowchart TB
 | `recorder/own/` | Option B (WGC → D3D11 → Media Foundation), built through WS1.6 and **the default backend since #243**, on Windows build 19041+: the game window's video and every source the audio preset names (the game by process loopback; the microphone, the desktop and applications), every track of the preset's layout, the mix and each stem, in one file: the encoder MFTs driven directly, the file written by `mp4::write` | `OwnRecorder` |
 | `recorder/own/clock.rs` | The video tick grid on QPC, and placing audio packets on it: drift measured, corrected by slipping frames, or trusted from the device count when a source has no QPC stamps. Which of the two a source gets is decided from its first packet's stamp | `tick_time`, `ticks_due`, `Aligner`, `check_stamp`, `Stamper`, `DeviceTimeline` |
 | `recorder/own/feed.rs` | One audio source's packets through its own `Aligner` into the mixer: never past the video, held with silence to the mixer's watermark while the source is quiet, padded to the last tick at stop | `Feed`, `Packet` |
-| `recorder/own/fit.rs` | Where a frame from a resized game window goes in the fixed-size output: scaled with its aspect kept, centred, black around it, even dimensions and offsets; and whether a frame is copied, scaled or skipped | `letterbox`, `place`, `Placement` |
+| `recorder/own/fit.rs` | Where a frame from a resized game window goes in the fixed-size output: scaled with its aspect kept, centred, black around it, even dimensions and offsets; which part of a frame is the picture (a Windowed game's title bar and borders measured as insets and cropped off, the whole frame otherwise); and whether a frame is copied, scaled or skipped | `letterbox`, `client_insets`, `source_rect`, `place`, `Placement` |
 | `recorder/own/mft.rs` | The bookkeeping of an asynchronous (hardware) encoder MFT: a `NeedInput` is one credit for one `ProcessInput`, a `HaveOutput` one `ProcessOutput` owed, frames that arrive with no credit wait in a bounded queue, and the drain ends on `DrainComplete` | `AsyncPump`, `Event` |
 | `recorder/own/mix.rs` | Each written track: its sources' aligned streams summed in fixed 10 ms blocks, clamped, then i16. A block is mixed once every source has delivered it or a watermark 150 ms behind now has passed it, so a silent, missing or unplugged source is silence and never a stall; never past the video, and ended on the last tick. `TrackMix` is every track of a layout, each source's packets copied to every track that sums it, so a stem is a mix of one (#239) | `Mixer`, `Mixdown`, `TrackMix`, `LATENCY` |
 | `recorder/own/mux.rs` | Encoded samples into the file through `mp4::write`: created at the first keyframe (whose SPS and PPS the `moov` needs), 100 ns times to 90 kHz and to each AAC track's rate, a video frame held until the next gives its duration, and a fragment closed before every keyframe after the first | `Mux`, `to_timescale`, `flush_before` |
@@ -276,10 +276,22 @@ sequenceDiagram
     W-->>R: exits 0
 ```
 
-The output size is fixed at `start` and the game window is not (#240). Each
-WGC frame goes through `scale::Fitter`, which asks `fit::place` what to do
-with it: the recording's own size (give or take the pixel an odd window was
-rounded down by) is a plain GPU copy, any other size is scaled by the D3D11
+The output size is fixed at `start` and the game window is not (#240). WGC
+captures the whole window, so a game in Windowed mode arrives with its title
+bar and borders (#314): `capture::window_rects` reads the window's extended
+frame bounds (`DwmGetWindowAttribute`) and its client area (`GetClientRect`,
+`ClientToScreen`), with the thread per-monitor DPI aware for the three calls
+so all are in physical pixels, and `fit::client_insets` turns them into how
+far in the client area sits. `fit::source_rect` takes those insets off every
+frame, so only the client area is copied or scaled, and the recording starts
+at the client area's size. The insets are measured at `start`, whenever a
+frame arrives at a new size, and on the 250 ms window poll below (a move to a
+monitor of another scale changes them); a borderless or fullscreen window has
+none and is recorded whole, as are rectangles that make no sense (a minimised
+window's). Each WGC frame then goes through `scale::Fitter`, which asks
+`fit::place` what to do with that picture: the recording's own size (give or
+take the pixel an odd window was rounded down by) is a plain GPU copy, any
+other size is scaled by the D3D11
 video processor into `fit::letterbox`'s rectangle with black bars around it,
 and a frame with no content is skipped. A minimised window sends no frames,
 so the ticks repeat the last one; one being minimised or alt-tabbed out of
@@ -310,7 +322,8 @@ flowchart LR
     C -->|yes| B["black slot<br/><small>every tick until stop,<br/>or a game window comes back</small>"]
     B -.->|"new game window<br/>(searched each second)"| R["new WGC capture;<br/>game audio restarted<br/>on the new PID"]
     R -.-> F
-    C -->|no| P{"fit::place"}
+    C -->|no| S["fit::source_rect:<br/><small>client area only<br/>(Windowed: title bar off)</small>"]
+    S --> P{"fit::place"}
     P -->|"content = output"| CP["copy into slot"]
     P -->|"other size"| VP["video processor:<br/>scale into letterbox,<br/>bars black"]
     P -->|"no content,<br/>or under 64 px"| SK["skip: tick repeats<br/>the last slot"]

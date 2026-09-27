@@ -26,7 +26,7 @@ use super::scale::{self, Fitter};
 use crate::recorder::CaptureProblem;
 use crate::recorder::audio::AudioLayout;
 use crate::recorder::own::clock;
-use crate::recorder::own::fit::Size;
+use crate::recorder::own::fit::{self, Insets, Size};
 use crate::recorder::own::plan::{self, CapturePlan};
 use crate::recorder::own::root;
 use crate::recorder::own::select::{self, Choice};
@@ -42,6 +42,11 @@ pub const FPS: u32 = 60;
 /// Textures frames are copied into. Enough that the encoder holding a few
 /// never leaves the capture without somewhere to put the next one.
 const SLOTS: usize = 8;
+
+/// How many changes of the window's frame one recording logs. It changes
+/// when the game switches between Windowed and borderless, or moves to a
+/// monitor of another scale; not when it is merely dragged.
+const FRAME_LINES: u32 = 8;
 
 /// How long `start` waits for the game window to report a real size and for
 /// WGC's first frame, together. `start` runs under the recorder lock on the
@@ -353,6 +358,48 @@ impl Session {
     }
 }
 
+/// Logs what the capture takes of the game window: the client area alone,
+/// with how far in it sits, or the whole window. The rectangles' sizes are
+/// beside the frame's, which is how the box confirms that a WGC frame covers
+/// the window's extended frame bounds (`capture::window_rects`).
+fn log_frame(
+    measured: Option<(fit::ScreenRect, fit::ScreenRect)>,
+    insets: Option<Insets>,
+    frame: Size,
+) {
+    let Some((window, client)) = measured else {
+        info!(
+            "recorder",
+            "own backend: the game window's frame could not be measured; recording the whole \
+             {}x{} window",
+            frame.width,
+            frame.height
+        );
+        return;
+    };
+    let size = |r: fit::ScreenRect| {
+        let width = i64::from(r.right) - i64::from(r.left);
+        let height = i64::from(r.bottom) - i64::from(r.top);
+        format!("{width}x{height}")
+    };
+    let what = match insets {
+        Some(i) => format!(
+            "recording only its client area, inset {} left, {} top, {} right, {} bottom",
+            i.left, i.top, i.right, i.bottom
+        ),
+        None => "no title bar or border to crop; recording the whole window".to_string(),
+    };
+    info!(
+        "recorder",
+        "own backend: the game window's frame bounds are {}, its client area {}, WGC's frame {}x{}: \
+         {what}",
+        size(window),
+        size(client),
+        frame.width,
+        frame.height
+    );
+}
+
 /// `MF_VERSION`, which windows-rs does not expose as a constant:
 /// `(MF_SDK_VERSION << 16) | MF_API_VERSION`, both fixed.
 pub fn mf_version() -> u32 {
@@ -401,6 +448,14 @@ struct Recording {
     /// Puts each frame into a slot, scaling it if the window has changed
     /// size since `start`.
     fitter: Fitter,
+    /// The window's frame as last measured (`fit::client_insets`), which
+    /// the fitter takes off every frame; and the content size of the last
+    /// frame, so a resize is measured again at once rather than at the next
+    /// poll.
+    insets: Option<Insets>,
+    last_content: Option<Size>,
+    /// Frame changes logged so far, up to [`FRAME_LINES`].
+    frame_lines: u32,
     /// Whether the game window is still there, and when to look for a new
     /// one once it is not (`own::watch`).
     watch: Watch,
@@ -446,7 +501,15 @@ impl Recording {
         let mut capture = Capture::start(&warm.device, hwnd)?;
         let window = watch::Window { handle: hwnd.0 as isize, owner: process::window_owner(hwnd) };
         let size = capture.size();
-        let (width, height) = status::even_size(size.Width, size.Height)
+        // The recording is the client area's size: a Windowed game's title
+        // bar and borders are cropped off every frame (#314), so they are
+        // not part of what the encoder is sized for either.
+        let measured = capture::window_rects(hwnd);
+        let insets = measured.and_then(|(window, client)| fit::client_insets(window, client));
+        let item = Size::from_i32(size.Width, size.Height);
+        let picture = fit::source_rect(item, insets);
+        log_frame(measured, insets, item);
+        let (width, height) = status::even_size(picture.width as i32, picture.height as i32)
             .ok_or("the game window has no area to capture (minimised?)")?;
         info!("recorder", "own backend: WGC border {}", capture.border);
 
@@ -469,6 +532,7 @@ impl Recording {
         };
         let slots = capture::create_slots(&warm.device.device, width, height, SLOTS)?;
         let mut fitter = Fitter::new(Size::new(width, height));
+        fitter.set_insets(insets);
         let (texture, content) = capture.texture(&warm.device, &first)?;
         // Black first: a new texture's contents are undefined, and a first
         // frame the fitter skips would otherwise show them.
@@ -479,6 +543,7 @@ impl Recording {
             Size::from_i32(content.Width, content.Height),
             &slots[0].texture,
         )?;
+        let last_content = Some(Size::from_i32(content.Width, content.Height));
         drop(first);
 
         // Every source the plan names: the game from the process that owns
@@ -529,6 +594,9 @@ impl Recording {
             next_slot: 1,
             status,
             fitter,
+            insets,
+            last_content,
+            frame_lines: 1,
             watch: Watch::new(window, Instant::now()),
             black: false,
             audio,
@@ -549,6 +617,11 @@ impl Recording {
     /// - *Resize*: WGC's frames change size, the pool is recreated at the new
     ///   one, and the fitter scales each frame into the size the encoder was
     ///   set up for, letterboxed (`fit`, `scale`).
+    /// - *Be Windowed*: the title bar and borders are cropped off every frame
+    ///   (#314). The frame is measured at `start`, whenever a frame arrives at
+    ///   a new size, and on the quarter-second window poll, which catches a
+    ///   move to a monitor of another scale; borderless and fullscreen have
+    ///   none, and are recorded whole.
     /// - *Minimise*: WGC delivers nothing at all, so `take_frame` finds no
     ///   frame and every tick repeats the last one until the window comes
     ///   back. Nothing here waits on WGC, so nothing stalls: the file keeps
@@ -642,10 +715,19 @@ impl Recording {
             return Ok(());
         };
         let (texture, content) = self.capture.texture(device, &frame)?;
+        let content = Size::from_i32(content.Width, content.Height);
+        // A resize, a mode switch or a move to another monitor: measure the
+        // window's frame again now, not at the next poll, so the first
+        // frame of the new size loses the right strips.
+        if self.last_content != Some(content) {
+            self.last_content = Some(content);
+            if !content.is_too_small() {
+                self.measure(content);
+            }
+        }
         // No free slot means the encoder is holding every one: the frame is
         // dropped and the tick repeats the last, which is what CFR asks for.
         if let Some(i) = self.free_slot() {
-            let content = Size::from_i32(content.Width, content.Height);
             let placed = self.fitter.place(device, &texture, content, &self.slots[i].texture)?;
             if placed != scale::Placed::Skipped {
                 self.latest = i;
@@ -666,8 +748,14 @@ impl Recording {
             Due::Check => {
                 let hwnd = self.capture.window();
                 let then = self.watch.window().owner;
-                watch::gone(process::is_window(hwnd), process::window_owner(hwnd), then)
-                    .then_some(Lost::Destroyed)
+                let gone =
+                    watch::gone(process::is_window(hwnd), process::window_owner(hwnd), then);
+                // The window's frame, on the same quarter-second poll: cheap,
+                // and what catches a change that brought no new frame size.
+                if !gone && let Some(content) = self.last_content {
+                    self.measure(content);
+                }
+                gone.then_some(Lost::Destroyed)
             }
             Due::Search => {
                 self.search(device, now);
@@ -726,6 +814,8 @@ impl Recording {
         self.capture = capture;
         self.watch.attached(window, now);
         self.black = false;
+        // A new window: its frame is measured at its first frame.
+        self.last_content = None;
         if self.watch.logging() || self.watch.last_logged() {
             info!(
                 "recorder",
@@ -744,6 +834,26 @@ impl Recording {
             && let Some(what) = audio.restart_game(hwnd)
         {
             info!("recorder", "own backend: the game came back: {what}");
+        }
+    }
+
+    /// Measures the captured window's frame and hands it to the fitter, and
+    /// logs it when it changed. A window that cannot be measured just now
+    /// (minimised, or closing) keeps the last measurement: its frames are
+    /// skipped or it is about to be noticed gone, either way unaffected.
+    fn measure(&mut self, content: Size) {
+        let Some((window, client)) = capture::window_rects(self.capture.window()) else {
+            return;
+        };
+        let insets = fit::client_insets(window, client);
+        if insets == self.insets {
+            return;
+        }
+        self.insets = insets;
+        self.fitter.set_insets(insets);
+        self.frame_lines += 1;
+        if self.frame_lines <= FRAME_LINES {
+            log_frame(Some((window, client)), insets, content);
         }
     }
 
