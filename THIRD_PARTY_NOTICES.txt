@@ -5464,7 +5464,7 @@ Used by:
   tauri-runtime 2.11.3 <https://github.com/tauri-apps/tauri>
   tauri-utils 2.9.3 <https://github.com/tauri-apps/tauri>
   tauri-winrt-notification 0.7.3 <https://github.com/tauri-apps/winrt-notification>
-  tauri 2.11.5 <https://github.com/tauri-apps/tauri>
+  tauri 2.11.6 <https://github.com/tauri-apps/tauri>
   ts-rs-macros 12.0.1 <https://github.com/Aleph-Alpha/ts-rs>
   ts-rs 12.0.1 <https://github.com/Aleph-Alpha/ts-rs>
   unic-char-property 0.9.0 <https://github.com/open-i18n/rust-unic/>
