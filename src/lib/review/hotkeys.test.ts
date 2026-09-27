@@ -21,6 +21,8 @@ describe("hotkeyAction", () => {
     expect(hotkeyAction("[", ctx())).toBe("prevMarker");
     expect(hotkeyAction("d", ctx())).toBe("prevDeath");
     expect(hotkeyAction("D", ctx())).toBe("nextDeath");
+    expect(hotkeyAction("t", ctx())).toBe("toggleRail");
+    expect(hotkeyAction("n", ctx())).toBe("noteAtPlayhead");
   });
 
   it("does nothing outside the review view", () => {
@@ -30,6 +32,23 @@ describe("hotkeyAction", () => {
   it("does nothing while typing", () => {
     expect(hotkeyAction(" ", ctx({ typing: true }))).toBeNull();
     expect(hotkeyAction("d", ctx({ typing: true }))).toBeNull();
+    expect(hotkeyAction("n", ctx({ typing: true }))).toBeNull();
+  });
+
+  describe("while typing a note", () => {
+    it("still plays and pauses on Ctrl+Space", () => {
+      expect(hotkeyAction(" ", ctx({ typing: true }), true)).toBe("togglePlay");
+      expect(hotkeyAction(" ", ctx({ onFormControl: true }), true)).toBe("togglePlay");
+    });
+
+    it("hands focus back to the player on Escape", () => {
+      expect(hotkeyAction("Escape", ctx({ typing: true }))).toBe("leaveField");
+    });
+
+    it("answers neither outside the review view", () => {
+      expect(hotkeyAction(" ", ctx({ reviewOpen: false, typing: true }), true)).toBeNull();
+      expect(hotkeyAction("Escape", ctx({ reviewOpen: false, typing: true }))).toBeNull();
+    });
   });
 
   describe("Space and focused controls", () => {

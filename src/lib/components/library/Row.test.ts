@@ -65,7 +65,6 @@ function render(
     props: {
       row: r,
       onopen: noop,
-      onreview: noop,
       onpin: noop,
       ondelete: noop,
       oninspect: noop,

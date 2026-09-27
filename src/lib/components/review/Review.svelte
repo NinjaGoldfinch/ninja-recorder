@@ -11,29 +11,39 @@
   The position is published into `playhead` from the rAF loop so the timeline
   can draw it. That is one number crossing the boundary in one direction, which
   is the smallest seam that still lets the timeline be declarative.
+
+  The review form and the event list sit beside the player in `ReviewRail`
+  (WS9 P1), so notes are written with the footage on screen. Opening a
+  recording loads its game review too, and closing writes it first.
 -->
 
 <script lang="ts">
+import { tick, untrack } from "svelte";
 import { assetUrl, call } from "../../../bridge";
-import { vodHeading } from "../../../format";
+import { formatTime, vodHeading } from "../../../format";
 import { showView } from "../../../router";
 import type { AudioLayout } from "../../../types";
 import { recordedWithout } from "../../library/problems";
-import { laneOpponent } from "../../library/scoreboard";
+import { laneOpponent, selfPlayer } from "../../library/scoreboard";
+import { gameClockAt } from "../../review/clock";
+import { reviewFacts } from "../../review/facts";
 import { type HotkeyContext, hotkeyAction, SEEK_STEP_S } from "../../review/hotkeys";
 import { parseAudioLayout, videoErrorReport } from "../../review/playback";
+import { railOpenSaved, saveRailOpen } from "../../review/rail";
+import { closeReview, openReviewForRecording } from "../../stores/gameReview.svelte";
 import { closeRecording, review, setDuration } from "../../stores/review.svelte";
 import { toast } from "../../stores/toast.svelte";
 import type { MetricKey } from "../../timeline/graph";
 import { nextMarker } from "../../timeline/navigate";
 import { stemCorrection } from "../../timeline/stem";
-import { clamp } from "../../timeline/window";
-import MarkerList from "./MarkerList.svelte";
+import { clamp, displayTime } from "../../timeline/window";
 import PlayerControls from "./PlayerControls.svelte";
+import ReviewRail from "./ReviewRail.svelte";
 import Timeline from "./Timeline.svelte";
 
 let video = $state<HTMLVideoElement>();
 let playerWrap = $state<HTMLElement>();
+let rail = $state<ReturnType<typeof ReviewRail>>();
 
 /** The player's own state. None of it belongs in the store. */
 let playhead = $state(0);
@@ -41,6 +51,9 @@ let paused = $state(true);
 let rate = $state(1);
 let fullscreen = $state(false);
 let menuOpen = $state(false);
+/** Whether the review rail is beside the player, or folded away so the player
+ *  has the width (theatre mode). Remembered across VODs. */
+let railOpen = $state(railOpenSaved());
 /** Whether the settings menu was open when the current click started.
  *
  * Not `$state`: nothing renders from it. It exists so that dismissing the menu
@@ -71,6 +84,9 @@ const heading = $derived(
     ? vodHeading(review.recording, laneOpponent(review.recording)?.champion ?? null)
     : "",
 );
+
+// When, how long, which queue and how it went, under the heading.
+const facts = $derived(review.recording ? reviewFacts(review.recording) : []);
 
 // What a capture failure cost this recording (#10), with every reason: the
 // library row's line in full. Text only; the reasons are untrusted.
@@ -301,6 +317,38 @@ function toggleFullscreen() {
   else playerWrap.requestFullscreen().catch(() => {});
 }
 
+/** The game clock where the player is: read on demand, never tracked. */
+function gameClockNow(): number | null {
+  if (!video) return null;
+  return gameClockAt(video.currentTime, review.samples, review.markers);
+}
+
+/**
+ * Pauses and starts a note at the current game time: the `n` key and the
+ * notes' stamp button. Opens the rail if theatre mode had it folded away,
+ * because a note nobody can see being written is not one.
+ *
+ * Falls back to the time the player shows when the recording has nothing to
+ * read the game clock from; a note's stamp is for finding the moment again,
+ * and the player's clock does that.
+ */
+async function noteAtPlayhead() {
+  if (!video) return;
+  video.pause();
+  if (!railOpen) {
+    railOpen = true;
+    saveRailOpen(true);
+    await tick();
+  }
+  const at = gameClockNow() ?? displayTime(video.currentTime, review.window);
+  await rail?.noteAt(formatTime(at));
+}
+
+function toggleRail() {
+  railOpen = !railOpen;
+  saveRailOpen(railOpen);
+}
+
 function jump(direction: 1 | -1, predicate?: (m: { kind: string }) => boolean) {
   if (!video) return;
   const target = nextMarker(review.markers, video.currentTime, direction, predicate);
@@ -363,6 +411,9 @@ function close() {
     video.load();
   }
   closeRecording();
+  // Not awaited: the save is flushed in the background, and the library does
+  // not need to wait for it to show.
+  void closeReview();
   showView("library");
 }
 
@@ -379,8 +430,15 @@ $effect(() => {
   // Read so the effect re-runs when the recording changes and not when its
   // markers do.
   const id = row.id;
-  void id;
 
+  // Untracked: the load writes the review store, and nothing it touches
+  // should make this effect reload the video.
+  untrack(
+    () =>
+      void openReviewForRecording(id, {
+        deaths: row.kda_d ?? selfPlayer(row)?.deaths ?? null,
+      }),
+  );
   startApplied = false;
   videoError = null;
   detachStem();
@@ -407,7 +465,7 @@ $effect(() => {
       onArrowControl: active?.tagName === "SELECT",
       menuOpen,
     };
-    const action = hotkeyAction(e.key, ctx);
+    const action = hotkeyAction(e.key, ctx, e.ctrlKey);
     if (action === null) return;
     e.preventDefault();
 
@@ -438,6 +496,15 @@ $effect(() => {
         break;
       case "prevDeath":
         jump(-1, (m) => m.kind === "death");
+        break;
+      case "toggleRail":
+        toggleRail();
+        break;
+      case "noteAtPlayhead":
+        void noteAtPlayhead();
+        break;
+      case "leaveField":
+        (document.activeElement as HTMLElement | null)?.blur();
         break;
       case "closeMenu":
         menuOpen = false;
@@ -507,100 +574,128 @@ $effect(() => {
 
 <div class="review-header">
   <button type="button" class="back-btn" onclick={close}>&larr; Back</button>
-  <h2>{heading}</h2>
+  <div class="review-title">
+    <h2>{heading}</h2>
+    {#if facts.length > 0}
+      <p class="review-facts">
+        {#each facts as fact, i (i)}<span>{fact}</span>{/each}
+      </p>
+    {/if}
+  </div>
+  <button
+    type="button"
+    class="icon-btn rail-toggle"
+    aria-pressed={!railOpen}
+    aria-label={railOpen ? "Hide the review panel" : "Show the review panel"}
+    title={railOpen ? "Theatre mode: hide the review panel (t)" : "Show the review panel (t)"}
+    onclick={toggleRail}>◧</button
+  >
 </div>
 
 {#if without}
   <p class="review-without" role="note">{without.full}</p>
 {/if}
 
-<div class="player-wrap" bind:this={playerWrap}>
-  <!-- svelte-ignore a11y_media_has_caption -->
-  <video
-    id="review-video"
-    bind:this={video}
-    onclick={() => {
-      // Click-to-toggle, as `review.ts` had it. The guard is the whole
-      // subtlety: a click that dismissed the settings menu started on a frame
-      // the user was not aiming at.
-      if (menuWasOpenOnPointerDown) return;
-      togglePlay();
-    }}
-    onloadedmetadata={onLoadedMetadata}
-    onerror={onVideoError}
-    onplay={() => {
-      paused = false;
-      startLoop();
-      void resumeStem();
-    }}
-    onpause={() => {
-      paused = true;
-      stopLoop();
-      stem?.pause();
-      // One last update, so the bar lands where the video actually stopped.
-      if (video) playhead = video.currentTime;
-    }}
-    onseeked={() => {
-      if (video) playhead = video.currentTime;
-      void resumeStem();
-    }}
-    ontimeupdate={stopAtWindowEnd}
-    onratechange={() => {
-      if (video) rate = video.playbackRate;
-    }}
-  ></video>
+<div class="review-layout" class:rail-closed={!railOpen}>
+  <div class="review-main">
+    <div class="player-wrap" bind:this={playerWrap}>
+      <!-- svelte-ignore a11y_media_has_caption -->
+      <video
+        id="review-video"
+        bind:this={video}
+        onclick={() => {
+          // Click-to-toggle, as `review.ts` had it. The guard is the whole
+          // subtlety: a click that dismissed the settings menu started on a frame
+          // the user was not aiming at.
+          if (menuWasOpenOnPointerDown) return;
+          togglePlay();
+        }}
+        onloadedmetadata={onLoadedMetadata}
+        onerror={onVideoError}
+        onplay={() => {
+          paused = false;
+          startLoop();
+          void resumeStem();
+        }}
+        onpause={() => {
+          paused = true;
+          stopLoop();
+          stem?.pause();
+          // One last update, so the bar lands where the video actually stopped.
+          if (video) playhead = video.currentTime;
+        }}
+        onseeked={() => {
+          if (video) playhead = video.currentTime;
+          void resumeStem();
+        }}
+        ontimeupdate={stopAtWindowEnd}
+        onratechange={() => {
+          if (video) rate = video.playbackRate;
+        }}
+      ></video>
 
-  {#if videoError}
-    <div class="video-error">
-      <p>{videoError.message}</p>
-      <code>{videoError.detail}</code>
+      {#if videoError}
+        <div class="video-error">
+          <p>{videoError.message}</p>
+          <code>{videoError.detail}</code>
+        </div>
+      {/if}
+
+      <PlayerControls
+        atS={Math.max(0, playhead - review.window.start)}
+        totalS={review.window.span}
+        {paused}
+        muted={userMuted}
+        volume={userVolume}
+        {rate}
+        {fullscreen}
+        {layout}
+        {selectedTrack}
+        {menuOpen}
+        ontoggleplay={togglePlay}
+        ontogglemute={toggleMute}
+        onvolume={setVolume}
+        onrate={setRate}
+        ontrack={(i) => void selectTrack(i)}
+        ontogglefullscreen={toggleFullscreen}
+        onmenu={(open) => (menuOpen = open)}
+        onscrub={moveScrub}
+        onscrubstart={startScrub}
+      />
     </div>
-  {/if}
 
-  <PlayerControls
-    atS={Math.max(0, playhead - review.window.start)}
-    totalS={review.window.span}
-    {paused}
-    muted={userMuted}
-    volume={userVolume}
-    {rate}
-    {fullscreen}
-    {layout}
-    {selectedTrack}
-    {menuOpen}
-    ontoggleplay={togglePlay}
-    ontogglemute={toggleMute}
-    onvolume={setVolume}
-    onrate={setRate}
-    ontrack={(i) => void selectTrack(i)}
-    ontogglefullscreen={toggleFullscreen}
-    onmenu={(open) => (menuOpen = open)}
-    onscrub={moveScrub}
-    onscrubstart={startScrub}
+    <!--
+      Only the markers the file reaches are drawn. A crashed recording carries
+      markers for moments past its own end, and `windowFraction` clamps, so drawing
+      them would pile a stack of unrelated events onto the final frame. They are
+      listed instead: see `splitByFootage`.
+    -->
+    <Timeline
+      markers={review.footage.inside}
+      samples={review.samples}
+      metric={review.metric}
+      window={review.window}
+      currentTimeS={playhead}
+      onmetric={(m: MetricKey) => (review.metric = m)}
+      onseek={seekTo}
+      onscrub={moveScrub}
+      onscrubstart={startScrub}
+    />
+
+    <p class="hint review-keys">
+      Space play &middot; &larr; &rarr; 5s &middot; [ ] markers &middot; d / D deaths &middot; n note
+      &middot; Esc back to video &middot; t theatre &middot; f fullscreen &middot; m mute
+    </p>
+  </div>
+
+  <ReviewRail
+    bind:this={rail}
+    open={railOpen}
+    markers={review.markers}
+    beyond={review.footage.beyond}
+    onseek={seekTo}
+    currentTimeS={playhead}
+    {gameClockNow}
+    onstamp={() => void noteAtPlayhead()}
   />
 </div>
-
-<!--
-  Only the markers the file reaches are drawn. A crashed recording carries
-  markers for moments past its own end, and `windowFraction` clamps, so drawing
-  them would pile a stack of unrelated events onto the final frame. They are
-  listed instead: see `splitByFootage`.
--->
-<Timeline
-  markers={review.footage.inside}
-  samples={review.samples}
-  metric={review.metric}
-  window={review.window}
-  currentTimeS={playhead}
-  onmetric={(m: MetricKey) => (review.metric = m)}
-  onseek={seekTo}
-  onscrub={moveScrub}
-  onscrubstart={startScrub}
-/>
-
-<MarkerList markers={review.markers} beyond={review.footage.beyond} onseek={seekTo} />
-
-<p class="hint">
-  Space play/pause &middot; &larr; &rarr; seek 5s &middot; [ ] markers &middot; d / D deaths
-  &middot; f fullscreen &middot; m mute
-</p>

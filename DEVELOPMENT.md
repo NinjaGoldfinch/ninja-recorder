@@ -1816,13 +1816,13 @@ building a window re-entrantly from inside a WebView2 IPC callback and getting a
 blank window, applies to windows created from a command, which `setup` is not.
 A window created later from a tray click will have to respect it.
 
-**The default size is derived from the frontend, not picked by eye.** The
-content column stops at `--content-max: 1120px`; add the container's padding
-and room for a scrollbar and 1200 is the narrowest inner width at which it
-reaches full width, so anything narrower squeezes every view and anything wider
-only adds background. The 900 height clears the review player and its timeline.
-The marker list under them is left to scroll, because a window tall enough to
-show it as well would not fit on a 1080p desktop.
+**The default size is derived from the frontend, not picked by eye.** At
+1340×850 the content column (`--content-max: 1120px`) opens at full width with
+a margin either side, and the height leaves room for the taskbar and the title
+bar on a 1080p desktop (#315). It is also the size the review view is laid out
+for: the player, its timeline and the review rail beside them all fit with
+nothing below the fold, and the marker list is a tab in that rail rather than a
+list under the player (#321, [docs/frontend.md](docs/frontend.md)).
 
 Verified on macOS against the real binary: a default start registers a GUI
 window, a windowless start stays running, `--daemon` exited 2 while it was
@@ -4165,3 +4165,20 @@ retention and the user's Delete), and a review has to outlive its VOD. It also
 has to exist for a spreadsheet row that was never recorded. The other two
 questions are answered or not needed by P0: events reuse `markers` (#249), and
 there is no widget until P2 (#252).
+
+**P1 pre-fills what the recording already knows** (#324,
+`reviewform/autofill.ts`). The game rating starts at the match result, and
+deaths starts at the end-of-game stats rather than the death-marker count,
+because the markers are only as complete as the poll that saw them. Three rules
+keep this from putting words in the user's mouth:
+
+- **Only a review that has never been saved is filled.** A saved review is the
+  user's, and that includes the fields they left blank.
+- **The pre-fill goes into the draft, not into the database.** Opening a VOD
+  writes nothing. The pre-filled answers are saved with the first real edit, so
+  a VOD that was only watched never gets a review nobody wrote.
+- **Each pre-filled answer is tagged "auto"** until the user changes it.
+
+The clear-time clock button fills in the game clock at the playhead. It is a
+faster way of entering the time by hand, not a derived value, so #248 stays
+open.

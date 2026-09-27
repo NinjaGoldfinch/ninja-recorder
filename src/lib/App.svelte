@@ -30,7 +30,6 @@ import { registerView } from "../router";
 import Library from "./components/library/Library.svelte";
 import Objectives from "./components/objectives/Objectives.svelte";
 import Review from "./components/review/Review.svelte";
-import ReviewForm from "./components/reviewform/ReviewForm.svelte";
 import Settings from "./components/settings/Settings.svelte";
 import AppBar from "./components/shell/AppBar.svelte";
 import CaptureStrip from "./components/shell/CaptureStrip.svelte";
@@ -42,7 +41,6 @@ import { setQuitAsker } from "./stores/quit.svelte";
 let libraryNode: HTMLElement;
 let reviewNode: HTMLElement;
 let settingsNode: HTMLElement;
-let gameNode: HTMLElement;
 let objectivesNode: HTMLElement;
 let quitDialog: ReturnType<typeof QuitDialog> | undefined;
 
@@ -56,7 +54,6 @@ $effect(() => {
   registerView("library", libraryNode);
   registerView("review", reviewNode);
   registerView("settings", settingsNode);
-  registerView("game", gameNode);
   registerView("objectives", objectivesNode);
 });
 
@@ -86,10 +83,6 @@ $effect(() => {
 
   <section bind:this={settingsNode} id="settings-view" class="view" hidden>
     <Settings />
-  </section>
-
-  <section bind:this={gameNode} id="game-view" class="view" hidden>
-    <ReviewForm />
   </section>
 
   <section bind:this={objectivesNode} id="objectives-view" class="view" hidden>

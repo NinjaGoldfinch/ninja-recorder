@@ -26,7 +26,6 @@ function render(props: Partial<Record<string, unknown>> = {}) {
     target: host,
     props: {
       row,
-      onreview: () => {},
       onpin: () => {},
       ondelete: () => {},
       oninspect: () => {},
@@ -115,11 +114,10 @@ describe("the pin button", () => {
   });
 });
 
-describe("the review button", () => {
-  it("opens the review form for its row", () => {
-    const onreview = vi.fn();
-    const el = render({ onreview });
-    el.querySelector<HTMLButtonElement>('[aria-label="Review this game"]')?.click();
-    expect(onreview).toHaveBeenCalledWith(row);
+describe("reviewing", () => {
+  it("has no button of its own: opening the row opens the review beside the player", () => {
+    const el = render();
+    expect(el.querySelector('[aria-label="Review this game"]')).toBeNull();
+    expect(el.textContent).not.toContain("📝");
   });
 });

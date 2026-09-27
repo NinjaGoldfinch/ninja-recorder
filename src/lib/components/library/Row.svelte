@@ -40,14 +40,13 @@ import Slot from "./Slot.svelte";
 interface Props {
   row: RecordingRow;
   onopen: (row: RecordingRow) => void;
-  onreview: (row: RecordingRow) => void;
   onpin: (row: RecordingRow) => void;
   ondelete: (row: RecordingRow) => void;
   oninspect: (row: RecordingRow) => void;
   showInspect: boolean;
 }
 
-const { row, onopen, onreview, onpin, ondelete, oninspect, showInspect }: Props = $props();
+const { row, onopen, onpin, ondelete, oninspect, showInspect }: Props = $props();
 
 const title = $derived(vodTitle(row));
 const kda = $derived(formatKda(row.kda_k, row.kda_d, row.kda_a));
@@ -210,5 +209,5 @@ function onCardKey(e: KeyboardEvent) {
 
   <span class="vod-sub vod-size">{formatBytes(row.size_bytes)}</span>
 
-  <RowActions {row} {onreview} {onpin} {ondelete} {oninspect} {showInspect} />
+  <RowActions {row} {onpin} {ondelete} {oninspect} {showInspect} />
 </article>
