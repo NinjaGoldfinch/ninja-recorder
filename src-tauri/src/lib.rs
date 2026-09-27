@@ -535,16 +535,15 @@ pub(crate) fn create_main_window(app: &tauri::AppHandle, view: Option<&str>) -> 
     };
     tauri::WebviewWindowBuilder::new(app, MAIN_WINDOW_LABEL, tauri::WebviewUrl::App(url.into()))
         .title("ninja-recorder")
-        // Sized around the frontend's own `--content-max: 1120px` plus the
-        // container's padding and room for a scrollbar, so the default
-        // window is exactly wide enough for the content column to reach its
-        // full width and stop — one pixel narrower and every view squeezes,
-        // wider and the column just centres itself in more background.
+        // Wider than the frontend's `--content-max: 1120px` plus the
+        // container's padding and a scrollbar, so the content column opens at
+        // its full width with a margin of background either side rather than
+        // running edge to edge.
         //
-        // The height clears the review view's player and its timeline; the
-        // marker list below them is deliberately left to scroll rather than
-        // opening a window taller than a 1080p desktop can show.
-        .inner_size(1200.0, 900.0)
+        // The height leaves room for the taskbar and the title bar on a 1080p
+        // desktop; the marker list below the review view's player and
+        // timeline is deliberately left to scroll.
+        .inner_size(1340.0, 850.0)
         .min_inner_size(960.0, 640.0)
         .build()?;
     Ok(())
