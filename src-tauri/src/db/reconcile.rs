@@ -40,6 +40,7 @@
 
 use super::{Db, DbError, NewRecording};
 use crate::mp4::Summary;
+use crate::recorder::audio::{AudioLayout, AudioTrackSpec};
 use crate::{info, warn};
 use serde::Serialize;
 use std::path::Path;
@@ -143,7 +144,18 @@ fn recover_unfinished_with(
         // Before the duration probe, so the probe reads the file the library
         // will play. Never fatal: the worst outcome is the file as the kill
         // left it, which is what recovery finished every row with before.
-        repair(path, ffmpeg, &metadata);
+        let audio_tracks = repair(path, ffmpeg, &metadata);
+
+        // A row begun by a build that stored no layout at the start (#311)
+        // gets one from the file's track count, so the player still offers
+        // the stems. A row that has one keeps it: the DB only fills a NULL.
+        let layout = match (&row.audio_tracks_json, audio_tracks) {
+            (None, Some(count)) => {
+                let preset = db.get_audio_preset().unwrap_or_default().layout();
+                recovered_layout(&preset, count).and_then(|l| serde_json::to_string(&l).ok())
+            }
+            _ => None,
+        };
 
         // The session's clock is gone, so the file is the only source of a
         // duration. `None` stays NULL, exactly as it does for an import that
@@ -151,7 +163,13 @@ fn recover_unfinished_with(
         let duration_s = ffmpeg.and_then(|ffmpeg| crate::probe::duration_s(ffmpeg, path));
         // Re-read: the remux and the tail cut both change it.
         let size_bytes = path.metadata().map_or(metadata.len(), |m| m.len());
-        db.recover_recording(row.id, duration_s, size_bytes as i64, finished_at)?;
+        db.recover_recording(
+            row.id,
+            duration_s,
+            size_bytes as i64,
+            finished_at,
+            layout.as_deref(),
+        )?;
         report.recovered += 1;
     }
 
@@ -167,14 +185,44 @@ fn remove_stale_remux_tmp(path: &Path) {
     }
 }
 
+/// A layout for a recovered file whose row has none, from how many audio
+/// tracks its `moov` declares. `None` for a file with no audio at all.
+///
+/// The labels are a guess, so the guess is the likeliest one: the current
+/// preset's, when its layout has exactly that many tracks, since that is what
+/// the recording was most probably made with. Otherwise track 0 is
+/// "Everything", which every layout's first track is (the mix), and the rest
+/// are numbered. The sources are left empty, because the file cannot say
+/// what they were, and nothing that reads a stored layout uses more than its
+/// labels and its track count.
+pub fn recovered_layout(preset: &AudioLayout, audio_tracks: usize) -> Option<AudioLayout> {
+    if audio_tracks == 0 {
+        return None;
+    }
+    let labels: Vec<String> = if preset.tracks.len() == audio_tracks {
+        preset.tracks.iter().map(|t| t.label.clone()).collect()
+    } else {
+        (0..audio_tracks)
+            .map(|i| if i == 0 { "Everything".to_string() } else { format!("Track {}", i + 1) })
+            .collect()
+    };
+    Some(AudioLayout {
+        sources: Vec::new(),
+        tracks: labels
+            .into_iter()
+            .map(|label| AudioTrackSpec { label, sources: Vec::new() })
+            .collect(),
+    })
+}
+
 /// What recovery does with a file a dead daemon left behind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecoveryAction {
     /// A fragmented file with at least one whole fragment: remux it to
     /// faststart, as a clean stop would have.
     Remux {
-        /// From the file's `moov`, because an unfinished row's
-        /// `audio_tracks_json` is NULL: the layout is written at finalize.
+        /// From the file's `moov`, which is the fact: a row begun by an older
+        /// build has no `audio_tracks_json` to ask.
         audio_tracks: usize,
         /// Cut the file to this length first. Set when the box the kill
         /// interrupted is anything but an `mdat`: a half-written `moof` stops
@@ -214,7 +262,11 @@ pub fn recovery_action(summary: &Summary) -> RecoveryAction {
 /// The I/O half: repairs a file our own writer made, reads the boxes, acts
 /// on `recovery_action`, and logs what it did. Every failure is logged and
 /// swallowed, leaving the file as it is.
-fn repair(path: &Path, ffmpeg: Option<&Path>, metadata: &std::fs::Metadata) {
+///
+/// Returns how many audio tracks the file's `moov` declares, when it has a
+/// whole one to read, for `recovered_layout`. Neither the cut nor the remux
+/// changes that number.
+fn repair(path: &Path, ffmpeg: Option<&Path>, metadata: &std::fs::Metadata) -> Option<usize> {
     // Ours (the own backend's), or not: `repair` answers by refusing a file
     // it did not write, which is the libobs case and needs no log line.
     if let Ok(r) = crate::mp4::write::repair(path)
@@ -233,12 +285,13 @@ fn repair(path: &Path, ffmpeg: Option<&Path>, metadata: &std::fs::Metadata) {
         Ok(summary) => summary,
         Err(e) => {
             warn!("db", "recovery could not read {}: {e}", path.display());
-            return;
+            return None;
         }
     };
+    let declared = summary.moov_complete.then_some(summary.audio_tracks as usize);
     let (audio_tracks, truncate_to) = match recovery_action(&summary) {
         RecoveryAction::Remux { audio_tracks, truncate_to } => (audio_tracks, truncate_to),
-        RecoveryAction::Leave => return,
+        RecoveryAction::Leave => return declared,
         RecoveryAction::Unplayable => {
             warn!(
                 "db",
@@ -246,7 +299,7 @@ fn repair(path: &Path, ffmpeg: Option<&Path>, metadata: &std::fs::Metadata) {
                 path.display(),
                 summary.layout
             );
-            return;
+            return declared;
         }
     };
 
@@ -271,7 +324,7 @@ fn repair(path: &Path, ffmpeg: Option<&Path>, metadata: &std::fs::Metadata) {
             "no ffmpeg, so recovered {} stays fragmented and will not scrub",
             path.display()
         );
-        return;
+        return declared;
     };
     // Inline at startup, so the time is worth knowing: a long recording is
     // a gigabyte or more of copying before the daemon is up.
@@ -295,6 +348,7 @@ fn repair(path: &Path, ffmpeg: Option<&Path>, metadata: &std::fs::Metadata) {
             started.elapsed().as_millis()
         ),
     }
+    declared
 }
 
 /// The repair and the remux both rewrite the file, so its mtime is now. Put
@@ -577,7 +631,7 @@ mod tests {
         std::fs::write(&file, b"partial but playable").unwrap();
 
         let id = db
-            .begin_recording(&file.to_string_lossy(), 1_000)
+            .begin_recording(&file.to_string_lossy(), 1_000, None)
             .unwrap();
         db.insert_markers(
             id,
@@ -655,7 +709,7 @@ mod tests {
         std::io::Write::write_all(&mut torn, &[0, 0, 1, 0, b'm', b'o', b'o', b'f', 0, 0]).unwrap();
         drop(torn);
         let killed_at = std::fs::metadata(&file).unwrap().modified().unwrap();
-        let id = db.begin_recording(&file.to_string_lossy(), 1_000).unwrap();
+        let id = db.begin_recording(&file.to_string_lossy(), 1_000, None).unwrap();
 
         let report = recover_unfinished(&db, None).unwrap();
         assert_eq!(report.recovered, 1);
@@ -682,7 +736,7 @@ mod tests {
         let dir = temp_dir("recover-no-file");
         let missing = dir.join("never-written.mp4");
 
-        db.begin_recording(&missing.to_string_lossy(), 1_000).unwrap();
+        db.begin_recording(&missing.to_string_lossy(), 1_000, None).unwrap();
 
         let report = recover_unfinished(&db, None).unwrap();
         assert_eq!(report.abandoned_removed, 1);
@@ -730,7 +784,7 @@ mod tests {
         let dir = temp_dir("in-progress");
         let file = dir.join("recording-2.mp4");
         std::fs::write(&file, b"still being written").unwrap();
-        db.begin_recording(&file.to_string_lossy(), 1_000).unwrap();
+        db.begin_recording(&file.to_string_lossy(), 1_000, None).unwrap();
 
         let report = reconcile(&db, &dir, None).unwrap();
         assert_eq!(report.imported, 0, "the file is ours and already tracked");
@@ -880,7 +934,7 @@ mod tests {
         std::fs::File::options().write(true).open(&file).unwrap().set_modified(killed_at).unwrap();
 
         let db = Db::open_temporary().unwrap();
-        let id = db.begin_recording(&file.to_string_lossy(), 1_000).unwrap();
+        let id = db.begin_recording(&file.to_string_lossy(), 1_000, None).unwrap();
         db.insert_markers(
             id,
             &[crate::db::NewMarker {
@@ -931,7 +985,7 @@ mod tests {
         fixtures::truncated_copy(&whole, &file, offset + size * 2 / 3);
 
         let db = Db::open_temporary().unwrap();
-        db.begin_recording(&file.to_string_lossy(), 1_000).unwrap();
+        db.begin_recording(&file.to_string_lossy(), 1_000, None).unwrap();
         assert_eq!(recover_unfinished(&db, Some(&ffmpeg)).unwrap().recovered, 1);
 
         let after = fixtures::summary(&file);
@@ -950,12 +1004,103 @@ mod tests {
         let mut bytes = fragmented_with(1, 2);
         bytes.truncate(bytes.len() - 100);
         std::fs::write(&file, &bytes).unwrap();
-        db.begin_recording(&file.to_string_lossy(), 1_000).unwrap();
+        db.begin_recording(&file.to_string_lossy(), 1_000, None).unwrap();
 
         assert_eq!(recover_unfinished(&db, None).unwrap().recovered, 1);
         assert_eq!(std::fs::read(&file).unwrap(), bytes, "left as the kill left it");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- A recovered recording keeps its track menu (#311) ----------------
+
+    fn labels(json: Option<&str>) -> Vec<String> {
+        let layout: AudioLayout = serde_json::from_str(json.expect("a layout")).unwrap();
+        layout.tracks.into_iter().map(|t| t.label).collect()
+    }
+
+    fn killed_file(dir: &Path, name: &str, audio: usize) -> std::path::PathBuf {
+        let file = dir.join(name);
+        let mut bytes = fragmented_with(audio, 2);
+        bytes.truncate(bytes.len() - 100);
+        std::fs::write(&file, &bytes).unwrap();
+        file
+    }
+
+    /// The case the issue was found with: a row begun with its layout, a
+    /// daemon killed before the finalize, and a restart. The layout the
+    /// start stored is the one the library gets, not a guess.
+    #[test]
+    fn a_recording_begun_and_recovered_keeps_the_layout_it_began_with() {
+        let db = Db::open_temporary().unwrap();
+        let dir = temp_dir("recover-layout");
+        let file = killed_file(&dir, "recording-4.mp4", 4);
+        let preset = crate::recorder::audio::AudioPreset::GameMicDiscord { mic_device_id: None };
+        let json = serde_json::to_string(&preset.layout()).unwrap();
+        db.begin_recording(&file.to_string_lossy(), 1_000, Some(&json)).unwrap();
+
+        assert_eq!(recover_unfinished(&db, None).unwrap().recovered, 1);
+        let rows = db.list_recordings().unwrap();
+        assert_eq!(rows[0].audio_tracks_json.as_deref(), Some(json.as_str()));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A row begun by a build that stored no layout gets one from the file,
+    /// labelled from the current preset when the track count matches.
+    #[test]
+    fn a_row_begun_without_a_layout_gets_one_from_the_file() {
+        let db = Db::open_temporary().unwrap();
+        let dir = temp_dir("recover-no-layout");
+        db.set_audio_preset(&crate::recorder::audio::AudioPreset::GameMicDiscord {
+            mic_device_id: None,
+        })
+        .unwrap();
+        let matching = killed_file(&dir, "recording-5.mp4", 4);
+        let other = killed_file(&dir, "recording-6.mp4", 2);
+        db.begin_recording(&matching.to_string_lossy(), 1_000, None).unwrap();
+        db.begin_recording(&other.to_string_lossy(), 2_000, None).unwrap();
+
+        assert_eq!(recover_unfinished(&db, None).unwrap().recovered, 2);
+        let row = |file: &Path| {
+            let id = db.find_by_path(&file.to_string_lossy()).unwrap().unwrap();
+            db.get_recording(id).unwrap().unwrap()
+        };
+        assert_eq!(
+            labels(row(&matching).audio_tracks_json.as_deref()),
+            ["Everything", "Game", "Mic", "Discord"]
+        );
+        assert_eq!(labels(row(&other).audio_tracks_json.as_deref()), ["Everything", "Track 2"]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A file recovery cannot read leaves the layout unknown rather than
+    /// inventing one.
+    #[test]
+    fn an_unreadable_file_leaves_the_layout_unknown() {
+        let db = Db::open_temporary().unwrap();
+        let dir = temp_dir("recover-unreadable-layout");
+        let file = dir.join("recording-7.mp4");
+        std::fs::write(&file, b"partial but playable").unwrap();
+        db.begin_recording(&file.to_string_lossy(), 1_000, None).unwrap();
+
+        assert_eq!(recover_unfinished(&db, None).unwrap().recovered, 1);
+        assert_eq!(db.list_recordings().unwrap()[0].audio_tracks_json, None);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn recovered_layout_uses_the_preset_only_when_the_count_matches() {
+        let desktop = crate::recorder::audio::AudioPreset::Desktop.layout();
+        let names = |layout: Option<AudioLayout>| -> Vec<String> {
+            layout.unwrap().tracks.into_iter().map(|t| t.label).collect()
+        };
+        assert_eq!(recovered_layout(&desktop, 0), None, "no audio, no menu");
+        assert_eq!(names(recovered_layout(&desktop, 2)), ["System audio", "Game"]);
+        assert_eq!(names(recovered_layout(&desktop, 1)), ["Everything"]);
+        assert_eq!(names(recovered_layout(&desktop, 3)), ["Everything", "Track 2", "Track 3"]);
     }
 
     /// A crash mid-remux leaves the temp file beside the recording. It is a
@@ -1021,7 +1166,7 @@ mod tests {
         std::fs::write(&file, b"still growing").unwrap();
         let tmp = crate::recorder::remux::tmp_path(&file);
         std::fs::write(&tmp, b"not ours to judge yet").unwrap();
-        let id = db.begin_recording(&file.to_string_lossy(), 1_000).unwrap();
+        let id = db.begin_recording(&file.to_string_lossy(), 1_000, None).unwrap();
 
         let mut asked = Vec::new();
         let report = recover_unfinished_with(&db, None, &mut |p| {
@@ -1051,7 +1196,7 @@ mod tests {
     fn recovery_does_not_wait_on_a_missing_file() {
         let db = Db::open_temporary().unwrap();
         let dir = temp_dir("recover-gone-no-wait");
-        db.begin_recording(&dir.join("gone.mp4").to_string_lossy(), 1_000).unwrap();
+        db.begin_recording(&dir.join("gone.mp4").to_string_lossy(), 1_000, None).unwrap();
 
         let report =
             recover_unfinished_with(&db, None, &mut |_| panic!("asked about a missing file"))
@@ -1069,7 +1214,7 @@ mod tests {
         std::fs::write(&file, b"partial").unwrap();
         let tmp = crate::recorder::remux::tmp_path(&file);
         std::fs::write(&tmp, b"half a remux").unwrap();
-        db.begin_recording(&file.to_string_lossy(), 1_000).unwrap();
+        db.begin_recording(&file.to_string_lossy(), 1_000, None).unwrap();
 
         assert_eq!(recover_unfinished(&db, None).unwrap().recovered, 1);
         assert!(!tmp.exists());
