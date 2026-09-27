@@ -379,14 +379,16 @@ impl Aligner {
 /// What a packet's QPC stamp turned out to be.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stamp {
-    /// A QPC time plausibly the packet's first frame: at or before the
-    /// moment the packet was taken, and not long before. `lag` is how long
-    /// before, in 100 ns units.
+    /// A QPC time plausibly the packet's first frame: not long before the
+    /// moment the packet was taken, and not further after it than the
+    /// source's lead allows. `lag` is how long before, in 100 ns units, and
+    /// negative for a stamp ahead of the read.
     Qpc { lag: i64 },
     /// No stamp at all. What the plan feared process loopback would give.
     Zero,
-    /// Non-zero, but not the performance counter this process reads: in the
-    /// future, or older than [`STAMP_MAX_LAG`].
+    /// Non-zero, but not the performance counter this process reads: further
+    /// in the future than the source's lead allows, or older than
+    /// [`STAMP_MAX_LAG`]. [`rejection`] says which.
     Implausible { lag: i64 },
 }
 
@@ -396,22 +398,64 @@ pub enum Stamp {
 /// is far closer than any other clock's zero would land.
 pub const STAMP_MAX_LAG: i64 = HNS_PER_SECOND;
 
-/// A stamp a little after the moment it was read is rounding between two
-/// conversions of the same counter, not the future.
-const STAMP_TOLERANCE: i64 = 10_000; // 1 ms
+/// How far after the moment it was read a stamp may be, for a source whose
+/// stamps are in the past: a microphone, or process loopback. A stamp a
+/// little after the read is rounding between two conversions of the same
+/// counter, not the future.
+pub const STAMP_MAX_LEAD: i64 = 10_000; // 1 ms
+
+/// How far after the moment it was read a stamp may be for **render
+/// loopback**, the desktop source.
+///
+/// A render-loopback stamp is legitimately ahead of the read. `GetBuffer`
+/// documents `pu64QPCPosition` as the counter "at the time that the audio
+/// endpoint device recorded the device position of the first audio frame",
+/// and the device position of a rendering stream as the frame "currently
+/// playing through the speakers". Loopback recording, where the hardware has
+/// no loopback pin, "copies the output stream from the audio engine into the
+/// loopback application's capture buffer, in addition to copying the audio
+/// data to the hardware's render pin": the copy reaches this process when
+/// the engine mixes it, before the device plays it, so the stamp is the
+/// packet's presentation time, up to one render latency ahead. #238's box
+/// run measured it 7.5 ms ahead (#295), which the 1 ms [`STAMP_MAX_LEAD`]
+/// rejected on every recording.
+///
+/// 50 ms is several shared-mode engine periods (10 ms by default) past
+/// that, for an output with a deeper buffer, and still twenty times tighter
+/// than [`STAMP_MAX_LAG`], so another clock's zero is no likelier to land in
+/// it than in the past window. A real stamp further ahead fails safe: the
+/// source goes to device time and the warning names this limit.
+///
+/// - <https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudiocaptureclient-getbuffer>
+/// - <https://learn.microsoft.com/en-us/windows/win32/coreaudio/loopback-recording>
+pub const LOOPBACK_MAX_LEAD: i64 = 500_000; // 50 ms
 
 /// Whether `stamp_hns`, from `GetBuffer`'s `pu64QPCPosition`, is on the
 /// performance counter, judged against `arrival_hns`, the counter read just
-/// after `GetBuffer` returned.
-pub fn check_stamp(stamp_hns: u64, arrival_hns: i64) -> Stamp {
+/// after `GetBuffer` returned. `max_lead` is how far after that read the
+/// stamp may be: [`STAMP_MAX_LEAD`], or [`LOOPBACK_MAX_LEAD`] for render
+/// loopback.
+pub fn check_stamp(stamp_hns: u64, arrival_hns: i64, max_lead: i64) -> Stamp {
     if stamp_hns == 0 {
         return Stamp::Zero;
     }
     let lag = arrival_hns.saturating_sub(i64::try_from(stamp_hns).unwrap_or(i64::MAX));
-    if (-STAMP_TOLERANCE..=STAMP_MAX_LAG).contains(&lag) {
+    if (-max_lead..=STAMP_MAX_LAG).contains(&lag) {
         Stamp::Qpc { lag }
     } else {
         Stamp::Implausible { lag }
+    }
+}
+
+/// Which of [`check_stamp`]'s limits a stamp `lag` before its read broke,
+/// and by how much, for the log: "7.5 ms in the future; at most 1 ms
+/// allowed", or "5000.0 ms old; at most 1000 ms allowed".
+pub fn rejection(lag: i64, max_lead: i64) -> String {
+    let ms = |hns: i64| hns as f64 / 10_000.0;
+    if lag < 0 {
+        format!("{:.1} ms in the future; at most {} ms allowed", -ms(lag), ms(max_lead))
+    } else {
+        format!("{:.1} ms old; at most {} ms allowed", ms(lag), ms(STAMP_MAX_LAG))
     }
 }
 
@@ -486,6 +530,7 @@ impl DeviceTimeline {
 /// stamp should cost that packet's placement, not the recording's clock.
 pub struct Stamper {
     rate: u32,
+    max_lead: i64,
     clock: Option<AudioClock>,
     timeline: DeviceTimeline,
     /// What the first packet's stamp was: the answer to the question.
@@ -495,9 +540,12 @@ pub struct Stamper {
 }
 
 impl Stamper {
-    pub fn new(rate: u32) -> Self {
+    /// A stamper for a source whose stamps may run up to `max_lead` ahead
+    /// of the read ([`check_stamp`]).
+    pub fn new(rate: u32, max_lead: i64) -> Self {
         Stamper {
             rate,
+            max_lead,
             clock: None,
             timeline: DeviceTimeline::new(rate),
             first: None,
@@ -512,6 +560,11 @@ impl Stamper {
 
     pub fn reanchors(&self) -> u64 {
         self.timeline.reanchors
+    }
+
+    /// How far ahead of the read this source's stamps may be.
+    pub fn max_lead(&self) -> i64 {
+        self.max_lead
     }
 
     fn began_at(&self, frames: u32, arrival_hns: i64) -> i64 {
@@ -548,7 +601,7 @@ impl Stamper {
                 }
             };
         };
-        let check = check_stamp(qpc_stamp, arrival_hns);
+        let check = check_stamp(qpc_stamp, arrival_hns, self.max_lead);
         let clock = match self.clock {
             Some(clock) => clock,
             None => {
@@ -771,21 +824,81 @@ mod tests {
     #[test]
     fn stamps_are_checked_against_the_moment_the_packet_was_taken() {
         let now = 1_000 * HNS_PER_SECOND;
-        assert_eq!(check_stamp(0, now), Stamp::Zero);
-        assert_eq!(check_stamp((now - 100_000) as u64, now), Stamp::Qpc { lag: 100_000 });
-        // Rounding between two conversions of the counter is not the future.
-        assert_eq!(check_stamp((now + 5_000) as u64, now), Stamp::Qpc { lag: -5_000 });
+        assert_eq!(check_stamp(0, now, STAMP_MAX_LEAD), Stamp::Zero);
         assert_eq!(
-            check_stamp((now + HNS_PER_SECOND) as u64, now),
+            check_stamp((now - 100_000) as u64, now, STAMP_MAX_LEAD),
+            Stamp::Qpc { lag: 100_000 }
+        );
+        // Rounding between two conversions of the counter is not the future.
+        assert_eq!(
+            check_stamp((now + 5_000) as u64, now, STAMP_MAX_LEAD),
+            Stamp::Qpc { lag: -5_000 }
+        );
+        assert_eq!(
+            check_stamp((now + HNS_PER_SECOND) as u64, now, STAMP_MAX_LEAD),
             Stamp::Implausible { lag: -HNS_PER_SECOND }
         );
         assert_eq!(
-            check_stamp((now - 5 * HNS_PER_SECOND) as u64, now),
+            check_stamp((now - 5 * HNS_PER_SECOND) as u64, now, STAMP_MAX_LEAD),
             Stamp::Implausible { lag: 5 * HNS_PER_SECOND }
         );
         // A device position in frames is not a QPC time.
-        assert!(matches!(check_stamp(96_000, now), Stamp::Implausible { .. }));
-        assert!(matches!(check_stamp(u64::MAX, now), Stamp::Implausible { .. }));
+        assert!(matches!(check_stamp(96_000, now, STAMP_MAX_LEAD), Stamp::Implausible { .. }));
+        assert!(matches!(check_stamp(u64::MAX, now, STAMP_MAX_LEAD), Stamp::Implausible { .. }));
+    }
+
+    #[test]
+    fn a_render_loopback_stamp_may_run_ahead_of_the_read() {
+        // #295's desktop source, from #238's box run: the first packet's
+        // stamp was 75,057 units (7.5 ms) after the moment it was taken.
+        let (stamp, taken) = (840_066_364_720u64, 840_066_289_663i64);
+        assert_eq!(check_stamp(stamp, taken, STAMP_MAX_LEAD), Stamp::Implausible { lag: -75_057 });
+        assert_eq!(check_stamp(stamp, taken, LOOPBACK_MAX_LEAD), Stamp::Qpc { lag: -75_057 });
+        // The lead widens only the future side: old is as old as ever, and
+        // a stamp past the loopback lead is still not this counter.
+        let now = 1_000 * HNS_PER_SECOND;
+        assert_eq!(
+            check_stamp((now + LOOPBACK_MAX_LEAD) as u64, now, LOOPBACK_MAX_LEAD),
+            Stamp::Qpc { lag: -LOOPBACK_MAX_LEAD }
+        );
+        assert_eq!(
+            check_stamp((now + LOOPBACK_MAX_LEAD + 1) as u64, now, LOOPBACK_MAX_LEAD),
+            Stamp::Implausible { lag: -LOOPBACK_MAX_LEAD - 1 }
+        );
+        assert_eq!(
+            check_stamp((now - STAMP_MAX_LAG - 1) as u64, now, LOOPBACK_MAX_LEAD),
+            Stamp::Implausible { lag: STAMP_MAX_LAG + 1 }
+        );
+    }
+
+    #[test]
+    fn a_rejection_names_the_limit_that_failed() {
+        // What #295's warning should have said.
+        assert_eq!(
+            rejection(-75_057, STAMP_MAX_LEAD),
+            "7.5 ms in the future; at most 1 ms allowed"
+        );
+        assert_eq!(
+            rejection(-600_000, LOOPBACK_MAX_LEAD),
+            "60.0 ms in the future; at most 50 ms allowed"
+        );
+        assert_eq!(
+            rejection(5 * HNS_PER_SECOND, STAMP_MAX_LEAD),
+            "5000.0 ms old; at most 1000 ms allowed"
+        );
+    }
+
+    #[test]
+    fn a_loopback_stamper_puts_a_stamp_ahead_of_the_read_on_qpc() {
+        let now = 500 * HNS_PER_SECOND;
+        let stamp = (now + 75_057) as u64;
+        let mut s = Stamper::new(RATE, LOOPBACK_MAX_LEAD);
+        assert_eq!(s.stamp(PACKET, Some(stamp), now), (stamp as i64, false, AudioClock::Qpc));
+        assert_eq!((s.first, s.max_lead()), (Some(Stamp::Qpc { lag: -75_057 }), LOOPBACK_MAX_LEAD));
+        // The same stamp on a source held to the 1 ms lead is device time.
+        let mut s = Stamper::new(RATE, STAMP_MAX_LEAD);
+        assert_eq!(s.stamp(PACKET, Some(stamp), now).2, AudioClock::Device);
+        assert_eq!(s.first, Some(Stamp::Implausible { lag: -75_057 }));
     }
 
     #[test]
@@ -826,7 +939,7 @@ mod tests {
 
     #[test]
     fn real_stamps_put_the_source_on_qpc_and_a_bad_one_is_substituted() {
-        let mut s = Stamper::new(RATE);
+        let mut s = Stamper::new(RATE, STAMP_MAX_LEAD);
         assert_eq!(s.clock(), None);
         let now = 500 * HNS_PER_SECOND;
         let stamp = (now - 150_000) as u64;
@@ -842,7 +955,7 @@ mod tests {
 
     #[test]
     fn zero_stamps_put_the_source_on_device_time_for_good() {
-        let mut s = Stamper::new(RATE);
+        let mut s = Stamper::new(RATE, STAMP_MAX_LEAD);
         let now = 500 * HNS_PER_SECOND;
         let first = (now - hns_of(480), false, AudioClock::Device);
         assert_eq!(s.stamp(PACKET, Some(0), now), first);
@@ -856,7 +969,7 @@ mod tests {
         assert_eq!((hns, clock), (later, AudioClock::Device));
         assert_eq!((s.substituted, s.reanchors()), (1, 0));
         // And a stamp on some other clock is treated as none.
-        let mut s = Stamper::new(RATE);
+        let mut s = Stamper::new(RATE, STAMP_MAX_LEAD);
         s.stamp(PACKET, Some(12_345), now);
         assert!(matches!(s.first, Some(Stamp::Implausible { .. })));
         assert_eq!(s.clock(), Some(AudioClock::Device));
@@ -864,7 +977,7 @@ mod tests {
 
     #[test]
     fn a_flagged_first_packet_does_not_decide_the_clock() {
-        let mut s = Stamper::new(RATE);
+        let mut s = Stamper::new(RATE, STAMP_MAX_LEAD);
         let now = 500 * HNS_PER_SECOND;
         // WASAPI may flag the first packet after a start as a timestamp
         // error: it is placed from its arrival and the question stays open.

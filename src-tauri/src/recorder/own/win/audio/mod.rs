@@ -6,7 +6,8 @@
 //! A source thread does nothing but capture. Each packet is converted to
 //! stereo f32, stamped by a [`Stamper`] (on QPC if the engine's stamps are
 //! real, on the sample count if not; the same decision for every kind of
-//! source), and sent to the session thread, which owns the encoders and a
+//! source, except that the desktop's render-loopback stamps may run further
+//! ahead of the read, `clock::LOOPBACK_MAX_LEAD`), and sent to the session thread, which owns the encoders and a
 //! [`crate::recorder::own::mix::Mixdown`] per written track, placing every
 //! source's packets on the video's clock and mixing each track from them
 //! (`track`). One thread feeds every encoder and the file, so nothing about
@@ -285,6 +286,13 @@ fn capture(
     ready: &SyncSender<Result<(), SourceError>>,
     stop: &AtomicBool,
 ) -> Result<Summary, String> {
+    // Render loopback is stamped with when the device will play a packet,
+    // which is after the read; every other source is stamped in the past
+    // (`clock::LOOPBACK_MAX_LEAD`).
+    let max_lead = match target {
+        Target::Desktop => clock::LOOPBACK_MAX_LEAD,
+        Target::Process(_) | Target::Microphone(_) => clock::STAMP_MAX_LEAD,
+    };
     let source = match open(name, target) {
         Ok(source) => source,
         Err(e) => {
@@ -295,7 +303,7 @@ fn capture(
     };
     let _ = ready.send(Ok(()));
 
-    let mut stamper = Stamper::new(SAMPLE_RATE);
+    let mut stamper = Stamper::new(SAMPLE_RATE, max_lead);
     let mut summary = Summary::default();
     let mut decided = false;
     let result =
@@ -364,8 +372,9 @@ fn log_first(name: &str, raw: &Raw, stamper: &Stamper) {
         Some(Stamp::Qpc { lag }) => info!(
             "recorder",
             "own backend: {name} audio clock qpc: the first packet's QPC stamp is real, {:.2} ms \
-             before it was taken ({positions})",
-            lag as f64 / 10_000.0
+             {} it was taken ({positions})",
+            lag.abs() as f64 / 10_000.0,
+            if lag < 0 { "after" } else { "before" }
         ),
         Some(Stamp::Zero) => warn!(
             "recorder",
@@ -375,10 +384,9 @@ fn log_first(name: &str, raw: &Raw, stamper: &Stamper) {
         Some(Stamp::Implausible { lag }) => warn!(
             "recorder",
             "own backend: {name} audio clock device: the QPC stamp is not this process's counter \
-             ({:.1} ms from the moment the packet was taken, more than {} ms allows), so the \
-             audio is stamped from its sample count, anchored at the first packet ({positions})",
-            lag as f64 / 10_000.0,
-            clock::STAMP_MAX_LAG / 10_000
+             ({}), so the audio is stamped from its sample count, anchored at the first packet \
+             ({positions})",
+            clock::rejection(lag, stamper.max_lead())
         ),
         None => {}
     }

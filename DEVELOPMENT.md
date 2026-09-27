@@ -3291,8 +3291,18 @@ its first packet**, and says which way it went:
 
 - The capture asks `GetBuffer` for both positions. `clock::check_stamp` judges
   the QPC one against the counter read the moment `GetBuffer` returned: zero is
-  no stamp; one in the future, or more than a second old, is not this
-  process's counter; anything else is QPC. A packet the engine itself flags
+  no stamp; one more than a second old, or further in the future than the
+  source allows, is not this process's counter; anything else is QPC. A
+  microphone's or a process-loopback stream's stamp is in the past, so it may
+  be at most 1 ms ahead, which is rounding. **The desktop's render-loopback
+  stamp may be up to 50 ms ahead** (`clock::LOOPBACK_MAX_LEAD`): `GetBuffer`
+  documents it as the time the device position was recorded, and a rendering
+  stream's device position as the frame "currently playing through the
+  speakers", while loopback copies the engine's output into the capture
+  buffer alongside the render pin, before the device plays it. #238's box run
+  measured it 7.5 ms ahead, which the 1 ms limit sent to device time on every
+  recording (#295). The device-time warning names the limit that failed and
+  its value. A packet the engine itself flags
   `AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR` (WASAPI documents it for the first
   packet after a start) is placed from its arrival and does not get to
   decide: the first unflagged packet does.
