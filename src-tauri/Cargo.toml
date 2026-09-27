@@ -117,7 +117,7 @@ minisign-verify = "0.2"
 # the daemon and the UI are running the same function rather than two
 # implementations of one rule (`daemon::Paths::resolve`). Already in the tree
 # through tauri; naming it here adds no crate.
-dirs = "6"
+dirs = "7"
 # The facade the capture crates log through: `ipc-link` hands every line libobs
 # writes to the worker's stdout to `log::info!` (#221). This app does not log
 # through it (`log.rs`); `daemon::log_bridge` only installs a receiver so those
