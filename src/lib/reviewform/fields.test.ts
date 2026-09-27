@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatClock, parseClock, parseCount } from "./fields";
+import { formatClock, parseClock, parseCount, withStamp } from "./fields";
 
 describe("clear time", () => {
   it("reads m:ss and mm:ss", () => {
@@ -41,5 +41,19 @@ describe("counts", () => {
     for (const text of ["-1", "1.5", "two", "1e2"]) {
       expect(parseCount(text), text).toEqual({ ok: false });
     }
+  });
+});
+
+describe("withStamp", () => {
+  it("starts empty notes with the stamp", () => {
+    expect(withStamp("", "6:36")).toBe("6:36 ");
+  });
+
+  it("puts the stamp on a new line after what is there", () => {
+    expect(withStamp("good gank path", "7:56")).toBe("good gank path\n7:56 ");
+  });
+
+  it("does not stack blank lines or trailing spaces", () => {
+    expect(withStamp("6:36 \n\n", "7:56")).toBe("6:36\n7:56 ");
   });
 });

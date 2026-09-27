@@ -24,10 +24,15 @@ const marker = (over: Partial<MarkerRow> = {}): MarkerRow =>
 let host: HTMLElement | null = null;
 let instance: Record<string, unknown> | null = null;
 
-function render(markers: MarkerRow[], onseek = (_t: number) => {}, beyond: MarkerRow[] = []) {
+function render(
+  markers: MarkerRow[],
+  onseek = (_t: number) => {},
+  beyond: MarkerRow[] = [],
+  currentTimeS = -1,
+) {
   host = document.createElement("div");
   document.body.append(host);
-  instance = mount(MarkerList, { target: host, props: { markers, beyond, onseek } });
+  instance = mount(MarkerList, { target: host, props: { markers, beyond, onseek, currentTimeS } });
   return host;
 }
 
@@ -126,5 +131,50 @@ describe("markers the recording does not reach", () => {
     const el = render([inside]);
     expect(el.querySelector(".marker-list-note")).toBeNull();
     expect(el.querySelector(".beyond-footage")).toBeNull();
+  });
+});
+
+describe("the Events tab", () => {
+  const grubs = (id: number, t: number) =>
+    marker({ id, kind: "voidgrubs", game_time_s: t, video_time_s: t + 20, payload_json: "{}" });
+  const death = (id: number, t: number) =>
+    marker({
+      id,
+      kind: "death",
+      game_time_s: t,
+      video_time_s: t + 20,
+      payload_json: JSON.stringify({ killer: "Zed" }),
+    });
+
+  it("collapses a burst of the same objective into one row", () => {
+    const el = render([grubs(1, 649), grubs(2, 656), grubs(3, 660)]);
+    const rows = el.querySelectorAll(".marker-list li");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].textContent).toContain("Voidgrubs ×3");
+  });
+
+  it("filters to one kind of event, and counts each", async () => {
+    const el = render([grubs(1, 300), death(2, 400), death(3, 700)]);
+    const deaths = [...el.querySelectorAll<HTMLButtonElement>(".event-filter")].find((b) =>
+      b.textContent?.startsWith("Deaths"),
+    );
+    expect(deaths?.textContent).toContain("2");
+    deaths?.click();
+    await Promise.resolve();
+    expect(el.querySelectorAll(".marker-list li")).toHaveLength(2);
+    expect(el.textContent).not.toContain("Voidgrubs");
+  });
+
+  it("lights the row the playhead most recently passed", () => {
+    const el = render([death(1, 100), death(2, 400)], () => {}, [], 300);
+    const rows = el.querySelectorAll(".marker-list li");
+    expect(rows[0].classList.contains("current")).toBe(true);
+    expect(rows[0].getAttribute("aria-current")).toBe("true");
+    expect(rows[1].classList.contains("current")).toBe(false);
+  });
+
+  it("offers no filters for a game with no markers", () => {
+    const el = render([]);
+    expect(el.querySelector(".event-filters")).toBeNull();
   });
 });

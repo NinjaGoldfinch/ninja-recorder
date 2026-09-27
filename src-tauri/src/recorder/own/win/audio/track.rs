@@ -29,7 +29,8 @@
 //! [`AudioTracks::restart_game`] to capture the new process into the same
 //! input. The track does not notice beyond a gap: the mixer's watermark
 //! carried it as silence while the game was gone, and the new source's
-//! packets are placed on the same timeline after it.
+//! packets are placed on the same timeline after it, re-anchored at its first
+//! real stamp (#313) rather than walked there one slipped frame at a time.
 //!
 //! **A microphone or desktop whose device goes away waits for it** (#298).
 //! Its thread keeps its channel open and reopens the device when it is back
@@ -54,7 +55,7 @@ use crate::recorder::own::plan::{self, CapturePlan, source_name};
 use crate::recorder::own::problem::{self, SourceError};
 use crate::recorder::own::reattach;
 use crate::recorder::own::root::{self, Proc};
-use crate::recorder::own::stats::{AudioStop, Opened, SourceStop};
+use crate::recorder::own::stats::{AudioStop, Opened, Outcome, SourceStop};
 use crate::{info, warn};
 
 /// How long a stop waits for the audio packets of the last video tick,
@@ -78,8 +79,9 @@ struct Input {
     game: bool,
     /// The process a process-loopback source captures.
     pid: Option<u32>,
-    /// A source restarted on a new process: its first packet is a
-    /// discontinuity, not drift.
+    /// A source restarted on a new process, not yet handed to the mix as
+    /// one: its aligners re-anchor on its first real stamp
+    /// ([`TrackMix::restart`]), rather than slipping towards it.
     restarted: bool,
 }
 
@@ -170,12 +172,16 @@ impl AudioTracks {
                 };
                 super::start(&name, target, tx).map(|source| (source, what, pid))
             });
+            // Not there is not a failure (#296): an absence is left out,
+            // said at INFO, and never called failed.
+            let failed = source.as_ref().err().is_some_and(|e| problem::is_failure(kind, e.stage));
             report.push(Opened {
                 name: name.clone(),
-                outcome: source
-                    .as_ref()
-                    .map(|(_, what, _)| what.clone())
-                    .map_err(|e| e.reason.clone()),
+                outcome: match &source {
+                    Ok((_, what, _)) => Outcome::Opened(what.clone()),
+                    Err(e) if failed => Outcome::Failed(e.reason.clone()),
+                    Err(e) => Outcome::Absent(e.reason.clone()),
+                },
             });
             if let Err(e) = &source
                 && let Some(problem) = problem::not_opened(kind, e)
@@ -197,10 +203,18 @@ impl AudioTracks {
                     });
                     opened.push(true);
                 }
-                Err(e) => {
+                Err(e) if failed => {
                     warn!(
                         "recorder",
                         "own backend: no {name} audio; it is left out of the recording: {e}"
+                    );
+                    opened.push(false);
+                }
+                Err(e) => {
+                    info!(
+                        "recorder",
+                        "own backend: no {name} audio, which is not there to capture; it is \
+                         left out of the recording: {e}"
                     );
                     opened.push(false);
                 }
@@ -234,15 +248,13 @@ impl AudioTracks {
             return;
         };
         for (i, input) in self.inputs.iter_mut().enumerate() {
+            if input.restarted {
+                input.restarted = false;
+                mix.restart(i);
+            }
             loop {
                 match input.packets.try_recv() {
-                    Ok(mut packet) => {
-                        if input.restarted {
-                            input.restarted = false;
-                            packet.discontinuity = true;
-                        }
-                        mix.push(i, packet);
-                    }
+                    Ok(packet) => mix.push(i, packet),
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         if !input.ended {
@@ -502,15 +514,18 @@ fn log_source(input: &mut Input, feed: &Feed, padded: u64, late: u64, missing: u
     };
     info!(
         "recorder",
-        "own backend: {} audio {clock_line}; gaps {} ({:.1} ms), overlaps {} ({:.1} ms), held \
-         {} times ({:.1} ms); lead silence {:.1} ms, lead dropped {:.1} ms; padded {:.1} ms at the \
-         end; {:.3} s written; in the mix, {:.1} ms late and dropped, {:.1} ms silent for want of \
-         a packet; {source_line}",
+        "own backend: {} audio {clock_line}; gaps {} ({:.1} ms), overlaps {} ({:.1} ms), of them \
+         {} unflagged jumps in the stamps ({:.1} ms), realigned at once and not counted as drift; \
+         held {} times ({:.1} ms); lead silence {:.1} ms, lead dropped {:.1} ms; padded {:.1} ms \
+         at the end; {:.3} s written; in the mix, {:.1} ms late and dropped, {:.1} ms silent for \
+         want of a packet; {source_line}",
         input.name,
         s.gaps,
         ms(s.gap_samples as i64),
         s.overlaps,
         ms(s.overlap_samples as i64),
+        s.jumps,
+        ms(s.jump_samples as i64),
         s.holds,
         ms(s.held_samples as i64),
         ms(s.lead_silence as i64),

@@ -16,7 +16,6 @@
 import { call, hasDevCommands } from "../../../bridge";
 import { showView } from "../../../router";
 import type { RecordingRow } from "../../../types";
-import { openReviewForRecording } from "../../stores/gameReview.svelte";
 import { fillInArt } from "../../stores/icons.svelte";
 import {
   clearFilters,
@@ -102,7 +101,6 @@ $effect(() => {
           void openRecording(r);
           showView("review");
         }}
-        onreview={(r: RecordingRow) => void openReviewForRecording(r.id)}
         onpin={(r: RecordingRow) => void togglePin(r)}
         ondelete={(r: RecordingRow) => void deleteRecording(r)}
         oninspect={(r: RecordingRow) =>

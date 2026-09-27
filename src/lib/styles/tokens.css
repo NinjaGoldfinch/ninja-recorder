@@ -56,6 +56,9 @@
   --ease: cubic-bezier(0.2, 0.6, 0.3, 1);
 
   --content-max: 1120px;
+  /* The review view is wider than the rest: the player and the review rail
+   * sit side by side, and the player is the thing worth the width. */
+  --review-max: 1600px;
 
   --font-sans: -apple-system, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono", monospace;

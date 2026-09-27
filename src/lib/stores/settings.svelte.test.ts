@@ -247,3 +247,34 @@ describe("retention", () => {
     expect(store.settings.retentionStatus).toContain("no daemon");
   });
 });
+
+describe("the capture backend", () => {
+  const status = (software_encoding: string | null) => ({
+    configured: "own",
+    automatic: false,
+    active: "own (idle)",
+    software_encoding,
+    options: [
+      { backend: "libobs", unavailable: null },
+      { backend: "own", unavailable: null },
+    ],
+  });
+
+  // Called on every game-state edge, which starts before the view has read the
+  // status at all; the view's own load decides when the first read happens.
+  it("does not refresh before the view has read it", async () => {
+    await store.refreshCaptureBackend();
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it("refreshes once read, so the software notice can appear", async () => {
+    call
+      .mockResolvedValueOnce(status(null))
+      .mockResolvedValueOnce(status("no hardware GPU was found"));
+    await store.loadCaptureBackend();
+    expect(store.settings.captureBackend?.software_encoding).toBeNull();
+    await store.refreshCaptureBackend();
+    expect(call).toHaveBeenLastCalledWith("get_capture_backend");
+    expect(store.settings.captureBackend?.software_encoding).toBe("no hardware GPU was found");
+  });
+});

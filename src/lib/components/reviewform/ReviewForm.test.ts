@@ -95,9 +95,12 @@ afterEach(async () => {
   instance = null;
 });
 
-async function open(): Promise<HTMLElement> {
-  await store.openReviewForRecording(3);
-  instance = svelte.mount(ReviewForm, { target: host });
+async function open(
+  facts = { deaths: null as number | null },
+  props: Record<string, unknown> = {},
+): Promise<HTMLElement> {
+  await store.openReviewForRecording(3, facts);
+  instance = svelte.mount(ReviewForm, { target: host, props });
   await settle();
   return host;
 }
@@ -121,14 +124,31 @@ function type(input: HTMLInputElement | HTMLTextAreaElement, value: string) {
 }
 
 describe("opening a review", () => {
-  it("makes the recording's game, loads it and shows the form", async () => {
+  it("makes the recording's game and loads it, without leaving the player", async () => {
     const el = await open();
     expect(client.open_game_for_recording).toHaveBeenCalledWith(3);
     expect(client.get_game_review).toHaveBeenCalledWith(7);
-    expect(showView).toHaveBeenCalledWith("game");
-    expect(el.textContent).toContain("Lee Sin");
-    expect(el.textContent).toContain("vs Vi");
-    expect(el.querySelector(".result-pill")?.getAttribute("data-outcome")).toBe("loss");
+    // The form is in the player's rail: loading it switches no view.
+    expect(showView).not.toHaveBeenCalled();
+    expect(el.textContent).toContain("Ward river at 2:45");
+  });
+
+  it("keeps the newer game when two loads race", async () => {
+    let releaseFirst: (id: number) => void = () => {};
+    client.open_game_for_recording
+      .mockImplementationOnce(() => new Promise((r) => (releaseFirst = r)))
+      .mockResolvedValueOnce(8);
+    client.get_game_review.mockImplementation(async (id: number) =>
+      fixture({ game: { ...fixture().game, id } }),
+    );
+    const first = store.openReviewForRecording(3);
+    // The first is waiting on the daemon when the second starts.
+    await vi.waitFor(() => expect(client.open_game_for_recording).toHaveBeenCalledWith(3));
+    const second = store.openReviewForRecording(4);
+    await second;
+    releaseFirst(7);
+    await first;
+    expect(store.gameReview.current?.game.id).toBe(8);
   });
 
   it("renders a user's text as text, never as markup", async () => {
@@ -160,7 +180,7 @@ describe("ratings", () => {
     await settle();
     expect(radio(el, "Lane", "Neutral").getAttribute("aria-checked")).toBe("true");
     expect(radio(el, "Lane", "Neutral").dataset.tone).toBe("mid");
-    expect(el.querySelector(".save-status")?.textContent).toBe("Unsaved changes");
+    expect(store.gameReview.status).toBe("unsaved");
 
     await store.flushReview();
     expect(client.save_game_review).toHaveBeenCalledWith(
@@ -168,7 +188,7 @@ describe("ratings", () => {
       expect.objectContaining({ lane_rating: "neutral" }),
     );
     await settle();
-    expect(el.querySelector(".save-status")?.textContent).toBe("Saved");
+    expect(store.gameReview.status).toBe("saved");
   });
 
   it("unsets a rating when the lit answer is clicked again", async () => {
@@ -194,7 +214,73 @@ describe("ratings", () => {
   });
 });
 
+describe("filling in what the recording knows", () => {
+  it("pre-selects the result and the stats' deaths, tagged auto, without saving", async () => {
+    const el = await open({ deaths: 4 });
+    expect(radio(el, "Game", "Loss").getAttribute("aria-checked")).toBe("true");
+    expect(el.querySelectorAll(".auto-tag")).toHaveLength(2);
+    const deaths = el.querySelector<HTMLInputElement>("#review-deaths");
+    expect(deaths?.value).toBe("4");
+    // Opening a VOD writes nothing.
+    await store.flushReview();
+    expect(client.save_game_review).not.toHaveBeenCalled();
+  });
+
+  it("saves the pre-filled answers with the first real edit", async () => {
+    const el = await open({ deaths: 4 });
+    radio(el, "Lane", "Win").click();
+    await store.flushReview();
+    expect(lastSaved()).toEqual(
+      expect.objectContaining({ game_rating: "loss", deaths: 4, lane_rating: "win" }),
+    );
+  });
+
+  it("drops the tag once the user changes the answer", async () => {
+    const el = await open({ deaths: 4 });
+    radio(el, "Game", "Win").click();
+    await settle();
+    expect(el.querySelectorAll(".auto-tag")).toHaveLength(1);
+    expect(store.gameReview.isAuto("game_rating")).toBe(false);
+  });
+
+  it("leaves a saved review exactly as it was saved", async () => {
+    client.get_game_review.mockResolvedValue(
+      fixture({
+        review: {
+          game_rating: null,
+          lane_rating: null,
+          mental_rating: null,
+          first_clear_ms: null,
+          smites_at_clear: null,
+          deaths: null,
+          free_notes: "",
+        },
+      }),
+    );
+    const el = await open({ deaths: 4 });
+    expect(radio(el, "Game", "Loss").getAttribute("aria-checked")).toBe("false");
+    expect(el.querySelector<HTMLInputElement>("#review-deaths")?.value).toBe("");
+    expect(el.querySelector(".auto-tag")).toBeNull();
+  });
+});
+
 describe("the number fields", () => {
+  it("fills the clear time from the game clock at the playhead", async () => {
+    const el = await open(undefined, { gameClockNow: () => 192.7 });
+    el.querySelector<HTMLButtonElement>(".clock-btn")?.click();
+    await settle();
+    expect(el.querySelector<HTMLInputElement>("#review-clear")?.value).toBe("3:12");
+    await store.flushReview();
+    expect(lastSaved().first_clear_ms).toBe(192_000);
+  });
+
+  it("does nothing with the clock when there is no game time to read", async () => {
+    const el = await open(undefined, { gameClockNow: () => null });
+    el.querySelector<HTMLButtonElement>(".clock-btn")?.click();
+    await settle();
+    expect(el.querySelector<HTMLInputElement>("#review-clear")?.value).toBe("");
+  });
+
   it("saves a clear time typed as m:ss in milliseconds", async () => {
     const el = await open();
     const [clear] = el.querySelectorAll<HTMLInputElement>(".review-numbers input");
@@ -280,14 +366,28 @@ describe("takeaways", () => {
     expect(box.value).toBe("");
   });
 
+  it("adds one on Enter, and keeps Shift+Enter for a new line", async () => {
+    client.add_takeaway.mockResolvedValue(takeaway(9, { body: "Hover grubs" }));
+    const el = await open();
+    const box = el.querySelector<HTMLTextAreaElement>('[aria-label="New takeaway"]');
+    if (!box) throw new Error("no takeaway box");
+    type(box, "Hover grubs");
+    await settle();
+    box.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true }),
+    );
+    await settle();
+    expect(client.add_takeaway).not.toHaveBeenCalled();
+    box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await settle();
+    expect(client.add_takeaway).toHaveBeenCalledWith({ kind: "game", id: 7 }, "Hover grubs");
+  });
+
   it("promotes one and then shows it as promoted", async () => {
     client.get_game_review.mockResolvedValue(fixture({ takeaways: [takeaway(1)] }));
     client.promote_takeaway.mockResolvedValue({ id: 40 });
     const el = await open();
-    const promote = [...el.querySelectorAll("button")].find(
-      (b) => b.textContent === "Promote to objective",
-    );
-    promote?.click();
+    el.querySelector<HTMLButtonElement>('[aria-label="Promote to objective"]')?.click();
     await settle();
     expect(client.promote_takeaway).toHaveBeenCalledWith(1, "other");
     expect(el.querySelector(".review-takeaways")?.textContent).toContain("Promoted");
@@ -303,15 +403,15 @@ describe("takeaways", () => {
   });
 });
 
-describe("leaving the form", () => {
-  it("writes anything unsaved before going back", async () => {
+describe("closing the review", () => {
+  it("writes anything unsaved, then lets the game go", async () => {
     const el = await open();
     const notes = el.querySelector<HTMLTextAreaElement>('[aria-label="Notes"]');
     if (!notes) throw new Error("no notes");
     type(notes, "tilted after first death");
-    [...el.querySelectorAll("button")].find((b) => b.textContent?.includes("Back"))?.click();
+    await store.closeReview();
     await settle();
     expect(lastSaved().free_notes).toBe("tilted after first death");
-    expect(showView).toHaveBeenLastCalledWith("library");
+    expect(store.gameReview.current).toBeNull();
   });
 });

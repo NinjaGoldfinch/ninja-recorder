@@ -16,8 +16,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  */
 
 const call = vi.hoisted(() => vi.fn());
+/** The review rail's game, answered by a fake daemon. */
+const client = vi.hoisted(() => ({
+  open_game_for_recording: vi.fn(),
+  get_game_review: vi.fn(),
+  save_game_review: vi.fn(),
+}));
 vi.mock("../../../bridge", () => ({
   call,
+  client,
   hasDevCommands: vi.fn().mockResolvedValue(false),
   assetUrl: (p: string) => p,
 }));
@@ -37,11 +44,24 @@ let store: typeof import("../../stores/review.svelte");
 type Svelte = typeof import("svelte");
 let svelte: Svelte;
 
-/** Typed loosely on purpose: only these five fields are read here. */
+/** Typed loosely on purpose, but with every field the heading and its facts
+ *  read, as a real row always has. */
 const row = {
   id: 1,
   path: "C:/vods/1.mp4",
+  started_at: 0,
+  duration_s: null,
+  queue: null,
+  game_mode: null,
   champion: "Ahri",
+  win: null,
+  kda_k: null,
+  kda_d: null,
+  kda_a: null,
+  cs: null,
+  tier: null,
+  division: null,
+  lp_after: null,
   audio_tracks_json: null as string | null,
   scoreboard_json: null as string | null,
 };
@@ -61,6 +81,25 @@ beforeEach(async () => {
   call.mockReset();
   call.mockResolvedValue([]);
   showView.mockReset();
+  for (const fn of Object.values(client)) fn.mockReset();
+  client.open_game_for_recording.mockResolvedValue(70);
+  client.get_game_review.mockResolvedValue({
+    game: {
+      id: 70,
+      recording_id: 1,
+      started_at: 0,
+      ended_at: null,
+      block_id: null,
+      champion: "Ahri",
+      matchup: null,
+      result: "win",
+    },
+    review: null,
+    death_markers: null,
+    objectives: [],
+    takeaways: [],
+  });
+  client.save_game_review.mockResolvedValue(null);
 
   svelte = await import("svelte");
   store = await import("../../stores/review.svelte");
@@ -106,6 +145,20 @@ describe("loading a recording", () => {
     await open();
     await Promise.resolve();
     expect(el.querySelector("h2")?.textContent).toContain("Ahri");
+  });
+
+  it("lists what is known about the game beside the heading", async () => {
+    const el = render();
+    call.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    await store.openRecording({ ...row, queue: 420, kda_k: 9, kda_d: 2, kda_a: 11 } as never);
+    await Promise.resolve();
+    const facts = el.querySelector(".review-facts")?.textContent ?? "";
+    expect(facts).toContain("Ranked Solo");
+    expect(facts).toContain("9 / 2 / 11");
+    // The deaths reach the review too, for pre-filling it.
+    await vi.waitFor(() =>
+      expect(el.querySelector<HTMLInputElement>("#review-deaths")?.value).toBe("2"),
+    );
   });
 
   it("says nothing about capture for a clean recording", async () => {
@@ -354,6 +407,162 @@ describe("audio tracks", () => {
     // Or the combined mix and the isolated stem would play on top of each
     // other.
     expect(video(el).muted).toBe(true);
+  });
+});
+
+describe("the review rail", () => {
+  it("loads the recording's game review beside the player", async () => {
+    const el = render();
+    await open();
+    await vi.waitFor(() => expect(client.get_game_review).toHaveBeenCalledWith(70));
+    expect(client.open_game_for_recording).toHaveBeenCalledWith(1);
+    expect(el.querySelector(".review-rail #rail-panel-review")?.hasAttribute("hidden")).toBe(false);
+    await vi.waitFor(() => expect(el.querySelector('[aria-label="Notes"]')).not.toBeNull());
+  });
+
+  it("lists the events in their own tab, and seeks from them", async () => {
+    const el = render();
+    await open([marker(60), marker(120)]);
+    await Promise.resolve();
+    const events = el.querySelector<HTMLButtonElement>("#rail-tab-events");
+    expect(events?.textContent).toContain("2");
+    events?.click();
+    await Promise.resolve();
+    expect(el.querySelector("#rail-panel-events")?.hasAttribute("hidden")).toBe(false);
+    expect(el.querySelector("#rail-panel-review")?.hasAttribute("hidden")).toBe(true);
+    el.querySelectorAll<HTMLElement>(".marker-list li")[1]?.click();
+    expect(video(el).currentTime).toBe(120);
+  });
+
+  it("writes an unsaved review when the player closes", async () => {
+    const el = render();
+    await open();
+    const notes = await vi.waitFor(() => {
+      const found = el.querySelector<HTMLTextAreaElement>('[aria-label="Notes"]');
+      if (!found) throw new Error("form not loaded");
+      return found;
+    });
+    notes.value = "ward earlier";
+    notes.dispatchEvent(new Event("input", { bubbles: true }));
+    el.querySelector<HTMLButtonElement>(".back-btn")?.click();
+    await vi.waitFor(() =>
+      expect(client.save_game_review).toHaveBeenCalledWith(
+        70,
+        expect.objectContaining({ free_notes: "ward earlier" }),
+      ),
+    );
+  });
+});
+
+describe("theatre mode", () => {
+  afterEach(() => localStorage.clear());
+
+  const rail = (el: HTMLElement) => el.querySelector<HTMLElement>(".review-rail");
+
+  it("folds the rail away with the button and brings it back with t", async () => {
+    const el = render();
+    await open();
+    await Promise.resolve();
+    expect(rail(el)?.hidden).toBe(false);
+
+    el.querySelector<HTMLButtonElement>(".rail-toggle")?.click();
+    await Promise.resolve();
+    expect(rail(el)?.hidden).toBe(true);
+    expect(el.querySelector(".review-layout")?.classList.contains("rail-closed")).toBe(true);
+    expect(el.querySelector(".rail-toggle")?.getAttribute("aria-pressed")).toBe("true");
+
+    key("t");
+    await Promise.resolve();
+    expect(rail(el)?.hidden).toBe(false);
+  });
+
+  it("is remembered for the next VOD", async () => {
+    let el = render();
+    await open();
+    key("t");
+    await Promise.resolve();
+    await svelte.unmount(instance as Record<string, unknown>, { outro: false });
+    instance = null;
+
+    el = render();
+    await open();
+    await Promise.resolve();
+    expect(rail(el)?.hidden).toBe(true);
+  });
+
+  it("does not fold the rail while typing in it", async () => {
+    const el = render();
+    await open();
+    const notes = await vi.waitFor(() => {
+      const found = el.querySelector<HTMLTextAreaElement>('[aria-label="Notes"]');
+      if (!found) throw new Error("form not loaded");
+      return found;
+    });
+    notes.focus();
+    key("t");
+    await Promise.resolve();
+    expect(rail(el)?.hidden).toBe(false);
+  });
+});
+
+describe("notes while watching", () => {
+  afterEach(() => localStorage.clear());
+
+  const notesBox = (el: HTMLElement) =>
+    vi.waitFor(() => {
+      const found = el.querySelector<HTMLTextAreaElement>('[aria-label="Notes"]');
+      if (!found) throw new Error("form not loaded");
+      return found;
+    });
+
+  it("n pauses and starts a note at the playhead, ready to type", async () => {
+    const el = render();
+    await open([marker(60)]);
+    const notes = await notesBox(el);
+    video(el).currentTime = 125;
+    await video(el).play();
+    key("n");
+    await vi.waitFor(() => expect(notes.value).toBe("2:05 "));
+    expect(video(el).paused).toBe(true);
+    expect(document.activeElement).toBe(notes);
+  });
+
+  it("opens the rail from theatre mode to take the note", async () => {
+    const el = render();
+    await open();
+    const notes = await notesBox(el);
+    key("t");
+    await Promise.resolve();
+    expect(el.querySelector<HTMLElement>(".review-rail")?.hidden).toBe(true);
+    key("n");
+    await vi.waitFor(() => expect(notes.value).not.toBe(""));
+    expect(el.querySelector<HTMLElement>(".review-rail")?.hidden).toBe(false);
+  });
+
+  it("the stamp button does the same as n", async () => {
+    const el = render();
+    await open();
+    const notes = await notesBox(el);
+    el.querySelector<HTMLButtonElement>(".stamp-btn")?.click();
+    await vi.waitFor(() => expect(notes.value).toBe("0:00 "));
+  });
+
+  it("Escape hands the keys back to the player, and Ctrl+Space plays from a field", async () => {
+    const el = render();
+    await open();
+    const notes = await notesBox(el);
+    notes.focus();
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: " ", ctrlKey: true, bubbles: true }),
+    );
+    await Promise.resolve();
+    expect(video(el).paused).toBe(false);
+
+    key("Escape");
+    expect(document.activeElement).not.toBe(notes);
+    key(" ");
+    await Promise.resolve();
+    expect(video(el).paused).toBe(true);
   });
 });
 

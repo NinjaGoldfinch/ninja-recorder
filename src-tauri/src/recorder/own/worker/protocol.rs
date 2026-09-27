@@ -175,11 +175,16 @@ mod tests {
         CaptureProblem::SourceFailed {
             source: "game".into(),
             reason: "process-loopback activation for PID 1 was refused: (0x80070005)".into(),
+            explained: None,
         }
     }
 
     fn ended() -> CaptureProblem {
-        CaptureProblem::SourceEnded { source: "microphone".into(), reason: "unplugged".into() }
+        CaptureProblem::SourceEnded {
+            source: "microphone".into(),
+            reason: "unplugged".into(),
+            explained: crate::recorder::own::problem::explain("microphone", "(0x88890004)"),
+        }
     }
 
     fn discord() -> AudioLayout {

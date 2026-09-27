@@ -333,7 +333,7 @@ So a finalize records:
 | `alignment_offset_s` | The offset markers were mapped through, or `null` if the clock never advanced. A marker that seeks to the wrong moment is this number being wrong |
 | `backend` | Which capture backend was live: on Windows possibly `FailedRecorder` carrying its init error |
 | `markers`, `samples` | What the finalize wrote. Disagreeing with the tables means an insert failed |
-| `capture_problems` | What the recording lost to a capture failure (#10): a list of tagged `CaptureProblem`s (`sourceFailed`, `sourceEnded`, `endedEarly`), each with the failing call's own message and HRESULT. **Left out when empty**, so a clean recording's JSON is what it was before, and a row from before it reads as empty. A source the preset names that simply was not there (Discord not running) is not in it |
+| `capture_problems` | What the recording lost to a capture failure (#10): a list of tagged `CaptureProblem`s (`sourceFailed`, `sourceEnded`, `endedEarly`), each with the failing call's own message and HRESULT, and, when the backend recognised it (#296), an `explained` object: the plain words, fix and whether a report is wanted that the UI and the notification say instead. **Left out when empty**, so a clean recording's JSON is what it was before, and a row from before it reads as empty. A source the preset names that simply was not there (Discord not running) is not in it |
 | `windows_build` | The Windows build the recording was made on, without which a capture problem is not a bug report. Left out when it could not be read, and off Windows |
 | `unreadable_polls` | Polls the Live Client endpoint answered but that could not be read as a snapshot (#305), not counted in `polls`. Left out when zero |
 | `unreadable_at_end` | Whether an unreadable poll came **after the last sample**, which is whether the stretch from the last sample to the end of the file was still game (#305). **Read by two things**: the trim cuts a post-game tail only when this is `false` (`trim::TailEvidence`), and the review player does not clip the tail when it is `true`. Absent on a row from before it existed, which the trim reads as "not known" and cuts no tail from |
@@ -494,7 +494,7 @@ agree**, because either can be the one reading a key the other never wrote.
 | `theme` | `system` / `light` / `dark` | `system` | `src/prefs.ts`, plus the pre-paint boot script |
 | `defaultSort` | `newest` / `oldest` / `longest` / `champion` | `newest` | `src/prefs.ts` |
 | `audio_preset` | JSON `AudioPreset` | `Game` | `db::get_audio_preset` |
-| `capture_backend` | `libobs` / `own` | `libobs`, until WS1.6 flips it to `own` | `db::get_capture_backend`, once at daemon startup; written only by `set_capture_backend`, which also swaps the live backend ([DEVELOPMENT.md §16](../DEVELOPMENT.md#the-switch-and-when-it-applies)) |
+| `capture_backend` | `libobs` / `own` | unset; since #243 that builds own where own can be built, else libobs (`libobs` before it). A stored row is kept, and only a click in Settings writes one | `db::get_capture_backend`, once at daemon startup; written only by `set_capture_backend`, which also swaps the live backend ([DEVELOPMENT.md §16](../DEVELOPMENT.md#the-switch-and-when-it-applies)) |
 | `closeAction` | `close-window` / `hide` / `quit` | `close-window` | `core::CloseAction` |
 | `notifications` | `on` / `off` | `on` | `core::NotificationPrefs` |
 | `notifyRecordingStarted` | `on` / `off` | `off` | `core::NotificationPrefs` |

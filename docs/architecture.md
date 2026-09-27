@@ -77,23 +77,23 @@ flowchart TB
 | `state_machine/supervisor.rs` | Spawning/aborting watchers, driving the recorder, finalizing | `Supervisor` |
 | `recorder/mod.rs` | The `Recorder` trait and its config/error types | `Recorder`, `RecordConfig` |
 | `recorder/backend.rs` | The `capture_backend` setting, and the pure choice of which backend to build from it | `CaptureBackend`, `choose`, `construct`, `Backends` |
-| `recorder/libobs/` | Windows capture backend (WGC + hardware encode) | `LibObsRecorder` |
+| `recorder/libobs/` | Windows capture backend (WGC + hardware encode). The fallback since #243, selectable for one release; WS8 deletes it | `LibObsRecorder` |
 | `recorder/window.rs` | Finding the League game window and its client size, for both Windows backends | `find_window`, `find_by_class`, `client_size` |
-| `recorder/own/` | Option B, the target backend (WGC → D3D11 → Media Foundation), being built through WS1.6. Constructible since #236 on Windows build 20348+: the game window's video and every source the audio preset names (the game by process loopback since #237; the microphone, the desktop and applications since #238), and since #239 every track of the preset's layout, the mix and each stem, in one file: the encoder MFTs driven directly, the file written by `mp4::write`. Selected only by a devtools build until #243 | `OwnRecorder` |
-| `recorder/own/clock.rs` | The video tick grid on QPC, and placing audio packets on it: drift measured, corrected by slipping frames, or trusted from the device count when a source has no QPC stamps. Which of the two a source gets is decided from its first packet's stamp | `tick_time`, `ticks_due`, `Aligner`, `check_stamp`, `Stamper`, `DeviceTimeline` |
+| `recorder/own/` | Option B (WGC → D3D11 → Media Foundation), built through WS1.6 and **the default backend since #243**, on Windows build 19041+: the game window's video and every source the audio preset names (the game by process loopback; the microphone, the desktop and applications), every track of the preset's layout, the mix and each stem, in one file: the encoder MFTs driven directly, the file written by `mp4::write` | `OwnRecorder` |
+| `recorder/own/clock.rs` | The video tick grid on QPC, and placing audio packets on it: drift measured and corrected by slipping frames, a step the stamps show but nothing flagged filled or cut at once, or trusted from the device count when a source has no QPC stamps. Which of the two a source gets is decided from its first packet's stamp | `tick_time`, `ticks_due`, `Aligner`, `check_stamp`, `Stamper`, `DeviceTimeline` |
 | `recorder/own/feed.rs` | One audio source's packets through its own `Aligner` into the mixer: never past the video, held with silence to the mixer's watermark while the source is quiet, padded to the last tick at stop | `Feed`, `Packet` |
-| `recorder/own/fit.rs` | Where a frame from a resized game window goes in the fixed-size output: scaled with its aspect kept, centred, black around it, even dimensions and offsets; and whether a frame is copied, scaled or skipped | `letterbox`, `place`, `Placement` |
+| `recorder/own/fit.rs` | Where a frame from a resized game window goes in the fixed-size output: scaled with its aspect kept, centred, black around it, even dimensions and offsets; which part of a frame is the picture (a Windowed game's title bar and borders measured as insets and cropped off, the whole frame otherwise); and whether a frame is copied, scaled or skipped | `letterbox`, `client_insets`, `source_rect`, `place`, `Placement` |
 | `recorder/own/mft.rs` | The bookkeeping of an asynchronous (hardware) encoder MFT: a `NeedInput` is one credit for one `ProcessInput`, a `HaveOutput` one `ProcessOutput` owed, frames that arrive with no credit wait in a bounded queue, and the drain ends on `DrainComplete` | `AsyncPump`, `Event` |
 | `recorder/own/mix.rs` | Each written track: its sources' aligned streams summed in fixed 10 ms blocks, clamped, then i16. A block is mixed once every source has delivered it or a watermark 150 ms behind now has passed it, so a silent, missing or unplugged source is silence and never a stall; never past the video, and ended on the last tick. `TrackMix` is every track of a layout, each source's packets copied to every track that sums it, so a stem is a mix of one (#239) | `Mixer`, `Mixdown`, `TrackMix`, `LATENCY` |
 | `recorder/own/mux.rs` | Encoded samples into the file through `mp4::write`: created at the first keyframe (whose SPS and PPS the `moov` needs), 100 ns times to 90 kHz and to each AAC track's rate, a video frame held until the next gives its duration, and a fragment closed before every keyframe after the first | `Mux`, `to_timescale`, `flush_before` |
 | `recorder/own/nv12.rs` | BGRA to NV12 on the CPU, BT.709 studio range, for a device with no video processor (the CI runner, a GPU-less VM) | `bgra_to_nv12`, `frame_len` |
 | `recorder/own/pcm.rs` | Endpoint sample formats to stereo f32 for the mixer (or i16), and the mix back to i16 | `to_stereo_f32`, `f32_to_i16` |
-| `recorder/own/problem.rs` | Which capture outcomes are failures to tell the user about (#10): a source lost while *finding* what to capture is an absence (Discord not running, no microphone), except the game; one lost while *opening* it, or that stops part-way, is a failure; so is an early end of the whole recording. `SourceError` carries the stage from `own/win/audio`; `outages` names the spans a lost device was silent for | `is_failure`, `not_opened`, `ended`, `outages`, `stop_problem`, `SourceError`, `Stage` |
+| `recorder/own/problem.rs` | Which capture outcomes are failures to tell the user about (#10): a source lost while *finding* what to capture is an absence (Discord not running, no microphone), except the game; one lost while *opening* it, or that stops part-way, is a failure; so is an early end of the whole recording. `explain` recognises the failures that are the user's or the machine's doing (a device disconnected, the microphone blocked in privacy settings) and says them plainly, without a report request (#296). `SourceError` carries the stage from `own/win/audio`; `outages` names the spans a lost device was silent for | `is_failure`, `not_opened`, `ended`, `explain`, `outages`, `stop_problem`, `SourceError`, `Stage` |
 | `recorder/own/reattach.rs` | What a microphone or desktop source does when its device goes away mid-recording (#298): which HRESULTs are waited out (`AUDCLNT_E_DEVICE_INVALIDATED`, `_SERVICE_NOT_RUNNING`, `_RESOURCES_INVALIDATED`), when the next reopen is due, whether a "Windows default" source moves to a new default, and how long each gap was | `recoverable`, `Retry`, `follows_default`, `Outage`, `silent_for` |
 | `recorder/own/plan.rs` | A preset's `AudioLayout` to a `CapturePlan`: the sources to open, each once, and what each written track sums (every track since #239; the Desktop mix is the desktop alone, and the game feeds only its stem). `realised_layout` drops a source that failed to open with its stem and reindexes, so `stop` reports the file that exists; `describe` is how the log names each track (`a:0 "Everything" (game + microphone)`) | `plan`, `CapturePlan`, `realised_layout`, `describe`, `TRACKS_WRITTEN` |
 | `recorder/own/root.rs` | Which process tree a process-loopback capture targets, from a process snapshot: the game (the window's owner, checked against `League of Legends.exe`), or the top of an application's tree (Discord, since #238). Reused parent PIDs are caught by creation time | `game_root`, `application_root` |
 | `recorder/own/select.rs` | Which H.264 encoder: hardware by adapter vendor (NVIDIA → AMD → Intel), the software MFT only as a marked fallback; the Windows build floor (19041, OBS's, untested on Windows 10) and its devtools-only override; a preset's checked audio layout (every preset since #238) | `rank`, `Choice`, `availability`, `floor_ignored`, `audio_layout` |
-| `recorder/own/stats.rs` | The session summary, logged by the worker in `worker.log` and copied into `daemon.log` from its `Started`/`Stopped` replies: one line at start (size, adapter, encoder and whether it is the software fallback, each source's root or why it failed, the tracks), one at stop (ticks, repeated ticks, the worst late tick, each source's clock, raw ppm, slips, gaps and holds, clipping, size, fragments, finalize), and one for the repair and the remux, rendered from plain counters (DEVELOPMENT.md §13) | `render_start`, `render_stop`, `render_remux`, `Cadence` |
+| `recorder/own/stats.rs` | The session summary, logged by the worker in `worker.log` and copied into `daemon.log` from its `Started`/`Stopped` replies: one line at start (size, adapter, encoder and whether it is the software fallback, each source's root, or why it was left out or failed, the tracks), one at stop (ticks, repeated ticks, the worst late tick, each source's clock, raw ppm, slips, gaps and holds, clipping, size, fragments, finalize), and one for the repair and the remux, rendered from plain counters (DEVELOPMENT.md §13) | `render_start`, `render_stop`, `render_remux`, `Cadence` |
 | `recorder/own/status.rs` | The even frame size, whether the encoder that was activated is the one `rank` chose, and the backend's name (`own (ready: …)`, `own (software encoding: …)`, `own (unavailable: …)`) | `even_size`, `check_loaded`, `Status` |
 | `recorder/own/win/` | Everything that calls Windows, and the only part of `own/` gated to it: the adapters and D3D11 device, the WGC capture with its border off, `scale` (frames into the fixed-size slots: a copy, or the D3D11 video processor when the window has been resized; the same processor, told BT.709 studio range, does `convert`'s BGRA → NV12), the process table, one thread per audio source (the game and applications by process loopback, include mode; the microphone and the desktop from their endpoints, the desktop with a silent keep-alive; all 48 kHz stereo float), every track's mix (`audio::AudioTracks`), the encoders driven directly (`h264`: the H.264 MFT, asynchronous or synchronous as it declares, 8 Mbps CBR, GOP 120, low latency, no B-frames, textures in where it is D3D11-aware; `aac`: an AAC MFT per track, 160 kbps), `output` (frames, encoders and the `own::mux` file together), and the session thread that owns them, which runs in the capture worker (`host`: the session as the worker's `Host`). `OwnRecorder` is the daemon's thin client of that worker, and repairs the file of a worker that died | `OwnRecorder`, `session::run`, `host::SessionHost`, `audio::start`, `audio::AudioTracks`, `h264::VideoEncoder`, `aac::AacEncoder`, `convert::Frames`, `output::Output`, `scale::Processor`, `scale::Fitter` |
 | `recorder/own/worker/` | The capture worker, `ninja-recorder --capture-worker` (#241): the process the session thread runs in, spawned only while League runs. The line protocol both sides share, the worker's loop (EOF is a shutdown), the pure lifetime rule, and the daemon's client with its timeouts, which puts the worker in a `recorder::job` | `run`, `protocol::{Request, Reply}`, `serve::serve`, `lifetime::Lifetime`, `client::Worker` |
@@ -167,10 +167,10 @@ behind a three-method trait and nothing above it knows libobs exists.
 
 ```mermaid
 flowchart TB
-    SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release · collect_output<br/>watch_capture · capture_lost<br/>backend_name · current_file · current_audio · worker_running"}
-    T -->|"libobs, #[cfg(windows)]"| L["LibObsRecorder<br/><small>WGC window capture,<br/>NVENC/AMF/QSV H.264,<br/>one AAC track per audio source,<br/>fragmented MP4 + faststart remux</small>"]
+    SUP["Supervisor"] --> T{"Recorder trait<br/>start · stop · is_recording<br/>prepare · release · collect_output<br/>watch_capture · capture_lost<br/>backend_name · software_encoding<br/>current_file · current_audio · worker_running"}
+    T -->|"libobs, #[cfg(windows)]:<br/>the fallback, for one release"| L["LibObsRecorder<br/><small>WGC window capture,<br/>NVENC/AMF/QSV H.264,<br/>one AAC track per audio source,<br/>fragmented MP4 + faststart remux</small>"]
     L -.->|"ipc-link, stdin / stdout"| LW["extprocess_recorder.exe<br/><small>spawned by the fork; found by name<br/>and put in a kill-on-close job</small>"]
-    T -->|"own, #[cfg(windows)], build 20348+"| O["OwnRecorder<br/><small>Option B: WGC → D3D11 →<br/>Media Foundation MFTs, driven directly,<br/>every track (mix + stems) in one file<br/>by our own writer, + faststart remux</small>"]
+    T -->|"own, #[cfg(windows)], build 19041+:<br/>the default"| O["OwnRecorder<br/><small>Option B: WGC → D3D11 →<br/>Media Foundation MFTs, driven directly,<br/>every track (mix + stems) in one file<br/>by our own writer, + faststart remux</small>"]
     O -.->|"stdin / stdout,<br/>one JSON line each"| WK["capture worker process<br/><small>--capture-worker, only while<br/>League runs; kill-on-close job</small>"]
     WK -.->|"channel"| SES["session thread<br/><small>owns every COM object:<br/>device, WGC, encoder MFTs</small>"]
     AUD["audio source threads<br/><small>game, applications: process loopback<br/>microphone, desktop: WASAPI endpoints</small>"] -.->|"stamped packets"| MIX["own::mix::TrackMix<br/><small>per track, per source aligner,<br/>10 ms blocks, watermark</small>"]
@@ -296,10 +296,22 @@ sequenceDiagram
     W-->>R: exits 0
 ```
 
-The output size is fixed at `start` and the game window is not (#240). Each
-WGC frame goes through `scale::Fitter`, which asks `fit::place` what to do
-with it: the recording's own size (give or take the pixel an odd window was
-rounded down by) is a plain GPU copy, any other size is scaled by the D3D11
+The output size is fixed at `start` and the game window is not (#240). WGC
+captures the whole window, so a game in Windowed mode arrives with its title
+bar and borders (#314): `capture::window_rects` reads the window's extended
+frame bounds (`DwmGetWindowAttribute`) and its client area (`GetClientRect`,
+`ClientToScreen`), with the thread per-monitor DPI aware for the three calls
+so all are in physical pixels, and `fit::client_insets` turns them into how
+far in the client area sits. `fit::source_rect` takes those insets off every
+frame, so only the client area is copied or scaled, and the recording starts
+at the client area's size. The insets are measured at `start`, whenever a
+frame arrives at a new size, and on the 250 ms window poll below (a move to a
+monitor of another scale changes them); a borderless or fullscreen window has
+none and is recorded whole, as are rectangles that make no sense (a minimised
+window's). Each WGC frame then goes through `scale::Fitter`, which asks
+`fit::place` what to do with that picture: the recording's own size (give or
+take the pixel an odd window was rounded down by) is a plain GPU copy, any
+other size is scaled by the D3D11
 video processor into `fit::letterbox`'s rectangle with black bars around it,
 and a frame with no content is skipped. A minimised window sends no frames,
 so the ticks repeat the last one; one being minimised or alt-tabbed out of
@@ -317,7 +329,9 @@ decisions. While black it looks for a game window every second, by the lookup
 Legends.exe`: that is a crashed game the player reconnected to, which the state
 machine keeps recording through. The picture comes back letterboxed if the new
 window is another size, and the game's process-loopback source is restarted on
-the new PID into the same tracks, which carried silence across the gap. A
+the new PID into the same tracks, which carried silence across the gap; each
+track's aligner re-anchors on the new source's first real stamp rather than
+slipping towards it (#313). A
 normal game end finds no window, and the black runs to `stop`. A lost GPU device
 (`DXGI_ERROR_DEVICE_REMOVED`, `_RESET`) does end it, with what was written
 finalized, and `stop` waits at most 20 s for the capture worker whatever
@@ -330,7 +344,8 @@ flowchart LR
     C -->|yes| B["black slot<br/><small>every tick until stop,<br/>or a game window comes back</small>"]
     B -.->|"new game window<br/>(searched each second)"| R["new WGC capture;<br/>game audio restarted<br/>on the new PID"]
     R -.-> F
-    C -->|no| P{"fit::place"}
+    C -->|no| S["fit::source_rect:<br/><small>client area only<br/>(Windowed: title bar off)</small>"]
+    S --> P{"fit::place"}
     P -->|"content = output"| CP["copy into slot"]
     P -->|"other size"| VP["video processor:<br/>scale into letterbox,<br/>bars black"]
     P -->|"no content,<br/>or under 64 px"| SK["skip: tick repeats<br/>the last slot"]
@@ -340,6 +355,16 @@ flowchart LR
     SK --> W
     W --> E["H.264 MFT"]
 ```
+
+`software_encoding` defaults to `None`, and only `OwnRecorder` overrides it:
+the reason, once a bring-up chose Microsoft's software H.264 encoder, and kept
+through `release` until one chooses hardware
+(`own::status::Status::software_encoding`). `get_capture_backend` carries it
+to Settings as `CaptureBackendStatus::software_encoding`, which shows a notice
+about the extra CPU with that reason
+([DEVELOPMENT.md §2.4](../DEVELOPMENT.md#24-encoding-defaults)). A field rather
+than a parse of `backend_name`, so that string's wording stays free to change;
+the reason is the one `backend_name` gives, so the two agree (#296).
 
 `collect_output` is the third default no-op, and the supervisor calls it every
 fifth Live Client poll while a recording runs. The libobs worker's info and
@@ -380,8 +405,9 @@ is that it does not record.
 
 ```mermaid
 flowchart LR
-    KV[("settings_kv<br/>capture_backend")] --> C{"backend::choose<br/><small>pure</small>"}
-    OPT["DaemonBackends::options<br/><small>libobs: worker staged?<br/>own: Windows build 20348+?<br/>(devtools: floor override)</small>"] --> C
+    KV[("settings_kv<br/>capture_backend")] -->|"libobs or own,<br/>as saved"| C{"backend::choose<br/><small>pure</small>"}
+    KV -->|"no row, or unrecognised:<br/>own if buildable, else libobs"| C
+    OPT["DaemonBackends::options<br/><small>libobs: worker staged?<br/>own: Windows build 19041+?<br/>(devtools: floor override)</small>"] --> C
     C -->|"buildable"| B["DaemonBackends::build"]
     C -->|"not buildable: the reason"| F["FailedRecorder(reason)"]
     B --> BOX["the recorder box<br/><small>one Arc · Mutex · Box dyn Recorder,<br/>shared by the supervisor and Ctx</small>"]
@@ -396,20 +422,23 @@ flowchart LR
   refused while a game is loading, recording or finalizing, by the same rule
   the updater uses, and the swap happens under the recorder lock that `start`
   takes, so a recording is never switched under.
-- **The default is `libobs` until #243**, WS1.6's last piece, which flips it
-  to `own`. Since #236 `DaemonBackends` offers `own` wherever
-  `select::availability` passes (Windows build 20348 or newer) and builds an
-  `OwnRecorder` for it; off Windows it is listed as unavailable, with the
-  reason. Whether the machine has an encoder is the backend's own answer, in
+- **The default is `own`, since #243**, WS1.6's last piece, wherever own
+  can be built. It moved only the users with no saved row: a stored `libobs`
+  stays libobs, with no migration. `DaemonBackends` offers `own` wherever
+  `select::availability` passes (Windows build 19041 or newer) and builds an
+  `OwnRecorder` for it; below that build, and off Windows, it is listed as
+  unavailable with the reason. There, an unset key resolves to libobs
+  (`backend::resolve`), logged once at startup, and Settings shows
+  "Automatic: libobs" with the reason. A *saved* `own` there is refused. Whether the machine has an encoder is the backend's own answer, in
   its name, once `prepare` has run. A **devtools** build started with
   `NINJA_OWN_IGNORE_OS_FLOOR=1` offers `own` below the floor too, with a
   warning in `daemon.log`, for #237's Windows 10 test; a release build never
   reads the variable.
-- **A chosen backend that cannot be built is refused, never replaced by the
+- **A saved backend that cannot be built is refused, never replaced by the
   other one.** The UI shows it disabled with the daemon's reason, so in
   practice this is only reached by a row written some other way.
-- **The Settings row is devtools-only until #243**, which un-hides it. The
-  setting and the commands are live in every build.
+- **The Settings row is in every build since #243**, which un-hid it along
+  with the flip. It was devtools-only before that.
 
 The reasoning is
 [DEVELOPMENT.md §16, "The switch, and when it applies"](../DEVELOPMENT.md#the-switch-and-when-it-applies).
@@ -595,7 +624,12 @@ or the database. Only then does the daemon open `daemon.log`, open the library,
 run the startup reconcile and retention passes, start the supervisor, and begin
 accepting. Shutdown reverses it: stop accepting, publish `DaemonShuttingDown`,
 then finalize whatever recording is in flight, because a game is worth more
-than a fast exit.
+than a fast exit, then release the capture backend. The release is what sends
+a worker `Release` and waits for it to exit on its own, so a clean stop logs
+`capture worker exiting (Released)` in `worker.log` and `exited cleanly
+(code 0)` in `daemon.log`. The daemon gives it five seconds (`RELEASE_GRACE`)
+and then exits anyway, and the kill-on-close job ends whatever is left, which
+is also what happens to a worker when the daemon crashes (#293).
 
 **One endpoint, no separate mutex.** `rpc::Listener::bind` returns
 `Ok(None)` when a daemon already owns the address: `first_pipe_instance` says so

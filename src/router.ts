@@ -6,10 +6,10 @@ import { type Component, mount, unmount } from "svelte";
 // library's visibility was written in places that knew nothing about each
 // other.
 
-// `game` is the WS9 review form for one game and `objectives` the list it
-// reviews against. `game`, like `review`, is never a start fragment: both need
-// something chosen first, and a cold window has nothing chosen.
-export type View = "library" | "review" | "settings" | "game" | "objectives";
+// `objectives` is the WS9 list a game is reviewed against; the review form
+// itself is in the player's rail. `review` is never a start fragment: it needs
+// a recording chosen first, and a cold window has nothing chosen.
+export type View = "library" | "review" | "settings" | "objectives";
 
 const views = new Map<View, HTMLElement>();
 const listeners: ((view: View) => void)[] = [];
@@ -29,11 +29,7 @@ export function registerView(name: View, node: HTMLElement) {
 
 function isView(value: string): value is View {
   return (
-    value === "library" ||
-    value === "review" ||
-    value === "settings" ||
-    value === "game" ||
-    value === "objectives"
+    value === "library" || value === "review" || value === "settings" || value === "objectives"
   );
 }
 
@@ -43,7 +39,7 @@ function isView(value: string): value is View {
 // listening for an event it only subscribes to once it has loaded.
 export function initRouting() {
   const start = window.location.hash.replace(/^#/, "");
-  if (isView(start) && start !== "review" && start !== "game") showView(start);
+  if (isView(start) && start !== "review") showView(start);
 
   void listen<string>("navigate", (event) => {
     if (isView(event.payload)) showView(event.payload);

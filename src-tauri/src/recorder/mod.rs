@@ -8,7 +8,7 @@ pub mod backend;
 pub mod devices;
 #[cfg(target_os = "windows")]
 pub mod libobs;
-// The target backend (Option B), being built through WS1.6. Compiled on every
+// The own backend (Option B), the default since #243. Compiled on every
 // platform so its pure core is tested everywhere; only `own::win` is gated to
 // Windows.
 pub mod own;
@@ -30,7 +30,7 @@ pub mod problem;
 pub mod stub;
 
 use audio::{AudioLayout, AudioPreset};
-pub use problem::CaptureProblem;
+pub use problem::{CaptureProblem, Explained};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -137,6 +137,18 @@ pub trait Recorder: Send {
     /// object itself. `FailedRecorder` folds its init error in here,
     /// which is why this returns an owned `String`.
     fn backend_name(&self) -> String;
+
+    /// Why this backend is encoding video in software, or `None` when it is
+    /// not, which the UI shows as a notice about the extra CPU
+    /// (DEVELOPMENT.md §2.4). Only the own backend can: libobs refuses rather
+    /// than fall back. A value beside `backend_name` rather than a parse of
+    /// it, so the wording of that string stays free to change; the reason is
+    /// the same one it names, so the two cannot disagree about why (#296).
+    ///
+    /// Default `None`.
+    fn software_encoding(&self) -> Option<String> {
+        None
+    }
 
     /// The file the recording in flight is being written to, or `None` when
     /// nothing is. For diagnostics: the dev portal's Recorder panel shows it,

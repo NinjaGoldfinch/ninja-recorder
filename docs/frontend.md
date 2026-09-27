@@ -36,20 +36,20 @@ flowchart TB
     LIBV["lib/components/library/<br/><small>Library, Row, Toolbar, StatsBar,<br/>Loadout, Matchup, Slot, RowActions</small>"]
     LIBS["lib/stores/library.svelte.ts<br/><small>owns: the row set + every control</small>"]
     ICONS["lib/stores/icons.svelte.ts<br/><small>owns: when art has arrived</small>"]
-    REVV["lib/components/review/<br/><small>Review (imperative island), Timeline,<br/>PlayerControls, MarkerList, MarkerTimes</small>"]
+    REVV["lib/components/review/<br/><small>Review (imperative island), Timeline,<br/>PlayerControls, ReviewRail, MarkerList,<br/>MarkerTimes</small>"]
     REVS["lib/stores/review.svelte.ts<br/><small>owns: which recording, its markers,<br/>samples and window</small>"]
     SETV["lib/components/settings/<br/><small>Settings, Appearance, BackgroundTray,<br/>Notifications, AudioSettings, Storage,<br/>Advanced, About, Update, UpdateNotes, SettingRow</small>"]
     SETS["lib/stores/settings.svelte.ts<br/><small>owns: autostart, audio, capture backend,<br/>retention, the folder, mirrored prefs</small>"]
     UPD["lib/stores/update.svelte.ts<br/><small>owns: the update status</small>"]
-    TL["lib/timeline/<br/><small>window, clusters, graph, stem,<br/>markers, navigate · pure, tested</small>"]
+    TL["lib/timeline/<br/><small>window, clusters, graph, stem,<br/>markers, events, navigate · pure, tested</small>"]
     LIBP["lib/library/<br/><small>filters, sort, stats, scoreboard,<br/>problems · pure, tested</small>"]
     SETP["lib/settings/<br/><small>notes, backfill, retention, audio,<br/>capture, update, about · pure, tested</small>"]
-    REVP["lib/review/<br/><small>hotkeys, playback<br/>pure, tested</small>"]
+    REVP["lib/review/<br/><small>hotkeys, playback, rail,<br/>clock, facts · pure, tested</small>"]
     RFV["lib/components/reviewform/<br/><small>ReviewForm, RatingControl</small>"]
     RFS["lib/stores/gameReview.svelte.ts<br/><small>owns: the open game, its draft review,<br/>the autosave queue</small>"]
     OBV["lib/components/objectives/<br/><small>Objectives</small>"]
     OBS["lib/stores/objectives.svelte.ts<br/><small>owns: the objectives list and its tab</small>"]
-    RFP["lib/reviewform/<br/><small>fields, ratings, autosave, sheet<br/>pure, tested</small>"]
+    RFP["lib/reviewform/<br/><small>fields, ratings, autosave, autofill,<br/>sheet · pure, tested</small>"]
     BRIDGE["bridge.ts<br/><small>composition root: picks a transport,<br/>exposes the generated client</small>"]
     TRANSPORT["lib/transport/<br/><small>pipe.ts (live) · mock.ts<br/>invoke.ts kept for the dev portal</small>"]
     CONTRACT["lib/contract/<br/><small>GENERATED from Rust</small>"]
@@ -211,7 +211,10 @@ tell the daemon to quit while it may be recording.
 shape: "The last recording was saved without game audio (the failing call and
 its HRESULT). If this keeps happening, please report it with your Windows
 version (Windows build 19045)", or, for a game that was not recorded at all,
-the same as an error. Unlike the recorder strip it is an event rather than a
+the same as an error. A problem the daemon recognised carries `explained`
+(#296), and the strip says its plain words and fix instead, asking for a
+report only if something it carries wants one: "The last recording was saved
+without part of the microphone audio (the microphone was disconnected)." Unlike the recorder strip it is an event rather than a
 state, so it does not clear itself: it stays until it is dismissed, and the
 next problem replaces it. The recording keeps the same list in its
 `diagnostics_json`, and `library/problems.ts` turns that into the library row's
@@ -486,7 +489,7 @@ would throw away an order the user chose.
 
 ## Views
 
-Five top-level sections in one document, toggled by `router.ts`. Before it
+Four top-level sections in one document, toggled by `router.ts`. Before it
 existed, each view flipped its own and its sibling's `hidden` attribute from
 two files that knew nothing about each other.
 
@@ -494,9 +497,7 @@ two files that knew nothing about each other.
 stateDiagram-v2
     [*] --> library
     library --> review: click a VOD card
-    review --> library: back
-    library --> game: 📝 on a VOD card
-    game --> library: back (saves first)
+    review --> library: back (saves the review first)
     library --> objectives: objectives button
     objectives --> library: back
     library --> settings: settings button
@@ -506,22 +507,72 @@ stateDiagram-v2
 
 ### The review form (WS9)
 
-`game` is the review form for one game and `objectives` the list it reviews
-against. **The form is its own view in P0, not a rail beside the player.** P0
-builds nothing video-related, and a separate view keeps the form clear of the
-player's document-level hotkeys, which only answer while `review` is showing.
-P1 moves it next to the player.
+The review form for one game lives in the **rail beside the player**
+(`review/ReviewRail.svelte`), and `objectives` is the list it reviews against.
+P0 shipped the form as a view of its own, `game`, opened from a 📝 button on
+each library row; P1 (#322) folded it into the player and removed both, so
+opening a VOD is the only way in and the footage is on screen while notes are
+written (#321 has the layout, and the alternatives it beat).
+
+```mermaid
+flowchart LR
+    ROW["library row<br/>click"] --> OPEN["review.openRecording<br/>+ showView('review')"]
+    OPEN --> PLAYER["Review.svelte<br/>loads the file"]
+    PLAYER -->|same effect, untracked| LOAD["gameReview.openReviewForRecording<br/>flush · open_game_for_recording · get_game_review"]
+    LOAD --> RAIL["ReviewRail<br/>Review tab: ReviewForm<br/>Events tab: MarkerList"]
+    BACK["← Back"] --> CLOSE["closeRecording + closeReview<br/>(flushes, then drops the game)"]
+```
+
+- **The rail has two tabs, and both stay mounted.** Review holds the form and
+  Events holds the marker list. A hidden tab keeps its half-typed text and its
+  scroll position, which an `{#if}` would throw away. The save status sits in
+  the tab bar, where it is visible from either tab.
+- **The player's hotkeys stand down while a field has focus**, as they always
+  have (`review/hotkeys.ts`, `typing`), so the form can sit beside a player
+  that answers Space and the arrows. Two keys still work from inside a field:
+  Ctrl+Space plays and pauses, and Escape hands focus back to the player.
+- **`n` starts a note at the playhead** (#325). It pauses, opens the rail if
+  theatre mode had folded it away, and starts a new line in Notes stamped with
+  the game time (`reviewform/fields.ts`, `withStamp`), with the cursor after
+  the stamp. The "+ Timestamp" button does the same. The stamp is plain text in
+  `free_notes`. Notes as separate timed rows on the timeline wait for #251, and
+  nothing in the schema changes until then. The player reaches the form through
+  `ReviewRail.noteAt`, a component export, which is the one call that crosses
+  inward from the player to the form.
+- **The Events tab is the marker list, made for a rail** (#326). Filter chips
+  narrow it to fights, deaths or objectives, each with its count. A burst of
+  the same event collapses into one row ("Voidgrubs ×3"), but only when the
+  label matches, so two different kills a few seconds apart stay two rows. The
+  row the playhead most recently passed is lit and scrolled into view while
+  the video plays, unless the pointer is over the list. `timeline/events.ts`
+  holds all three decisions.
+- **Loads race, and the newer one wins.** Opening one VOD after another starts
+  two loads; `gameReview` counts them and drops any answer that is not the
+  latest's, so a slow daemon cannot put the previous game's review beside the
+  next game's footage.
 
 - **The whole review is saved at once.** The form edits a draft, and
   `reviewform/autosave.ts` writes all of it 600 ms after the last change. It
   never runs two saves at once, and the last value typed is always the last
-  value written. The header shows Saved, Unsaved changes, Saving… or Not
-  saved. Leaving the form, or opening another game, flushes first.
+  value written. The rail's tab bar shows Saved, Unsaved changes, Saving… or
+  Not saved. Closing the player, or opening another game, flushes first.
 - **Ticks and takeaways save as they happen.** A tick is optimistic and
   reverts if the save fails.
 - **A blank box means "not entered", never zero.** For deaths, that is what
   lets the form fall back to the death markers the recording counted.
   `reviewform/fields.ts` holds those rules, and the clear time's `m:ss` shape.
+- **A review never saved starts from what the recording knows.**
+  `reviewform/autofill.ts` sets the game rating to the result and deaths to
+  the end-of-game stats, in the draft only. Nothing is written until a real
+  edit, and each answer is tagged "auto" until it is changed
+  ([DEVELOPMENT.md §20](../DEVELOPMENT.md#20-vod-review-ws9-the-provisional-p0-defaults)).
+- **The clear time can be taken from the footage.** Pause on the clear and
+  press ⏱: `review/clock.ts` turns the playhead into game time, using the
+  nearest sample or marker because both carry both clocks. The form asks for
+  that time through a callback when the button is pressed, rather than
+  receiving the playhead as a prop, which would re-render it every frame.
+- **The heading carries the game's facts.** `review/facts.ts` lists the date,
+  length, queue, KDA, CS and rank, and each is shown only if it is known.
 - **The spreadsheet is parsed here, not in the daemon.** The Objectives
   view reads the chosen CSV and `reviewform/sheet.ts` turns it into typed rows.
   The local timezone, DST included, is only known on this side, and it is
@@ -538,7 +589,7 @@ curve is not optional furniture: it is how a position in the game is read off
 the timeline at all, and having to scroll to it defeats the widget.
 
 So the player is capped, and **the cap is a `max-width`, not a `max-height`**.
-`.player-wrap` takes the vertical space left over after the app bar, the view
+`.player-wrap` takes the vertical space left over after the app bar, the review
 header and the whole timeline, and multiplies it by the recording's own aspect
 ratio; `review.ts` publishes that ratio as `--player-ratio` on `loadedmetadata`,
 falling back to the same 16/9 the video's `aspect-ratio` placeholder already
@@ -563,6 +614,23 @@ Two details that are load-bearing rather than tidy:
 On a tall window the cap never binds, because the content column's own width is
 the smaller of the two, so this changes nothing for anyone who was not scrolling
 in the first place.
+
+**The review rail keeps to the same fold.** The review view widens to
+`--review-max` (the app bar's content follows it, so the two stay aligned), and
+splits into the player column and a `--rail-width` rail. The rail is as tall as
+the window leaves it (`--rail-chrome`, measured the same way as
+`--player-chrome`) and its panels scroll inside it, so a long form never makes
+the page scroll away from the player. At the default 1340×850 window that is a
+924×520 player and a 352px rail, with nothing below the fold. Below 1100px wide
+the rail drops under the player, and the page scrolls to it.
+
+**Theatre mode folds the rail away** (the ◧ button in the review header, or
+`t`), and the player column takes the width. The player's height cap still
+binds, so at 1340×850 the video grows to 942×530 and centres rather than
+pushing the ruler down. The rail is hidden, not unmounted, so a half-typed
+field survives it. Whether the rail is open is a layout preference of this
+window's alone, so `review/rail.ts` keeps it in `localStorage` rather than in
+SQLite with the real preferences.
 
 ### The player clips both ends
 
@@ -896,7 +964,7 @@ a shipped build.
 | `check_for_update` | nothing | settings → About → "Check now" |
 | `install_update` | nothing | settings → About → "Install and restart"; ends the process |
 | `start_recording` / `stop_recording` / `is_recording` | nothing | registered but unreferenced by the main UI, and since #282 by the dev portal's panels too: they reach the daemon's recorder around the supervisor ([dev-portal.md](dev-portal.md#the-recorder-panel-has-no-manual-controls)). Only the Commands panel can still invoke them |
-| `open_game_for_recording` | the game's id | review form, opened from a library row; makes the game for a recording from before WS9 |
+| `open_game_for_recording` | the game's id | review rail, whenever the player opens a recording; makes the game for a recording from before WS9 |
 | `get_game_review` / `save_game_review` | `GameReview \| null` / nothing | review form: load, then the debounced autosave of the whole `ReviewInput` |
 | `set_objective_ticked` | nothing | review form → "Reviewing against" |
 | `add_takeaway` / `delete_takeaway` / `promote_takeaway` | `Takeaway` / nothing / `Objective` | review form → Takeaways |
@@ -913,14 +981,13 @@ loads instead of from the `prefs.ts` cache, and applies whatever
 It is one of two rows in the settings form that can come back disabled, when
 the build has no autostart control or the read failed.
 
-**The capture backend is the other, and it is devtools-only until #243.**
-`Settings.svelte` renders the Advanced group, which holds only this row, when
-`hasDevCommands()` answers true: the same probe that reveals the dev portal
-button, so there is no second devtools flag. In a release build the group is
-absent. Since #236 the row offers a real own backend on Windows build 20348
-or newer, but a video-only one, and #243, which makes it the default, deletes
-the gate ([DEVELOPMENT.md §16](../DEVELOPMENT.md#the-switch-and-when-it-applies)).
-`Settings.test.ts` checks both builds.
+**The capture backend is the other.** `Settings.svelte` renders the
+Advanced group, which holds only this row, in every build. It was
+devtools-only until #243 made the own backend the default and deleted the
+`hasDevCommands()` gate in the same change: libobs is now the fallback a
+release user can pick without a reinstall
+([DEVELOPMENT.md §16](../DEVELOPMENT.md#the-switch-and-when-it-applies)).
+`Settings.test.ts` checks that it renders without the dev commands.
 
 `capture_backend` is a `settings_kv`
 key, but it is not read through `prefs.ts` and not written with
@@ -928,13 +995,35 @@ key, but it is not read through `prefs.ts` and not written with
 check the backend can be built here, refuse while a game is in progress, and
 swap the live recorder
 ([DEVELOPMENT.md §16](../DEVELOPMENT.md#the-switch-and-when-it-applies)).
+**Automatic, when nothing is saved.** `CaptureBackendStatus` carries
+`automatic: true` when no `capture_backend` row exists, and `configured` is
+then the daemon's pick: Own where it can be built, else libobs. The row says
+so in plain text (`settings/capture.ts`'s `automaticNote`): "Automatic: Own,
+the default." or "Automatic: libobs, because <Own's reason>.". Only a click
+writes the row, and clicking the automatic pick does write it:
+`saveCaptureBackend` skips a click only on a backend that is already saved.
+
 `Advanced.svelte` renders what `get_capture_backend` reports: every backend
-the daemon knows about, one it cannot build **disabled with the daemon's
-reason** beside it (the own backend off Windows or below build 20348), and
+the daemon knows about, each with a one-line explanation
+(`settings/capture.ts`'s `BACKEND_EXPLAINED`: Own is the default, libobs the
+fallback for one release), one it cannot build **disabled with the daemon's
+reason** beside it (the own backend off Windows or below build 19041), and
 the backend actually
 live. A click calls `set_capture_backend` and the control shows the status it
 returns, never the value it sent, so a refusal leaves it where it was and
 raises a toast. The row says that a change applies from the next recording.
+
+**The software-encoding notice.** When `CaptureBackendStatus` has
+`software_encoding` set, the row shows a warning callout
+(`settings/capture.ts`'s `softwareNote`) that recording is encoding in
+software, because of the reason that field carries (the one "In use now"
+gives, #296), and costs more CPU: the UI's third of DEVELOPMENT.md §2.4's rule that
+the own backend's software fallback is never silent. The own backend only
+learns its encoder when the League client opens, long after the view first
+reads the status, so `status.svelte.ts` calls `refreshCaptureBackend` on every
+game-state edge, next to `refreshUpdateStatus`; it does nothing until the view
+has read the status once. The daemon keeps the flag set after the client
+closes, so the notice is still there when Settings is opened after a game.
 Every string in it that came from the daemon is interpolated, never rendered
 as markup.
 
@@ -1104,8 +1193,9 @@ above records.
 tray needs: a `#settings` URL fragment read once at startup, for a window the
 tray has just created, and a `navigate` event for a window that already exists.
 A `#review` fragment is ignored, because the review view with no recording
-loaded is not a state worth restoring into. `#game` is ignored for the same
-reason; `#objectives` opens that list.
+loaded is not a state worth restoring into. `#game`, the review form's
+fragment before it moved into the player, is no longer a view and is ignored
+like any other unknown fragment; `#objectives` opens that list.
 
 ## The root, and how it mounts
 

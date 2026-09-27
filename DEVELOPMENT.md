@@ -72,9 +72,9 @@ trait Recorder {
 ```
 
 Backends:
-- `LibObsRecorder`: Windows, the real one.
+- `LibObsRecorder`: Windows. What every release before #243 recorded with, and since then the fallback, selectable for one release; WS8 deletes it.
 - `StubRecorder`: every non-Windows build. It sleeps, then copies a fixture MP4 into place. Keeps the entire app layer developable and testable without Windows. Nothing ships it; since the macOS bundle was dropped it exists purely for the dev loop and `cargo test` (§9).
-- `OwnRecorder` (Option B, `recorder/own/`): being built through WS1.6, and **constructible since #236** on Windows build 20348 or newer. It records the game window's video and every source the audio preset names, the game by process loopback since #237 and the microphone, the desktop and applications since #238, and since #239 every track of the preset in one file, the mix and each stem, with the encoder MFTs driven directly and the file written by our own muxer (§2.5). Only a devtools build can select it until the default flips (#243). Its pure core (the tick grid, the audio aligner and feed, the mixer of every track, the capture plan, the process-tree root, encoder ranking, the loaded-encoder check, the asynchronous encoder's bookkeeping, the mux, the CPU colour conversion) is compiled and tested on every platform. Which of it and libobs the daemon builds is the `capture_backend` setting, and what happens when the chosen one cannot be built is §16's "The switch, and when it applies".
+- `OwnRecorder` (Option B, `recorder/own/`): **the default since #243**, built through WS1.6, on Windows build 19041 or newer (§2.4). It records the game window's video and every source the audio preset names, the game by process loopback since #237 and the microphone, the desktop and applications since #238, and since #239 every track of the preset in one file, the mix and each stem, with the encoder MFTs driven directly and the file written by our own muxer (§2.5). A missing `capture_backend` setting means this backend; a stored `libobs` row keeps libobs. Its pure core (the tick grid, the audio aligner and feed, the mixer of every track, the capture plan, the process-tree root, encoder ranking, the loaded-encoder check, the asynchronous encoder's bookkeeping, the mux, the CPU colour conversion) is compiled and tested on every platform. Which of it and libobs the daemon builds is the `capture_backend` setting, and what happens when the chosen one cannot be built is §16's "The switch, and when it applies".
 
 **Decision: the own backend holds no COM object; a session thread does.**
 Every D3D11, Media Foundation and WinRT object lives on one thread
@@ -222,12 +222,25 @@ Implemented in `src-tauri/src/recorder/`: `Recorder`, `RecordConfig`, `RecorderE
     hardware adapter. It is **never silent**: `recorder::own::select::rank`
     returns it as a `SoftwareFallback` carrying the reason, and every caller
     has to put that reason in `daemon.log` and the recording's
-    `diagnostics_json` and show the UI a notice about the extra CPU. Since
-    #236 the first two are done: `OwnRecorder` writes a `warn` line naming
-    the encoder and the reason, and its `backend_name` (which is what
+    `diagnostics_json` and show the UI a notice about the extra CPU. All
+    three are done: `OwnRecorder` writes a `warn` line naming the encoder
+    and the reason, its `backend_name` (which is what
     `RecordingDiagnostics::backend` records) reads `own (software encoding:
-    <encoder>, because <reason>)`. The UI notice is still owed, and arrives
-    before the fallback can reach a release user (#243). The check is made
+    <encoder>, because <reason>)`, and since #243 Settings → Advanced shows
+    a notice about the extra CPU. The notice is driven by its own field,
+    not by parsing that name: `Recorder::software_encoding` (the reason, or
+    `None`; only `OwnRecorder` overrides it) reaches the UI as
+    `CaptureBackendStatus::software_encoding`. It carries the same reason
+    `backend_name` gives after "because", so the notice cannot blame a
+    missing hardware encoder under an "In use now" line that says software
+    was forced (#296). The `warn` line is written once per decision, not
+    once per answer: the supervisor pre-warms on every dispatch, and a warm
+    worker answers each with the status it already has. It is sticky across the
+    client closing (`own::status::Status::software_encoding`), because the
+    worker's status goes back to idle then and Settings is usually opened
+    after a game; only a new encoder bring-up changes it. The UI re-reads the
+    status on each game-state edge, which is when the answer can move. The
+    check is made
     twice: once on the ranking, and again on what was actually activated
     (`own::status::check_loaded`). Until #239 that second check caught the
     sink writer loading the software MFT when asked for hardware; now the
@@ -236,8 +249,10 @@ Implemented in `src-tauri/src/recorder/`: `Recorder`, `RecordConfig`, `RecorderE
     turns a wrong vendor match (#224) or an unusual GPU into no recording at
     all, where a fallback turns it into a recording that costs CPU and says
     so. The software path's CPU cost on the gameplay machine is **measured
-    before own becomes the default (#243)**; the fallback does not ship as
-    the default path until that number exists.
+    before own becomes the default**, in the exit run
+    ([windows-verification.md §11.8](docs/windows-verification.md#118-the-exit-run-243));
+    the fallback does not ship as the default path until that number
+    exists.
   - **A devtools build can be made to take the fallback on purpose**, so it
     can be exercised and measured on a machine with a hardware encoder:
     started with `NINJA_OWN_FORCE_SOFTWARE_ENCODER=1`, the own backend picks
@@ -552,6 +567,24 @@ release and devtools builds alike, three ways:
   `diagnostics_json`: "Recorded without game audio" in the library row's
   empty slack column, with every reason in its tooltip and in full on the
   review page, so it is still there for a window that was closed at the time.
+
+**Not every failure is a bug, and only a bug asks for a report** (#296). The
+first Windows runs asked the user to report a headset they had unplugged, and
+a microphone they had blocked in Windows' privacy settings. `own::problem::
+explain` recognises those by their HRESULT and attaches `explained` to the
+problem: plain words ("the microphone was disconnected", "Windows is blocking
+microphone access"), a fix where there is one ("Turn on *Let desktop apps
+access your microphone* in Settings → Privacy & security → Microphone"), and
+whether a report is worth asking for. The notification, the strip and the
+line on the recording say those words instead of the call and its HRESULT,
+and drop "Please report" when nothing they carry wants it. The technical
+reason is kept in the problem regardless, so `daemon.log` and
+`diagnostics_json` still have it. Recognised so far: `AUDCLNT_E_DEVICE_INVALIDATED`
+(0x88890004) on any source, and `E_ACCESSDENIED` (0x80070005) on the
+microphone only, because on a process loopback it is the Windows 10 case
+above and still a bug. A dead capture worker is explained too, as "the
+capture worker stopped unexpectedly", without its pid and exit code; that one
+still asks for a report.
 
 **The distinction that makes this bearable is failure against absence.** A
 preset names sources the machine may simply not have: Discord not running, no
@@ -1796,13 +1829,13 @@ building a window re-entrantly from inside a WebView2 IPC callback and getting a
 blank window, applies to windows created from a command, which `setup` is not.
 A window created later from a tray click will have to respect it.
 
-**The default size is derived from the frontend, not picked by eye.** The
-content column stops at `--content-max: 1120px`; add the container's padding
-and room for a scrollbar and 1200 is the narrowest inner width at which it
-reaches full width, so anything narrower squeezes every view and anything wider
-only adds background. The 900 height clears the review player and its timeline.
-The marker list under them is left to scroll, because a window tall enough to
-show it as well would not fit on a 1080p desktop.
+**The default size is derived from the frontend, not picked by eye.** At
+1340×850 the content column (`--content-max: 1120px`) opens at full width with
+a margin either side, and the height leaves room for the taskbar and the title
+bar on a 1080p desktop (#315). It is also the size the review view is laid out
+for: the player, its timeline and the review rail beside them all fit with
+nothing below the fold, and the marker list is a tab in that rail rather than a
+list under the player (#321, [docs/frontend.md](docs/frontend.md)).
 
 Verified on macOS against the real binary: a default start registers a GUI
 window, a windowless start stays running, `--daemon` exited 2 while it was
@@ -2541,7 +2574,7 @@ worker that dies before it answers `Stop` leaves its stop line nowhere;
 The values below show the shape and are not a measurement:
 
 ```text
-[recorder] own: recording 2026-09-26_12-00-00.mp4: 1920x1080 from NVIDIA GeForce RTX 3070, encoder NVIDIA H.264 Encoder MFT [VEN_10DE] (hardware), sources: game=PID 4242 (the game window's owner, named League of Legends.exe), microphone=default, Discord.exe=failed (no Discord.exe process is running); tracks: Everything
+[recorder] own: recording 2026-09-26_12-00-00.mp4: 1920x1080 from NVIDIA GeForce RTX 3070, encoder NVIDIA H.264 Encoder MFT [VEN_10DE] (hardware), sources: game=PID 4242 (the game window's owner, named League of Legends.exe), microphone=default, Discord.exe=left out (no Discord.exe process is running); tracks: Everything
 [recorder] own: stopped 2026-09-26_12-00-00.mp4: 1800.000 s, 108000 ticks, 0.41% repeated, worst tick 0.62 f late; per source: game clock=qpc raw=-12.35 ppm slips=7 gaps=0 holds=3, microphone clock=device slips=0 gaps=1 holds=0; mix clipped 0; 1836.0 MB; 900 fragments; finalize ok
 [recorder] own: remux 2026-09-26_12-00-00.mp4: ok in 812 ms
 ```
@@ -2552,8 +2585,12 @@ substitution shows) and whether it is hardware or the **software fallback,
 with the reason**. Then every source the plan named: what it opened
 (`PID <n> (<how the root was chosen>)` for a process-loopback source,
 `default` or the configured device id for the microphone, `default output`
-for the desktop), or `failed (<why>)`; and the labels of the tracks the file
-holds, or `none (video only)`.
+for the desktop), `left out (<why>)` for one that was not there to capture
+(Discord not running, no microphone plugged in), or `failed (<why>)` for one
+that was there and would not open; and the labels of the tracks the file
+holds, or `none (video only)`. The split is §2.6's failure against absence:
+until #296 the line said `failed` for both, and logged an absence at `WARN`;
+an absence is now `INFO`.
 
 **Stop.** The video first: its length (ticks over 60 fps), the ticks written,
 the share that **repeated** the tick before because no new picture had arrived
@@ -2564,7 +2601,9 @@ before. Then per source, from its aligner: the clock it ran on, the raw drift
 in ppm (QPC clock only: on the device clock the audio is stamped from its own
 sample count, so there is nothing to compare, and it is left out rather than
 printed as a meaningless number), slips (single frames dropped or repeated to
-hold it on QPC), gaps (holes over 50 ms filled with silence), holds (silence
+hold it on QPC), gaps (holes filled with silence at once: over 50 ms, at a
+discontinuity, or a jump), `jumps=N` when there were any (holes or overlaps
+nothing flagged, #297), holds (silence
 written because the source was quiet), and `ended early` for one whose capture
 died before the recording did. Then the samples the mix clipped, the file's
 size after the finalize, the **fragments** the file was closed with, and
@@ -3267,8 +3306,18 @@ its first packet**, and says which way it went:
 
 - The capture asks `GetBuffer` for both positions. `clock::check_stamp` judges
   the QPC one against the counter read the moment `GetBuffer` returned: zero is
-  no stamp; one in the future, or more than a second old, is not this
-  process's counter; anything else is QPC. A packet the engine itself flags
+  no stamp; one more than a second old, or further in the future than the
+  source allows, is not this process's counter; anything else is QPC. A
+  microphone's or a process-loopback stream's stamp is in the past, so it may
+  be at most 1 ms ahead, which is rounding. **The desktop's render-loopback
+  stamp may be up to 50 ms ahead** (`clock::LOOPBACK_MAX_LEAD`): `GetBuffer`
+  documents it as the time the device position was recorded, and a rendering
+  stream's device position as the frame "currently playing through the
+  speakers", while loopback copies the engine's output into the capture
+  buffer alongside the render pin, before the device plays it. #238's box run
+  measured it 7.5 ms ahead, which the 1 ms limit sent to device time on every
+  recording (#295). The device-time warning names the limit that failed and
+  its value. A packet the engine itself flags
   `AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR` (WASAPI documents it for the first
   packet after a start) is placed from its arrival and does not get to
   decide: the first unflagged packet does.
@@ -3276,6 +3325,22 @@ its first packet**, and says which way it went:
   holds it there by slipping single frames, as the spike did. One bad stamp
   later on costs that packet's placement, stamped from its arrival instead,
   and is counted, not the recording's clock.
+- **Slips are for drift, and only drift.** One frame per 10 ms packet holds
+  up to about 2000 ppm within half a millisecond, which is fifty times what a
+  sound card is off by, so audio more than 5 ms off its stamps is not drift.
+  The box showed process loopback losing 10 to 50 ms of samples with nothing
+  flagged (#297: -600 and -1546 ppm "drift" from one step each, while the
+  microphone in the same recordings read a few ppm), and a reconnected game's
+  new source starting 49 ms off the old one's line (#313, -2446 ppm and 2354
+  slips). Both were walked back one frame per packet, the audio off by the
+  step for seconds meanwhile, and both were counted as drift. Now a packet
+  flagged as a discontinuity, and the first real stamp of a restarted source,
+  are placed exactly, as a source that joins late is; a step past 5 ms that
+  holds for three packets in a row (one stray stamp does not) is filled with
+  silence or cut at once and counted as a **jump**; and every hole the
+  aligner fills or cuts is left out of the raw figure, so `raw=` stays a
+  statement about two clocks. The stamps were already what the aligner
+  steered by; this only changes how fast it gets there.
 - **Otherwise the source goes to device time** for the rest of the recording
   (`clock::DeviceTimeline`): anchored once, at the first packet's arrival less
   its own length, and then stamped from the sample count. Nothing is slipped,
@@ -3382,33 +3447,71 @@ filled.
 the plan spells it. No migration: a missing key is the default, the same as
 every other key in that table ([data-model.md](docs/data-model.md#what-lives-in-settings_kv)).
 
-**The default is libobs, and WS1.6 flips it to `own` in its last piece
-(#243).** Not because libobs is the preferred answer; the plan's default is
-Option B. A default the build cannot construct would refuse every game for
-everyone who never opened Settings, and before #236 that is what `own` would
-have done. Since #236 `own` is constructible on Windows build 20348 or newer,
-since #237 it records the Game preset's audio, since #238 every source a
-preset names, mixed into track 0, and since #239 every track; the flip waits
-until it has been measured against libobs. The flip
-is a one-line change to `CaptureBackend`'s `#[default]`, pinned by a test so
-that it cannot happen by accident. It moves only the users who never chose.
-Someone who picked libobs explicitly has a stored row and keeps it.
+**The default was libobs until WS1.6's last piece (#243) flipped it to
+`own`.** Not because libobs was the preferred answer; the plan's default is
+Option B. A default the build cannot construct would have refused every game
+for everyone who never opened Settings, and before #236 that is what `own`
+would have done. #236 made `own` constructible (on Windows build 20348 or
+newer then; #291 lowered the floor to 19041), #237 gave it the Game preset's audio, #238 every source a preset
+names, mixed into track 0, and #239 every track; the flip waited until it had
+been measured against libobs (the exit run,
+[windows-verification.md §11.8](docs/windows-verification.md#118-the-exit-run-243)).
+The flip was a one-line change to `CaptureBackend`'s `#[default]`, pinned by
+a test so that it cannot happen again by accident. It moved only the users
+who never chose. Someone who picked libobs explicitly has a stored row and
+keeps it, with no migration; `a_stored_libobs_row_stays_on_libobs` pins that.
 
-**The Settings row is devtools-only until WS1.6 flips the default, and the
-flip (#243) un-hides it.** Until #236 the row could offer one backend, with
-the other disabled beside it, and a control that changes nothing is not worth
-a release user's attention; since #236 it offers a backend that records
-video, and since #237 one preset's audio, which is not worth it either. So the
-Advanced group, which holds only this row, renders only where the `dev_*`
-commands exist: the check the dev portal button already makes
-(`hasDevCommands`), rather than a second devtools flag. Everything behind the
-row is live in every build: the key, the daemon's choice at startup, the
-refusal, and both commands. #243 removes the gate in the same change that
-flips the default, which is the change that makes the other choice worth a
-release user's attention. Until then a release build has no way to show the "Nothing will be
-recorded" warning, which is acceptable because it has no way to save an
-unbuildable choice either: the only writer that bypasses the checks is
-`set_ui_pref`, and nothing in a release build calls it with this key.
+**With nothing saved, the default is own where own can be built, and
+libobs where it cannot.** The own backend's floor is Windows build 19041
+(§2.4, lowered from 20348 by #291), so every Windows 10 from 2004 on and
+Windows 11 get own. What is left below it is Windows 10 1903 and 1909
+(builds 18362 and 18363), both long out of support, so a machine that falls
+back is rare. It still matters: no release build before the flip had the
+Settings row, so no release user has a saved row, and resolving a missing
+key to `own` everywhere would have stopped such a machine recording on the
+day the flip shipped. It also covers any other reason own cannot be built.
+So
+`recorder::backend::resolve` takes the saved value as an `Option` beside
+what the build offers, and decides:
+
+| Saved | Own buildable | Libobs buildable | Builds |
+|---|---|---|---|
+| nothing | yes | either | own |
+| nothing | no | yes | libobs, logged once at startup as `capture_backend unset; own unavailable (<reason>), using libobs` |
+| nothing | no | no | nothing: refused with both reasons |
+| `own` or `libobs` | | | exactly that, or refused with its reason |
+
+This does not weaken "refused, never substituted", because that rule protects
+a choice the *user* made: a saved `own` below the floor is still refused,
+with the warning, and never quietly recorded on libobs. A missing key is not
+a choice anyone made. The default is ours to pick, and picking one that
+cannot record would be refusing on the user's behalf. The pick is still
+attributable: the startup log says it, `diagnostics_json.backend` names the
+backend that wrote each file, and Settings → Advanced says "Automatic:
+libobs, because <own's reason>". Only a click writes the row, so the app's
+pick never becomes the user's by itself. An unrecognised stored value, such
+as one written by a newer build, is treated as unset.
+
+**WS8 (#51) has to settle Windows 10 before libobs is deleted.** Once libobs
+is gone, there is nothing for an unset key to fall back to below the floor,
+and the 19041 floor is OBS's, not Microsoft's, and untested on Windows 10
+hardware (§2.4). #237's floor test decides which of two answers WS8 ships:
+Windows 10 22H2 (19045) works, and own records on Windows 10 from 2004 on, or
+it does not, and Windows 10 is dropped as a supported platform, said in the
+release notes. Builds below 19041 are dropped either way.
+
+**The Settings row was devtools-only until the flip, which un-hid it.** Until
+#236 the row could offer one backend, with the other disabled beside it, and
+a control that changes nothing is not worth a release user's attention; after
+#236 it offered a backend that recorded video, and after #237 one preset's
+audio, which was not worth it either. So the Advanced group, which holds only
+this row, rendered only where the `dev_*` commands existed (`hasDevCommands`).
+#243 removed that gate in the same change that flipped the default, which is
+the change that made the other choice worth a release user's attention: libobs
+is now the fallback a user can pick without a reinstall. Everything behind the
+row was already live in every build: the key, the daemon's choice at startup,
+the refusal, and both commands. The row also carries a one-line explanation of
+each backend, and the software-encoding notice (§2.4).
 
 **A backend that cannot be built is refused, never substituted.** The choice
 is `recorder::backend::choose`, a pure function of the setting and what this
@@ -3425,9 +3528,10 @@ disabled with that reason, and `set_capture_backend` refuses it again for any
 caller that got past the control. What remains is a row written some other
 way: a downgrade from a build that had the own backend, or a raw
 `set_ui_pref`, or a machine that was upgraded from and then back to a
-Windows below build 20348. The daemon then records nothing, and the settings
-row (in a devtools build, until the flip) says so in a warning rather than
-only through a disabled button.
+Windows below build 19041 with `own` saved. With nothing saved, a machine
+below that build records on libobs instead (above). The daemon then records
+nothing, and the settings row says so in a warning rather than only through
+a disabled button.
 
 **A change applies to the next recording, and never to the current one.**
 Two answers were available. "At the next daemon start" is simplest, but the
@@ -3464,12 +3568,11 @@ does not own the recorder, like `quit_recorder`.
 **What only Windows can confirm** is the row in
 [windows-verification.md §9](docs/windows-verification.md#9-the-capture-backend-switch-ws17-11):
 that switching in the client's lobby leaves one worker process rather than two,
-and that the next game records on the backend the row says is in use. Since
-#236 a devtools build can switch to a real own backend, so that row can be
-checked both ways. The comparison WS1.7's exit criterion asks for, both
-backends recording the same game with audio, can be run on the Game preset
-since #237, on every preset's track 0 since #238, and on every track since
-#239.
+and that the next game records on the backend the row says is in use, both
+ways. Since #243 a release build shows the row, so this is checked on a
+release installer. The comparison WS1.7's exit criterion asks for, both
+backends recording the same game with audio, is part of the exit run (§11.8
+there).
 
 ---
 
@@ -3764,6 +3867,16 @@ dead pipe, then finalize whatever recording is in flight. That last step is the
 one worth the wait. Killing a daemon mid-game leaves a fragmented MP4 with no
 row, recoverable only by the next startup's reconcile and stripped of its
 markers, so a clean stop finalizes first and exits second.
+
+Between the two it releases the capture backend (#293). Until then it did not,
+and the kill-on-close job ended the worker at exit: nothing was lost, since the
+recording had been finalized, but the worker never ran its own `Release`, and a
+clean quit looked like a crash in both logs. The release is bounded at the
+daemon, not only in the backend, because the own backend allows a worker 30 s
+to exit and a wedged driver should not hold a quit that long: after five
+seconds the daemon exits anyway and the job does what it always did. It runs on
+a plain thread rather than `spawn_blocking`, because dropping the runtime waits
+for blocking tasks and would undo the bound.
 
 ### The UI opens its log before the builder, for the same reason
 
@@ -4065,3 +4178,20 @@ retention and the user's Delete), and a review has to outlive its VOD. It also
 has to exist for a spreadsheet row that was never recorded. The other two
 questions are answered or not needed by P0: events reuse `markers` (#249), and
 there is no widget until P2 (#252).
+
+**P1 pre-fills what the recording already knows** (#324,
+`reviewform/autofill.ts`). The game rating starts at the match result, and
+deaths starts at the end-of-game stats rather than the death-marker count,
+because the markers are only as complete as the poll that saw them. Three rules
+keep this from putting words in the user's mouth:
+
+- **Only a review that has never been saved is filled.** A saved review is the
+  user's, and that includes the fields they left blank.
+- **The pre-fill goes into the draft, not into the database.** Opening a VOD
+  writes nothing. The pre-filled answers are saved with the first real edit, so
+  a VOD that was only watched never gets a review nobody wrote.
+- **Each pre-filled answer is tagged "auto"** until the user changes it.
+
+The clear-time clock button fills in the game clock at the playhead. It is a
+faster way of entering the time by hand, not a derived value, so #248 stays
+open.

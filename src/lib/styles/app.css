@@ -285,8 +285,8 @@ button:disabled {
 }
 
 /* Everything above and below the player that has to stay on screen with
- * it: the app bar, the container's top padding, the view header, and the
- * whole timeline down past the ruler. One number, in one place, because
+ * it: the app bar, the container's padding, the review header, the whole
+ * timeline down past the ruler, and the key hint under it. One number, in one place, because
  * the only reason it exists is to be adjusted when that furniture
  * changes.
  *
@@ -295,7 +295,253 @@ button:disabled {
  * slightly smaller player; being a rem under puts the ruler back under the
  * fold, which is the whole thing this exists to prevent. */
 .review-view {
-  --player-chrome: 18rem;
+  --player-chrome: 20rem;
+  /* The rail's width, and everything above and below it that it has to
+   * leave room for so it ends at the bottom of the window: the app bar, the
+   * container's padding and the review header. Measured, like the chrome
+   * above, and a little generous for the same reason. */
+  --rail-width: 22rem;
+  --rail-chrome: 10rem;
+}
+
+/* The review view gets the wider column, and so does the app bar above it,
+ * so the two stay aligned. `:has` rather than a class set from the router:
+ * the `hidden` attribute is already the one statement of which view is
+ * showing, and a second mechanism is one that can disagree with it. */
+.container:has(> .review-view:not([hidden])),
+body:has(.review-view:not([hidden])) .app-bar-inner {
+  max-width: var(--review-max);
+}
+
+/* Nothing follows the review's last line, so the page's usual bottom margin
+ * would only be a strip for the window to scroll into. */
+.container:has(> .review-view:not([hidden])) {
+  padding-bottom: var(--sp-4);
+}
+
+.review-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-3);
+}
+
+/* The heading and its facts share one line, and the facts give way first. */
+.review-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.review-header h2 {
+  margin: 0;
+  flex-shrink: 0;
+  font-size: var(--fs-lg);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.review-facts {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.review-facts span + span::before {
+  content: "·";
+  margin: 0 0.45em;
+  color: var(--text-subtle);
+}
+
+/* The player and the timeline on the left, the review rail on the right. The
+ * left column takes whatever the rail leaves, and `minmax(0, …)` lets it
+ * shrink below the timeline's content width rather than pushing the rail off
+ * the side. */
+.review-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--rail-width);
+  gap: var(--sp-4);
+  align-items: start;
+}
+
+/* Theatre mode: the rail is folded away and the player column takes the
+ * width. The player's own height cap still binds, so the ruler stays above
+ * the fold and the video centres in the extra room. */
+.review-layout.rail-closed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.review-rail[hidden] {
+  display: none;
+}
+
+.review-main {
+  min-width: 0;
+}
+
+.rail-toggle {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.rail-toggle[aria-pressed="true"] {
+  color: var(--accent);
+}
+
+.review-keys {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-sm);
+}
+
+/* The rail is exactly as tall as the window leaves it, and its panels scroll
+ * inside it, so the form and the events never push the page into scrolling
+ * away from the player. */
+.review-rail {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - var(--rail-chrome));
+  min-height: 24rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background-color: var(--bg-surface);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+
+.rail-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.rail-tabs [role="tab"] {
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  padding: var(--sp-2) var(--sp-2);
+  margin-bottom: -1px;
+  font-size: var(--fs-md);
+  font-weight: 550;
+  color: var(--text-muted);
+}
+
+.rail-tabs [role="tab"]:hover {
+  color: var(--text);
+  background: none;
+}
+
+.rail-tabs [role="tab"][aria-selected="true"] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.rail-count {
+  margin-left: 0.2em;
+  padding: 0 0.45em;
+  border-radius: var(--r-pill);
+  background-color: var(--bg-surface-2);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-subtle);
+}
+
+.rail-tabs .save-status {
+  padding-right: var(--sp-1);
+}
+
+.rail-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-3) var(--sp-4);
+}
+
+.rail-panel[hidden] {
+  display: none;
+}
+
+/* The event list fills the rail rather than capping itself: the rail is the
+ * scroll container now, and the list's own frame would be a box in a box. */
+.rail-events {
+  padding: 0;
+}
+
+.rail-events .marker-list {
+  flex: 1;
+  max-height: none;
+  border: none;
+  border-radius: 0;
+  background: none;
+}
+
+.event-filters {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  background-color: var(--bg-surface);
+}
+
+.event-filter {
+  padding: 0.2em 0.65em;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.event-filter[aria-pressed="true"] {
+  border-color: var(--accent);
+  background-color: var(--accent-soft);
+  color: var(--text);
+}
+
+.event-filter-count {
+  margin-left: 0.15em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-subtle);
+}
+
+.marker-count {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The row the playhead most recently passed. */
+.marker-list li.current {
+  background-color: var(--accent-soft);
+}
+
+/* Too narrow for the two side by side: the rail goes under the player and
+ * the page scrolls to it, which is the one layout where that is acceptable,
+ * because there is no room to show both anyway. */
+@media (max-width: 1100px) {
+  .review-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .review-rail {
+    height: auto;
+    max-height: none;
+  }
+
+  .rail-panel {
+    overflow-y: visible;
+  }
 }
 
 .player-wrap {
@@ -2048,48 +2294,139 @@ button.small {
   font-weight: 600;
 }
 
-.review-game-title {
+/* The review form in the rail. Sections are divided by a rule rather than
+ * boxed, because the rail is already the box. It is a column at least as tall
+ * as the rail, so the notes can take whatever height the rest leaves. */
+.review-form {
+  flex: 1 0 auto;
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
+  flex-direction: column;
+}
+
+.review-section {
+  padding: var(--sp-3) 0;
+  border-top: 1px solid var(--border);
+}
+
+.review-section:first-child {
+  padding-top: 0;
+  border-top: none;
+}
+
+.review-section h3 {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--text-subtle);
+}
+
+.rating-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: var(--sp-3);
-  margin: 0;
+  padding: var(--sp-1) 0;
+}
+
+.rating-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
   font-weight: 550;
+  font-size: var(--fs-md);
 }
 
-.result-pill {
-  padding: 0.1em 0.6em;
+.rating-row .segmented button {
+  padding: 0.25em 0.65em;
+}
+
+/* Says the answer came from the recording, not from the user, until the
+ * user changes it. */
+.auto-tag {
+  padding: 0 0.45em;
   border-radius: var(--r-pill);
-  font-size: var(--fs-sm);
+  background-color: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-xs);
   font-weight: 600;
-}
-
-.result-pill[data-outcome="win"] {
-  background-color: var(--win-bg);
-  color: var(--win-fg);
-}
-
-.result-pill[data-outcome="loss"] {
-  background-color: var(--loss-bg);
-  color: var(--loss-fg);
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
 }
 
 .review-numbers {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
-  gap: var(--sp-4);
-  padding-top: var(--sp-3);
-  border-top: 1px solid var(--border);
+  grid-template-columns: 1.5fr 1fr 1fr;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
 }
 
 .review-numbers .field {
   display: grid;
   gap: var(--sp-1);
   align-content: start;
+  min-width: 0;
+}
+
+.field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.review-numbers input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.field-with-button {
+  display: flex;
+  gap: var(--sp-1);
+}
+
+.clock-btn {
+  flex-shrink: 0;
 }
 
 .review-numbers .field.invalid input {
   border-color: var(--loss-fg);
+}
+
+.field-hint {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--text-subtle);
+}
+
+.review-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+
+.review-section-head h3 {
+  margin: 0;
+}
+
+.stamp-btn {
+  padding: 0.15em 0.6em;
+  font-size: var(--fs-sm);
+}
+
+.review-section h3 + .field-hint {
+  margin-top: 0;
+}
+
+.review-section .review-checklist li,
+.review-section .review-takeaways li {
+  gap: var(--sp-2);
+  padding: var(--sp-1) 0;
+  font-size: var(--fs-md);
 }
 
 .review-checklist,
@@ -2137,15 +2474,38 @@ button.small {
   margin-top: var(--sp-3);
 }
 
+.review-section .takeaway-add {
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+/* One line until there is more to say; grows with what is typed. */
+.takeaway-add textarea {
+  resize: none;
+  field-sizing: content;
+  min-height: 2.2em;
+  max-height: 8em;
+}
+
 .takeaway-add textarea,
 .objective-add input {
   flex: 1;
 }
 
+/* The notes take whatever height the rest of the rail leaves. */
+.review-notes-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 0;
+}
+
 .review-notes {
+  flex: 1;
   width: 100%;
+  min-height: 6rem;
   box-sizing: border-box;
-  resize: vertical;
+  resize: none;
 }
 
 .objective-list {

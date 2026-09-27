@@ -2619,6 +2619,7 @@ mod tests {
         crate::recorder::CaptureProblem::SourceFailed {
             source: "game".into(),
             reason: "process-loopback activation for PID 9 was refused: (0x80070005)".into(),
+            explained: None,
         }
     }
 
@@ -2756,6 +2757,7 @@ mod tests {
     fn worker_died() -> crate::recorder::CaptureProblem {
         crate::recorder::CaptureProblem::EndedEarly {
             reason: "the capture worker stopped at 2:58: pid 7 exited with code 1".into(),
+            explained: None,
         }
     }
 

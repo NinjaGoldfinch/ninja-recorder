@@ -31,9 +31,21 @@ fn file_name(path: &Path) -> String {
 pub struct Opened {
     /// `game`, `microphone`, `desktop`, or the application's executable.
     pub name: String,
-    /// What it captures (`PID 1234, the game window's owner, …`, or the
-    /// endpoint) when it opened; why not when it did not.
-    pub outcome: Result<String, String>,
+    pub outcome: Outcome,
+}
+
+/// What became of a planned source at start.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// It opened: what it captures (`PID 1234, the game window's owner, …`,
+    /// or the endpoint).
+    Opened(String),
+    /// It was not there to capture (Discord not running, no microphone
+    /// plugged in), and why: the preset meeting a machine without it, which
+    /// is not a failure (`own::problem::is_failure`, #296).
+    Absent(String),
+    /// It was there and would not open, and why.
+    Failed(String),
 }
 
 /// The start line: `own: recording <file>: <W>x<H> from <adapter>, encoder
@@ -59,8 +71,9 @@ pub fn render_start(
         let each: Vec<String> = sources
             .iter()
             .map(|s| match &s.outcome {
-                Ok(what) => format!("{}={what}", s.name),
-                Err(why) => format!("{}=failed ({why})", s.name),
+                Outcome::Opened(what) => format!("{}={what}", s.name),
+                Outcome::Absent(why) => format!("{}=left out ({why})", s.name),
+                Outcome::Failed(why) => format!("{}=failed ({why})", s.name),
             })
             .collect();
         each.join(", ")
@@ -121,8 +134,13 @@ pub struct SourceStop {
     pub raw_ppm: Option<f64>,
     /// Single frames dropped or repeated to hold the audio on QPC.
     pub slips: u64,
-    /// Holes past the gap threshold, filled with silence.
+    /// Holes filled with silence at once: past the gap threshold, at a
+    /// discontinuity, or a jump.
     pub gaps: u64,
+    /// Of the gaps and overlaps, those nothing flagged: the stamps left the
+    /// sample count by more than 5 ms and stayed there (`clock::AlignStats`).
+    /// A source that ran short, realigned and left out of `raw_ppm`.
+    pub jumps: u64,
     /// Times silence was written because no packet had come.
     pub holds: u64,
     /// The capture ended on an error of its own before the recording did.
@@ -138,6 +156,7 @@ impl SourceStop {
             raw_ppm: aligner.raw_ppm(),
             slips: s.slips_dropped + s.slips_repeated,
             gaps: s.gaps,
+            jumps: s.jumps,
             holds: s.holds,
             ended_early,
         }
@@ -198,8 +217,12 @@ pub fn render_stop(
                         (AudioClock::Qpc, None) => " raw=unmeasured".to_string(),
                         (AudioClock::Device, _) => String::new(),
                     };
+                    // Only when there were any: a clean source's line is
+                    // unchanged, and one that ran short says so.
+                    let jumps =
+                        if s.jumps > 0 { format!(" jumps={}", s.jumps) } else { String::new() };
                     format!(
-                        "{} clock={}{raw} slips={} gaps={} holds={}{}",
+                        "{} clock={}{raw} slips={} gaps={}{jumps} holds={}{}",
                         s.name,
                         s.clock.name(),
                         s.slips,
@@ -276,14 +299,14 @@ mod tests {
         let sources = vec![
             Opened {
                 name: "game".into(),
-                outcome: Ok("PID 4242 (the game window's owner, named League of Legends.exe)"
+                outcome: Outcome::Opened("PID 4242 (the game window's owner, named League of Legends.exe)"
                     .into()),
             },
-            Opened { name: "microphone".into(), outcome: Ok("default".into()) },
-            Opened { name: "desktop".into(), outcome: Ok("default output".into()) },
+            Opened { name: "microphone".into(), outcome: Outcome::Opened("default".into()) },
+            Opened { name: "desktop".into(), outcome: Outcome::Opened("default output".into()) },
             Opened {
                 name: "Discord.exe".into(),
-                outcome: Ok("PID 77 (the top of Discord.exe's tree (6 processes))".into()),
+                outcome: Outcome::Opened("PID 77 (the top of Discord.exe's tree (6 processes))".into()),
             },
         ];
         let line = render_start(
@@ -314,7 +337,7 @@ mod tests {
                 encoder: "the software H.264 MFT".into(),
                 reason: "no hardware H.264 encoder matches a hardware adapter".into(),
             },
-            &[Opened { name: "game".into(), outcome: Ok("PID 1".into()) }],
+            &[Opened { name: "game".into(), outcome: Outcome::Opened("PID 1".into()) }],
             &layout(&["Game"]),
         );
         assert!(line.contains(
@@ -330,16 +353,41 @@ mod tests {
             (1920, 1080),
             "AMD Radeon RX 6800",
             &Status::Ready { encoder: "AMDh264Encoder".into() },
-            &[Opened {
-                name: "Discord.exe".into(),
-                outcome: Err("no Discord.exe process is running".into()),
-            }],
+            &[
+                Opened {
+                    name: "microphone".into(),
+                    outcome: Outcome::Failed("Access is denied. (0x80070005)".into()),
+                },
+                Opened {
+                    name: "Discord.exe".into(),
+                    outcome: Outcome::Absent("no Discord.exe process is running".into()),
+                },
+            ],
             &AudioLayout { sources: Vec::new(), tracks: Vec::new() },
         );
         assert!(line.ends_with(
-            "sources: Discord.exe=failed (no Discord.exe process is running); tracks: none \
-             (video only)"
+            "sources: microphone=failed (Access is denied. (0x80070005)), Discord.exe=left out \
+             (no Discord.exe process is running); tracks: none (video only)"
         ));
+    }
+
+    /// #296: Discord not running is the preset meeting a machine without
+    /// it, not a failure, and the start line does not call it one.
+    #[test]
+    fn an_absent_source_is_left_out_not_failed() {
+        let line = render_start(
+            path(),
+            (2, 2),
+            "a",
+            &Status::Ready { encoder: "e".into() },
+            &[Opened {
+                name: "Discord.exe".into(),
+                outcome: Outcome::Absent("no Discord.exe process is running".into()),
+            }],
+            &AudioLayout { sources: Vec::new(), tracks: Vec::new() },
+        );
+        assert!(line.contains("Discord.exe=left out (no Discord.exe process is running)"), "{line}");
+        assert!(!line.contains("failed"), "{line}");
     }
 
     #[test]
@@ -374,6 +422,7 @@ mod tests {
             raw_ppm: Some(-12.345),
             slips: 7,
             gaps: 1,
+            jumps: 0,
             holds: 3,
             ended_early: false,
         }
@@ -392,6 +441,7 @@ mod tests {
                         raw_ppm: None,
                         slips: 0,
                         gaps: 2,
+                        jumps: 0,
                         holds: 0,
                         ended_early: true,
                     },
@@ -431,6 +481,20 @@ mod tests {
         };
         let line = render_stop(path(), 60, &stop, &Ok(()), Some(0));
         assert!(line.contains("game clock=qpc raw=unmeasured slips=7"), "{line}");
+        assert!(!line.contains("jumps"), "{line}");
+    }
+
+    #[test]
+    fn stop_names_the_jumps_of_a_source_that_ran_short() {
+        let mut source = qpc("game");
+        source.jumps = 2;
+        let stop = Stop {
+            cadence: Cadence { ticks: 1, ..Cadence::default() },
+            audio: Some(AudioStop { sources: vec![source], clipped: 0 }),
+            fragments: None,
+        };
+        let line = render_stop(path(), 60, &stop, &Ok(()), None);
+        assert!(line.contains("slips=7 gaps=1 jumps=2 holds=3"), "{line}");
         assert!(line.contains("0.017 s, 1 ticks, 0.00% repeated"), "{line}");
     }
 
@@ -478,8 +542,9 @@ mod tests {
         aligner.stats.slips_dropped = 2;
         aligner.stats.slips_repeated = 3;
         aligner.stats.gaps = 1;
+        aligner.stats.jumps = 1;
         aligner.stats.holds = 4;
         let s = SourceStop::from_aligner("game", &aligner, false);
-        assert_eq!((s.slips, s.gaps, s.holds, s.raw_ppm), (5, 1, 4, None));
+        assert_eq!((s.slips, s.gaps, s.jumps, s.holds, s.raw_ppm), (5, 1, 1, 4, None));
     }
 }
