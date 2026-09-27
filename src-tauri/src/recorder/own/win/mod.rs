@@ -112,6 +112,9 @@ pub struct OwnRecorder {
     /// The client closed during a recording: end the worker after the stop.
     release_pending: bool,
     status: Status,
+    /// Whether the last encoder brought up was the software MFT, which is
+    /// what `software_encoding` answers (`Status::software_encoding`).
+    software: bool,
     /// The recording in flight.
     active: Option<Active>,
     /// For the faststart remux on stop; `None` skips it, as for libobs.
@@ -158,6 +161,7 @@ impl OwnRecorder {
             worker: None,
             release_pending: false,
             status: Status::Idle,
+            software: false,
             active: None,
             ffmpeg_path,
             lost: None,
@@ -341,6 +345,7 @@ impl Recorder for OwnRecorder {
             audio.sources.len(),
             plan::describe(&audio)
         );
+        self.software = status.software_encoding(self.software);
         self.status = status;
 
         // The origin, last: see the doc comment above.
@@ -492,6 +497,13 @@ impl Recorder for OwnRecorder {
         self.status.backend_name()
     }
 
+    /// The last bring-up chose the software MFT, and no later one has chosen
+    /// hardware. Kept through `release`, so Settings can still say so once
+    /// the client has closed.
+    fn software_encoding(&self) -> bool {
+        self.software
+    }
+
     fn current_file(&self) -> Option<PathBuf> {
         self.active.as_ref().map(|active| active.path.clone())
     }
@@ -555,9 +567,10 @@ impl Recorder for OwnRecorder {
                 if let Status::Software { encoder, reason } = &status {
                     warn!(
                         "recorder",
-                        "own backend: will encode in software with {encoder}: {reason}"
+                        "own backend: software H.264 encoding with {encoder}: {reason}"
                     );
                 }
+                self.software = status.software_encoding(self.software);
                 self.status = status;
                 Ok(())
             }

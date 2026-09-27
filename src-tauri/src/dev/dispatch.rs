@@ -327,7 +327,8 @@ mod tests {
         let idle = dispatch_dev(&ctx, "dev_health", json!({})).await.unwrap();
         assert_eq!(idle["is_recording"], json!(false));
         assert_eq!(idle["recorder"]["backend"], json!("stub"));
-        assert_eq!(idle["recorder"]["configured"], json!("libobs"));
+        // A fresh library has nothing saved; the daemon picks (#243).
+        assert_eq!(idle["recorder"]["configured"], json!("unset"));
         assert_eq!(idle["recorder"]["current_file"], Value::Null);
         // The stub has no worker, which is not the same as a worker that is down.
         assert_eq!(idle["recorder"]["worker_running"], Value::Null);

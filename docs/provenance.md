@@ -178,12 +178,12 @@ identifier. cargo-deny warns on every run and still matches the exceptions.
 It is the fork's manifest, not ours, and WS8 deletes the dependency, so it is
 left alone rather than carried as a patch.
 
-### WS1.7: `[bans] wildcards` is `warn`, not `deny`
+### ~~WS1.7: `[bans] wildcards` is `warn`, not `deny`~~ (paid, WS1.7)
 
 A git dependency with no `version` key is a wildcard, and cargo-deny has no
-per-dependency allow for one. So the key is `warn` until the branch pin above
-becomes a tag pin, at which point WS1.7 flips it to `deny`. Leaving it at
-`warn` afterwards would let the next wildcard in unnoticed.
+per-dependency allow for one. So the key was `warn` until the branch pin above
+became a tag pin, and WS1.7 then flipped it to `deny`. Leaving it at `warn`
+afterwards would have let the next wildcard in unnoticed.
 
 ### ffmpeg
 

@@ -19,6 +19,8 @@ const refreshDiskUsage = vi.hoisted(() => vi.fn());
 vi.mock("./library.svelte", () => ({ refreshLibrary, refreshDiskUsage }));
 const refreshUpdateStatus = vi.hoisted(() => vi.fn());
 vi.mock("./update.svelte", () => ({ refreshUpdateStatus }));
+const refreshCaptureBackend = vi.hoisted(() => vi.fn());
+vi.mock("./settings.svelte", () => ({ refreshCaptureBackend }));
 
 let status: typeof import("./status.svelte");
 let about: typeof import("./about.svelte");
@@ -52,6 +54,7 @@ beforeEach(async () => {
   refreshLibrary.mockReset();
   refreshDiskUsage.mockReset();
   refreshUpdateStatus.mockReset();
+  refreshCaptureBackend.mockReset();
 
   about = await import("./about.svelte");
   status = await import("./status.svelte");
@@ -148,6 +151,25 @@ describe("what it refreshes, and when", () => {
     vi.advanceTimersByTime(5000);
     await settle();
     expect(refreshUpdateStatus).toHaveBeenCalledOnce();
+  });
+
+  // The own backend learns its encoder when the client opens, so the
+  // software-encoding notice in Settings can only appear after an edge.
+  it("re-reads the capture backend on a state change and not otherwise", async () => {
+    backend(supervisor("Idle"));
+    status.initStatus();
+    await settle();
+    expect(refreshCaptureBackend).toHaveBeenCalledOnce();
+
+    refreshCaptureBackend.mockClear();
+    vi.advanceTimersByTime(5000);
+    await settle();
+    expect(refreshCaptureBackend).not.toHaveBeenCalled();
+
+    backend(supervisor("ClientRunning"));
+    vi.advanceTimersByTime(5000);
+    await settle();
+    expect(refreshCaptureBackend).toHaveBeenCalledOnce();
   });
 
   it("refreshes the library when a game stops finalizing", async () => {
