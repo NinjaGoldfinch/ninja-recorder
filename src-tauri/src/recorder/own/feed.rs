@@ -37,6 +37,11 @@ pub struct Packet {
     pub frames: u32,
     /// WASAPI's `AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY`, or a re-anchor.
     pub discontinuity: bool,
+    /// `hns` was estimated from when the packet was taken, because its own
+    /// stamp failed `clock::check_stamp` or was flagged as a timestamp error
+    /// (`clock::Stamper::substituted`). A restarted source is re-anchored at
+    /// its first packet that is not ([`crate::recorder::own::mix::TrackMix::restart`]).
+    pub estimated: bool,
     /// Interleaved L R, full scale -1.0..1.0 and unclamped (`pcm::to_stereo_f32`):
     /// the mixer clamps once, after summing. Zeros for a packet the engine
     /// marked silent.
@@ -231,6 +236,7 @@ mod tests {
             hns: ORIGIN + hns_of(samples),
             frames: PACKET,
             discontinuity: false,
+            estimated: false,
             pcm: vec![value; PACKET as usize * 2],
             clock,
         }
@@ -323,6 +329,7 @@ mod tests {
                 hns,
                 frames: PACKET,
                 discontinuity,
+                estimated: false,
                 pcm: vec![1.0; PACKET as usize * 2],
                 clock: AudioClock::Device,
             });

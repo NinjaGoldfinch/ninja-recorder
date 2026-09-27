@@ -308,6 +308,9 @@ pub struct TrackMix {
     /// source `sums[t][j]`.
     sums: Vec<Vec<usize>>,
     mixdowns: Vec<Mixdown>,
+    /// Per source, whether it was restarted and has not yet sent a packet
+    /// with a real stamp to re-anchor on ([`TrackMix::restart`]).
+    restarted: Vec<bool>,
 }
 
 impl TrackMix {
@@ -316,7 +319,22 @@ impl TrackMix {
     pub fn new(rate: u32, origin: i64, layout: &AudioLayout) -> Self {
         let sums: Vec<Vec<usize>> = layout.tracks.iter().map(|t| t.sources.clone()).collect();
         let mixdowns = sums.iter().map(|s| Mixdown::new(rate, origin, s.len())).collect();
-        TrackMix { sums, mixdowns }
+        let restarted = vec![false; layout.sources.len()];
+        TrackMix { sums, mixdowns, restarted }
+    }
+
+    /// Source `source` has been restarted on a new capture: a reconnected
+    /// game's new process (#302). Its stamps start from wherever the new
+    /// stream does, which is not where the old one left off, so its first
+    /// packet with a real stamp is marked a discontinuity and every track's
+    /// aligner re-anchors there, placing it exactly as a source that joins
+    /// late is placed, rather than slipping single frames towards it and
+    /// counting the step as drift (#313). A packet stamped from its arrival
+    /// before that is placed by the usual rules; it is no anchor.
+    pub fn restart(&mut self, source: usize) {
+        if let Some(restarted) = self.restarted.get_mut(source) {
+            *restarted = true;
+        }
     }
 
     pub fn tracks(&self) -> usize {
@@ -344,7 +362,14 @@ impl TrackMix {
     }
 
     /// A packet from `source`, to every track that sums it.
-    pub fn push(&mut self, source: usize, packet: Packet) {
+    pub fn push(&mut self, source: usize, mut packet: Packet) {
+        if let Some(restarted) = self.restarted.get_mut(source)
+            && *restarted
+            && !packet.estimated
+        {
+            *restarted = false;
+            packet.discontinuity = true;
+        }
         for (sums, mixdown) in self.sums.iter().zip(&mut self.mixdowns) {
             if let Some(lane) = sums.iter().position(|&s| s == source) {
                 mixdown.push(lane, packet.clone());
@@ -577,6 +602,7 @@ mod tests {
             hns: ORIGIN + hns_of(frames_from_origin),
             frames,
             discontinuity: false,
+            estimated: false,
             pcm: vec![value; frames as usize * 2],
             clock: AudioClock::Qpc,
         }
@@ -690,6 +716,38 @@ mod tests {
         assert_eq!(tracks.first_lane(2), Some((0, 2)));
         assert_eq!(tracks.first_lane(3), None);
         assert_eq!(tracks.feed(1).unwrap().aligner().written(), 100 * BLOCK);
+    }
+
+    /// #313 through the tracks: a restarted game re-anchors on its first
+    /// packet with a real stamp, not on one stamped from its arrival, which
+    /// can be off by a packet or two of queueing.
+    #[test]
+    fn a_restarted_source_reanchors_on_its_first_real_stamp() {
+        let layout = AudioPreset::Game.layout();
+        let mut tracks = TrackMix::new(RATE, ORIGIN, &layout);
+        for block in 0..100u64 {
+            tracks.push(0, packet(block * BLOCK, BLOCK as u32, 0.25));
+        }
+        tracks.restart(0);
+        // The new process's first packet, flagged as a timestamp error and
+        // stamped from its arrival 100 ms on: 15 ms later than it was.
+        let resumed = 110 * BLOCK;
+        let mut estimated = packet(resumed + 720, BLOCK as u32, 0.5);
+        estimated.estimated = true;
+        tracks.push(0, estimated);
+        for block in 1..500u64 {
+            tracks.push(0, packet(resumed + block * BLOCK, BLOCK as u32, 0.5));
+        }
+        let end = hns_of(resumed + 500 * BLOCK);
+        let mut out = Out::default();
+        tracks.write(end, end, &mut |_, pcm: &[i16], position: u64| out.writer()(pcm, position))
+            .unwrap();
+        let s = &tracks.feed(0).unwrap().aligner().stats;
+        assert_eq!(s.discontinuities, 1, "the flag went to the first real stamp");
+        assert_eq!(s.slips_dropped + s.slips_repeated + s.jumps, 0, "{s:?}");
+        assert_eq!((s.raw_drift_last, s.raw_drift_worst, s.residual_last), (0, 0, 0));
+        assert_eq!(out.frames(), resumed + 500 * BLOCK);
+        assert_eq!((out.at(resumed), out.at(resumed + 3 * BLOCK)), (0, level(0.5)));
     }
 
     /// The Desktop preset: the game feeds only its stem, and the mix is the
