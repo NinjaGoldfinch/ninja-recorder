@@ -161,7 +161,7 @@ notify-rust = "4"
 # than reimplementing it — including reading Task Manager's own
 # `StartupApproved\Run` override, so an entry switched off from the Startup
 # tab reads as disabled.
-auto-launch = "0.5"
+auto-launch = "0.6"
 # In-app updates (DEVELOPMENT.md §14). Windows-only in practice: `latest.json`
 # carries a `windows-x86_64` entry and nothing else, so a macOS build's check
 # simply finds nothing. Registered in `lib.rs` only when the `devtools` feature
