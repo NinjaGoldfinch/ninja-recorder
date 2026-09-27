@@ -284,8 +284,18 @@ user's own account of their sessions.
 `recordings.audio_tracks_json` holds a serialized `AudioLayout`: the ordered
 track list and the sources feeding each one ([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#25-multi-track-audio)).
 A `recording_audio_tracks` table would be the orthodox shape, and it would buy
-nothing here: the value is written once, always read whole, never queried by
-predicate, and at most six rows long.
+nothing here: the value is always read whole, never queried by predicate, and
+at most six rows long.
+
+It is written when the row is opened, from the layout the backend reports once
+`start` returns (`Recorder::current_audio`), and rewritten at finalize from
+what `stop` reports, which wins where the two differ (#311). Before that it was
+written only at finalize, so a recording finished by startup recovery had no
+layout, and the review player offered only its first track. Recovery fills a
+layout that is still NULL, for a row begun by a build that stored none, from
+the file's audio track count: the current preset's labels when its layout has
+that many tracks, otherwise `Everything` and `Track 2`, `Track 3`, and so on,
+with no sources. It never replaces one the start stored.
 
 The upsert in `insert_recording` treats it specially:
 
@@ -553,7 +563,9 @@ stateDiagram-v2
     Recovered --> [*]: reconcile
     note right of Open
         Hidden from the library.
-        Markers, samples, the
+        The audio layout is
+        written at the start;
+        markers, samples, the
         match summary and the
         scoreboard are written
         here, as the polls
@@ -596,11 +608,11 @@ leaves it alone.
 
 | Writer | Method | `finished_at` |
 |---|---|---|
-| Supervisor, at start | `begin_recording` | NULL, and upserts on `path` so a leftover row is reclaimed |
+| Supervisor, at start | `begin_recording` | NULL, and upserts on `path` so a leftover row is reclaimed. Writes the audio layout too |
 | Supervisor, per poll | `update_live_summary` | untouched: the row stays hidden while it fills in, summary columns, scoreboard and game identity alike |
 | Supervisor, at finalize | `finish_recording` | set, and matched **by id** |
 | `reconcile`, importing | `insert_recording` | set from the file's mtime |
-| `recover_unfinished` | `recover_recording` | set from the file's mtime |
+| `recover_unfinished` | `recover_recording` | set from the file's mtime. Fills a NULL audio layout from the file's track count |
 
 The finalize matches by id rather than upserting on `path` because the path a
 recording starts with is a prediction (`RecordConfig::expected_output_path`)
@@ -635,7 +647,8 @@ the bug that motivated all of this.
 Recovery also repairs the file (#233). A killed recording is a fragmented MP4
 that never reached the faststart remux a clean stop runs, so it came back
 playable but with no scrub bar. `recovery_action` decides from the file's own
-boxes, because an unfinished row's `audio_tracks_json` is still NULL, and the
+boxes, which are the fact where the row's `audio_tracks_json` is a claim (and
+NULL on a row an older build began), and the
 remux runs before the duration probe so the probe reads the file the library
 will play. A failed remux leaves the file as it was, and no failure along
 the way stops the row being finished. The one change made without ffmpeg is
@@ -695,7 +708,11 @@ flowchart TB
     ACT -->|"Leave<br/><small>complete, unfragmented</small>"| PROBE0
     ACT -->|"Unplayable<br/><small>no whole fragment,<br/>or not an MP4</small>"| PROBE0
     PROBE0["probe::duration_s<br/><small>the session clock died with the daemon</small>"]
-    PROBE0 --> FIN["recover_recording<br/><small>duration_s, size_bytes, finished_at from mtime.<br/>Markers untouched; champion and KDA stay NULL</small>"]
+    PROBE0 --> LAYOUT{"Row has an<br/>audio layout?"}
+    LAYOUT -->|"yes: begin_recording<br/>stored it"| FIN
+    LAYOUT -->|"no: an older build<br/>began it"| GUESS["recovered_layout<br/><small>from the moov's audio track count:<br/>the preset's labels if the count matches,<br/>else Everything, Track 2 …; none if no audio<br/>or no whole moov</small>"]
+    GUESS --> FIN
+    FIN["recover_recording<br/><small>duration_s, size_bytes, finished_at from mtime;<br/>audio layout only where it was NULL.<br/>Markers untouched; champion and KDA stay NULL</small>"]
     DROP0 --> REP0["RecoveryReport<br/><small>recovered, abandoned_removed,<br/>still_writing</small>"]
     FIN --> REP0
     LATER --> REP0

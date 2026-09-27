@@ -876,8 +876,15 @@ nothing, because a KDA moves on a kill rather than on a tick, and the loading
 screen and the end-of-game screen produce repeats and nothing else.
 
 **What stays at the finalize is what the finalize is the source of**: the
-duration from the session clock, the file's size, the audio layout and the
-diagnostics. The scoreboard blob was on that list and should not have been
+duration from the session clock, the file's size and the diagnostics. The
+audio layout was on that list too, and is now written at the start as well
+(#311): a recovered recording had all its tracks on disk and no layout on the
+row, so the player offered only the mix. The backend knows its layout once
+`start` returns (`Recorder::current_audio`, the sources that actually opened),
+and the row is opened after that, so the layout goes in with it. The finalize
+still rewrites it from what `stop` reports, which has the last word.
+Recovery fills one only where the start stored none, from the
+file's track count, and says less: labels without sources. The scoreboard blob was on that list and should not have been
 (#200): it is read off the polls exactly as the KDA is, so a recovered card had
 a champion and a score and no items, spells or runes. It now rides the same
 write, held to the same rule, because the session keeps the last poll that

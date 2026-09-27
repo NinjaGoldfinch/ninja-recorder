@@ -422,7 +422,7 @@ mod tests {
     #[test]
     fn a_row_fills_in_a_recorded_game_without_overwriting_it() {
         let db = Db::open_temporary().unwrap();
-        let recording = db.begin_recording("C:/vods/a.mp4", 3 * MIN).unwrap();
+        let recording = db.begin_recording("C:/vods/a.mp4", 3 * MIN, None).unwrap();
         let game = db.start_game(Some(recording), 3 * MIN).unwrap();
         db.finish_game(game, &GameFacts {
             champion: Some("Viego".into()),
