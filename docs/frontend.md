@@ -699,6 +699,13 @@ library: there are about 170 champions, a square is around 7 KB, and a library
 of any size converges on the ones its owner actually meets. Ten times the names
 asked for is not ten times the disk.
 
+Items are asked for across the whole board on the same argument, because the
+matchup draws the lane opponent's seven slots beside ours. `collect` takes every
+player's items rather than `laneOpponent`'s, so it cannot disagree with the row
+about who the opponent was, and the set converges on the item catalogue. It
+once asked for ours alone, which left the opponent's slots blank except where
+an item happened to appear in one of our builds elsewhere in the library.
+
 So `icons.ts` collects what the visible rows want, asks once (`resolve_icons`),
 and caches the answer for the session. Misses are cached too: a champion Data
 Dragon has never heard of must not be asked about again on every render.

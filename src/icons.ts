@@ -88,14 +88,22 @@ function collect(rows: RecordingRow[]): Wanted {
     // rather than by the library — there are about 170 champions, a square
     // is around 7 KB, and a library of any size converges on the ones its
     // owner actually meets. Ten times the names is not ten times the disk.
+    //
+    // Items are asked for the same way, and for the same reason: the row
+    // draws the lane opponent's build beside ours. Asking for ours alone
+    // left theirs blank except where it happened to share an item with a
+    // build of ours somewhere else in the library. Every player rather than
+    // `laneOpponent`'s answer, so this cannot disagree with it about who
+    // that is — and the set converges on the item catalogue, a few hundred
+    // squares, whatever the library's size.
     for (const player of board?.players ?? []) {
       if (player.champion) wanted.champions.add(player.champion);
+      for (const item of player.items) wanted.items.add(item);
     }
 
     const us = board?.players.find((p) => p.is_us);
     if (!us) continue;
 
-    for (const item of us.items) wanted.items.add(item);
     for (const spell of us.spells) wanted.spells.add(spell);
     for (const id of us.spell_ids ?? []) wanted.spellIds.add(id);
     if (board?.our_runes) {
