@@ -4210,3 +4210,39 @@ each kind a key (M, G, ?). M was already mute, and the person using this asked
 for one key to remember, so `n` opens an editor with a kind picker, and the
 kind defaults to a neutral `note`. That needed a fifth kind, so it came with a
 migration rather than overloading one of the four.
+
+## 21. Derived data: keep the documents, re-derive the rest (#349)
+
+**Decision.** Keep each game's raw League documents, gzipped as received, and
+treat everything shown about a game as an extraction over them. The documents
+are the match-history game, its timeline, the end-of-game block, the current
+summoner (which is what says which player was "us"), and the last live
+`allgamedata` snapshot that had players.
+
+**Why.** Every field the app has added since v1 (positions, the lane matchup,
+the trinket, the ADC's boots, every player's runes) reached recordings made
+*before* it only by fetching from the League client again, and only as far
+back as the client's match history goes. Recordings from before #346 show no
+opponent runes for exactly that reason. Keeping only the extracted columns
+makes every change to an extraction a data loss for older games; keeping the
+documents makes it a re-run.
+
+**Why not model every field instead.** A match document has about 150 fields
+per player and the app reads about 20. Modelling all of them now would be a
+large, speculative schema, and it would still lose whatever Riot adds next.
+
+**Costs.**
+
+- **Size.** A document is tens of kilobytes of JSON and a few once gzipped,
+  beside a recording of a gigabyte or more. They go with the recording
+  (CASCADE), so retention needs nothing new.
+- **Privacy.** The match-history documents name the nine other players; the
+  live snapshot names only us, because the client anonymises the rest. That is
+  fine on the user's own disk. **Anything that ever exports or shares a
+  recording must leave `game_documents` behind.**
+
+**What follows from it.** Re-deriving is versioned, so an extraction that
+changes knows which recordings it has not reached yet, and the daemon catches
+them up on its own, from the archive where it can and from the client where it
+must (#349's plan). Nothing here needs a backfill button.
+

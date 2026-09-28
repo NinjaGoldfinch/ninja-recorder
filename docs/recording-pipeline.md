@@ -46,6 +46,7 @@ sequenceDiagram
         S->>S: scoreboard (last good) → items, trinket, spells, every player's runes
         S->>S: GameIdentity::absorb → game id, queue
         S->>D: write them as they arrive (so a crash keeps them)
+        S->>D: archive the raw snapshot, at most once a minute (#349)
         opt the response is unreadable (not a 404)
             G-->>S: something that does not parse
             S->>S: mark the session "unreadable since the last sample"<br/>(first one of the game saved to logs/)
@@ -57,6 +58,7 @@ sequenceDiagram
     S->>R: stop()
     R-->>S: finalized MP4 path
     S->>D: finish_recording; rewrite markers + samples<br/>against the final alignment
+    S->>D: archive the last raw snapshot with players (#349)
     S->>D: finish_game (champion, matchup, result, end; widen block)
     S->>D: retention::enforce_now
     S-->>UI: emit "library-changed"

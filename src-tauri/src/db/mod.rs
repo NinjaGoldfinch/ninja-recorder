@@ -5,6 +5,7 @@
 //! metadata. `reconcile` (submodule) is what keeps the two in sync when a
 //! user touches the recordings folder directly.
 
+pub mod documents;
 mod in_use;
 pub mod pool;
 pub mod reconcile;
@@ -461,6 +462,27 @@ static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
         -- converted, so a time typed into its free notes stays text.
         ALTER TABLE game_reviews ADD COLUMN stamps_converted INTEGER NOT NULL DEFAULT 1;
         UPDATE game_reviews SET stamps_converted = 0;
+        ",
+    ), M::up(
+        "
+        -- The raw documents a recording's data is derived from (#349): the
+        -- match-history game, its timeline, the end-of-game block, the
+        -- current summoner they were read as, and the last live snapshot.
+        -- Everything the library and review show is extracted from these,
+        -- so a change to an extraction can be re-run over them rather than
+        -- needing the League client again.
+        --
+        -- Gzipped JSON text. One row per kind per recording, replaced when
+        -- a kind is fetched again. CASCADE, like markers and samples: the
+        -- documents describe this recording, and go with it.
+        CREATE TABLE game_documents (
+            recording_id  INTEGER NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+            kind          TEXT NOT NULL
+                          CHECK (kind IN ('match', 'timeline', 'eog', 'summoner', 'live')),
+            fetched_at    INTEGER NOT NULL, -- unix millis
+            body          BLOB NOT NULL,    -- gzip of the JSON text as received
+            PRIMARY KEY (recording_id, kind)
+        );
         ",
     )];
     let count = migrations.len() as i64;

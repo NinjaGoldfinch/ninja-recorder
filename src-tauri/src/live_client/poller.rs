@@ -7,6 +7,7 @@ use crate::{debug, warn};
 use super::client::{LiveClientDataClient, LiveClientError};
 use super::events::AllGameData;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Where the first unreadable response of a game is kept, in the logs
@@ -81,7 +82,7 @@ pub async fn watch<OnSnapshot, OnUnreadable, OnDown>(
     mut on_unreadable: OnUnreadable,
     mut on_down: OnDown,
 ) where
-    OnSnapshot: FnMut(AllGameData) + Send,
+    OnSnapshot: FnMut(AllGameData, Arc<str>) + Send,
     OnUnreadable: FnMut() + Send,
     OnDown: FnMut() + Send,
 {
@@ -92,11 +93,11 @@ pub async fn watch<OnSnapshot, OnUnreadable, OnDown>(
 
     loop {
         match client.fetch_all_game_data().await {
-            Ok(snapshot) => {
+            Ok((snapshot, raw)) => {
                 backoff = poll_interval;
                 failures = 0;
                 was_up = true;
-                on_snapshot(snapshot);
+                on_snapshot(snapshot, raw);
                 tokio::time::sleep(poll_interval).await;
             }
             Err(e) if !e.means_endpoint_gone() => {

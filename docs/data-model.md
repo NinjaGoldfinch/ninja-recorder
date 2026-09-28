@@ -87,6 +87,7 @@ worked because there was one connection; they now use `Db::open_temporary()`.
 erDiagram
     recordings ||--o{ markers : "has"
     recordings ||--o{ samples : "has"
+    recordings ||--o{ game_documents : "derived from"
     recordings |o--o| games : "VOD of, SET NULL"
     blocks ||--o{ games : "groups"
     games ||--o| game_reviews : "has"
@@ -133,6 +134,12 @@ erDiagram
         REAL    video_time_s "aligned seek target"
         TEXT    kind "kill, death, assist, dragon, baron, herald, voidgrubs, turret, inhibitor, ace, multikill, first_blood, custom"
         TEXT    payload_json "raw event detail"
+    }
+    game_documents {
+        INTEGER recording_id PK "and FK, ON DELETE CASCADE"
+        TEXT    kind PK "match, timeline, eog, summoner, live"
+        INTEGER fetched_at "unix millis"
+        BLOB    body "gzip of the JSON as received"
     }
     samples {
         INTEGER id PK
@@ -281,6 +288,23 @@ user's own account of their sessions.
 | 7 | `recordings.diagnostics_json` (nullable) | What the app *observed* while making the recording, as against what the recording contains: how many Live Client Data polls landed, whether we were ever found in `allPlayers`, the alignment the markers were mapped through, which capture backend was live. None of it is derivable afterwards: the live API is gone the moment the game ends. JSON rather than a child table for the same reasons as `audio_tracks_json`, plus one more: a column is disposed of with its row, so retention and `delete_recording` need no cascade to get wrong |
 | 13 | `games`, `blocks`, `game_reviews`, `objectives`, `game_objectives`, `notes`, `takeaways`, and six indexes | WS9's VOD review. Hung off `games` rather than `recordings` so a review survives its VOD (see "The review tables outlive the recording" above). Reuses `markers` for events instead of adding an event table (#249). `takeaways` enforces exactly one owner with `CHECK ((game_id IS NULL) <> (block_id IS NULL))` |
 | 14 | `notes` rebuilt: `kind` gains `note`, and `created_at`; `game_reviews.stamps_converted` | WS9 P1's timed notes (#258). `note` is the neutral kind a note gets when none is picked, and every converted stamp's (#251). SQLite cannot alter a CHECK, so the table is rebuilt; nothing had written to it, but the copy keeps any rows. `stamps_converted` is a once-flag for turning the `m:ss` stamps P1's first `n` key wrote into the free notes into notes: existing reviews start at 0 and are converted on their next open (`Db::open_game_for_review`), and reviews made after the migration start at 1, so a time typed into their free notes stays text |
+| 15 | `game_documents` | The raw League documents each recording's data is derived from (#349): the match-history game, its timeline, the end-of-game block when it was this game's, the current summoner that says which player was us, and the last live `allgamedata` poll that had players. Gzipped JSON as received, not re-serialised, so the fields no struct models are kept too. CASCADE, like `markers` and `samples`. See "Derived data is re-derived from the archive" below |
+
+### Derived data is re-derived from the archive
+
+Everything the library and the review show about a game is **extracted** from
+a few raw documents, and since migration 15 those documents are kept
+(`game_documents`, `db::documents`). The live snapshot is archived by the
+supervisor as polls arrive (at most once a minute) and again at finalize. The
+post-game documents are archived by the deferred patch and the resume sweep
+(`match_summary::archive_lcu_documents`), each fetched as the text it arrived
+as.
+
+The point is that an extraction can change after a game is recorded. With only
+the extracted columns kept, a new field (the opponent's runes, the trinket's
+box) needs the League client again, and the client's match history only
+reaches back so far. With the documents kept, it is a re-run over local data.
+[DEVELOPMENT.md §21](../DEVELOPMENT.md) has the decision.
 
 ### The audio layout is JSON, not a child table
 

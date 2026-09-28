@@ -297,6 +297,13 @@ fn is_zero(n: &usize) -> bool {
     *n == 0
 }
 
+/// How often a game in progress archives its latest live snapshot (#349).
+///
+/// Finalize archives the last one regardless; this is for the recording a
+/// killed daemon never finalizes, which still keeps a snapshot at most this
+/// old. A ~50 KB compress and one row write a minute.
+const LIVE_DOCUMENT_EVERY: Duration = Duration::from_secs(60);
+
 struct RecordingSession {
     /// The `recordings` row opened when capture started, if it could be.
     ///
@@ -354,6 +361,13 @@ struct RecordingSession {
     /// establishes nothing new costs no write. Most polls do not: a KDA moves
     /// on a kill, not on a tick.
     last_live_written: Option<db::LiveMatch>,
+    /// The last poll that carried a player list, as the text it arrived as
+    /// (#349): the live half of the document archive. Last-good for the same
+    /// reason `scoreboard` is.
+    live_document: Option<Arc<str>>,
+    /// When `live_document` was last archived, so a game's polls archive it
+    /// once a minute rather than once a second (`LIVE_DOCUMENT_EVERY`).
+    live_document_archived_at: Option<Instant>,
     record_started_at: Instant,
     /// The stem `Recorder::start` was given. Kept rather than re-derived from
     /// `started_at_millis`: the format lives at the one call site that builds
@@ -1045,7 +1059,7 @@ impl Supervisor {
                 Duration::from_secs(1),
                 {
                     let sup = Arc::clone(&sup);
-                    move |snapshot| sup.on_snapshot(snapshot)
+                    move |snapshot, raw| sup.on_snapshot(snapshot, Some(raw))
                 },
                 {
                     let sup = Arc::clone(&sup);
@@ -1059,6 +1073,19 @@ impl Supervisor {
             .await;
         });
         *self.live_client_task.lock().unwrap() = Some(handle);
+    }
+
+    /// Archives a recording's live snapshot (#349). Best effort: a missing
+    /// document costs a later re-derivation its live half, never the game.
+    fn archive_live_document(&self, recording_id: i64, text: &str) {
+        if let Err(e) = self.db.put_document(
+            recording_id,
+            db::documents::DocumentKind::Live,
+            text,
+            timestamp_millis(),
+        ) {
+            warn!("documents", "could not archive the live snapshot: {e}");
+        }
     }
 
     fn stop_live_client_poll(&self) {
@@ -1077,7 +1104,7 @@ impl Supervisor {
     /// summary/marker/sample/alignment logic is a pure function of its
     /// inputs and can be unit-tested without a clock or a live game
     /// (CLAUDE.md: pure decision, thin I/O wrapper).
-    fn on_snapshot(self: &Arc<Self>, snapshot: AllGameData) {
+    fn on_snapshot(self: &Arc<Self>, snapshot: AllGameData, raw: Option<Arc<str>>) {
         self.dispatch(StateEvent::LiveClientUp);
 
         let mut guard = self.session.lock().unwrap();
@@ -1105,6 +1132,22 @@ impl Supervisor {
         // absorbed rather than assigned: a client that drops out later must
         // not be able to hand back an id this recording already read.
         session.game.absorb(*self.pending_game.lock().unwrap());
+        // Last-good, like the scoreboard: the polls after `GameEnd` carry no
+        // players and must not replace the one that did (#349).
+        if let Some(raw) = raw.filter(|_| !snapshot.all_players.is_empty()) {
+            session.live_document = Some(raw);
+        }
+        let live_document = match (session.recording_id, &session.live_document) {
+            (Some(_), Some(doc))
+                if session
+                    .live_document_archived_at
+                    .is_none_or(|at| at.elapsed() >= LIVE_DOCUMENT_EVERY) =>
+            {
+                session.live_document_archived_at = Some(Instant::now());
+                Some(Arc::clone(doc))
+            }
+            _ => None,
+        };
         // Only when this poll actually established something. A KDA moves on
         // a kill rather than on a tick, so most polls leave this `None` and
         // cost no write at all; the loading screen and the end-of-game screen
@@ -1119,6 +1162,10 @@ impl Supervisor {
         // sink inline, and holding this across it would put a `lib.rs` closure
         // inside the lock that every poll and the whole finalize contend for.
         drop(guard);
+
+        if let (Some(id), Some(doc)) = (recording_id, live_document) {
+            self.archive_live_document(id, &doc);
+        }
 
         // **Written now, not at finalize** (#150). This is the whole fix: a
         // daemon killed from here on leaves these markers in the database
@@ -1381,6 +1428,8 @@ impl Supervisor {
                     ever_matched: false,
                     game: lcu::GameIdentity::default(),
                     last_live_written: None,
+                    live_document: None,
+                    live_document_archived_at: None,
                     record_started_at: Instant::now(),
                     file_stem: config_file_stem.clone(),
                     started_at_millis,
@@ -1717,6 +1766,13 @@ impl Supervisor {
                                 ended_at: Some(ended_at),
                             },
                         );
+                        // The last live snapshot, as it arrived (#349). The
+                        // one every re-derivation of this recording's live
+                        // half reads, so it is written whatever the throttle
+                        // says.
+                        if let Some(doc) = session.as_ref().and_then(|s| s.live_document.as_deref()) {
+                            self.archive_live_document(id, doc);
+                        }
                         Some(id)
                     }
                     Err(e) => {
@@ -1894,7 +1950,8 @@ impl Supervisor {
     /// Feeds one Live Client Data payload through the real marker/sample
     /// pipeline, exactly as the poller would.
     pub fn dev_on_snapshot(self: &Arc<Self>, snapshot: AllGameData) {
-        self.on_snapshot(snapshot);
+        // A simulated snapshot has no text it arrived as, so nothing to archive.
+        self.on_snapshot(snapshot, None);
     }
 
     /// A read-only view of the in-flight recording session. Nothing else
@@ -2297,7 +2354,7 @@ mod tests {
         let (sup, counts) = counting_supervisor();
         sup.start_recording();
         for second in 0..11 {
-            sup.on_snapshot(snapshot(60.0 + f64::from(second), &[]));
+            sup.on_snapshot(snapshot(60.0 + f64::from(second), &[]), None);
         }
         assert_eq!(counts.collected.load(Ordering::Relaxed), 3, "polls 1, 6 and 11");
     }
@@ -2308,7 +2365,7 @@ mod tests {
         // this path is responsible for.
         let (sup, counts) = counting_supervisor();
         for second in 0..6 {
-            sup.on_snapshot(snapshot(f64::from(second), &[]));
+            sup.on_snapshot(snapshot(f64::from(second), &[]), None);
         }
         assert_eq!(counts.collected.load(Ordering::Relaxed), 0);
     }
@@ -2375,6 +2432,8 @@ mod tests {
             ever_matched: false,
             game: lcu::GameIdentity::default(),
             last_live_written: None,
+            live_document: None,
+            live_document_archived_at: None,
             record_started_at: Instant::now(),
             file_stem: "recording-0".to_string(),
             started_at_millis: 0,
@@ -2966,8 +3025,8 @@ mod tests {
 
         // A mid-game poll, then the one carrying GameEnd — which in a real
         // game is routinely the last poll that ever succeeds.
-        sup.on_snapshot(fixture_snapshot("mid-game"));
-        sup.on_snapshot(fixture_snapshot("won"));
+        sup.on_snapshot(fixture_snapshot("mid-game"), None);
+        sup.on_snapshot(fixture_snapshot("won"), None);
 
         sup.stop_recording();
 
@@ -3007,8 +3066,8 @@ mod tests {
     #[test]
     fn unreadable_polls_at_the_end_reach_the_trim() {
         let (tail, diagnostics) = tail_evidence_after(|sup| {
-            sup.on_snapshot(snapshot(10.0, &[]));
-            sup.on_snapshot(snapshot(11.0, &[]));
+            sup.on_snapshot(snapshot(10.0, &[]), None);
+            sup.on_snapshot(snapshot(11.0, &[]), None);
             sup.on_unreadable_poll();
             sup.on_unreadable_poll();
         });
@@ -3022,9 +3081,9 @@ mod tests {
     #[test]
     fn a_sample_after_unreadable_polls_clears_them() {
         let (tail, _) = tail_evidence_after(|sup| {
-            sup.on_snapshot(snapshot(10.0, &[]));
+            sup.on_snapshot(snapshot(10.0, &[]), None);
             sup.on_unreadable_poll();
-            sup.on_snapshot(snapshot(12.0, &[]));
+            sup.on_snapshot(snapshot(12.0, &[]), None);
         });
         assert_eq!(tail, crate::trim::TailEvidence::Clean);
     }
@@ -3034,9 +3093,9 @@ mod tests {
     #[test]
     fn a_frozen_clock_does_not_clear_unreadable_polls() {
         let (tail, _) = tail_evidence_after(|sup| {
-            sup.on_snapshot(snapshot(10.0, &[]));
+            sup.on_snapshot(snapshot(10.0, &[]), None);
             sup.on_unreadable_poll();
-            sup.on_snapshot(snapshot(10.0, &[]));
+            sup.on_snapshot(snapshot(10.0, &[]), None);
         });
         assert_eq!(tail, crate::trim::TailEvidence::Unreadable);
     }
@@ -3045,8 +3104,8 @@ mod tests {
     #[test]
     fn a_clean_game_reaches_the_trim_as_clean() {
         let (tail, _) = tail_evidence_after(|sup| {
-            sup.on_snapshot(snapshot(10.0, &[]));
-            sup.on_snapshot(snapshot(11.0, &[]));
+            sup.on_snapshot(snapshot(10.0, &[]), None);
+            sup.on_snapshot(snapshot(11.0, &[]), None);
         });
         assert_eq!(tail, crate::trim::TailEvidence::Clean);
     }
@@ -3065,7 +3124,7 @@ mod tests {
     fn a_killed_daemon_leaves_its_markers_in_the_database() {
         let (sup, dir) = test_supervisor();
         sup.start_recording();
-        sup.on_snapshot(snapshot(210.5, &[3]));
+        sup.on_snapshot(snapshot(210.5, &[3]), None);
 
         // The daemon dies here. No finalize, ever.
 
@@ -3087,7 +3146,7 @@ mod tests {
     fn the_row_a_recording_opens_is_not_in_the_library_yet() {
         let (sup, dir) = test_supervisor();
         sup.start_recording();
-        sup.on_snapshot(snapshot(210.5, &[3]));
+        sup.on_snapshot(snapshot(210.5, &[3]), None);
 
         assert!(
             sup.db.list_recordings().unwrap().is_empty(),
@@ -3192,7 +3251,7 @@ mod tests {
         sup.start_recording();
         let opened = sup.db.unfinished_recordings().unwrap()[0].id;
 
-        sup.on_snapshot(snapshot(210.5, &[3]));
+        sup.on_snapshot(snapshot(210.5, &[3]), None);
         sup.stop_recording();
 
         let rows = sup.db.list_recordings().unwrap();
@@ -3215,9 +3274,9 @@ mod tests {
         // Two polls carrying the same event, then a third carrying a
         // second. The tracker dedupes by event id, so this is two markers
         // written live across three polls.
-        sup.on_snapshot(snapshot(210.5, &[3]));
-        sup.on_snapshot(snapshot(211.5, &[3]));
-        sup.on_snapshot(snapshot(540.0, &[3, 8]));
+        sup.on_snapshot(snapshot(210.5, &[3]), None);
+        sup.on_snapshot(snapshot(211.5, &[3]), None);
+        sup.on_snapshot(snapshot(540.0, &[3, 8]), None);
 
         let id = sup.db.unfinished_recordings().unwrap()[0].id;
         let live = sup.db.get_markers(id).unwrap().len();
@@ -3246,14 +3305,14 @@ mod tests {
         // The loading screen: game time pinned at 0 while capture runs on.
         // The event's own clock reads 210.5, and with no alignment proven
         // yet it resolves 1:1 against that.
-        sup.on_snapshot(snapshot(0.0, &[3]));
+        sup.on_snapshot(snapshot(0.0, &[3]), None);
         let id = sup.db.unfinished_recordings().unwrap()[0].id;
         let live = sup.db.get_markers(id).unwrap()[0].video_time_s;
         assert_eq!(live, 210.5, "the 1:1 fallback, which is all there is to go on");
 
         // Now the clock jumps to 30s while barely any capture time has
         // passed, which proves an offset of about -30.
-        sup.on_snapshot(snapshot(30.0, &[3]));
+        sup.on_snapshot(snapshot(30.0, &[3]), None);
         sup.stop_recording();
 
         let settled = sup.db.get_markers(id).unwrap();
@@ -3283,7 +3342,7 @@ mod tests {
     fn a_killed_daemon_leaves_its_samples_in_the_database() {
         let (sup, dir) = test_supervisor();
         sup.start_recording();
-        sup.on_snapshot(snapshot(210.5, &[3]));
+        sup.on_snapshot(snapshot(210.5, &[3]), None);
 
         // The daemon dies here. No finalize, ever.
 
@@ -3306,19 +3365,19 @@ mod tests {
 
         let id = sup.db.unfinished_recordings().unwrap()[0].id;
 
-        sup.on_snapshot(snapshot(210.5, &[3]));
+        sup.on_snapshot(snapshot(210.5, &[3]), None);
         assert_eq!(sup.db.get_samples(id).unwrap().len(), 1);
 
         // The loading-screen and pause case: the poller re-fetches the same
         // payload, game time unchanged.
-        sup.on_snapshot(snapshot(210.5, &[3]));
+        sup.on_snapshot(snapshot(210.5, &[3]), None);
         assert_eq!(
             sup.db.get_samples(id).unwrap().len(),
             1,
             "a repeated timestamp is not a second point on the curve"
         );
 
-        sup.on_snapshot(snapshot(211.5, &[3]));
+        sup.on_snapshot(snapshot(211.5, &[3]), None);
         assert_eq!(sup.db.get_samples(id).unwrap().len(), 2);
 
         std::fs::remove_dir_all(&dir).ok();
@@ -3332,9 +3391,9 @@ mod tests {
         let (sup, dir) = test_supervisor();
         sup.start_recording();
 
-        sup.on_snapshot(snapshot(210.5, &[3]));
-        sup.on_snapshot(snapshot(211.5, &[3]));
-        sup.on_snapshot(snapshot(212.5, &[3]));
+        sup.on_snapshot(snapshot(210.5, &[3]), None);
+        sup.on_snapshot(snapshot(211.5, &[3]), None);
+        sup.on_snapshot(snapshot(212.5, &[3]), None);
 
         let id = sup.db.unfinished_recordings().unwrap()[0].id;
         let live = sup.db.get_samples(id).unwrap().len();
@@ -3363,7 +3422,7 @@ mod tests {
 
         // The first poll of a game already in progress. Nothing has proven an
         // offset yet, so the sample resolves 1:1 against its own game time.
-        sup.on_snapshot(snapshot(210.5, &[3]));
+        sup.on_snapshot(snapshot(210.5, &[3]), None);
         let id = sup.db.unfinished_recordings().unwrap()[0].id;
         let live = sup.db.get_samples(id).unwrap()[0].video_time_s;
         assert_eq!(live, 210.5, "the 1:1 fallback, which is all there is to go on");
@@ -3371,7 +3430,7 @@ mod tests {
         // The clock advances while capture has barely run, which proves that
         // game second 211.5 is the start of this video rather than 211 seconds
         // into it.
-        sup.on_snapshot(snapshot(211.5, &[3]));
+        sup.on_snapshot(snapshot(211.5, &[3]), None);
         sup.stop_recording();
 
         let settled = sup.db.get_samples(id).unwrap();
@@ -3421,7 +3480,7 @@ mod tests {
         let id = sup.db.unfinished_recordings().unwrap()[0].id;
 
         // Ten minutes in, and the list already holds six events of ours.
-        sup.on_snapshot(snapshot(600.0, &EARLIER));
+        sup.on_snapshot(snapshot(600.0, &EARLIER), None);
         assert!(
             sup.db.get_markers(id).unwrap().is_empty(),
             "nothing on the first poll's list happened during this recording"
@@ -3429,14 +3488,14 @@ mod tests {
 
         // The clock ticks, which is what proves the alignment. Still nothing.
         pretend_capture_has_run_for(&sup, 1.0);
-        sup.on_snapshot(snapshot(601.0, &EARLIER));
+        sup.on_snapshot(snapshot(601.0, &EARLIER), None);
         assert!(sup.db.get_markers(id).unwrap().is_empty());
 
         // Fifteen minutes of capture later we take Baron, at game time 1500.
         pretend_capture_has_run_for(&sup, 900.0);
         let mut later = EARLIER.to_vec();
         later.push(10);
-        sup.on_snapshot(snapshot(1500.5, &later));
+        sup.on_snapshot(snapshot(1500.5, &later), None);
 
         let live = sup.db.get_markers(id).unwrap();
         assert_eq!(live.len(), 1, "only the event this recording saw happen: {live:?}");
@@ -3522,7 +3581,7 @@ mod tests {
     fn a_killed_daemon_leaves_its_card_filled_in() {
         let (sup, dir) = test_supervisor();
         sup.start_recording();
-        sup.on_snapshot(fixture_snapshot("mid-game"));
+        sup.on_snapshot(fixture_snapshot("mid-game"), None);
 
         // The daemon dies here. No finalize, ever.
 
@@ -3545,7 +3604,7 @@ mod tests {
     fn a_killed_daemon_leaves_its_scoreboard_behind() {
         let (sup, dir) = test_supervisor();
         sup.start_recording();
-        sup.on_snapshot(fixture_snapshot("mid-game"));
+        sup.on_snapshot(fixture_snapshot("mid-game"), None);
 
         // The daemon dies here. No finalize, ever.
 
@@ -3567,6 +3626,51 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// The live half of the document archive (#349), from a real capture.
+    fn paired_live() -> (AllGameData, Arc<str>) {
+        let text = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/live-client/allgamedata-paired.json"
+        ));
+        (serde_json::from_str(text).unwrap(), Arc::from(text))
+    }
+
+    /// A killed daemon keeps the live snapshot, as the text it arrived as:
+    /// the first poll with players is archived at once, not only at finalize.
+    #[test]
+    fn a_killed_daemon_keeps_its_live_snapshot() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+        let (snapshot, raw) = paired_live();
+        sup.on_snapshot(snapshot, Some(Arc::clone(&raw)));
+
+        let id = sup.db.unfinished_recordings().unwrap()[0].id;
+        let kept = sup.db.get_document(id, db::documents::DocumentKind::Live).unwrap();
+        assert_eq!(kept.as_deref(), Some(&*raw), "byte for byte, not re-serialised");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Last-good, like the scoreboard: the end-of-game polls carry no players
+    /// and must not replace the snapshot that had them.
+    #[test]
+    fn a_poll_without_players_does_not_replace_the_live_snapshot() {
+        let (sup, dir) = test_supervisor();
+        sup.start_recording();
+        let (snapshot, raw) = paired_live();
+        sup.on_snapshot(snapshot, Some(Arc::clone(&raw)));
+        let (empty, _) = paired_live();
+        let empty = AllGameData { all_players: Vec::new(), ..empty };
+        sup.on_snapshot(empty, Some(Arc::from("{\"allPlayers\": []}")));
+
+        let guard = sup.session.lock().unwrap();
+        let kept = guard.as_ref().and_then(|s| s.live_document.as_deref());
+        assert_eq!(kept, Some(&*raw));
+        drop(guard);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// A poll with no player list after a good one does not take the
     /// scoreboard back. The session keeps the last good one, and the write is
     /// an assignment, so this is the property that makes that safe.
@@ -3574,11 +3678,11 @@ mod tests {
     fn a_poll_without_players_does_not_erase_the_written_scoreboard() {
         let (sup, dir) = test_supervisor();
         sup.start_recording();
-        sup.on_snapshot(fixture_snapshot("mid-game"));
+        sup.on_snapshot(fixture_snapshot("mid-game"), None);
         let before = sup.db.unfinished_recordings().unwrap()[0].scoreboard_json.clone();
         assert!(before.is_some());
 
-        sup.on_snapshot(fixture_snapshot("unmatched"));
+        sup.on_snapshot(fixture_snapshot("unmatched"), None);
 
         let after = sup.db.unfinished_recordings().unwrap()[0].scoreboard_json.clone();
         assert_eq!(after, before);
@@ -3594,8 +3698,8 @@ mod tests {
     fn an_outcome_seen_before_the_kill_is_on_the_row() {
         let (sup, dir) = test_supervisor();
         sup.start_recording();
-        sup.on_snapshot(fixture_snapshot("mid-game"));
-        sup.on_snapshot(fixture_snapshot("won"));
+        sup.on_snapshot(fixture_snapshot("mid-game"), None);
+        sup.on_snapshot(fixture_snapshot("won"), None);
 
         let open = sup.db.unfinished_recordings().unwrap();
         assert_eq!(open[0].win, Some(true));
@@ -3634,8 +3738,8 @@ mod tests {
     fn the_finalize_still_writes_the_whole_row() {
         let (sup, dir) = test_supervisor();
         sup.start_recording();
-        sup.on_snapshot(fixture_snapshot("mid-game"));
-        sup.on_snapshot(fixture_snapshot("won"));
+        sup.on_snapshot(fixture_snapshot("mid-game"), None);
+        sup.on_snapshot(fixture_snapshot("won"), None);
         sup.stop_recording();
 
         let rows = sup.db.list_recordings().unwrap();
@@ -3667,7 +3771,7 @@ mod tests {
         };
 
         sup.start_recording();
-        sup.on_snapshot(fixture_snapshot("mid-game"));
+        sup.on_snapshot(fixture_snapshot("mid-game"), None);
 
         // The daemon dies here. No finalize, ever.
 
@@ -3692,11 +3796,11 @@ mod tests {
         };
 
         sup.start_recording();
-        sup.on_snapshot(fixture_snapshot("mid-game"));
+        sup.on_snapshot(fixture_snapshot("mid-game"), None);
 
         // The client drops out: the next read has nothing in it.
         *sup.pending_game.lock().unwrap() = lcu::GameIdentity::default();
-        sup.on_snapshot(fixture_snapshot("won"));
+        sup.on_snapshot(fixture_snapshot("won"), None);
 
         let id = sup.db.unfinished_recordings().unwrap()[0].id;
         assert_eq!(
@@ -3799,8 +3903,8 @@ mod tests {
         };
 
         sup.start_recording();
-        sup.on_snapshot(fixture_snapshot("mid-game"));
-        sup.on_snapshot(fixture_snapshot("won"));
+        sup.on_snapshot(fixture_snapshot("mid-game"), None);
+        sup.on_snapshot(fixture_snapshot("won"), None);
         sup.stop_recording();
 
         let d = diagnostics_of(&sup);
@@ -3824,7 +3928,7 @@ mod tests {
     fn a_game_we_were_never_placed_in_says_so() {
         let (sup, dir) = test_supervisor();
         sup.start_recording();
-        sup.on_snapshot(fixture_snapshot("unmatched"));
+        sup.on_snapshot(fixture_snapshot("unmatched"), None);
         sup.stop_recording();
 
         let d = diagnostics_of(&sup);
@@ -3861,7 +3965,7 @@ mod tests {
     fn a_rescan_upsert_cannot_erase_the_diagnostics() {
         let (sup, dir) = test_supervisor();
         sup.start_recording();
-        sup.on_snapshot(fixture_snapshot("mid-game"));
+        sup.on_snapshot(fixture_snapshot("mid-game"), None);
         sup.stop_recording();
 
         let path = sup.db.list_recordings().unwrap()[0].path.clone();
@@ -3911,7 +4015,7 @@ mod tests {
         let seen = recording_fetcher(&sup);
 
         sup.start_recording();
-        sup.on_snapshot(fixture_snapshot("won"));
+        sup.on_snapshot(fixture_snapshot("won"), None);
         // Set after the poll, not before: this test drives the supervisor
         // directly, so the machine is still `Idle`, and a dispatch from
         // `Idle` clears the lockfile stash on purpose (`dispatch_one` —

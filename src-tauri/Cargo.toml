@@ -140,6 +140,9 @@ futures-util = "0.3"
 base64 = "0.23"
 rusqlite = { version = "0.32", features = ["bundled"] }
 rusqlite_migration = "1"
+# Compresses the raw League documents archived per recording (#349). Already in
+# the graph through `png`; named here because the archive depends on it.
+flate2 = "1"
 # Cross-platform free-disk-space query for the record-start preflight check
 # (DEVELOPMENT.md §6) — std has no such API.
 fs2 = "0.4"

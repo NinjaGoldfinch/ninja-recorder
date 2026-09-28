@@ -44,6 +44,14 @@ impl LcuHttpClient {
     /// response is also written to `fixtures/lcu/` before parsing —
     /// DEVELOPMENT.md §3.3.
     pub async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, LcuClientError> {
+        let text = self.get_text(path).await?;
+        Ok(serde_json::from_str(&text)?)
+    }
+
+    /// GETs `path` and returns the body as the text it arrived as, for the
+    /// document archive (#349): a document kept as received keeps the fields
+    /// no struct here models, which is the point of keeping it.
+    pub async fn get_text(&self, path: &str) -> Result<String, LcuClientError> {
         let url = format!("{}{}", self.base_url, path);
         let text = self
             .client
@@ -57,7 +65,7 @@ impl LcuHttpClient {
 
         fixtures::record("lcu", path, &text);
 
-        Ok(serde_json::from_str(&text)?)
+        Ok(text)
     }
 }
 
