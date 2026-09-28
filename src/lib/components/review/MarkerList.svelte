@@ -44,6 +44,8 @@ interface Props {
   notes?: readonly PlacedNote[];
   /** Opens the note in the player's editor, where there is room to write. */
   onnoteedit?: (note: Note) => void;
+  /** Pauses and opens a new note at the playhead, the same as the `n` key. */
+  onstamp?: () => void;
   onnotedelete?: (noteId: number) => void;
 }
 
@@ -54,6 +56,7 @@ const {
   currentTimeS = -1,
   notes = [],
   onnoteedit,
+  onstamp,
   onnotedelete,
 }: Props = $props();
 
@@ -104,18 +107,32 @@ $effect(() => {
 });
 </script>
 
-{#if markers.length > 0 || notes.length > 0}
-  <div class="event-filters" role="group" aria-label="Show">
-    {#each FILTERS as f (f.value)}
+{#if markers.length > 0 || notes.length > 0 || onstamp}
+  <div class="event-filters">
+    {#if markers.length > 0 || notes.length > 0}
+      <div class="event-filter-chips" role="group" aria-label="Show">
+        {#each FILTERS as f (f.value)}
+          <button
+            type="button"
+            class="event-filter"
+            aria-pressed={filter === f.value}
+            disabled={counts[f.value] === 0}
+            onclick={() => (filter = f.value)}
+            >{f.label} <span class="event-filter-count">{counts[f.value]}</span></button
+          >
+        {/each}
+      </div>
+    {/if}
+    <!-- The mouse's way to the `n` key, beside the notes it adds to. It sat
+         over the Review tab's free-notes box until that box went. -->
+    {#if onstamp}
       <button
         type="button"
-        class="event-filter"
-        aria-pressed={filter === f.value}
-        disabled={counts[f.value] === 0}
-        onclick={() => (filter = f.value)}
-        >{f.label} <span class="event-filter-count">{counts[f.value]}</span></button
+        class="ghost stamp-btn"
+        title="Pause and add a timed note at the playhead (n)"
+        onclick={onstamp}>+ Note</button
       >
-    {/each}
+    {/if}
   </div>
 {/if}
 
@@ -182,6 +199,9 @@ $effect(() => {
           aria-current={i === current ? "true" : undefined}
           style="--marker-color:{style.color}"
           onclick={() => {
+            // A drag that selected some of the note, to copy it, ends in a
+            // click as well; that one is not a seek.
+            if (!(window.getSelection()?.isCollapsed ?? true)) return;
             onseek(item.placed.videoTimeS);
             expanded = expanded === note.id ? null : note.id;
           }}

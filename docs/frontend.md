@@ -582,7 +582,7 @@ flowchart LR
   Shift+Enter starts a new line, and Escape cancels. The editor swallows its own keys, so
   typing never reaches the player's hotkeys. It sits over the player rather than
   in the rail, so it works in theatre mode without unfolding anything. The
-  form's "+ Note" button does the same as `n`.
+  Events tab's "+ Note" button, beside the filter chips, does the same as `n`.
 - **A note is stored in game time and drawn in video time.** It belongs to the
   game and outlives the recording, so `notes.ts_ms` is the game clock.
   `review/clock.ts` maps it both ways, `noteTimeAt` to stamp it and `videoAt` to
@@ -611,7 +611,13 @@ flowchart LR
   notes, `n` typed `6:36 ` into the free notes. Opening a review that still has
   them turns each `m:ss text` line into a `note`-kind note and leaves the rest
   of the text where it was (`db::review::split_stamps`, in the same transaction
-  as the open). The free notes stay for anything that is not about one moment.
+  as the open).
+- **There is no free-notes box.** A moment is a timed note and the game as a
+  whole is a takeaway, so the Review tab's Notes panel was one box too many.
+  Its text was not dropped with it: the same open that converts stamps then
+  moves whatever the free notes still hold into one takeaway, once
+  (`convert_free_notes`, flagged by `notes_converted`), and empties them. The
+  column stays, unwritten by the form, for overall notes somewhere else.
 - **The Events tab is the marker list, made for a rail** (#326). Filter chips
   narrow it to fights, deaths, objectives or notes, each with its count. A burst of
   the same event collapses into one row ("Voidgrubs ×3"), but only when the
@@ -636,7 +642,13 @@ flowchart LR
   value written. The rail's tab bar shows Saved, Unsaved changes, Saving… or
   Not saved. Closing the player, or opening another game, flushes first.
 - **Ticks and takeaways save as they happen.** A tick is optimistic and
-  reverts if the save fails.
+  reverts if the save fails. A takeaway is edited in place, in the add box's
+  own form: Enter saves, Shift+Enter is a new line, Escape puts the text back.
+  An objective it was promoted to keeps its own text.
+- **What the user wrote can be selected and copied.** The app is
+  `user-select: none` by default, like a native window; takeaways, objectives
+  and timed notes are on the list that opts back in. A note row seeks on
+  click, so the click that ends a drag-selection is ignored.
 - **A blank box means "not entered", never zero.** For deaths, that is what
   lets the form fall back to the death markers the recording counted.
   `reviewform/fields.ts` holds those rules, and the clear time's `m:ss` shape.
@@ -1096,7 +1108,7 @@ a shipped build.
 | `open_game_for_recording` | the game's id | review rail, whenever the player opens a recording; makes the game for a recording from before WS9 |
 | `get_game_review` / `save_game_review` | `GameReview \| null` / nothing | review form: load, then the debounced autosave of the whole `ReviewInput` |
 | `set_objective_ticked` | nothing | review form → "Reviewing against" |
-| `add_takeaway` / `delete_takeaway` / `promote_takeaway` | `Takeaway` / nothing / `Objective` | review form → Takeaways |
+| `add_takeaway` / `update_takeaway` / `delete_takeaway` / `promote_takeaway` | `Takeaway` / `Takeaway` / nothing / `Objective` | review form → Takeaways |
 | `list_objectives` / `create_objective` / `update_objective` / `set_objective_status` | `Vec<Objective>` / `Objective` | Objectives view |
 | `split_block` / `merge_blocks` | new block id / nothing | nothing in the UI yet: the block view is WS9 P3. The dev portal's Commands panel drives them |
 | `import_review_rows` | `ImportReport` | Objectives view → "Import spreadsheet…", with the rows `reviewform/sheet.ts` parsed from the chosen CSV |

@@ -223,4 +223,22 @@ describe("a note row", () => {
     await Promise.resolve();
     expect(rows(el).some((r) => r.classList.contains("expanded"))).toBe(false);
   });
+
+  it("does not seek on the click that ends selecting some of its text", () => {
+    const seek = vi.fn();
+    const el = renderNotes(seek);
+    const body = el.querySelector(".note-body");
+    if (!body?.firstChild) throw new Error("no note body");
+    const range = document.createRange();
+    range.setStart(body.firstChild, 0);
+    range.setEnd(body.firstChild, 4);
+    window.getSelection()?.addRange(range);
+
+    rows(el)[0]?.click();
+    expect(seek).not.toHaveBeenCalled();
+
+    window.getSelection()?.removeAllRanges();
+    rows(el)[0]?.click();
+    expect(seek).toHaveBeenCalledWith(10);
+  });
 });

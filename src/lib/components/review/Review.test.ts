@@ -428,7 +428,7 @@ describe("the review rail", () => {
     await vi.waitFor(() => expect(client.get_game_review).toHaveBeenCalledWith(70));
     expect(client.open_game_for_recording).toHaveBeenCalledWith(1);
     expect(el.querySelector(".review-rail #rail-panel-review")?.hasAttribute("hidden")).toBe(false);
-    await vi.waitFor(() => expect(el.querySelector('[aria-label="Notes"]')).not.toBeNull());
+    await vi.waitFor(() => expect(el.querySelector("#review-clear")).not.toBeNull());
   });
 
   it("lists the events in their own tab, and seeks from them", async () => {
@@ -449,17 +449,17 @@ describe("the review rail", () => {
     const el = render();
     await open();
     const notes = await vi.waitFor(() => {
-      const found = el.querySelector<HTMLTextAreaElement>('[aria-label="Notes"]');
+      const found = el.querySelector<HTMLInputElement>("#review-clear");
       if (!found) throw new Error("form not loaded");
       return found;
     });
-    notes.value = "ward earlier";
+    notes.value = "2:58";
     notes.dispatchEvent(new Event("input", { bubbles: true }));
     el.querySelector<HTMLButtonElement>(".back-btn")?.click();
     await vi.waitFor(() =>
       expect(client.save_game_review).toHaveBeenCalledWith(
         70,
-        expect.objectContaining({ free_notes: "ward earlier" }),
+        expect.objectContaining({ first_clear_ms: 178_000 }),
       ),
     );
   });
@@ -505,7 +505,7 @@ describe("theatre mode", () => {
     const el = render();
     await open();
     const notes = await vi.waitFor(() => {
-      const found = el.querySelector<HTMLTextAreaElement>('[aria-label="Notes"]');
+      const found = el.querySelector<HTMLInputElement>("#review-clear");
       if (!found) throw new Error("form not loaded");
       return found;
     });
@@ -519,9 +519,10 @@ describe("theatre mode", () => {
 describe("notes while watching", () => {
   afterEach(() => localStorage.clear());
 
+  /** Resolves once the form has loaded: any of its fields would do. */
   const notesBox = (el: HTMLElement) =>
     vi.waitFor(() => {
-      const found = el.querySelector<HTMLTextAreaElement>('[aria-label="Notes"]');
+      const found = el.querySelector<HTMLInputElement>("#review-clear");
       if (!found) throw new Error("form not loaded");
       return found;
     });
@@ -613,11 +614,12 @@ describe("notes while watching", () => {
     expect(el.querySelector<HTMLElement>(".review-rail")?.hidden).toBe(true);
   });
 
-  it("the + Note button does the same as n", async () => {
+  it("the Events tab's + Note button does the same as n", async () => {
     const el = render();
     await open();
     await notesBox(el);
-    el.querySelector<HTMLButtonElement>(".stamp-btn")?.click();
+    expect(el.querySelector("#rail-panel-review .stamp-btn")).toBeNull();
+    el.querySelector<HTMLButtonElement>("#rail-panel-events .stamp-btn")?.click();
     await composer(el);
   });
 

@@ -26,7 +26,7 @@ interface Props {
   currentTimeS: number;
   /** The game clock at the playhead, for the form's clock button. */
   gameClockNow: () => number | null;
-  /** The player's "note at the playhead", for the form's note button. */
+  /** The player's "note at the playhead", for the Events tab's note button. */
   onstamp: () => void;
   /** Opens a note in the player's editor: the Events tab's edit button. */
   onnoteedit: (note: Note) => void;
@@ -90,7 +90,7 @@ const STATUS_COPY = {
     aria-labelledby="rail-tab-review"
     hidden={tab !== "review"}
   >
-    <ReviewForm {gameClockNow} {onstamp} />
+    <ReviewForm {gameClockNow} />
   </div>
 
   <div
@@ -107,6 +107,7 @@ const STATUS_COPY = {
       {currentTimeS}
       {notes}
       {onnoteedit}
+      {onstamp}
       onnotedelete={(id) => void deleteNote(id)}
     />
   </div>

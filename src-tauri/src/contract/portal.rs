@@ -979,6 +979,14 @@ macro_rules! production_form_table {
             { name: "body", kind: "string", default: "", help: "", optional: false },
         ],
     }
+    update_takeaway {
+        group: "Review",
+        danger: false,
+        args: [
+            { name: "takeawayId", kind: "number", default: "", help: "", optional: false },
+            { name: "body", kind: "string", default: "", help: "", optional: false },
+        ],
+    }
     update_objective {
         group: "Review",
         danger: false,

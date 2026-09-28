@@ -55,7 +55,8 @@
 }
 
 /* Text worth copying out: paths, versions, IDs, error detail, and anything
- * the user typed themselves. The form controls are not optional — Chromium
+ * the user typed themselves, which includes their takeaways, objectives and
+ * timed notes once saved. The form controls are not optional — Chromium
  * applies an inherited `user-select: none` inside them too, so leaving them
  * out silently breaks selecting the text in the search box. */
 input,
@@ -65,6 +66,9 @@ select,
 code,
 .mono,
 .about-list dd,
+.takeaway-body,
+.objective-body,
+.note-body,
 .selectable {
   -webkit-user-select: text;
   user-select: text;
@@ -492,11 +496,23 @@ body:has(.review-view:not([hidden])) .app-bar-inner {
   top: 0;
   z-index: 1;
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-1);
+  align-items: flex-start;
+  gap: var(--sp-2);
   padding: var(--sp-2) var(--sp-3);
   border-bottom: 1px solid var(--border);
   background-color: var(--bg-surface);
+}
+
+.event-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+/* "+ Note" keeps the row's right end however the chips wrap. */
+.event-filters .stamp-btn {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .event-filter {
@@ -2655,18 +2671,6 @@ button.small {
   color: var(--text-subtle);
 }
 
-.review-section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-2);
-  margin-bottom: var(--sp-2);
-}
-
-.review-section-head h3 {
-  margin: 0;
-}
-
 .stamp-btn {
   padding: 0.15em 0.6em;
   font-size: var(--fs-sm);
@@ -2746,20 +2750,10 @@ button.small {
   flex: 1;
 }
 
-/* The notes take whatever height the rest of the rail leaves. */
-.review-notes-section {
+/* A takeaway being rewritten: the add box's own form, in the row's place. */
+.review-section .takeaway-edit {
   flex: 1;
-  display: flex;
-  flex-direction: column;
-  padding-bottom: 0;
-}
-
-.review-notes {
-  flex: 1;
-  width: 100%;
-  min-height: 6rem;
-  box-sizing: border-box;
-  resize: none;
+  margin-top: 0;
 }
 
 .objective-list {
@@ -2774,7 +2768,6 @@ button.small {
 .review-numbers input,
 .takeaway-add textarea,
 .objective-add input,
-.review-notes,
 .note-editor-text {
   padding: 0.45em 0.7em;
   border-radius: var(--r-sm);
@@ -2788,7 +2781,6 @@ button.small {
 .review-numbers input:focus-visible,
 .takeaway-add textarea:focus-visible,
 .objective-add input:focus-visible,
-.review-notes:focus-visible,
 .note-editor-text:focus-visible {
   outline: none;
   border-color: var(--accent);

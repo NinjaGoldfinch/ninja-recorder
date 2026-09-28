@@ -6,6 +6,11 @@
   after a short pause (`reviewform/autosave.ts`), and ticks and takeaways are
   saved as they happen. The rail's tab bar says which state the draft is in.
 
+  **No free-notes box.** Anything about one moment is a timed note (`n`, or
+  "+ Note" in the Events tab), and anything about the game as a whole is a
+  takeaway. Notes written before the box went were moved into a takeaway on
+  their game's next open (`db::review::convert_free_notes`).
+
   **What the recording already knows is filled in** for a review never saved
   (`reviewform/autofill.ts`), and tagged "auto" until the user changes it.
 
@@ -23,6 +28,7 @@ import {
   gameReview,
   promoteTakeaway,
   setTicked,
+  updateTakeaway,
 } from "../../stores/gameReview.svelte";
 import RatingControl from "./RatingControl.svelte";
 
@@ -34,11 +40,9 @@ interface Props {
    * only wants it when the clock button is pressed.
    */
   gameClockNow?: () => number | null;
-  /** Asks the player for a note at the playhead, the same as the `n` key. */
-  onstamp?: () => void;
 }
 
-const { gameClockNow = () => null, onstamp }: Props = $props();
+const { gameClockNow = () => null }: Props = $props();
 
 // Text boxes keep what was typed, even when it does not parse yet, so a
 // half-typed "2:" is not wiped by the next render. They are reset from the
@@ -50,6 +54,8 @@ let clearInvalid = $state(false);
 let smitesInvalid = $state(false);
 let deathsInvalid = $state(false);
 let newTakeaway = $state("");
+/** The takeaway being rewritten in place, and its text so far. */
+let editingTakeaway = $state<{ id: number; text: string } | null>(null);
 let shownGame: number | null = null;
 
 $effect(() => {
@@ -62,6 +68,7 @@ $effect(() => {
   deathsText = review.deaths === null ? "" : String(review.deaths);
   clearInvalid = smitesInvalid = deathsInvalid = false;
   newTakeaway = "";
+  editingTakeaway = null;
 });
 
 function onClear(text: string) {
@@ -102,6 +109,30 @@ function takeawayKey(event: KeyboardEvent) {
   if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
   event.preventDefault();
   (event.currentTarget as HTMLTextAreaElement).form?.requestSubmit();
+}
+
+async function saveTakeaway(event: SubmitEvent) {
+  event.preventDefault();
+  if (!editingTakeaway) return;
+  if (await updateTakeaway(editingTakeaway.id, editingTakeaway.text)) editingTakeaway = null;
+}
+
+/** The same keys as adding one, and Escape puts the text back. Every key
+ *  stops here, so typing never reaches the player's hotkeys. */
+function editTakeawayKey(event: KeyboardEvent) {
+  event.stopPropagation();
+  if (event.key === "Escape") {
+    event.preventDefault();
+    editingTakeaway = null;
+  } else {
+    takeawayKey(event);
+  }
+}
+
+/** Focused with the cursor after the text, as the note editor opens. */
+function focusAtEnd(node: HTMLTextAreaElement) {
+  node.focus();
+  node.setSelectionRange(node.value.length, node.value.length);
 }
 
 // Only while the box is blank: that is when the markers are what counts.
@@ -223,25 +254,53 @@ const deathsHint = $derived.by(() => {
         <ul class="review-takeaways">
           {#each gameReview.current.takeaways as takeaway (takeaway.id)}
             <li>
-              <span class="takeaway-body">{takeaway.body}</span>
-              {#if takeaway.promoted_to_id === null}
+              {#if editingTakeaway?.id === takeaway.id}
+                <form class="takeaway-add takeaway-edit" onsubmit={saveTakeaway}>
+                  <textarea
+                    aria-label="Takeaway"
+                    title="Enter saves; Shift+Enter starts a new line; Esc cancels"
+                    bind:value={editingTakeaway.text}
+                    onkeydown={editTakeawayKey}
+                    use:focusAtEnd
+                  ></textarea>
+                  <button type="button" class="ghost" onclick={() => (editingTakeaway = null)}
+                    >Cancel</button
+                  >
+                  <button
+                    type="submit"
+                    class="primary"
+                    disabled={editingTakeaway.text.trim() === ""}>Save</button
+                  >
+                </form>
+              {:else}
+                <span class="takeaway-body">{takeaway.body}</span>
                 <button
                   type="button"
                   class="icon-btn"
-                  aria-label="Promote to objective"
-                  title="Promote to objective"
-                  onclick={() => void promoteTakeaway(takeaway.id)}>⤴</button
+                  aria-label="Edit takeaway"
+                  title="Edit takeaway"
+                  onclick={() => (editingTakeaway = { id: takeaway.id, text: takeaway.body })}
+                  >✎</button
                 >
-              {:else}
-                <span class="hint">Promoted</span>
+                {#if takeaway.promoted_to_id === null}
+                  <button
+                    type="button"
+                    class="icon-btn"
+                    aria-label="Promote to objective"
+                    title="Promote to objective"
+                    onclick={() => void promoteTakeaway(takeaway.id)}>⤴</button
+                  >
+                {:else}
+                  <span class="hint">Promoted</span>
+                {/if}
+                <button
+                  type="button"
+                  class="icon-btn danger"
+                  aria-label="Delete takeaway"
+                  title="Delete takeaway"
+                  onclick={() => void deleteTakeaway(takeaway.id)}>🗑</button
+                >
               {/if}
-              <button
-                type="button"
-                class="icon-btn danger"
-                aria-label="Delete takeaway"
-                title="Delete takeaway"
-                onclick={() => void deleteTakeaway(takeaway.id)}>🗑</button
-              >
             </li>
           {/each}
         </ul>
@@ -257,27 +316,6 @@ const deathsHint = $derived.by(() => {
         ></textarea>
         <button type="submit" class="primary" disabled={newTakeaway.trim() === ""}>Add</button>
       </form>
-    </section>
-
-    <section class="review-section review-notes-section">
-      <div class="review-section-head">
-        <h3>Notes</h3>
-        {#if onstamp}
-          <button
-            type="button"
-            class="ghost stamp-btn"
-            title="Pause and add a timed note at the playhead (n)"
-            onclick={onstamp}>+ Note</button
-          >
-        {/if}
-      </div>
-      <textarea
-        class="review-notes"
-        aria-label="Notes"
-        placeholder="Anything that isn't about one moment. For a moment, press n while watching: it becomes a timed note on the timeline."
-        value={gameReview.draft.free_notes}
-        oninput={(e) => edit({ free_notes: e.currentTarget.value })}
-      ></textarea>
     </section>
   </div>
 {:else if gameReview.loading}
