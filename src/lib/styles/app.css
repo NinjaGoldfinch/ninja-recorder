@@ -87,6 +87,15 @@ body {
   background-repeat: no-repeat;
 }
 
+/* The element `App.svelte` mounts into. It takes no box of its own, so the
+ * app bar, the strips and `.container` are the body's flex items, as the rule
+ * above assumes. As a plain block it would be as tall as its content, and the
+ * review's height, which comes down a flex chain from `<body>`, would stop
+ * here: the player drew at zero height with every gate green. */
+#app-root {
+  display: contents;
+}
+
 /* The `hidden` attribute means "not rendered", but the UA rule that
  * implements it (`[hidden] { display: none }`) is a bare attribute selector,
  * so any class rule setting `display` silently beats it. This app toggles

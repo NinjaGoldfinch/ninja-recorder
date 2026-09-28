@@ -722,6 +722,14 @@ column widths and the timeline's growth are worked out from it too.
 
 Details that are load-bearing rather than tidy:
 
+- **The height comes down an unbroken flex chain from `<body>`.** `body` is
+  `100vh`, and `.container`, `.review-view` and `.review-body` each flex to
+  fill their parent. `.review-body` is a size container, so its content gives
+  it no height: one plain block anywhere in that chain makes it zero, and the
+  player and rail with it. `#app-root`, the element `App.svelte` mounts into,
+  is `display: contents` for that reason, and `Review.layout.test.ts` builds
+  the page under a real `#app-root` so a wrapper that breaks the chain fails
+  the gate. Alpha.174 shipped with the harness leaving it out.
 - **`--below-player` is the only estimate, and it is small.** It is the
   timeline at its smallest plus the one-line key hint, both fixed sizes inside
   this component, and it feeds only the column's width and the timeline's

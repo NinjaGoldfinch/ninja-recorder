@@ -139,8 +139,8 @@ function problemsAt(host: HTMLElement, theatre: boolean): string[] {
 }
 
 describe("the review page at every window shape", () => {
+  let appRoot: HTMLElement;
   let host: HTMLElement;
-  let appBar: HTMLElement;
   let instance: Record<string, unknown>;
 
   beforeAll(async () => {
@@ -166,14 +166,21 @@ describe("the review page at every window shape", () => {
       notes: [],
     });
 
+    // The DOM `index.html` and `App.svelte` build: everything is rendered
+    // into `#app-root`, never straight into `<body>`. The review's height
+    // comes down a flex chain from `<body>`, so a harness that left the
+    // wrapper out passed while the app drew a zero-height player.
+    appRoot = document.createElement("div");
+    appRoot.id = "app-root";
     // The app bar's real height: a 2.5rem button row in its padding.
-    appBar = document.createElement("header");
+    const appBar = document.createElement("header");
     appBar.className = "app-bar";
     appBar.innerHTML = `<div class="app-bar-inner"><div style="height:2.5rem"></div></div>`;
     host = document.createElement("main");
     host.className = "container";
     host.innerHTML = `<section id="review-view" class="review-view"></section>`;
-    document.body.append(appBar, host);
+    appRoot.append(appBar, host);
+    document.body.append(appRoot);
 
     const store = await import("../../stores/review.svelte");
     await store.openRecording(row as never);
@@ -186,8 +193,7 @@ describe("the review page at every window shape", () => {
 
   afterAll(() => {
     unmount(instance);
-    host.remove();
-    appBar.remove();
+    appRoot.remove();
   });
 
   async function sweep(theatre: boolean): Promise<string[]> {
