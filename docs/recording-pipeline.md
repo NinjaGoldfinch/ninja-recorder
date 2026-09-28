@@ -236,7 +236,15 @@ deferred patch's `correct_champion` (see [data-model.md](data-model.md)).
 **Marker kinds** (`MarkerKind::as_str`, matching `markers.kind` in SQLite):
 `kill`, `death`, `assist`, `dragon`, `baron`, `herald`, `voidgrubs`,
 `turret`, `inhibitor`, `ace`, `multikill`, `first_blood`. `custom` exists
-in the schema for hand-added markers.
+in the schema for hand-added markers. The review draws neither `ace`,
+`multikill` nor `first_blood`, which repeat a kill it already shows, but they
+are still recorded (see [frontend.md](frontend.md)).
+
+**A kill, death or assist names champions as well as players.** The event
+carries only names, so `classify_event` looks each one up in `allPlayers`
+(`champion_of`) and adds `victim_champion` / `killer_champion` to the payload
+beside `victim` / `killer`. A name that is not a player, such as a turret,
+gets `null`.
 
 ### What ends a recording, and what must not
 

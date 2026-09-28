@@ -89,8 +89,19 @@ const ruler = $derived.by(() => {
   return { step, labels };
 });
 
-/** Which cluster's tooltip is showing, by index. */
-let hovered = $state<number | null>(null);
+/**
+ * What the tooltip is showing: a cluster of markers, by index, or one note,
+ * by id. Notes share the markers' box rather than the pin's `title`, which
+ * drew the operating system's tooltip, in its font and its colours, beside
+ * this one.
+ */
+let hovered = $state<{ cluster: number } | { note: number } | null>(null);
+const hoveredCluster = $derived(hovered && "cluster" in hovered ? clusters[hovered.cluster] : null);
+const hoveredNote = $derived.by(() => {
+  const target = hovered;
+  if (!target || !("note" in target)) return null;
+  return visibleNotes.find((n) => n.note.id === target.note) ?? null;
+});
 let tooltipLeft = $state(0);
 let scrollable = $state(false);
 
@@ -119,8 +130,8 @@ function placeTooltip(percent: number) {
   if (scrollable) tooltip.scrollTop = 0;
 }
 
-function showTooltip(index: number, percent: number) {
-  hovered = index;
+function showTooltip(target: { cluster: number } | { note: number }, percent: number) {
+  hovered = target;
   // Measured after the DOM has the content, which is what the old code got
   // by unhiding before measuring in the same handler.
   queueMicrotask(() => placeTooltip(percent));
@@ -203,7 +214,7 @@ function hideTooltip(e: MouseEvent) {
           style="left:{percent.toFixed(3)}%; --marker-color:{style.color}"
           aria-label={cluster.map((m) => `${markerLabel(m)} at ${formatTime(m.video_time_s)}`).join("; ")}
           onclick={() => onseek(cluster[0].video_time_s)}
-          onmouseenter={() => showTooltip(index, percent)}
+          onmouseenter={() => showTooltip({ cluster: index }, percent)}
           onmouseleave={hideTooltip}
         >
           {style.icon}{#if cluster.length > 1}<span class="glyph-badge">{cluster.length}</span>{/if}
@@ -214,19 +225,21 @@ function hideTooltip(e: MouseEvent) {
     <!--
       The user's notes, as pins along the top edge, apart from the game's
       markers: a note is the user's, and it should not be clustered into a
-      burst of kills. The text is the hover title, interpolated as text.
+      burst of kills. The text is in the tooltip, interpolated as text.
     -->
     {#if visibleNotes.length > 0}
       <div class="timeline-notes">
         {#each visibleNotes as placed (placed.note.id)}
           {@const style = noteStyle(placed.note.kind)}
+          {@const percent = windowFraction(placed.videoTimeS, window) * 100}
           <button
             type="button"
             class="note-pin"
-            style="left:{(windowFraction(placed.videoTimeS, window) * 100).toFixed(3)}%; --note-color:{style.color}"
-            title="{style.label} at {formatTime(placed.note.ts_ms / 1000)}: {placed.note.body}"
+            style="left:{percent.toFixed(3)}%; --note-color:{style.color}"
             aria-label="{style.label} at {formatTime(placed.note.ts_ms / 1000)}: {placed.note.body}"
             onclick={() => onseek(placed.videoTimeS)}
+            onmouseenter={() => showTooltip({ note: placed.note.id }, percent)}
+            onmouseleave={hideTooltip}
           ></button>
         {/each}
       </div>
@@ -256,13 +269,27 @@ function hideTooltip(e: MouseEvent) {
     style="left:{tooltipLeft}px"
     onmouseleave={hideTooltip}
   >
-    {#if hovered !== null && clusters[hovered]}
-      {#each clusters[hovered] as marker (marker.id)}
+    {#if hoveredCluster}
+      {#each hoveredCluster as marker (marker.id)}
         <span class="tooltip-row">
           <span class="marker-icon">{markerStyle(marker).icon}</span>{markerLabel(marker)}
           <MarkerTimes {marker} />
         </span>
       {/each}
+    {:else if hoveredNote}
+      {@const style = noteStyle(hoveredNote.note.kind)}
+      <span class="tooltip-row">
+        <span class="marker-icon">{style.icon}</span>{style.label}
+        <span class="marker-times">
+          <span class="marker-game-time" title="Game clock"
+            >{formatTime(hoveredNote.note.ts_ms / 1000)}</span
+          >
+          <span class="hint" title="Position in the recording"
+            >{formatTime(hoveredNote.videoTimeS)}</span
+          >
+        </span>
+      </span>
+      <span class="tooltip-note">{hoveredNote.note.body}</span>
     {/if}
   </div>
 </div>

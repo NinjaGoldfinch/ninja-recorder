@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { MarkerRow } from "../../types";
-import { isElder, markerLabel, markerStyle, multikillLabel, splitByFootage } from "./markers";
+import {
+  isElder,
+  isShown,
+  markerLabel,
+  markerStyle,
+  multikillLabel,
+  splitByFootage,
+} from "./markers";
 
 const marker = (kind: string, payload: unknown = {}): MarkerRow =>
   ({
@@ -19,6 +26,36 @@ describe("markerLabel", () => {
       expect(markerLabel(marker("death", { killer: "Darius" }))).toBe("Killed by Darius");
       expect(markerLabel(marker("assist", { killer: "Lux", victim: "Zed" }))).toBe(
         "Lux killed Zed",
+      );
+    });
+
+    it("names the champion rather than the player when the marker has one", () => {
+      expect(markerLabel(marker("kill", { victim: "EnemyB#NA1", victim_champion: "Lux" }))).toBe(
+        "Killed Lux",
+      );
+      expect(markerLabel(marker("death", { killer: "EnemyA#NA1", killer_champion: "Zed" }))).toBe(
+        "Killed by Zed",
+      );
+      expect(
+        markerLabel(
+          marker("assist", {
+            killer: "Blitz#NA1",
+            killer_champion: "Garen",
+            victim: "EnemyA#NA1",
+            victim_champion: "Zed",
+          }),
+        ),
+      ).toBe("Garen killed Zed");
+    });
+
+    it("falls back to the name where there is no champion", () => {
+      // A marker recorded before champions were, and a turret, which is not
+      // a player and has none.
+      expect(
+        markerLabel(marker("death", { killer: "Turret_T1_C_05_A", killer_champion: null })),
+      ).toBe("Killed by Turret_T1_C_05_A");
+      expect(markerLabel(marker("kill", { victim: "EnemyB", victim_champion: "" }))).toBe(
+        "Killed EnemyB",
       );
     });
 
@@ -187,5 +224,19 @@ describe("splitByFootage", () => {
 
   it("says nothing is beyond an empty list", () => {
     expect(splitByFootage([], 120)).toEqual({ inside: [], beyond: [] });
+  });
+});
+
+describe("isShown", () => {
+  it("hides the announcer's kinds, which repeat a kill the review already shows", () => {
+    expect(isShown(marker("multikill"))).toBe(false);
+    expect(isShown(marker("first_blood"))).toBe(false);
+    expect(isShown(marker("ace"))).toBe(false);
+  });
+
+  it("shows everything else, including a kind it has never heard of", () => {
+    for (const kind of ["kill", "death", "assist", "dragon", "turret", "supermassive_objective"]) {
+      expect(isShown(marker(kind))).toBe(true);
+    }
   });
 });

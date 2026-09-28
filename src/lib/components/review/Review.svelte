@@ -23,7 +23,7 @@ import { assetUrl, call } from "../../../bridge";
 import { formatTime, vodHeading } from "../../../format";
 import { onViewChange, showView } from "../../../router";
 import type { AudioLayout } from "../../../types";
-import type { NoteKind } from "../../contract/types";
+import type { Note, NoteKind } from "../../contract/types";
 import { recordedWithout } from "../../library/problems";
 import { laneOpponent, selfPlayer } from "../../library/scoreboard";
 import { gameClockAt, noteTimeAt } from "../../review/clock";
@@ -37,6 +37,7 @@ import {
   closeReview,
   gameReview,
   openReviewForRecording,
+  updateNote,
 } from "../../stores/gameReview.svelte";
 import { closeRecording, review, setDuration } from "../../stores/review.svelte";
 import { toast } from "../../stores/toast.svelte";
@@ -341,8 +342,11 @@ const placedNotes = $derived(
   ),
 );
 
-/** The note being written at the playhead, if any: its game time in ms. */
-let composing = $state<{ tsMs: number } | null>(null);
+/**
+ * The note open in the editor over the player, if any: its game time in ms,
+ * and for an edit, the note being rewritten. A new note carries no `note`.
+ */
+let composing = $state<{ tsMs: number; note?: Note } | null>(null);
 
 /**
  * Pauses and opens a timed note at the playhead: the `n` key and the form's
@@ -365,9 +369,24 @@ function noteAtPlayhead() {
   composing = { tsMs: Math.round(gameTimeS * 1000) };
 }
 
+/**
+ * Opens a saved note in the same editor, over the player: the Events tab's
+ * edit button. It edited in place in the rail before, which put the text box
+ * wherever the row happened to be and left a long note three lines tall;
+ * here it has the room `n` has, and the rail does not need scrolling to
+ * find it.
+ */
+function editNote(note: Note) {
+  video?.pause();
+  composing = { tsMs: note.ts_ms, note };
+}
+
 async function saveNote(kind: NoteKind, body: string) {
   if (!composing) return;
-  if (await addNote(composing.tsMs, kind, body)) composing = null;
+  const saved = composing.note
+    ? await updateNote(composing.note.id, kind, body)
+    : await addNote(composing.tsMs, kind, body);
+  if (saved) composing = null;
 }
 
 function toggleRail() {
@@ -377,7 +396,7 @@ function toggleRail() {
 
 function jump(direction: 1 | -1, predicate?: (m: { kind: string }) => boolean) {
   if (!video) return;
-  const target = nextMarker(review.markers, video.currentTime, direction, predicate);
+  const target = nextMarker(review.shown, video.currentTime, direction, predicate);
   if (target) seekTo(target.video_time_s);
 }
 
@@ -695,13 +714,19 @@ $effect(() => {
           {/if}
 
           {#if composing}
-            <div class="note-composer">
-              <NoteEditor
-                label="Note at {formatTime(composing.tsMs / 1000)}"
-                onsave={saveNote}
-                oncancel={() => (composing = null)}
-              />
-            </div>
+            <!-- Keyed, because the editor seeds itself once from its props and
+                 editing a second note straight after a first has to reseed. -->
+            {#key composing}
+              <div class="note-composer">
+                <NoteEditor
+                  label="Note at {formatTime(composing.tsMs / 1000)}"
+                  kind={composing.note?.kind}
+                  body={composing.note?.body}
+                  onsave={saveNote}
+                  oncancel={() => (composing = null)}
+                />
+              </div>
+            {/key}
           {/if}
 
           <PlayerControls
@@ -755,12 +780,13 @@ $effect(() => {
 
     <ReviewRail
       open={railOpen}
-      markers={review.markers}
+      markers={review.shown}
       beyond={review.footage.beyond}
       onseek={seekTo}
       currentTimeS={playhead}
       {gameClockNow}
       onstamp={noteAtPlayhead}
+      onnoteedit={editNote}
       notes={placedNotes}
     />
   </div>

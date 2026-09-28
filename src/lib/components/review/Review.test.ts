@@ -633,7 +633,7 @@ describe("notes while watching", () => {
     expect(el.querySelector(".note-row")?.textContent).toContain("nice gank");
   });
 
-  it("edits and deletes a note from the Events tab", async () => {
+  it("edits a note from the Events tab in the player's editor, and deletes it there", async () => {
     client.get_game_review.mockResolvedValue({
       ...(await client.get_game_review()),
       notes: [savedNote()],
@@ -650,7 +650,7 @@ describe("notes while watching", () => {
 
     row.querySelector<HTMLButtonElement>('[aria-label="Edit note"]')?.click();
     const text = await vi.waitFor(() => {
-      const found = el.querySelector<HTMLTextAreaElement>('.note-row.editing [aria-label="Note"]');
+      const found = el.querySelector<HTMLTextAreaElement>('.note-composer [aria-label="Note"]');
       if (!found) throw new Error("not editing");
       return found;
     });
@@ -664,6 +664,9 @@ describe("notes while watching", () => {
     await vi.waitFor(() =>
       expect(el.querySelector(".note-row")?.textContent).toContain("great gank"),
     );
+    // Saved, so the editor is gone, and it never opened in the row.
+    expect(el.querySelector(".note-composer")).toBeNull();
+    expect(el.querySelector(".note-row textarea")).toBeNull();
 
     el.querySelector<HTMLButtonElement>('[aria-label="Delete note"]')?.click();
     await vi.waitFor(() => expect(client.delete_note).toHaveBeenCalledWith(5));

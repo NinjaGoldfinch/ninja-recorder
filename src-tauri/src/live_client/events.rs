@@ -1146,7 +1146,14 @@ pub struct Marker {
 /// the database. That is irreversible per recording: Live Client Data is
 /// gone once the game ends. The trade, and the two alternatives rejected
 /// for it, are in DEVELOPMENT.md §3.2.
-fn classify_event(event: &GameEvent, our_names: &[&str]) -> Option<Marker> {
+///
+/// `players` is only read to name the champions in a kill, death or assist
+/// (`champion_of`). The gate above never looks at it.
+fn classify_event(
+    event: &GameEvent,
+    our_names: &[&str],
+    players: &[PlayerEntry],
+) -> Option<Marker> {
     let is_ours = |name: &Option<String>| -> bool {
         match name {
             Some(n) => our_names.iter().any(|us| names_match(n, us)),
@@ -1163,6 +1170,7 @@ fn classify_event(event: &GameEvent, our_names: &[&str]) -> Option<Marker> {
     // it, so a turret our team took while we were on the other side of the
     // map never becomes a seek target.
     let took_part = || is_ours(&event.killer_name) || assisted();
+    let champion = |name: &Option<String>| name.as_deref().and_then(|n| champion_of(players, n));
 
     let marker = |kind: MarkerKind, payload: serde_json::Value| {
         Some(Marker {
@@ -1177,19 +1185,27 @@ fn classify_event(event: &GameEvent, our_names: &[&str]) -> Option<Marker> {
             if is_ours(&event.killer_name) {
                 marker(
                     MarkerKind::Kill,
-                    serde_json::json!({ "victim": event.victim_name }),
+                    serde_json::json!({
+                        "victim": event.victim_name,
+                        "victim_champion": champion(&event.victim_name),
+                    }),
                 )
             } else if is_ours(&event.victim_name) {
                 marker(
                     MarkerKind::Death,
-                    serde_json::json!({ "killer": event.killer_name }),
+                    serde_json::json!({
+                        "killer": event.killer_name,
+                        "killer_champion": champion(&event.killer_name),
+                    }),
                 )
             } else if assisted() {
                 marker(
                     MarkerKind::Assist,
                     serde_json::json!({
                         "victim": event.victim_name,
+                        "victim_champion": champion(&event.victim_name),
                         "killer": event.killer_name,
+                        "killer_champion": champion(&event.killer_name),
                     }),
                 )
             } else {
@@ -1270,6 +1286,30 @@ fn classify_event(event: &GameEvent, our_names: &[&str]) -> Option<Marker> {
         ),
         _ => None,
     }
+}
+
+/// The champion the player an event names was playing, for a kill, death
+/// or assist marker's label.
+///
+/// The review shows champions, not players: a Riot ID is somebody else's
+/// name, and the champion is what was on screen. The event only carries the
+/// name, and the scoreboard deliberately stores no names, so this is the one
+/// moment the two can be joined. `None` for a name that is not a player,
+/// which is how a turret or a minion reports a kill, and the label then
+/// falls back to the name itself.
+///
+/// Viego by key, as in `self_summary`, so a possession does not name the
+/// champion he was wearing.
+fn champion_of(players: &[PlayerEntry], name: &str) -> Option<String> {
+    let player = players
+        .iter()
+        .find(|p| p.candidate_names().iter().any(|n| names_match(name, n)))?;
+    if is_viego(player) {
+        return Some("Viego".to_string());
+    }
+    Some(player.champion_name.trim())
+        .filter(|c| !c.is_empty())
+        .map(normalize_champion)
 }
 
 /// Compares names leniently: case-insensitive, and ignoring a `#tagline`
@@ -1399,7 +1439,7 @@ impl MarkerTracker {
             if !self.seen_event_ids.insert(event.event_id) {
                 continue;
             }
-            if let Some(marker) = classify_event(event, &our_names) {
+            if let Some(marker) = classify_event(event, &our_names, &snapshot.all_players) {
                 fresh.push(marker);
             }
         }
@@ -1803,6 +1843,33 @@ mod tests {
         assert!(kinds.contains(&MarkerKind::Kill), "kinds were: {kinds:?}");
         assert!(kinds.contains(&MarkerKind::Death), "kinds were: {kinds:?}");
         assert!(kinds.contains(&MarkerKind::FirstBlood), "kinds were: {kinds:?}");
+    }
+
+    /// The review labels a kill by champion, and only the event's names can
+    /// say which one: the fixture's events name `EnemyB#NA1`, whose
+    /// `allPlayers` entry is Lux.
+    #[test]
+    fn kill_death_and_assist_markers_name_the_champions() {
+        let markers = MarkerTracker::new().ingest(&fixture());
+        let payload = |kind: MarkerKind| {
+            &markers.iter().find(|m| m.kind == kind).expect("marker present").payload
+        };
+
+        assert_eq!(payload(MarkerKind::Kill)["victim_champion"], "Lux");
+        assert_eq!(payload(MarkerKind::Death)["killer_champion"], "Zed");
+        assert_eq!(payload(MarkerKind::Assist)["killer_champion"], "Garen");
+        assert_eq!(payload(MarkerKind::Assist)["victim_champion"], "Zed");
+        // The name is still collected, for a recording's own record of it.
+        assert_eq!(payload(MarkerKind::Kill)["victim"], "EnemyB#NA1");
+    }
+
+    /// A turret or a minion is not in `allPlayers`, so there is no champion
+    /// to name and the label falls back to whatever the event called it.
+    #[test]
+    fn a_killer_who_is_not_a_player_has_no_champion() {
+        let players = fixture().all_players;
+        assert_eq!(champion_of(&players, "Turret_T1_C_05_A"), None);
+        assert_eq!(champion_of(&players, "ninja"), Some("Ahri".to_string()));
     }
 
     /// The fixture's objectives are deliberately mixed: we kill the turret

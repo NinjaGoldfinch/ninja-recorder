@@ -178,3 +178,49 @@ describe("the Events tab", () => {
     expect(el.querySelector(".event-filters")).toBeNull();
   });
 });
+
+describe("a note row", () => {
+  const placed = (id: number, videoTimeS: number) => ({
+    note: {
+      id,
+      game_id: 1,
+      ts_ms: videoTimeS * 1000,
+      kind: "note" as const,
+      body: `note ${id}`,
+      created_at: 0,
+    },
+    videoTimeS,
+  });
+
+  function renderNotes(onseek = (_t: number) => {}) {
+    host = document.createElement("div");
+    document.body.append(host);
+    instance = mount(MarkerList, {
+      target: host,
+      props: { markers: [], onseek, notes: [placed(1, 10), placed(2, 20)] },
+    });
+    return host;
+  }
+
+  const rows = (el: HTMLElement) => [...el.querySelectorAll<HTMLElement>(".note-row")];
+
+  it("opens in full on the click that seeks to it, one at a time", async () => {
+    const seek = vi.fn();
+    const el = renderNotes(seek);
+    expect(rows(el).some((r) => r.classList.contains("expanded"))).toBe(false);
+
+    rows(el)[0]?.click();
+    await Promise.resolve();
+    expect(seek).toHaveBeenCalledWith(10);
+    expect(rows(el).map((r) => r.classList.contains("expanded"))).toEqual([true, false]);
+
+    rows(el)[1]?.click();
+    await Promise.resolve();
+    expect(rows(el).map((r) => r.classList.contains("expanded"))).toEqual([false, true]);
+
+    // A second click on the open one closes it again.
+    rows(el)[1]?.click();
+    await Promise.resolve();
+    expect(rows(el).some((r) => r.classList.contains("expanded"))).toBe(false);
+  });
+});

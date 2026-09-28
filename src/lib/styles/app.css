@@ -1175,6 +1175,10 @@ body:has(.review-view:not([hidden])) .app-bar-inner {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
+  /* Its own width, up to the cap, rather than whatever lies between its
+   * `left` and the timeline's edge: a note wraps, and near the right end it
+   * was squeezed to half the width it had in the middle. */
+  width: max-content;
   max-width: 22rem;
   max-height: 14rem;
   overflow-y: auto;
@@ -1194,6 +1198,19 @@ body:has(.review-view:not([hidden])) .app-bar-inner {
 
 .timeline-tooltip[data-scrollable="true"] {
   pointer-events: auto;
+}
+
+/* A note in the tooltip, cut to four lines: it is a glance, and the Events
+ * tab has the whole note a click away. The tooltip itself does not wrap, so
+ * this wraps at its `max-width`. */
+.timeline-tooltip .tooltip-note {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .timeline-tooltip .tooltip-row {
@@ -1291,31 +1308,67 @@ body:has(.review-view:not([hidden])) .app-bar-inner {
  * a taller row. Edit and delete appear on hover or focus, like a library
  * row's actions. */
 .marker-list li.note-row {
-  position: relative;
   align-items: flex-start;
 }
 
+/* Cut to two lines until the row is clicked open (`expanded` in
+ * `MarkerList.svelte`). The ellipsis is what says there is more. */
 .note-body {
   flex: 1;
   min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
+.note-row.expanded .note-body {
+  -webkit-line-clamp: unset;
+  line-clamp: none;
+}
+
 /* Over the time, on hover or focus, rather than beside it: a hidden button
  * that still takes its width would push a note's time left of every event's
- * time, and the column would stop reading down the list. */
+ * time, and the column would stop reading down the list.
+ *
+ * `.note-side` is the time's own box, so the actions cover exactly it and sit
+ * on the first line whatever height the body wraps to. Centring them on the
+ * row instead left them floating under the time of a note that wraps, and
+ * sizing them to their buttons left the time showing past them. Their
+ * background has to be the row's in every state or it shows as a box, and
+ * `--accent-soft` is translucent in the dark theme, so the lit row's is
+ * layered over the surface rather than inherited. */
+.note-side {
+  position: relative;
+  margin-left: auto;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
 .note-actions {
   position: absolute;
-  top: 50%;
-  right: var(--sp-2);
-  transform: translateY(-50%);
-  display: inline-flex;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
   gap: 0.1rem;
-  padding-left: var(--sp-2);
   background-color: var(--bg-surface);
   opacity: 0;
   transition: opacity var(--dur) var(--ease);
+}
+
+.note-row.current .note-actions {
+  background-image: linear-gradient(var(--accent-soft), var(--accent-soft));
+}
+
+.note-row:hover .note-actions {
+  background-color: var(--bg-surface-hover);
+  background-image: none;
 }
 
 .note-actions .icon-btn {
@@ -1331,17 +1384,11 @@ body:has(.review-view:not([hidden])) .app-bar-inner {
 @media (hover: none) {
   .note-actions {
     position: static;
-    transform: none;
     opacity: 1;
   }
 }
 
-.marker-list li.note-row.editing {
-  display: block;
-  cursor: default;
-}
-
-/* The editor `n` opens, and the one a note row edits in place. */
+/* The editor `n` opens, and the one a note row's edit button opens. */
 .note-editor {
   display: flex;
   flex-direction: column;
@@ -1364,10 +1411,15 @@ body:has(.review-view:not([hidden])) .app-bar-inner {
   border-left: 4px solid var(--note-color, var(--border-strong));
 }
 
+/* Grows with what is in it, so an edit opens with the whole note in view
+ * rather than two lines of it and a scrollbar, up to the point where it
+ * would crowd the player. */
 .note-editor-text {
   width: 100%;
-  resize: vertical;
+  resize: none;
+  field-sizing: content;
   min-height: 2.8rem;
+  max-height: 8lh;
 }
 
 .note-editor-actions {
@@ -2714,13 +2766,16 @@ button.small {
   margin-top: var(--sp-3);
 }
 
-/* The review form's own text fields, dressed like the search box and the
- * selects above. Scoped to the form rather than added to that global rule,
- * which would restyle every text input in the dev portal's shared sheet. */
+/* The review's own text fields, dressed like the search box and the
+ * selects above: the form's, and the timed-note editor's. Scoped rather
+ * than added to that global rule, which would restyle every text input in
+ * the dev portal's shared sheet. The note editor was missed once and drew
+ * the platform's grey box beside a themed select. */
 .review-numbers input,
 .takeaway-add textarea,
 .objective-add input,
-.review-notes {
+.review-notes,
+.note-editor-text {
   padding: 0.45em 0.7em;
   border-radius: var(--r-sm);
   border: 1px solid var(--border);
@@ -2733,7 +2788,8 @@ button.small {
 .review-numbers input:focus-visible,
 .takeaway-add textarea:focus-visible,
 .objective-add input:focus-visible,
-.review-notes:focus-visible {
+.review-notes:focus-visible,
+.note-editor-text:focus-visible {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-ring);

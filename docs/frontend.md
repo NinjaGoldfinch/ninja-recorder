@@ -594,11 +594,18 @@ flowchart LR
   Events tab both draw the placed list.
 - **Notes are pins on the timeline and rows in the Events tab.** On the
   timeline they are pins along the top edge, apart from the game's markers, so
-  a note is never clustered into a burst of kills. The hover title is the note
-  itself, and a click seeks there. In the Events tab they are rows interleaved
+  a note is never clustered into a burst of kills. Hovering one opens the
+  markers' own tooltip, not the system's, with the note cut to four lines, and
+  a click seeks there. In the Events tab they are rows interleaved
   with the events in playback order, with a Notes chip of their own and the same
-  two clocks in the same columns as an event. A row is edited or deleted in
-  place, with the same editor.
+  two clocks in the same columns as an event. A note is cut to two lines until
+  it is clicked, and the click that seeks to it opens it in full, one at a time;
+  the playhead opens nothing, because rows changing height under a list that
+  follows it would jump about. Edit and delete appear over the row's clocks
+  on hover. Delete is immediate; edit pauses and opens the note in the editor
+  `n` opens, over the player, where it has room. It edited in place in the
+  rail at first, which left a long note three lines tall wherever its row
+  happened to be scrolled.
 - **The stamps the first `n` wrote are converted, once** (#258). Before timed
   notes, `n` typed `6:36 ` into the free notes. Opening a review that still has
   them turns each `m:ss text` line into a `note`-kind note and leaves the rest
@@ -611,6 +618,12 @@ flowchart LR
   row the playhead most recently passed is lit and scrolled into view while
   the video plays, unless the pointer is over the list. `timeline/events.ts`
   holds all three decisions.
+- **The announcer's markers are recorded and never drawn.** A multikill,
+  first blood and an ace are each the same moment as a kill already on
+  screen, so `timeline/markers.ts`'s `HIDDEN_KINDS` keeps them out of the
+  timeline, the Events tab and `[`/`]`, through the store's `review.shown`.
+  `review.markers` stays whole, because the game clock and note placement
+  read every marker's two times.
 - **Loads race, and the newer one wins.** Opening one VOD after another starts
   two loads; `gameReview` counts them and drops any answer that is not the
   latest's, so a slow daemon cannot put the previous game's review beside the
@@ -873,15 +886,19 @@ inside the glyph container.
 
 Two shapes, and the split is about who the marker is *about*.
 
-**Kills name people**: `Killed Nautilus`, `Killed by Akali`, `Blitzcrank killed
-Jarvan IV`. The name is the whole content: it is never yours, and it is what
-you would scrub for.
+**Kills name champions**: `Killed Nautilus`, `Killed by Akali`, `Blitzcrank
+killed Jarvan IV`. The champion is the whole content: it is never yours, and it
+is what you would scrub for. The event names only the *player*, so
+`classify_event` looks the name up in `allPlayers` and records the champion
+beside it (`victim_champion`, `killer_champion`); the scoreboard stores no
+names, so that is the one moment the two can be joined. A marker from before
+that, or a killer that is not a player (a turret), has no champion, and the
+label falls back to the name.
 
 **Objectives name nobody**: `Dragon`, `Baron`, `Herald`, `Turret`,
-`Inhibitor`, `Ace`, `First Blood`. `classify_event` only writes one of these
-when you took part. Every objective branch is gated on `took_part()`, and
-`Ace` and `FirstBlood` on it being *you*, so the killer was always you or an
-ally you assisted. Printing it told you your own champion's name, which is the
+`Inhibitor`. `classify_event` only writes one of these
+when you took part. Every objective branch is gated on `took_part()`, so the
+killer was always you or an ally you assisted. Printing it told you your own champion's name, which is the
 one thing you already know.
 
 The elemental dragon type went the same way. It says which drake, not which

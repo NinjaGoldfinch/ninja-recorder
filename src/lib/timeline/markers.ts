@@ -81,6 +81,22 @@ export function isElder(payload: Record<string, unknown>): boolean {
   return typeof type === "string" && type.trim().toLowerCase() === "elder";
 }
 
+/**
+ * Kinds still recorded but never drawn: the announcer's lines.
+ *
+ * A multikill, first blood and an ace are each the same moment as a kill the
+ * review already shows, so a row or a glyph for one is a second copy of that
+ * kill in a louder voice. They stay in the database, since collecting them
+ * costs nothing and a later view might want them; the review leaves them out
+ * of the timeline, the Events tab and `[`/`]` alike, so the three never
+ * disagree about what a marker is.
+ */
+export const HIDDEN_KINDS: ReadonlySet<string> = new Set(["multikill", "first_blood", "ace"]);
+
+export function isShown(marker: MarkerRow): boolean {
+  return !HIDDEN_KINDS.has(marker.kind);
+}
+
 export function markerLabel(m: MarkerRow): string {
   let payload: Record<string, unknown> = {};
   try {
@@ -89,17 +105,25 @@ export function markerLabel(m: MarkerRow): string {
     // Malformed payload: fall back to just the kind below.
   }
   const str = (key: string) => (typeof payload[key] === "string" ? (payload[key] as string) : "?");
+  // The champion, not the player: a Riot ID is somebody else's name, and the
+  // champion is what was on screen. Recorded beside the name since the kill
+  // labels changed, so a marker from before then has only the name, and a
+  // turret or a minion has no champion at all; both fall back to the name.
+  const who = (key: string) => {
+    const champion = payload[`${key}_champion`];
+    return typeof champion === "string" && champion !== "" ? champion : str(key);
+  };
 
   switch (m.kind) {
     // The three that name somebody: who you killed, who killed you, and whose
-    // kill you helped with. That name is the whole content of the marker and
-    // it is never yours, so it stays.
+    // kill you helped with. That champion is the whole content of the marker
+    // and it is never yours, so it stays.
     case "kill":
-      return `Killed ${str("victim")}`;
+      return `Killed ${who("victim")}`;
     case "death":
-      return `Killed by ${str("killer")}`;
+      return `Killed by ${who("killer")}`;
     case "assist":
-      return `${str("killer")} killed ${str("victim")}`;
+      return `${who("killer")} killed ${who("victim")}`;
 
     // The objectives name nobody. `classify_event` only writes one of these
     // when you took part (`took_part()` gates every branch), so the killer is

@@ -13,12 +13,13 @@ import { markerLabel } from "./markers";
 export type EventFilter = "all" | "kills" | "deaths" | "objectives" | "notes";
 
 /**
- * Fights, deaths and map objectives. Assists and aces count as fights, since
- * a fight is what they are. A kind no filter names, such as one a newer build
- * writes, still shows under All.
+ * Fights, deaths and map objectives. Assists count as fights, since a fight
+ * is what they are. A kind no filter names, such as one a newer build
+ * writes, still shows under All. The announcer's kinds are not here because
+ * the list never receives them (`HIDDEN_KINDS`).
  */
 const FILTER_KINDS: Record<Exclude<EventFilter, "all">, ReadonlySet<string>> = {
-  kills: new Set(["kill", "assist", "multikill", "first_blood", "ace"]),
+  kills: new Set(["kill", "assist"]),
   deaths: new Set(["death"]),
   objectives: new Set(["dragon", "baron", "herald", "voidgrubs", "turret", "inhibitor"]),
   // Notes are not markers, so no marker kind matches: the chip shows the
