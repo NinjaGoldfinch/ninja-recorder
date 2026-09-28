@@ -17,6 +17,7 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use rusqlite::{params, OptionalExtension};
+use std::collections::HashMap;
 use std::io::{Read, Write};
 
 /// Which document. The spellings are the table's CHECK list;
@@ -112,6 +113,67 @@ impl Db {
             params![recording_id, kind.as_str()],
             |r| r.get(0),
         )?)
+    }
+}
+
+impl Db {
+    /// Keeps the client's champion id-to-name table, replacing names that
+    /// changed (a rename keeps its id).
+    pub fn put_champion_names(&self, names: &HashMap<i64, String>) -> Result<(), DbError> {
+        let mut conn = self.pool.write();
+        let tx = conn.transaction()?;
+        {
+            let mut insert = tx.prepare(
+                "INSERT INTO champion_names (id, name) VALUES (?1, ?2)
+                 ON CONFLICT (id) DO UPDATE SET name = excluded.name",
+            )?;
+            for (id, name) in names {
+                insert.execute(params![id, name])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Every champion name kept so far.
+    pub fn champion_names(&self) -> Result<HashMap<i64, String>, DbError> {
+        let conn = self.pool.read();
+        let mut stmt = conn.prepare("SELECT id, name FROM champion_names")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Finished recordings whose scoreboard an older extraction wrote (or
+    /// none said which), and that have documents to re-derive it from.
+    pub fn recordings_to_rederive(&self, version: i64) -> Result<Vec<i64>, DbError> {
+        let conn = self.pool.read();
+        let mut stmt = conn.prepare(
+            "SELECT r.id FROM recordings r
+             WHERE r.finished_at IS NOT NULL
+               AND (r.scoreboard_version IS NULL OR r.scoreboard_version < ?1)
+               AND EXISTS (SELECT 1 FROM game_documents d
+                           WHERE d.recording_id = r.id AND d.kind IN ('live', 'match'))
+             ORDER BY r.started_at DESC",
+        )?;
+        let rows = stmt.query_map([version], |r| r.get(0))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Writes a re-derived scoreboard and the version that derived it. The CS
+    /// column follows the board, as the other scoreboard writes keep it.
+    pub fn write_derived_scoreboard(
+        &self,
+        recording_id: i64,
+        scoreboard_json: &str,
+        cs: Option<i64>,
+        version: i64,
+    ) -> Result<bool, DbError> {
+        Ok(self.pool.write().execute(
+            "UPDATE recordings
+             SET scoreboard_json = ?2, cs = COALESCE(?3, cs), scoreboard_version = ?4
+             WHERE id = ?1",
+            params![recording_id, scoreboard_json, cs, version],
+        )? > 0)
     }
 }
 

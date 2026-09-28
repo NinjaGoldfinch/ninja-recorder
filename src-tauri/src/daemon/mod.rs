@@ -688,6 +688,20 @@ async fn start(paths: Paths) -> Result<Option<Started>, DaemonError> {
         Err(e) => error!("retention", "failed to load policy: {e}"),
     }
 
+    // Recordings an older extraction wrote are re-derived from their archived
+    // documents (#349): locally, no client, no network. Off the runtime and
+    // not awaited, so a large library never delays the pipe coming up; rows
+    // update in the open library through the event, like any other edit.
+    {
+        let db = db.clone();
+        let events = events.clone();
+        tokio::task::spawn_blocking(move || {
+            if crate::derive::rederive_outdated(&db) > 0 {
+                events.publish(Event::LibraryChanged { reason: LibraryChangeReason::Edited });
+            }
+        });
+    }
+
     wire_finalize_work(&supervisor, &events, &db, paths.ffmpeg.clone());
     supervisor.start();
 

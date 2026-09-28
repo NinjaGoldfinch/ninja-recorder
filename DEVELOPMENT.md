@@ -4241,8 +4241,22 @@ large, speculative schema, and it would still lose whatever Riot adds next.
   fine on the user's own disk. **Anything that ever exports or shares a
   recording must leave `game_documents` behind.**
 
-**What follows from it.** Re-deriving is versioned, so an extraction that
-changes knows which recordings it has not reached yet, and the daemon catches
-them up on its own, from the archive where it can and from the client where it
-must (#349's plan). Nothing here needs a backfill button.
+**Versioned, so a change finds the rows it has not reached.** Each derivation
+has a version (`derive::SCOREBOARD_VERSION`), and each row records which
+version wrote it. The daemon re-derives older rows from their documents at
+every start, locally and off the runtime. Nothing here needs a backfill button.
+
+**The version is enforced, not remembered.** A golden test derives the paired
+game's documents and pins the output to the version
+(`fixtures/derived/scoreboard.golden.json`). A change to the output without a
+bump fails CI and says to bump; a bump is then followed by rewriting the file
+with `UPDATE_GOLDEN=1 cargo test`, which refuses to rewrite it unless the
+version was bumped. The failure this prevents is quiet: without a bump, rows
+already written would never be re-derived, and old games would disagree with
+new ones about the same field.
+
+**Never worse than what is there.** A derivation that cannot name a champion
+(the match document says ids; the client's name table was never kept, and no
+live board names it) writes nothing and retries at a later start. A blank
+champion is worse than the board already stored.
 

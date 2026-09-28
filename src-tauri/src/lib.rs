@@ -13,6 +13,7 @@ mod core;
 pub mod daemon;
 mod db;
 mod ddragon;
+mod derive;
 #[cfg(feature = "devtools")]
 mod dev;
 mod fixtures;

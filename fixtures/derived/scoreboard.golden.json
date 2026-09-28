@@ -1,0 +1,333 @@
+{
+  "version": 1,
+  "scoreboard": {
+    "players": [
+      {
+        "champion": "Volibear",
+        "team": "ORDER",
+        "level": 20,
+        "kills": 16,
+        "deaths": 5,
+        "assists": 3,
+        "cs": 303,
+        "position": "Top",
+        "items": [
+          3047,
+          3157,
+          3146,
+          3302,
+          3124,
+          3087,
+          3340
+        ],
+        "spells": [],
+        "spell_ids": [
+          4,
+          14
+        ],
+        "trinket": 3340,
+        "role_item": 1220,
+        "runes": {
+          "keystone_id": 8008,
+          "keystone": "",
+          "primary_tree_id": 8000,
+          "secondary_tree_id": 8200
+        }
+      },
+      {
+        "champion": "Viego",
+        "team": "ORDER",
+        "is_us": true,
+        "level": 17,
+        "kills": 11,
+        "deaths": 3,
+        "assists": 5,
+        "cs": 197,
+        "position": "Jungle",
+        "items": [
+          6676,
+          3036,
+          6673,
+          3111,
+          1038,
+          1037,
+          3340
+        ],
+        "spells": [],
+        "spell_ids": [
+          11,
+          4
+        ],
+        "trinket": 3340,
+        "role_item": 1209,
+        "runes": {
+          "keystone_id": 9923,
+          "keystone": "",
+          "primary_tree_id": 8100,
+          "secondary_tree_id": 8000
+        }
+      },
+      {
+        "champion": "Hwei",
+        "team": "ORDER",
+        "level": 17,
+        "kills": 4,
+        "deaths": 7,
+        "assists": 11,
+        "cs": 220,
+        "position": "Middle",
+        "items": [
+          1058,
+          4645,
+          3175,
+          2503,
+          1082,
+          1058,
+          3363
+        ],
+        "spells": [],
+        "spell_ids": [
+          12,
+          4
+        ],
+        "trinket": 3363,
+        "role_item": 1206,
+        "runes": {
+          "keystone_id": 8229,
+          "keystone": "",
+          "primary_tree_id": 8200,
+          "secondary_tree_id": 8000
+        }
+      },
+      {
+        "champion": "Kalista",
+        "team": "ORDER",
+        "level": 16,
+        "kills": 7,
+        "deaths": 4,
+        "assists": 8,
+        "cs": 244,
+        "position": "Bottom",
+        "items": [
+          3143,
+          3087,
+          3124,
+          3302,
+          1042,
+          1086,
+          3363
+        ],
+        "spells": [],
+        "spell_ids": [
+          1,
+          4
+        ],
+        "trinket": 3363,
+        "role_item": 3008,
+        "runes": {
+          "keystone_id": 8008,
+          "keystone": "",
+          "primary_tree_id": 8000,
+          "secondary_tree_id": 8300
+        }
+      },
+      {
+        "champion": "Tahm Kench",
+        "team": "ORDER",
+        "level": 14,
+        "kills": 1,
+        "deaths": 5,
+        "assists": 14,
+        "cs": 40,
+        "position": "Support",
+        "items": [
+          3869,
+          3190,
+          3047,
+          3075,
+          1029,
+          1029,
+          3364
+        ],
+        "spells": [],
+        "spell_ids": [
+          3,
+          4
+        ],
+        "trinket": 3364,
+        "role_item": 1208,
+        "runes": {
+          "keystone_id": 8465,
+          "keystone": "",
+          "primary_tree_id": 8400,
+          "secondary_tree_id": 8100
+        }
+      },
+      {
+        "champion": "Trundle",
+        "team": "CHAOS",
+        "level": 16,
+        "kills": 4,
+        "deaths": 14,
+        "assists": 3,
+        "cs": 209,
+        "position": "Top",
+        "items": [
+          1055,
+          3181,
+          3074,
+          3047,
+          3078,
+          3211,
+          3340
+        ],
+        "spells": [],
+        "spell_ids": [
+          14,
+          4
+        ],
+        "trinket": 3340,
+        "role_item": 1220,
+        "runes": {
+          "keystone_id": 8008,
+          "keystone": "",
+          "primary_tree_id": 8000,
+          "secondary_tree_id": 8400
+        }
+      },
+      {
+        "champion": "Qiyana",
+        "team": "CHAOS",
+        "level": 17,
+        "kills": 5,
+        "deaths": 4,
+        "assists": 4,
+        "cs": 268,
+        "position": "Jungle",
+        "items": [
+          6694,
+          6696,
+          2520,
+          3134,
+          6699,
+          3158,
+          3364
+        ],
+        "spells": [],
+        "spell_ids": [
+          4,
+          11
+        ],
+        "trinket": 3364,
+        "role_item": 1209,
+        "runes": {
+          "keystone_id": 8369,
+          "keystone": "",
+          "primary_tree_id": 8300,
+          "secondary_tree_id": 8100
+        }
+      },
+      {
+        "champion": "Pantheon",
+        "team": "CHAOS",
+        "level": 15,
+        "kills": 6,
+        "deaths": 8,
+        "assists": 3,
+        "cs": 183,
+        "position": "Middle",
+        "items": [
+          1055,
+          6692,
+          3071,
+          3173,
+          6610,
+          1036,
+          3364
+        ],
+        "spells": [],
+        "spell_ids": [
+          14,
+          4
+        ],
+        "trinket": 3364,
+        "role_item": 1206,
+        "runes": {
+          "keystone_id": 8005,
+          "keystone": "",
+          "primary_tree_id": 8000,
+          "secondary_tree_id": 8200
+        }
+      },
+      {
+        "champion": "Twitch",
+        "team": "CHAOS",
+        "level": 14,
+        "kills": 7,
+        "deaths": 10,
+        "assists": 3,
+        "cs": 211,
+        "position": "Bottom",
+        "items": [
+          1086,
+          6676,
+          3031,
+          2512,
+          3035,
+          3340
+        ],
+        "spells": [],
+        "spell_ids": [
+          21,
+          4
+        ],
+        "trinket": 3340,
+        "role_item": 3006,
+        "runes": {
+          "keystone_id": 8008,
+          "keystone": "",
+          "primary_tree_id": 8000,
+          "secondary_tree_id": 8200
+        }
+      },
+      {
+        "champion": "Zilean",
+        "team": "CHAOS",
+        "level": 14,
+        "kills": 2,
+        "deaths": 3,
+        "assists": 12,
+        "cs": 64,
+        "position": "Support",
+        "items": [
+          3876,
+          2065,
+          3190,
+          2524,
+          3158,
+          3364
+        ],
+        "spells": [],
+        "spell_ids": [
+          4,
+          7
+        ],
+        "trinket": 3364,
+        "role_item": 1208,
+        "runes": {
+          "keystone_id": 8214,
+          "keystone": "",
+          "primary_tree_id": 8200,
+          "secondary_tree_id": 8300
+        }
+      }
+    ],
+    "our_team": "ORDER",
+    "our_runes": {
+      "keystone_id": 9923,
+      "keystone": "",
+      "primary_tree_id": 8100,
+      "secondary_tree_id": 8000
+    }
+  }
+}

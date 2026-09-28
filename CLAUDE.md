@@ -329,6 +329,12 @@ workstream should be rewritten to say what it means.
   for `reconcile` and the no-id fallback. A new query that lists recordings has
   to decide whether it wants `finished_at IS NOT NULL`, and the answer is
   almost always yes (DEVELOPMENT.md §4.3).
+- **Changing an extraction means bumping its version.** What the app shows
+  about a game is derived from archived documents (`db::documents`, #349), and
+  `derive::SCOREBOARD_VERSION` is what makes older rows re-derive on the next
+  start. `scoreboard_output_is_pinned_to_its_version` fails if the output
+  changes without a bump; bump, then `UPDATE_GOLDEN=1 cargo test` rewrites the
+  golden file. Never write a one-off backfill for a derived field: bump instead.
 - **Append migrations, never edit them.** Shipped builds have already run the
   old ones. WS6 changed connection handling, not the schema.
 - **A `Db` method reads or it writes, and the connection enforces which.**

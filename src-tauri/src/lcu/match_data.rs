@@ -843,6 +843,20 @@ fn participants(me: &CurrentSummoner, game: &GameDto) -> Vec<ParticipantSummary>
 /// that rather than guessing, and callers must treat it as "write nothing" —
 /// a scoreboard that cannot say which half is ours is worse than the live one
 /// it would replace, because it renders with the teams the wrong way round.
+/// Every participant, ours flagged, from archived documents (#349): the
+/// match-history game and the current summoner it was read as, both as the
+/// text they arrived as. The same `participants` the live fetch runs.
+pub fn participants_from_documents(
+    summoner_json: &str,
+    match_json: &str,
+) -> Result<Vec<ParticipantSummary>, MatchDataError> {
+    let me: CurrentSummoner =
+        serde_json::from_str(summoner_json).map_err(|e| MatchDataError::Client(e.into()))?;
+    let game: GameDto =
+        serde_json::from_str(match_json).map_err(|e| MatchDataError::Client(e.into()))?;
+    Ok(participants(&me, &game))
+}
+
 pub async fn fetch_participants(
     http: &LcuHttpClient,
     game_id: i64,

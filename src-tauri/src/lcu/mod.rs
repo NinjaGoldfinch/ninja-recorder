@@ -34,11 +34,11 @@ pub use lockfile::{LockfileError, LockfileInfo, LockfileState};
 #[allow(unused_imports)]
 pub use match_data::{
     fetch_match_summary, fetch_recent_games, fetch_participants, fetch_sides, MatchDataError, MatchSummary,
-    ParticipantSummary, PlayedGame, Sides,
+    ParticipantSummary, PlayedGame, Sides, participants_from_documents,
 };
 // `GoldPoint` is deliberately not re-exported: the one caller never names
 // it, and `-D warnings` fails on a re-export nothing uses — this line has no
 // `allow` above it, unlike the group of external re-exports. It stays public
 // on `timeline` for whoever does name it.
 pub use timeline::fetch_gold_series;
-pub use champions::champion_name;
+pub use champions::{champion_name, champion_names};

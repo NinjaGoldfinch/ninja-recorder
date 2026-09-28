@@ -121,6 +121,7 @@ erDiagram
         TEXT    diagnostics_json "nullable, JSON RecordingDiagnostics"
         TEXT    scoreboard_json "JSON, all ten players as the game ended"
         INTEGER cs "our own creep score"
+        INTEGER scoreboard_version "extraction that wrote the board; NULL = re-derive"
         TEXT    tier "ladder this game was played at; NULL unless ranked"
         TEXT    division "NULL at Master and above, where divisions do not exist"
         INTEGER lp_after "LP once the game settled, not a delta; nothing reports one"
@@ -134,6 +135,10 @@ erDiagram
         REAL    video_time_s "aligned seek target"
         TEXT    kind "kill, death, assist, dragon, baron, herald, voidgrubs, turret, inhibitor, ace, multikill, first_blood, custom"
         TEXT    payload_json "raw event detail"
+    }
+    champion_names {
+        INTEGER id PK "the client's champion id"
+        TEXT    name
     }
     game_documents {
         INTEGER recording_id PK "and FK, ON DELETE CASCADE"
@@ -289,6 +294,7 @@ user's own account of their sessions.
 | 13 | `games`, `blocks`, `game_reviews`, `objectives`, `game_objectives`, `notes`, `takeaways`, and six indexes | WS9's VOD review. Hung off `games` rather than `recordings` so a review survives its VOD (see "The review tables outlive the recording" above). Reuses `markers` for events instead of adding an event table (#249). `takeaways` enforces exactly one owner with `CHECK ((game_id IS NULL) <> (block_id IS NULL))` |
 | 14 | `notes` rebuilt: `kind` gains `note`, and `created_at`; `game_reviews.stamps_converted` | WS9 P1's timed notes (#258). `note` is the neutral kind a note gets when none is picked, and every converted stamp's (#251). SQLite cannot alter a CHECK, so the table is rebuilt; nothing had written to it, but the copy keeps any rows. `stamps_converted` is a once-flag for turning the `m:ss` stamps P1's first `n` key wrote into the free notes into notes: existing reviews start at 0 and are converted on their next open (`Db::open_game_for_review`), and reviews made after the migration start at 1, so a time typed into their free notes stays text |
 | 15 | `game_documents` | The raw League documents each recording's data is derived from (#349): the match-history game, its timeline, the end-of-game block when it was this game's, the current summoner that says which player was us, and the last live `allgamedata` poll that had players. Gzipped JSON as received, not re-serialised, so the fields no struct models are kept too. CASCADE, like `markers` and `samples`. See "Derived data is re-derived from the archive" below |
+| 16 | `recordings.scoreboard_version` (nullable), `champion_names` | Versioned re-derivation (#349): which version of the scoreboard extraction wrote a row, so a newer one re-derives it from the archive at the next start; and the client's champion id-to-name table, so that can happen with no client running. NULL is every row from before the migration, which is re-derived once |
 
 ### Derived data is re-derived from the archive
 
@@ -299,6 +305,18 @@ supervisor as polls arrive (at most once a minute) and again at finalize. The
 post-game documents are archived by the deferred patch and the resume sweep
 (`match_summary::archive_lcu_documents`), each fetched as the text it arrived
 as.
+
+**Re-deriving is versioned and automatic.** `derive::SCOREBOARD_VERSION` names
+the scoreboard extraction, and `recordings.scoreboard_version` records which
+one wrote each board. At every daemon start, after the folder reconcile and
+retention, `derive::rederive_outdated` re-derives each finished recording whose
+version is older (or NULL) and that has documents, off the async runtime, and
+rows update in the open library through `library-changed`. The derivation is
+the live path's own: the live snapshot's board, replaced by the match-history
+board where there is one, taking what only the live capture knew through
+`carry_live_fields`. Champion ids resolve through `champion_names`, kept
+whenever the client's table is read; a champion nothing can name leaves the row
+as it is rather than writing a blank.
 
 The point is that an extraction can change after a game is recorded. With only
 the extracted columns kept, a new field (the opponent's runes, the trinket's

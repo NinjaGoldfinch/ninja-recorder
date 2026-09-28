@@ -484,6 +484,25 @@ static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
             PRIMARY KEY (recording_id, kind)
         );
         ",
+    ), M::up(
+        "
+        -- Re-deriving from the archive (#349).
+        --
+        -- `scoreboard_version` is the version of the extraction that wrote a
+        -- recording's scoreboard (`derive::SCOREBOARD_VERSION`). NULL is
+        -- every row written before this migration, and every row a write path
+        -- other than the re-derivation wrote since: both are re-derived on
+        -- the next start, which rewrites them the same way or better.
+        --
+        -- `champion_names` is the client's id-to-name table, kept whenever it
+        -- is read, because the match document names champions by id and a
+        -- re-derivation must not need the client to read them.
+        ALTER TABLE recordings ADD COLUMN scoreboard_version INTEGER;
+        CREATE TABLE champion_names (
+            id    INTEGER PRIMARY KEY,
+            name  TEXT NOT NULL
+        );
+        ",
     )];
     let count = migrations.len() as i64;
     (Migrations::new(migrations), count)
