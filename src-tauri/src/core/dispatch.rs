@@ -421,7 +421,7 @@ dispatch_table! {
     ctx_result  install_update() -> ();
     /// Stops the recorder itself, so nothing records in the background afterwards. Answers `recordingInFlight` instead of stopping when a game is being recorded and `force` is false; call again with `force` once the person has agreed.
     ctx_result  quit_recorder(force: bool) -> crate::core::QuitOutcome;
-    /// The review's game for a recording, made from the recording if it has none: every recording from before VOD review, and anything reconcile imported. A game made this way has no objective snapshot.
+    /// The review's game for a recording, made from the recording if it has none: every recording from before VOD review, and anything reconcile imported. A game made this way has no objective snapshot. Also fills the game's recording offset from the recording's clocked points, and turns any m:ss stamps left in the review's free notes into timed notes, once.
     ctx_result  open_game_for_recording(recording_id: i64) -> i64;
     /// Everything the review form shows for one game: its header, the saved review (null until the first save), the death-marker count, the objectives it was played against, and its takeaways. null if there is no such game.
     ctx_result  get_game_review(game_id: i64) -> Option<crate::db::review::GameReview>;
@@ -441,6 +441,12 @@ dispatch_table! {
     ctx_result  add_takeaway(owner: crate::db::review::TakeawayOwner, body: String) -> crate::db::review::Takeaway;
     /// Deletes a takeaway. An objective it was promoted to stays.
     ctx_result  delete_takeaway(takeaway_id: i64) -> ();
+    /// Adds a timed note to a game at a game time in milliseconds. Refuses an empty body, a negative time, and a game that does not exist.
+    ctx_result  add_note(game_id: i64, ts_ms: i64, kind: crate::db::review::NoteKind, body: String) -> crate::db::review::Note;
+    /// Rewrites a note's kind and text. Its time does not change. Refuses an empty body and a note that does not exist.
+    ctx_result  update_note(note_id: i64, kind: crate::db::review::NoteKind, body: String) -> crate::db::review::Note;
+    /// Deletes a timed note.
+    ctx_result  delete_note(note_id: i64) -> ();
     /// Makes an active objective from a takeaway, in one transaction. A takeaway already promoted returns the objective it became rather than making a second.
     ctx_result  promote_takeaway(takeaway_id: i64, category: crate::db::review::ObjectiveCategory) -> crate::db::review::Objective;
     /// Starts a new block at a game: it and every later game in its block move to the new one. Returns the new block's id. Refuses the first game of a block.
@@ -811,6 +817,9 @@ mod tests {
             "set_objective_status" => json!({ "objectiveId": 1, "status": "retired" }),
             "add_takeaway" => json!({ "owner": { "kind": "game", "id": 1 }, "body": "t" }),
             "delete_takeaway" => json!({ "takeawayId": 1 }),
+            "add_note" => json!({ "gameId": 1, "tsMs": 396000, "kind": "mistake", "body": "burnt flash" }),
+            "update_note" => json!({ "noteId": 1, "kind": "good", "body": "b" }),
+            "delete_note" => json!({ "noteId": 1 }),
             "promote_takeaway" => json!({ "takeawayId": 1, "category": "other" }),
             "merge_blocks" => json!({ "intoBlockId": 1, "fromBlockId": 2 }),
             "import_review_rows" => json!({ "rows": [{

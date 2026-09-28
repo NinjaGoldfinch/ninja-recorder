@@ -8,7 +8,7 @@
 //   events    src-tauri/src/contract/events.rs (contract_events!)
 //   types     src-tauri/src/contract/types.rs  (the boundary list)
 
-import type { AudioInputDevice, AudioPreset, AutostartStatus, BackfillReport, CaptureBackend, CaptureBackendStatus, DiskUsage, EnforcementReport, GameReview, IconRequest, IconSet, ImportReport, ImportRow, LcuStatus, MarkerRow, Objective, ObjectiveCategory, ObjectiveStatus, QuitOutcome, ReconcileReport, RecordingRow, RetentionPolicy, ReviewInput, SampleRow, SupervisorStatus, Takeaway, TakeawayOwner, UpdateStatus } from "./types";
+import type { AudioInputDevice, AudioPreset, AutostartStatus, BackfillReport, CaptureBackend, CaptureBackendStatus, DiskUsage, EnforcementReport, GameReview, IconRequest, IconSet, ImportReport, ImportRow, LcuStatus, MarkerRow, Note, NoteKind, Objective, ObjectiveCategory, ObjectiveStatus, QuitOutcome, ReconcileReport, RecordingRow, RetentionPolicy, ReviewInput, SampleRow, SupervisorStatus, Takeaway, TakeawayOwner, UpdateStatus } from "./types";
 
 /**
  * How a command reaches the backend. Supplied by the caller rather
@@ -104,6 +104,12 @@ export function createClient(invoke: Invoke) {
       invoke("add_takeaway", { owner, body }) as Promise<Takeaway>,
     delete_takeaway: (takeawayId: number): Promise<null> =>
       invoke("delete_takeaway", { takeawayId }) as Promise<null>,
+    add_note: (gameId: number, tsMs: number, kind: NoteKind, body: string): Promise<Note> =>
+      invoke("add_note", { gameId, tsMs, kind, body }) as Promise<Note>,
+    update_note: (noteId: number, kind: NoteKind, body: string): Promise<Note> =>
+      invoke("update_note", { noteId, kind, body }) as Promise<Note>,
+    delete_note: (noteId: number): Promise<null> =>
+      invoke("delete_note", { noteId }) as Promise<null>,
     promote_takeaway: (takeawayId: number, category: ObjectiveCategory): Promise<Objective> =>
       invoke("promote_takeaway", { takeawayId, category }) as Promise<Objective>,
     split_block: (gameId: number): Promise<number> =>

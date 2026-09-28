@@ -77,6 +77,31 @@ text_enum! {
         Macro = "macro", Lane = "lane", Mental = "mental", Mechanics = "mechanics", Other = "other",
     }
 }
+text_enum! {
+    /// What a timed note is. Plain text with a kind, not rich text (#251).
+    /// `Note` is the neutral default: a note made without picking a kind,
+    /// and every stamp converted out of the free notes.
+    NoteKind {
+        Note = "note", Mistake = "mistake", Good = "good", Question = "question",
+        Takeaway = "takeaway",
+    }
+}
+
+/// A note at a moment in a game (WS9 P1, #258).
+///
+/// **`ts_ms` is game time, not video time**, because a note belongs to the
+/// game and a review outlives its recording. The player maps it onto the
+/// video through whatever carries both clocks, as it does for markers; a
+/// recording nothing ever clocked plays its video time as game time.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
+pub struct Note {
+    pub id: i64,
+    pub game_id: i64,
+    pub ts_ms: i64,
+    pub kind: NoteKind,
+    pub body: String,
+    pub created_at: i64,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 pub struct Objective {
@@ -148,6 +173,11 @@ pub struct GameSummary {
     /// The lane opponent's champion, or `None` where no board says who.
     pub matchup: Option<String>,
     pub result: Option<GameResult>,
+    /// The game clock when the recording started, in milliseconds: negative
+    /// when capture began on the loading screen, before the clock started.
+    /// `None` for a game with no recording, or one nothing ever clocked. See
+    /// `recording_offset_ms`.
+    pub recording_offset_ms: Option<i64>,
 }
 
 /// Everything the review form shows for one game.
@@ -162,6 +192,8 @@ pub struct GameReview {
     pub death_markers: Option<i64>,
     pub objectives: Vec<GameObjective>,
     pub takeaways: Vec<Takeaway>,
+    /// Timed notes, in game-time order.
+    pub notes: Vec<Note>,
 }
 
 /// What finalize knows about a game once it is over.
@@ -220,6 +252,64 @@ fn lane_opponent_json(scoreboard_json: Option<&str>) -> Option<String> {
     serde_json::from_str(scoreboard_json?).ok().as_ref().and_then(lane_opponent)
 }
 
+/// Splits `m:ss text` stamps out of a review's free notes: the notes they
+/// become, as `(game time in ms, body)`, and the text that is left.
+///
+/// This is the shape P1's first `n` key wrote (`reviewform/fields.ts`,
+/// `withStamp`): a line that starts with a game time, a space, and what was
+/// typed after it. Minutes may run past 59, since a stamp never has an hour
+/// field. A line is only a stamp when all of that holds and something was
+/// typed: an empty stamp stays where it is rather than becoming a note with
+/// no words, and anything else stays text. Pure, so the rule is tested
+/// without a database.
+pub fn split_stamps(text: &str) -> (Vec<(i64, String)>, String) {
+    let mut stamps = Vec::new();
+    let mut kept = Vec::new();
+    for line in text.lines() {
+        match parse_stamp(line) {
+            Some(stamp) => stamps.push(stamp),
+            None => kept.push(line),
+        }
+    }
+    let rest = kept.join("\n").trim_end().to_string();
+    (stamps, rest)
+}
+
+fn parse_stamp(line: &str) -> Option<(i64, String)> {
+    let (clock, body) = line.split_once(' ')?;
+    let body = body.trim();
+    if body.is_empty() {
+        return None;
+    }
+    let (minutes, seconds) = clock.split_once(':')?;
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if !digits(minutes) || minutes.len() > 3 || seconds.len() != 2 || !digits(seconds) {
+        return None;
+    }
+    let (minutes, seconds): (i64, i64) = (minutes.parse().ok()?, seconds.parse().ok()?);
+    if seconds > 59 {
+        return None;
+    }
+    Some(((minutes * 60 + seconds) * 1000, body.to_string()))
+}
+
+/// The game clock at the recording's first frame, in milliseconds, from
+/// anything that carries both clocks as `(game_time_s, video_time_s)`.
+///
+/// The earliest game time wins: the offset can drift across a game and a
+/// pause moves it outright, so the point nearest the start describes the
+/// start. The review player still maps each moment through the nearest
+/// point (`review/clock.ts`); this is the single number `games` keeps, which
+/// survives the recording and its markers being deleted. Pure.
+pub fn recording_offset_ms(points: &[(f64, f64)]) -> Option<i64> {
+    let (game, video) = points
+        .iter()
+        .copied()
+        .filter(|(g, v)| g.is_finite() && v.is_finite())
+        .min_by(|a, b| a.0.total_cmp(&b.0))?;
+    Some(((game - video) * 1000.0).round() as i64)
+}
+
 fn refuse(message: impl Into<String>) -> DbError {
     DbError::Refused(message.into())
 }
@@ -253,6 +343,32 @@ fn row_to_takeaway(row: &rusqlite::Row) -> rusqlite::Result<Takeaway> {
         promoted_to_id: row.get(5)?,
         created_at: row.get(6)?,
     })
+}
+
+fn row_to_note(row: &rusqlite::Row) -> rusqlite::Result<Note> {
+    Ok(Note {
+        id: row.get(0)?,
+        game_id: row.get(1)?,
+        ts_ms: row.get(2)?,
+        kind: row.get(3)?,
+        body: row.get(4)?,
+        created_at: row.get(5)?,
+    })
+}
+
+const NOTE_COLUMNS: &str = "id, game_id, ts_ms, kind, body, created_at";
+
+fn get_note(tx: &rusqlite::Connection, id: i64) -> Result<Note, DbError> {
+    tx.query_row(&format!("SELECT {NOTE_COLUMNS} FROM notes WHERE id = ?1"), [id], row_to_note)
+        .optional()?
+        .ok_or_else(|| refuse(format!("no note {id}")))
+}
+
+fn non_negative(ts_ms: i64) -> Result<i64, DbError> {
+    if ts_ms < 0 {
+        return Err(refuse("a note cannot be before the game started"));
+    }
+    Ok(ts_ms)
 }
 
 const OBJECTIVE_COLUMNS: &str = "id, body, category, status, created_at, retired_at";
@@ -401,6 +517,66 @@ pub(super) fn ensure_game_in(tx: &Transaction, recording_id: i64) -> Result<i64,
     Ok(game_id)
 }
 
+/// Fills `games.recording_offset_ms` from the recording's markers and
+/// samples, if it is still empty. A game whose recording nothing ever
+/// clocked keeps `None`.
+fn fill_recording_offset(tx: &Transaction, game_id: i64, recording_id: i64) -> Result<(), DbError> {
+    let empty: bool = tx.query_row(
+        "SELECT recording_offset_ms IS NULL FROM games WHERE id = ?1",
+        [game_id],
+        |r| r.get(0),
+    )?;
+    if !empty {
+        return Ok(());
+    }
+    let points = tx
+        .prepare(
+            "SELECT game_time_s, video_time_s FROM markers WHERE recording_id = ?1
+             UNION ALL
+             SELECT game_time_s, video_time_s FROM samples WHERE recording_id = ?1",
+        )?
+        .query_map([recording_id], |r| Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
+    if let Some(offset) = recording_offset_ms(&points) {
+        tx.execute(
+            "UPDATE games SET recording_offset_ms = ?2 WHERE id = ?1",
+            params![game_id, offset],
+        )?;
+    }
+    Ok(())
+}
+
+/// Turns a review's `m:ss` stamps into notes, once (`split_stamps`). The
+/// flag is set even when there was nothing to convert, so text typed into
+/// the free notes later is never taken for a stamp.
+fn convert_stamps(tx: &Transaction, game_id: i64, now: i64) -> Result<(), DbError> {
+    let Some(free_notes) = tx
+        .query_row(
+            "SELECT free_notes FROM game_reviews WHERE game_id = ?1 AND stamps_converted = 0",
+            [game_id],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?
+    else {
+        return Ok(());
+    };
+    let (stamps, rest) = split_stamps(&free_notes);
+    for (ts_ms, body) in &stamps {
+        tx.execute(
+            "INSERT INTO notes (game_id, ts_ms, kind, body, created_at) VALUES (?1, ?2, 'note', ?3, ?4)",
+            params![game_id, ts_ms, body, now],
+        )?;
+    }
+    // Untouched when nothing was a stamp, so a review with no stamps keeps
+    // its text byte for byte.
+    let free_notes = if stamps.is_empty() { free_notes } else { rest };
+    tx.execute(
+        "UPDATE game_reviews SET free_notes = ?2, stamps_converted = 1 WHERE game_id = ?1",
+        params![game_id, free_notes],
+    )?;
+    Ok(())
+}
+
 fn snapshot_active_objectives(tx: &Transaction, game_id: i64) -> Result<(), DbError> {
     tx.execute(
         "INSERT OR IGNORE INTO game_objectives (game_id, objective_id)
@@ -497,7 +673,8 @@ impl Db {
                         CASE WHEN EXISTS (SELECT 1 FROM markers WHERE recording_id = r.id)
                              THEN (SELECT COUNT(*) FROM markers
                                    WHERE recording_id = r.id AND kind = 'death')
-                        END
+                        END,
+                        g.recording_offset_ms
                  FROM games g LEFT JOIN recordings r ON r.id = g.recording_id
                  WHERE g.id = ?1",
                 [game_id],
@@ -512,6 +689,7 @@ impl Db {
                             champion: r.get(5)?,
                             matchup: r.get(6)?,
                             result: r.get(7)?,
+                            recording_offset_ms: r.get(10)?,
                         },
                         r.get::<_, Option<String>>(8)?,
                         r.get::<_, Option<i64>>(9)?,
@@ -572,7 +750,14 @@ impl Db {
             .query_map([game_id], row_to_takeaway)?
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(Some(GameReview { game, review, death_markers, objectives, takeaways }))
+        let notes = conn
+            .prepare(&format!(
+                "SELECT {NOTE_COLUMNS} FROM notes WHERE game_id = ?1 ORDER BY ts_ms, created_at, id"
+            ))?
+            .query_map([game_id], row_to_note)?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Some(GameReview { game, review, death_markers, objectives, takeaways, notes }))
     }
 
     // --- reviews ----------------------------------------------------------
@@ -780,6 +965,74 @@ impl Db {
 
     pub fn delete_takeaway(&self, id: i64) -> Result<(), DbError> {
         self.pool.write().execute("DELETE FROM takeaways WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    // --- timed notes (WS9 P1, #258) ---------------------------------------
+
+    /// The review's game for a recording, made ready for the review player,
+    /// in one transaction: the game is made if it has none
+    /// (`ensure_game_in`), its `recording_offset_ms` is filled from the
+    /// recording's clocked points if it is still empty, and any `m:ss` stamps
+    /// its free notes still hold become notes, once.
+    ///
+    /// **A write, on the open path, on purpose.** Reads go to `query_only`
+    /// connections and cannot write, and a stamp has to leave the free notes
+    /// in the same transaction it becomes a note, or a crash between the two
+    /// would leave it in both.
+    pub fn open_game_for_review(&self, recording_id: i64, now: i64) -> Result<i64, DbError> {
+        let mut conn = self.pool.write();
+        let tx = conn.transaction()?;
+        let game_id = ensure_game_in(&tx, recording_id)?;
+        fill_recording_offset(&tx, game_id, recording_id)?;
+        convert_stamps(&tx, game_id, now)?;
+        tx.commit()?;
+        Ok(game_id)
+    }
+
+    pub fn add_note(
+        &self,
+        game_id: i64,
+        ts_ms: i64,
+        kind: NoteKind,
+        body: &str,
+        now: i64,
+    ) -> Result<Note, DbError> {
+        let body = non_empty(body, "a note")?;
+        let ts_ms = non_negative(ts_ms)?;
+        let conn = self.pool.write();
+        conn.execute(
+            "INSERT INTO notes (game_id, ts_ms, kind, body, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![game_id, ts_ms, kind, body, now],
+        )
+        .map_err(|e| match e {
+            rusqlite::Error::SqliteFailure(f, _)
+                if f.code == rusqlite::ErrorCode::ConstraintViolation =>
+            {
+                refuse(format!("no game {game_id}"))
+            }
+            e => e.into(),
+        })?;
+        get_note(&conn, conn.last_insert_rowid())
+    }
+
+    /// Rewrites a note's kind and text. Its time is not editable here: a
+    /// note in the wrong place is deleted and made again at the playhead.
+    pub fn update_note(&self, id: i64, kind: NoteKind, body: &str) -> Result<Note, DbError> {
+        let body = non_empty(body, "a note")?;
+        let conn = self.pool.write();
+        if conn.execute(
+            "UPDATE notes SET kind = ?2, body = ?3 WHERE id = ?1",
+            params![id, kind, body],
+        )? == 0
+        {
+            return Err(refuse(format!("no note {id}")));
+        }
+        get_note(&conn, id)
+    }
+
+    pub fn delete_note(&self, id: i64) -> Result<(), DbError> {
+        self.pool.write().execute("DELETE FROM notes WHERE id = ?1", [id])?;
         Ok(())
     }
 
@@ -1115,6 +1368,12 @@ mod tests {
         }
         for v in ObjectiveCategory::ALL {
             conn.execute("UPDATE objectives SET category = ?1", [v]).unwrap();
+        }
+        for v in NoteKind::ALL {
+            conn.execute("UPDATE notes SET kind = ?1", [v]).unwrap();
+            let back: NoteKind =
+                conn.query_row("SELECT kind FROM notes", [], |r| r.get(0)).unwrap();
+            assert_eq!(back, *v);
         }
     }
 
@@ -1490,5 +1749,176 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(lane_opponent(&no_positions), None);
+    }
+
+    // --- timed notes (WS9 P1, #258) ------------------------------------------
+
+    #[test]
+    fn stamps_are_split_out_of_free_notes() {
+        let (stamps, rest) =
+            split_stamps("gank was early\n6:36 burnt flash for no reason\n12:05 good ward\nlast line");
+        assert_eq!(
+            stamps,
+            vec![(396_000, "burnt flash for no reason".to_string()), (725_000, "good ward".to_string())]
+        );
+        assert_eq!(rest, "gank was early\nlast line");
+    }
+
+    /// Only what `withStamp` writes is a stamp. Anything else is text, and
+    /// text is never lost.
+    #[test]
+    fn only_a_stamp_with_words_is_a_stamp() {
+        for line in [
+            "6:36 ",            // an empty stamp stays: a note needs words
+            "6:36",             // no space
+            "6:6 x",            // one seconds digit
+            "6:61 x",           // not a clock
+            ":36 x",            // no minutes
+            "1:02:03 x",        // a stamp never has an hour field
+            "10000:00 x",       // four minute digits
+            "at 6:36 x",        // not at the start
+            "6.36 x",
+        ] {
+            let (stamps, rest) = split_stamps(line);
+            assert!(stamps.is_empty(), "{line:?} was taken for a stamp");
+            assert_eq!(rest, line.trim_end(), "{line:?} was changed");
+        }
+        // Minutes past an hour are still minutes.
+        assert_eq!(split_stamps("75:10 baron").0, vec![(4_510_000, "baron".to_string())]);
+    }
+
+    #[test]
+    fn the_recording_offset_comes_from_the_earliest_game_time() {
+        // Recording began 8 s before the game clock (the loading screen).
+        assert_eq!(recording_offset_ms(&[(60.0, 68.0), (12.0, 20.25)]), Some(-8_250));
+        // A pause later moves the offset; the start is what is kept.
+        assert_eq!(recording_offset_ms(&[(12.0, 20.0), (600.0, 640.0)]), Some(-8_000));
+        assert_eq!(recording_offset_ms(&[]), None);
+        assert_eq!(recording_offset_ms(&[(f64::NAN, 1.0)]), None);
+    }
+
+    #[test]
+    fn a_note_is_added_listed_rewritten_and_deleted() {
+        let db = db();
+        seed_game(&db);
+        let note = db.add_note(1, 396_000, NoteKind::Mistake, "  burnt flash  ", 5000).unwrap();
+        assert_eq!(
+            (note.game_id, note.ts_ms, note.kind, note.body.as_str(), note.created_at),
+            (1, 396_000, NoteKind::Mistake, "burnt flash", 5000)
+        );
+
+        let review = db.get_game_review(1).unwrap().unwrap();
+        // seed_game's own note is at 60 s, so this one is second.
+        assert_eq!(review.notes.iter().map(|n| n.ts_ms).collect::<Vec<_>>(), vec![60_000, 396_000]);
+
+        let rewritten = db.update_note(note.id, NoteKind::Good, "actually fine").unwrap();
+        assert_eq!((rewritten.kind, rewritten.body.as_str(), rewritten.ts_ms), (NoteKind::Good, "actually fine", 396_000));
+
+        db.delete_note(note.id).unwrap();
+        assert_eq!(db.get_game_review(1).unwrap().unwrap().notes.len(), 1);
+    }
+
+    #[test]
+    fn a_note_needs_words_a_game_and_a_time_in_the_game() {
+        let db = db();
+        seed_game(&db);
+        assert!(matches!(db.add_note(1, 0, NoteKind::Note, "   ", 0), Err(DbError::Refused(_))));
+        assert!(matches!(db.add_note(1, -1, NoteKind::Note, "x", 0), Err(DbError::Refused(_))));
+        assert!(matches!(db.add_note(99, 0, NoteKind::Note, "x", 0), Err(DbError::Refused(_))));
+        assert!(matches!(db.update_note(99, NoteKind::Note, "x"), Err(DbError::Refused(_))));
+    }
+
+    /// A recording with a review written before timed notes: its stamps
+    /// become notes on the next open, and the rest of the text stays.
+    fn a_review_written_before_notes(db: &Db, free_notes: &str) -> i64 {
+        let recording = db.begin_recording("C:/vods/a.mp4", 1000, None).unwrap();
+        let game = db.ensure_game_for_recording(recording).unwrap();
+        exec(
+            db,
+            &format!(
+                "INSERT INTO game_reviews (game_id, free_notes, stamps_converted)
+                 VALUES ({game}, '{free_notes}', 0)"
+            ),
+        )
+        .unwrap();
+        recording
+    }
+
+    #[test]
+    fn stamps_become_notes_once_on_open() {
+        let db = db();
+        let recording = a_review_written_before_notes(&db, "early gank\n6:36 burnt flash");
+        let game = db.open_game_for_review(recording, 7000).unwrap();
+
+        let review = db.get_game_review(game).unwrap().unwrap();
+        assert_eq!(review.review.as_ref().unwrap().free_notes, "early gank");
+        assert_eq!(review.notes.len(), 1);
+        let note = &review.notes[0];
+        assert_eq!((note.ts_ms, note.kind, note.body.as_str(), note.created_at), (396_000, NoteKind::Note, "burnt flash", 7000));
+
+        // A second open converts nothing, even text typed to look like a stamp.
+        exec(&db, &format!("UPDATE game_reviews SET free_notes = '9:00 typed later' WHERE game_id = {game}")).unwrap();
+        db.open_game_for_review(recording, 8000).unwrap();
+        let review = db.get_game_review(game).unwrap().unwrap();
+        assert_eq!(review.notes.len(), 1);
+        assert_eq!(review.review.unwrap().free_notes, "9:00 typed later");
+    }
+
+    /// A review made after this change starts converted: a time typed into
+    /// its free notes is text, not a note.
+    #[test]
+    fn a_new_review_is_never_converted() {
+        let db = db();
+        let recording = db.begin_recording("C:/vods/a.mp4", 1000, None).unwrap();
+        let game = db.open_game_for_review(recording, 1).unwrap();
+        db.upsert_review(game, &ReviewInput { free_notes: "6:36 typed".into(), ..Default::default() })
+            .unwrap();
+        db.open_game_for_review(recording, 2).unwrap();
+        let review = db.get_game_review(game).unwrap().unwrap();
+        assert!(review.notes.is_empty());
+        assert_eq!(review.review.unwrap().free_notes, "6:36 typed");
+    }
+
+    #[test]
+    fn opening_fills_the_recording_offset_once() {
+        let db = db();
+        let recording = db.begin_recording("C:/vods/a.mp4", 1000, None).unwrap();
+        exec(
+            &db,
+            &format!(
+                "INSERT INTO markers (recording_id, game_time_s, video_time_s, kind) VALUES
+                 ({recording}, 400.0, 408.5, 'kill'), ({recording}, 90.0, 98.5, 'death')"
+            ),
+        )
+        .unwrap();
+        let game = db.open_game_for_review(recording, 0).unwrap();
+        assert_eq!(db.get_game_review(game).unwrap().unwrap().game.recording_offset_ms, Some(-8_500));
+
+        // Kept once set, even if the markers later say something else.
+        exec(&db, &format!("UPDATE markers SET video_time_s = video_time_s + 60 WHERE recording_id = {recording}")).unwrap();
+        db.open_game_for_review(recording, 0).unwrap();
+        assert_eq!(db.get_game_review(game).unwrap().unwrap().game.recording_offset_ms, Some(-8_500));
+    }
+
+    #[test]
+    fn a_recording_nothing_clocked_has_no_offset() {
+        let db = db();
+        let recording = db.begin_recording("C:/vods/imported.mp4", 1000, None).unwrap();
+        let game = db.open_game_for_review(recording, 0).unwrap();
+        assert_eq!(db.get_game_review(game).unwrap().unwrap().game.recording_offset_ms, None);
+    }
+
+    /// A review outlives its recording, and so do its notes: they are in game
+    /// time and hang off the game.
+    #[test]
+    fn notes_outlive_their_recording_and_go_with_their_game() {
+        let db = db();
+        let recording = db.begin_recording("C:/vods/a.mp4", 1000, None).unwrap();
+        let game = db.open_game_for_review(recording, 0).unwrap();
+        db.add_note(game, 1000, NoteKind::Good, "x", 0).unwrap();
+        exec(&db, &format!("DELETE FROM recordings WHERE id = {recording}")).unwrap();
+        assert_eq!(db.get_game_review(game).unwrap().unwrap().notes.len(), 1);
+        exec(&db, &format!("DELETE FROM games WHERE id = {game}")).unwrap();
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM notes WHERE body = 'x'"), 0);
     }
 }
