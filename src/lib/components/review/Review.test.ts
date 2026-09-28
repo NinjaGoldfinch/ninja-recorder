@@ -32,10 +32,15 @@ vi.mock("../../../bridge", () => ({
   assetUrl: (p: string) => p,
 }));
 const showView = vi.hoisted(() => vi.fn());
+/** Whatever the component subscribed with, so a test can move the view. */
+const viewListeners = vi.hoisted(() => new Set<(view: string) => void>());
 vi.mock("../../../router", () => ({
   showView,
   currentView: () => "review",
-  onViewChange: vi.fn(),
+  onViewChange: (cb: (view: string) => void) => {
+    viewListeners.add(cb);
+    return () => viewListeners.delete(cb);
+  },
   registerView: vi.fn(),
   initRouting: vi.fn(),
 }));
@@ -84,6 +89,7 @@ beforeEach(async () => {
   call.mockReset();
   call.mockResolvedValue([]);
   showView.mockReset();
+  viewListeners.clear();
   for (const fn of Object.values(client)) fn.mockReset();
   client.open_game_for_recording.mockResolvedValue(70);
   client.get_game_review.mockResolvedValue({
@@ -695,6 +701,34 @@ describe("closing", () => {
     expect(store.review.isOpen).toBe(false);
     expect(showView).toHaveBeenCalledWith("library");
     expect(video(el).getAttribute("src")).toBeNull();
+  });
+
+  it("also closes when the app bar leaves the review for another view", async () => {
+    // Left open behind Objectives, the hidden video kept playing, and opening
+    // the same recording again found it unchanged: the file never reloaded,
+    // the duration stayed zero, and the player could neither play nor draw.
+    const el = render();
+    await open([marker(60)]);
+    await Promise.resolve();
+
+    for (const cb of viewListeners) cb("objectives");
+    await Promise.resolve();
+
+    expect(store.review.isOpen).toBe(false);
+    expect(video(el).getAttribute("src")).toBeNull();
+
+    await open([marker(60)]);
+    await Promise.resolve();
+    expect(video(el).getAttribute("src")).toBe(row.path);
+  });
+
+  it("stops listening once unmounted", async () => {
+    render();
+    await Promise.resolve();
+    expect(viewListeners.size).toBe(1);
+    if (instance) await svelte.unmount(instance, { outro: false });
+    instance = null;
+    expect(viewListeners.size).toBe(0);
   });
 });
 
