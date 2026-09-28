@@ -2023,14 +2023,14 @@ button.armed {
     0 1px 3px rgba(0, 0, 0, 0.6);
 }
 
-.vod-role svg {
+/* The client's lane icon as a mask, so the badge is the theme's colour rather
+ * than the client's gold (RoleIcon.svelte). */
+.vod-role-glyph {
   position: absolute;
-  top: 1px;
-  left: 1px;
-  width: calc(var(--role-size) - 2px);
-  height: calc(var(--role-size) - 2px);
-  fill: var(--text);
+  inset: 1px;
+  background-color: var(--text);
   opacity: 0.85;
+  mask: var(--role-icon) center / contain no-repeat;
 }
 
 .vod-slot img {

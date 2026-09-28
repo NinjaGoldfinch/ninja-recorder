@@ -881,7 +881,7 @@ macro_rules! production_form_table {
         group: "Library",
         danger: false,
         args: [
-            { name: "request", kind: "json", default: "{'champions': ['Wukong'], 'items': [3089], 'spells': ['Flash'], 'runes': [8112]}", help: "Four lists: champions, items, spells, runes. Any of them may be omitted.", optional: false },
+            { name: "request", kind: "json", default: "{'champions': ['Wukong'], 'items': [3089], 'spells': ['Flash'], 'runes': [8112], 'positions': ['Jungle']}", help: "Lists of champions, items, spells, spellIds, runes and positions. Any of them may be omitted.", optional: false },
         ],
     }
     save_game_review {

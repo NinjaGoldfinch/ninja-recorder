@@ -11,6 +11,7 @@ mod core;
 // `pub` because `main.rs` dispatches on it before either side is built, and
 // the daemon's refusal is a value it returns rather than a string in
 // `launch.rs` — see `daemon::run`.
+mod cdragon;
 pub mod daemon;
 mod db;
 mod ddragon;

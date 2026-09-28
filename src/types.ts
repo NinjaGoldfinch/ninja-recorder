@@ -228,6 +228,9 @@ export interface IconSet {
   spells: Record<string, string>;
   spell_ids: Record<string, string>;
   runes: Record<string, string>;
+  /** Keyed by role. Community Dragon's rather than Data Dragon's, which has
+   *  no position art (`cdragon.rs`). */
+  positions: Record<string, string>;
 }
 
 export interface ReconcileReport {

@@ -1450,7 +1450,7 @@ the game itself reports.
 **One request per page, not per icon.** A row carries up to twenty-two pieces
 of art (a portrait, two spells, two runes, seven items and the ten champions
 of the two team compositions) and a library shows dozens of rows, so
-`resolve_icons` takes four lists and answers with four maps.
+`resolve_icons` takes a list per kind and answers with a map per kind.
 
 **Six icons in flight, not one and not all of them.** The first version
 resolved them strictly in series, on the reasoning that firing a cold cache at
@@ -1472,6 +1472,34 @@ whole page. The total wait is unchanged; what changes is that it stops being
 one wait for everything, so the rows someone is actually looking at fill in
 first. On a warm cache every chunk resolves without a request and it is
 indistinguishable from the single pass it replaced.
+
+**One source per kind of art, and position icons are Community Dragon's.**
+Data Dragon publishes no position art, and the role badge first used five
+shapes drawn in `RoleIcon` for that reason. They were replaced with the
+client's own icons, from Community Dragon (`cdragon.rs`), because the official
+art is what a League player reads at a glance. That does not reopen the spell
+detour above: the lesson there was that *two* sources for one picture are two
+ways to draw the wrong one, and here there is exactly one. Nothing falls back
+to anything. An icon Community Dragon cannot supply is no badge, which is also
+what an unknown role draws, so a drawn stand-in would be a second picture of
+the same role for no gain.
+
+Community Dragon is an unedited extract of the client, run by the community,
+with no promise about paths. So the directory asked for is **the patch Data
+Dragon already resolved** (`16.19.1` → `16.19`) rather than `latest`, cached
+per patch under `<app data>/cdragon/`, which makes a moved path fail at a patch
+boundary rather than at random. The client's file is two layers, a dimmed map
+at half opacity under the lit lane, and at the badge's twelve pixels the map
+smudges, so **only the `class="active"` shapes are kept**, rewritten into a
+fresh `<svg>` once on the way into the cache. The frontend uses that file as a
+CSS mask filled with a theme colour rather than as an `<img>`, which is what
+lets the badge be the theme's colour instead of the client's gold, and means
+nothing fetched is ever inserted as markup. `resolve_icons` takes the roles as
+a sixth list, so the badge costs no extra call.
+
+The icons are Riot's, served as-is by Community Dragon, which is what puts
+them under the same terms as every Data Dragon image here. A third-party
+redrawing of the same shapes would not be.
 
 ### 5.4 Decision: the dead ends are skipped, not cut
 

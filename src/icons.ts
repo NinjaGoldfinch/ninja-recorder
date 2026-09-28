@@ -1,5 +1,6 @@
 /**
- * Data Dragon art, asked for once per page rather than once per icon.
+ * Data Dragon art, and Community Dragon's position icons, asked for once per
+ * page rather than once per icon.
  *
  * A row can carry a champion portrait, two summoner spells, three runes
  * and seven items. A library of forty rows is therefore several hundred
@@ -24,6 +25,7 @@ const cache = {
   spells: new Map<string, string | null>(),
   spellIds: new Map<number, string | null>(),
   runes: new Map<number, string | null>(),
+  positions: new Map<string, string | null>(),
 };
 
 export function championIcon(name: string | null): string | null {
@@ -47,6 +49,12 @@ export function runeIcon(id: number): string | null {
   return cache.runes.get(id) ?? null;
 }
 
+/** The lane icon for a role. A mask rather than a picture: the file's shape
+ *  is all it carries, and the stylesheet decides its colour. */
+export function positionIcon(role: string | null): string | null {
+  return role === null ? null : (cache.positions.get(role) ?? null);
+}
+
 /** Everything one page of rows wants drawn. */
 interface Wanted {
   champions: Set<string>;
@@ -54,6 +62,7 @@ interface Wanted {
   spells: Set<string>;
   spellIds: Set<number>;
   runes: Set<number>;
+  positions: Set<string>;
 }
 
 export function parseScoreboard(json: string | null): Scoreboard | null {
@@ -83,10 +92,14 @@ function collect(rows: RecordingRow[]): Wanted {
     spells: new Set(),
     spellIds: new Set(),
     runes: new Set(),
+    positions: new Set(),
   };
 
   for (const row of rows) {
     if (row.champion) wanted.champions.add(row.champion);
+    // Five of them at most, ever. Anything the backend does not recognise
+    // is a miss, which is the same as an unknown role: no badge.
+    if (row.role) wanted.positions.add(row.role);
 
     const board = parseScoreboard(row.scoreboard_json);
 
@@ -140,20 +153,28 @@ export async function loadIcons(rows: RecordingRow[]): Promise<boolean> {
   const spells = [...wanted.spells].filter((s) => !cache.spells.has(s));
   const spellIds = [...wanted.spellIds].filter((s) => !cache.spellIds.has(s));
   const runes = [...wanted.runes].filter((r) => !cache.runes.has(r));
+  const positions = [...wanted.positions].filter((p) => !cache.positions.has(p));
 
-  if (!champions.length && !items.length && !spells.length && !spellIds.length && !runes.length) {
+  if (
+    !champions.length &&
+    !items.length &&
+    !spells.length &&
+    !spellIds.length &&
+    !runes.length &&
+    !positions.length
+  ) {
     return false;
   }
 
   let set: IconSet;
   try {
     set = await call<IconSet>("resolve_icons", {
-      request: { champions, items, spells, spellIds, runes },
+      request: { champions, items, spells, spellIds, runes, positions },
     });
   } catch {
     // Offline, or the command is unavailable outside the Tauri webview.
     // Record the misses so the same lookup is not retried on every render.
-    set = { champions: {}, items: {}, spells: {}, spell_ids: {}, runes: {} };
+    set = { champions: {}, items: {}, spells: {}, spell_ids: {}, runes: {}, positions: {} };
   }
 
   // Everything asked for is recorded, hit or miss. A key the backend left
@@ -172,6 +193,9 @@ export async function loadIcons(rows: RecordingRow[]): Promise<boolean> {
   }
   for (const id of runes) {
     cache.runes.set(id, set.runes[id] ? assetUrl(set.runes[id]) : null);
+  }
+  for (const role of positions) {
+    cache.positions.set(role, set.positions[role] ? assetUrl(set.positions[role]) : null);
   }
   return true;
 }

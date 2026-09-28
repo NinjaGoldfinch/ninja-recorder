@@ -3,6 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RecordingRow } from "../../../types";
 import Row from "./Row.svelte";
 
+// The badge draws only once its icon is cached, and the cache is filled over
+// IPC. Every other lookup is left real, so every other slot stays empty.
+vi.mock("../../../icons", async (actual) => ({
+  ...(await actual<typeof import("../../../icons")>()),
+  positionIcon: (role: string | null) => (role === "Jungle" ? "position-jungle.svg" : null),
+}));
+
 /**
  * Parity for the row, against `frontend.md`'s "What a row says when the data is
  * missing" table.
@@ -109,14 +116,20 @@ describe("a row with nothing known", () => {
     expect(render(row()).querySelectorAll(".vod-missing").length).toBeGreaterThanOrEqual(4);
   });
 
-  it("badges our portrait with the role, and nothing when it is unknown", () => {
+  it("badges our portrait with the role, and nothing when it is unknown or has no icon", () => {
     const known = render(row({ champion: "Viego", role: "Jungle" }));
     const badge = known.querySelector(".vod-champion > .vod-portrait-wrap .vod-role");
     expect(badge?.getAttribute("title")).toBe("Jungle");
+    // The icon is a mask the stylesheet fills, never an <img> of the gold.
+    const glyph = badge?.querySelector<HTMLElement>(".vod-role-glyph");
+    expect(glyph?.style.getPropertyValue("--role-icon")).toBe('url("position-jungle.svg")');
+    expect(badge?.querySelector("img, svg")).toBeNull();
     // The opponent played the same role, so theirs carries no badge.
     expect(known.querySelectorAll(".vod-role")).toHaveLength(1);
 
-    for (const role of [null, "Arena"]) {
+    // Top is a real role whose icon is not cached yet: offline before the
+    // first fetch, which draws no badge rather than a stand-in.
+    for (const role of [null, "Arena", "Top"]) {
       expect(
         render(row({ champion: "Viego", role })).querySelector(".vod-role"),
         String(role),
