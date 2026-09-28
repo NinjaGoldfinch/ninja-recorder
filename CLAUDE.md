@@ -88,7 +88,14 @@ cd src-tauri && cargo clippy --no-deps -- -D warnings
 cd src-tauri && cargo clippy --features devtools,contract-gen --no-deps -- -D warnings
 powershell ./scripts/smoke-daemon.ps1                 # Windows only: it runs
 powershell ./scripts/smoke-ui.ps1                     # Windows only: and finds it
+npx playwright install chromium && npm run test:layout  # rows fit, in a real browser
 ```
+
+The layout gate (#345) is the only frontend test that measures a pixel: jsdom
+does no layout, which is how rows drew past their card with every gate green
+(#342). It runs `src/**/*.layout.test.ts` under `vitest.layout.config.ts`, so
+`npx vitest run` never needs a browser. **A change to the library row's markup
+or its CSS runs it**, and a new kind of row belongs in its `ROWS` list.
 
 The last two are the only gates that **start the binary**, and the only ones a
 Linux box cannot run. One launches `--daemon`, waits for the named pipe, does

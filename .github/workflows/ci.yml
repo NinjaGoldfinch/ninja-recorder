@@ -348,6 +348,20 @@ jobs:
             Stop-Process -Id $busy.Id -ErrorAction SilentlyContinue
           }
 
+      # The layout gate (#345). The one frontend test that renders in a real
+      # browser: every other one runs in jsdom, which does no layout, so
+      # library rows drew past their card (#342) with every step above green.
+      # It mounts the real row under the real stylesheet in Chromium, the
+      # engine WebView2 is built on, and measures it at every window width
+      # from 960 to 2560. Chromium comes from Playwright, pinned by the
+      # lockfile. Last rather than beside the unit tests only so that the
+      # step numbers in docs/ci-and-releases.md stay where they were.
+      - name: Install Chromium for the layout gate
+        run: npx playwright install chromium
+
+      - name: Layout gate
+        run: npm run test:layout
+
   # The notices gate. THIRD_PARTY_NOTICES.txt ships in the installer, and
   # `scripts/notices.mjs --check` regenerates it from Cargo.lock (cargo-about)
   # and the production frontend bundle (Vite, in memory) and fails if the

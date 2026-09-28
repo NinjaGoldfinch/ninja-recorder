@@ -56,7 +56,12 @@ export default defineConfig({
     // rather than untested by accident. #72 reversed that: the portal is being
     // reworked alongside the app, and its logic is as testable as anything
     // else once it stops being markup builders.
-    exclude: ["node_modules/**", "dist/**"],
+    //
+    // `*.layout.test.ts` runs in a real browser under `vitest.layout.config.ts`
+    // instead (#345). jsdom does no layout, so a test about where things are
+    // drawn means nothing here, and keeping it out means `vitest run` still
+    // needs no browser installed.
+    exclude: ["node_modules/**", "dist/**", "src/**/*.layout.test.ts"],
 
     // `npm run coverage`. Scoped to `src/lib/`, and that is the whole point:
     // measuring the vanilla modules would report a number dominated by

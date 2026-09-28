@@ -14,6 +14,7 @@
     "test": "vitest run",
     "coverage": "vitest run --coverage",
     "test:watch": "vitest",
+    "test:layout": "vitest run --config vitest.layout.config.ts",
     "preview": "vite preview",
     "tauri": "tauri",
     "build:devtools": "npm run typecheck && npm run check:svelte && NINJA_DEVTOOLS=1 vite build",
@@ -28,12 +29,14 @@
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@tauri-apps/cli": "^2",
     "@typescript/native": "npm:typescript@~7.0.2",
-    "@vitest/coverage-v8": "^5.0.1",
+    "@vitest/browser-playwright": "^5.0.2",
+    "@vitest/coverage-v8": "^5.0.2",
     "jsdom": "^30.1.1",
+    "playwright": "^1.63.0",
     "svelte": "^5.57.1",
     "svelte-check": "^4.7.6",
     "typescript": "~6.0.3",
     "vite": "^8.3.1",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.2"
   }
 }
