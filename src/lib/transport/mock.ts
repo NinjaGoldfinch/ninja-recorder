@@ -30,6 +30,8 @@ import type {
 import type {
   CaptureBackendStatus,
   GameReview,
+  Note,
+  NoteKind,
   Objective,
   ObjectiveCategory,
   ObjectiveStatus,
@@ -404,6 +406,7 @@ function reviewMock(
             champion: row.champion,
             matchup: null,
             result: row.win === null ? null : row.win ? "win" : "loss",
+            recording_offset_ms: null,
           },
           review: null,
           death_markers: row.kda_d,
@@ -415,6 +418,7 @@ function reviewMock(
             ticked: false,
           })),
           takeaways: [],
+          notes: [],
         });
       }
       return { value: GAMES.get(recordingId)?.game.id };
@@ -466,6 +470,35 @@ function reviewMock(
       if (owner.kind === "game") reviewFor(owner.id).takeaways.push(added);
       return { value: added };
     }
+    case "add_note": {
+      const body = String(args.body).trim();
+      if (body === "") throw new Error("a note cannot be empty");
+      const added: Note = {
+        id: nextId++,
+        game_id: args.gameId as number,
+        ts_ms: args.tsMs as number,
+        kind: args.kind as NoteKind,
+        body,
+        created_at: Date.now(),
+      };
+      reviewFor(added.game_id).notes.push(added);
+      return { value: added };
+    }
+    case "update_note":
+      for (const game of GAMES.values()) {
+        const found = game.notes.find((n) => n.id === args.noteId);
+        if (found) {
+          found.kind = args.kind as NoteKind;
+          found.body = String(args.body).trim();
+          return { value: { ...found } };
+        }
+      }
+      throw new Error(`no note ${String(args.noteId)}`);
+    case "delete_note":
+      for (const game of GAMES.values()) {
+        game.notes = game.notes.filter((n) => n.id !== args.noteId);
+      }
+      return { value: null };
     case "delete_takeaway":
       for (const game of GAMES.values()) {
         game.takeaways = game.takeaways.filter((t) => t.id !== args.takeawayId);

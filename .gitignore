@@ -66,3 +66,6 @@ Thumbs.db
 # Claude Code session-local state (launch.json itself is a real project
 # file and stays tracked)
 .claude/*.lock
+
+# Vitest browser mode (the layout gate) writes screenshots and attachments here.
+.vitest/

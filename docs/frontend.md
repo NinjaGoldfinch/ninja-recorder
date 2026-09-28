@@ -36,7 +36,7 @@ flowchart TB
     LIBV["lib/components/library/<br/><small>Library, Row, Toolbar, StatsBar,<br/>Perks, Build, StatLine, Matchup,<br/>Slot, RowActions</small>"]
     LIBS["lib/stores/library.svelte.ts<br/><small>owns: the row set + every control</small>"]
     ICONS["lib/stores/icons.svelte.ts<br/><small>owns: when art has arrived</small>"]
-    REVV["lib/components/review/<br/><small>Review (imperative island), Timeline,<br/>PlayerControls, ReviewRail, MarkerList,<br/>MarkerTimes</small>"]
+    REVV["lib/components/review/<br/><small>Review (imperative island), Timeline,<br/>PlayerControls, ReviewRail, MarkerList,<br/>MarkerTimes, NoteEditor</small>"]
     REVS["lib/stores/review.svelte.ts<br/><small>owns: which recording, its markers,<br/>samples and window</small>"]
     SETV["lib/components/settings/<br/><small>Settings, Appearance, BackgroundTray,<br/>Notifications, AudioSettings, Storage,<br/>Advanced, About, Update, UpdateNotes, SettingRow</small>"]
     SETS["lib/stores/settings.svelte.ts<br/><small>owns: autostart, audio, capture backend,<br/>retention, the folder, mirrored prefs</small>"]
@@ -44,7 +44,7 @@ flowchart TB
     TL["lib/timeline/<br/><small>window, clusters, graph, stem,<br/>markers, events, navigate · pure, tested</small>"]
     LIBP["lib/library/<br/><small>filters, sort, stats, scoreboard,<br/>build, problems · pure, tested</small>"]
     SETP["lib/settings/<br/><small>notes, backfill, retention, audio,<br/>capture, update, about · pure, tested</small>"]
-    REVP["lib/review/<br/><small>hotkeys, playback, rail,<br/>clock, facts · pure, tested</small>"]
+    REVP["lib/review/<br/><small>hotkeys, playback, rail,<br/>clock, facts, notes · pure, tested</small>"]
     RFV["lib/components/reviewform/<br/><small>ReviewForm, RatingControl</small>"]
     RFS["lib/stores/gameReview.svelte.ts<br/><small>owns: the open game, its draft review,<br/>the autosave queue</small>"]
     OBV["lib/components/objectives/<br/><small>Objectives</small>"]
@@ -564,16 +564,39 @@ flowchart LR
   have (`review/hotkeys.ts`, `typing`), so the form can sit beside a player
   that answers Space and the arrows. Two keys still work from inside a field:
   Ctrl+Space plays and pauses, and Escape hands focus back to the player.
-- **`n` starts a note at the playhead** (#325). It pauses, opens the rail if
-  theatre mode had folded it away, and starts a new line in Notes stamped with
-  the game time (`reviewform/fields.ts`, `withStamp`), with the cursor after
-  the stamp. The "+ Timestamp" button does the same. The stamp is plain text in
-  `free_notes`. Notes as separate timed rows on the timeline wait for #251, and
-  nothing in the schema changes until then. The player reaches the form through
-  `ReviewRail.noteAt`, a component export, which is the one call that crosses
-  inward from the player to the form.
+- **`n` makes a timed note at the playhead** (#258). It pauses and opens a
+  small editor over the player (`NoteEditor.svelte`), with the text box focused
+  and a dropdown for the kind: note (the default), mistake, good, question or
+  takeaway. **One key and a picker**, rather than the spec's key per kind: `m`
+  was already mute, and one key is less to remember. Enter saves, Shift+Enter
+  starts a new line, and Escape cancels. The editor swallows its own keys, so
+  typing never reaches the player's hotkeys. It sits over the player rather than
+  in the rail, so it works in theatre mode without unfolding anything. The
+  form's "+ Note" button does the same as `n`.
+- **A note is stored in game time and drawn in video time.** It belongs to the
+  game and outlives the recording, so `notes.ts_ms` is the game clock.
+  `review/clock.ts` maps it both ways, `noteTimeAt` to stamp it and `videoAt` to
+  place it. Both directions use the latest point *at or before* the position,
+  not the nearest: with two points either side of a pause, "nearest" picks
+  different points in the two clocks, and a note would read back up to the
+  pause's length away. With nothing clocked, the game's
+  `recording_offset_ms` places it, and failing that the video time is the game
+  time. `review/notes.ts` places every note once, and the timeline and the
+  Events tab both draw the placed list.
+- **Notes are pins on the timeline and rows in the Events tab.** On the
+  timeline they are pins along the top edge, apart from the game's markers, so
+  a note is never clustered into a burst of kills. The hover title is the note
+  itself, and a click seeks there. In the Events tab they are rows interleaved
+  with the events in playback order, with a Notes chip of their own and the same
+  two clocks in the same columns as an event. A row is edited or deleted in
+  place, with the same editor.
+- **The stamps the first `n` wrote are converted, once** (#258). Before timed
+  notes, `n` typed `6:36 ` into the free notes. Opening a review that still has
+  them turns each `m:ss text` line into a `note`-kind note and leaves the rest
+  of the text where it was (`db::review::split_stamps`, in the same transaction
+  as the open). The free notes stay for anything that is not about one moment.
 - **The Events tab is the marker list, made for a rail** (#326). Filter chips
-  narrow it to fights, deaths or objectives, each with its count. A burst of
+  narrow it to fights, deaths, objectives or notes, each with its count. A burst of
   the same event collapses into one row ("Voidgrubs ×3"), but only when the
   label matches, so two different kills a few seconds apart stay two rows. The
   row the playhead most recently passed is lit and scrolled into view while

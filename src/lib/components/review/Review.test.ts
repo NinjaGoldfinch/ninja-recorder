@@ -21,6 +21,9 @@ const client = vi.hoisted(() => ({
   open_game_for_recording: vi.fn(),
   get_game_review: vi.fn(),
   save_game_review: vi.fn(),
+  add_note: vi.fn(),
+  update_note: vi.fn(),
+  delete_note: vi.fn(),
 }));
 vi.mock("../../../bridge", () => ({
   call,
@@ -93,11 +96,13 @@ beforeEach(async () => {
       champion: "Ahri",
       matchup: null,
       result: "win",
+      recording_offset_ms: null,
     },
     review: null,
     death_markers: null,
     objectives: [],
     takeaways: [],
+    notes: [],
   });
   client.save_game_review.mockResolvedValue(null);
 
@@ -515,36 +520,148 @@ describe("notes while watching", () => {
       return found;
     });
 
-  it("n pauses and starts a note at the playhead, ready to type", async () => {
+  const composer = (el: HTMLElement) =>
+    vi.waitFor(() => {
+      const found = el.querySelector<HTMLElement>(".note-composer");
+      if (!found) throw new Error("no note editor");
+      return found;
+    });
+
+  /** A key pressed inside the editor, where the element sees it first. */
+  const keyIn = (target: Element, k: string) =>
+    target.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }));
+
+  const savedNote = (over: Record<string, unknown> = {}) => ({
+    id: 5,
+    game_id: 70,
+    ts_ms: 90_000,
+    kind: "good",
+    body: "nice gank",
+    created_at: 1,
+    ...over,
+  });
+
+  it("n pauses and opens a note at the playhead, ready to type", async () => {
     const el = render();
     await open([marker(60)]);
-    const notes = await notesBox(el);
+    await notesBox(el);
     video(el).currentTime = 125;
     await video(el).play();
     key("n");
-    await vi.waitFor(() => expect(notes.value).toBe("2:05 "));
+    const editor = await composer(el);
     expect(video(el).paused).toBe(true);
-    expect(document.activeElement).toBe(notes);
+    expect(editor.textContent).toContain("Note at 2:05");
+    expect(document.activeElement).toBe(editor.querySelector('[aria-label="Note"]'));
+    expect(editor.querySelector<HTMLSelectElement>('[aria-label="Kind"]')?.value).toBe("note");
   });
 
-  it("opens the rail from theatre mode to take the note", async () => {
+  it("Enter saves it in game time, with the kind picked from the dropdown", async () => {
+    client.add_note.mockResolvedValue(savedNote({ id: 9, ts_ms: 125_000, kind: "mistake" }));
+    const el = render();
+    await open([marker(60)]);
+    await notesBox(el);
+    video(el).currentTime = 125;
+    key("n");
+    const editor = await composer(el);
+
+    const kind = editor.querySelector<HTMLSelectElement>(
+      '[aria-label="Kind"]',
+    ) as HTMLSelectElement;
+    kind.value = "mistake";
+    kind.dispatchEvent(new Event("change", { bubbles: true }));
+    const text = editor.querySelector<HTMLTextAreaElement>(
+      '[aria-label="Note"]',
+    ) as HTMLTextAreaElement;
+    text.value = "burnt flash";
+    text.dispatchEvent(new Event("input", { bubbles: true }));
+    keyIn(text, "Enter");
+
+    await vi.waitFor(() =>
+      expect(client.add_note).toHaveBeenCalledWith(70, 125_000, "mistake", "burnt flash"),
+    );
+    await vi.waitFor(() => expect(el.querySelector(".note-composer")).toBeNull());
+  });
+
+  it("Escape cancels without saving, and m in a note is a letter, not mute", async () => {
     const el = render();
     await open();
-    const notes = await notesBox(el);
+    await notesBox(el);
+    key("n");
+    const editor = await composer(el);
+    const text = editor.querySelector('[aria-label="Note"]') as HTMLTextAreaElement;
+    keyIn(text, "m");
+    expect(video(el).muted).toBe(false);
+    keyIn(text, "Escape");
+    await vi.waitFor(() => expect(el.querySelector(".note-composer")).toBeNull());
+    expect(client.add_note).not.toHaveBeenCalled();
+  });
+
+  it("works in theatre mode without unfolding the rail", async () => {
+    const el = render();
+    await open();
+    await notesBox(el);
     key("t");
     await Promise.resolve();
-    expect(el.querySelector<HTMLElement>(".review-rail")?.hidden).toBe(true);
     key("n");
-    await vi.waitFor(() => expect(notes.value).not.toBe(""));
-    expect(el.querySelector<HTMLElement>(".review-rail")?.hidden).toBe(false);
+    await composer(el);
+    expect(el.querySelector<HTMLElement>(".review-rail")?.hidden).toBe(true);
   });
 
-  it("the stamp button does the same as n", async () => {
+  it("the + Note button does the same as n", async () => {
     const el = render();
     await open();
-    const notes = await notesBox(el);
+    await notesBox(el);
     el.querySelector<HTMLButtonElement>(".stamp-btn")?.click();
-    await vi.waitFor(() => expect(notes.value).toBe("0:00 "));
+    await composer(el);
+  });
+
+  it("draws saved notes on the timeline and lists them in the Events tab", async () => {
+    client.get_game_review.mockResolvedValue({
+      ...(await client.get_game_review()),
+      notes: [savedNote()],
+    });
+    const el = render();
+    await open([marker(60)]);
+    await vi.waitFor(() => expect(el.querySelectorAll(".note-pin")).toHaveLength(1));
+    expect(el.querySelector(".note-pin")?.getAttribute("aria-label")).toContain("nice gank");
+    expect(el.querySelector(".note-row")?.textContent).toContain("nice gank");
+  });
+
+  it("edits and deletes a note from the Events tab", async () => {
+    client.get_game_review.mockResolvedValue({
+      ...(await client.get_game_review()),
+      notes: [savedNote()],
+    });
+    client.update_note.mockResolvedValue(savedNote({ body: "great gank" }));
+    client.delete_note.mockResolvedValue(null);
+    const el = render();
+    await open([marker(60)]);
+    const row = await vi.waitFor(() => {
+      const found = el.querySelector<HTMLElement>(".note-row");
+      if (!found) throw new Error("no note row");
+      return found;
+    });
+
+    row.querySelector<HTMLButtonElement>('[aria-label="Edit note"]')?.click();
+    const text = await vi.waitFor(() => {
+      const found = el.querySelector<HTMLTextAreaElement>('.note-row.editing [aria-label="Note"]');
+      if (!found) throw new Error("not editing");
+      return found;
+    });
+    expect(text.value).toBe("nice gank");
+    text.value = "great gank";
+    text.dispatchEvent(new Event("input", { bubbles: true }));
+    keyIn(text, "Enter");
+    await vi.waitFor(() =>
+      expect(client.update_note).toHaveBeenCalledWith(5, "good", "great gank"),
+    );
+    await vi.waitFor(() =>
+      expect(el.querySelector(".note-row")?.textContent).toContain("great gank"),
+    );
+
+    el.querySelector<HTMLButtonElement>('[aria-label="Delete note"]')?.click();
+    await vi.waitFor(() => expect(client.delete_note).toHaveBeenCalledWith(5));
+    await vi.waitFor(() => expect(el.querySelector(".note-row")).toBeNull());
   });
 
   it("Escape hands the keys back to the player, and Ctrl+Space plays from a field", async () => {

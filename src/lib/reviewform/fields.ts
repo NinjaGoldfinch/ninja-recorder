@@ -35,15 +35,3 @@ export function parseCount(text: string): Parsed<number | null> {
   if (!/^\d+$/.test(trimmed)) return { ok: false };
   return { ok: true, value: Number(trimmed) };
 }
-
-/**
- * The notes with a new line started at `stamp`, ready to be typed after.
- *
- * Always on a line of its own, so a stamp never lands in the middle of a
- * sentence; and never after a blank line, so pressing the key twice does not
- * leave a gap.
- */
-export function withStamp(notes: string, stamp: string): string {
-  const trimmed = notes.replace(/\s+$/, "");
-  return trimmed === "" ? `${stamp} ` : `${trimmed}\n${stamp} `;
-}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MarkerRow } from "../../types";
-import { currentRow, eventRows, matchesFilter } from "./events";
+import { currentItem, currentRow, eventRows, listItems, matchesFilter } from "./events";
 
 let nextId = 1;
 const m = (kind: string, t: number, payload: Record<string, unknown> = {}): MarkerRow => ({
@@ -88,5 +88,51 @@ describe("currentRow", () => {
 
   it("lights a row just seeked to, a hair before its time", () => {
     expect(currentRow(rows, 219.8)).toBe(1);
+  });
+});
+
+describe("listItems and currentItem", () => {
+  const m = (id: number, video_time_s: number, kind = "kill") =>
+    ({
+      id,
+      recording_id: 1,
+      game_time_s: video_time_s,
+      video_time_s,
+      kind,
+      payload_json: "{}",
+    }) as MarkerRow;
+  const placed = (id: number, videoTimeS: number) => ({
+    note: {
+      id,
+      game_id: 1,
+      ts_ms: videoTimeS * 1000,
+      kind: "mistake" as const,
+      body: "b",
+      created_at: 0,
+    },
+    videoTimeS,
+  });
+
+  it("merges notes into the events in playback order, the event first at a tie", () => {
+    const rows = eventRows([m(1, 10), m(2, 100)], new Set(), "all");
+    const items = listItems(rows, [placed(7, 50), placed(8, 100)], "all");
+    expect(
+      items.map((i) => (i.type === "event" ? `e${i.row.marker.id}` : `n${i.placed.note.id}`)),
+    ).toEqual(["e1", "n7", "e2", "n8"]);
+  });
+
+  it("shows only notes under Notes, and no notes under an event filter", () => {
+    const markers = [m(1, 10), m(2, 20, "death")];
+    const notesOnly = listItems(eventRows(markers, new Set(), "notes"), [placed(7, 5)], "notes");
+    expect(notesOnly.map((i) => i.type)).toEqual(["note"]);
+    const deaths = listItems(eventRows(markers, new Set(), "deaths"), [placed(7, 5)], "deaths");
+    expect(deaths.map((i) => i.type)).toEqual(["event"]);
+  });
+
+  it("lights the last item the playhead passed", () => {
+    const items = listItems(eventRows([m(1, 10)], new Set(), "all"), [placed(7, 30)], "all");
+    expect(currentItem(items, 5)).toBe(-1);
+    expect(currentItem(items, 20)).toBe(0);
+    expect(currentItem(items, 31)).toBe(1);
   });
 });

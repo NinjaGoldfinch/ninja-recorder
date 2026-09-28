@@ -41,6 +41,20 @@ export interface PortalCommand {
 
 export const COMMANDS: PortalCommand[] = [
   {
+    name: "add_note",
+    group: "Review",
+    dev: false,
+    overRpc: true,
+    danger: false,
+    description: "Adds a timed note to a game at a game time in milliseconds. Refuses an empty body, a negative time, and a game that does not exist.",
+    args: [
+      { name: "gameId", kind: "number", default: "1", help: "", optional: false },
+      { name: "tsMs", kind: "number", default: "0", help: "game time in milliseconds", optional: false },
+      { name: "kind", kind: "string", default: "note", help: "note, mistake, good, question or takeaway", optional: false },
+      { name: "body", kind: "string", default: "", help: "", optional: false },
+    ],
+  },
+  {
     name: "add_takeaway",
     group: "Review",
     dev: false,
@@ -91,6 +105,17 @@ export const COMMANDS: PortalCommand[] = [
     description: "Deletes one recording's row and its file on disk.",
     args: [
       { name: "recordingId", kind: "number", default: "", help: "", optional: false },
+    ],
+  },
+  {
+    name: "delete_note",
+    group: "Review",
+    dev: false,
+    overRpc: true,
+    danger: true,
+    description: "Deletes a timed note.",
+    args: [
+      { name: "noteId", kind: "number", default: "", help: "", optional: false },
     ],
   },
   {
@@ -315,7 +340,7 @@ export const COMMANDS: PortalCommand[] = [
     dev: false,
     overRpc: true,
     danger: false,
-    description: "The review's game for a recording, made from the recording if it has none: every recording from before VOD review, and anything reconcile imported. A game made this way has no objective snapshot.",
+    description: "The review's game for a recording, made from the recording if it has none: every recording from before VOD review, and anything reconcile imported. A game made this way has no objective snapshot. Also fills the game's recording offset from the recording's clocked points, and turns any m:ss stamps left in the review's free notes into timed notes, once.",
     args: [
       { name: "recordingId", kind: "number", default: "", help: "", optional: false },
     ],
@@ -516,6 +541,19 @@ export const COMMANDS: PortalCommand[] = [
     danger: true,
     description: "Stops capture and returns the path of the file produced.",
     args: [],
+  },
+  {
+    name: "update_note",
+    group: "Review",
+    dev: false,
+    overRpc: true,
+    danger: false,
+    description: "Rewrites a note's kind and text. Its time does not change. Refuses an empty body and a note that does not exist.",
+    args: [
+      { name: "noteId", kind: "number", default: "", help: "", optional: false },
+      { name: "kind", kind: "string", default: "note", help: "note, mistake, good, question or takeaway", optional: false },
+      { name: "body", kind: "string", default: "", help: "", optional: false },
+    ],
   },
   {
     name: "update_objective",

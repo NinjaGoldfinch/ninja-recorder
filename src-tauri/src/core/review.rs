@@ -4,8 +4,8 @@
 
 use super::Ctx;
 use crate::db::review::{
-    GameReview, Objective, ObjectiveCategory, ObjectiveStatus, ReviewInput, Takeaway,
-    TakeawayOwner,
+    GameReview, Note, NoteKind, Objective, ObjectiveCategory, ObjectiveStatus, ReviewInput,
+    Takeaway, TakeawayOwner,
 };
 
 fn now_millis() -> i64 {
@@ -16,7 +16,7 @@ fn now_millis() -> i64 {
 }
 
 pub fn open_game_for_recording(ctx: &Ctx, recording_id: i64) -> Result<i64, String> {
-    ctx.db.ensure_game_for_recording(recording_id).map_err(|e| e.to_string())
+    ctx.db.open_game_for_review(recording_id, now_millis()).map_err(|e| e.to_string())
 }
 
 pub fn get_game_review(ctx: &Ctx, game_id: i64) -> Result<Option<GameReview>, String> {
@@ -76,6 +76,24 @@ pub fn add_takeaway(ctx: &Ctx, owner: TakeawayOwner, body: String) -> Result<Tak
 
 pub fn delete_takeaway(ctx: &Ctx, takeaway_id: i64) -> Result<(), String> {
     ctx.db.delete_takeaway(takeaway_id).map_err(|e| e.to_string())
+}
+
+pub fn add_note(
+    ctx: &Ctx,
+    game_id: i64,
+    ts_ms: i64,
+    kind: NoteKind,
+    body: String,
+) -> Result<Note, String> {
+    ctx.db.add_note(game_id, ts_ms, kind, &body, now_millis()).map_err(|e| e.to_string())
+}
+
+pub fn update_note(ctx: &Ctx, note_id: i64, kind: NoteKind, body: String) -> Result<Note, String> {
+    ctx.db.update_note(note_id, kind, &body).map_err(|e| e.to_string())
+}
+
+pub fn delete_note(ctx: &Ctx, note_id: i64) -> Result<(), String> {
+    ctx.db.delete_note(note_id).map_err(|e| e.to_string())
 }
 
 pub fn promote_takeaway(

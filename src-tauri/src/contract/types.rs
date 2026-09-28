@@ -86,6 +86,8 @@ macro_rules! all_boundary_types {
             crate::db::review::GameSummary,
             crate::db::review::LaneRating,
             crate::db::review::MentalRating,
+            crate::db::review::Note,
+            crate::db::review::NoteKind,
             crate::db::review::Objective,
             crate::db::review::ObjectiveCategory,
             crate::db::review::ObjectiveStatus,
@@ -190,7 +192,7 @@ mod tests {
             }};
         }
         let n = all_boundary_types!(check);
-        assert_eq!(n, 59, "the boundary type list changed; update the count deliberately");
+        assert_eq!(n, 61, "the boundary type list changed; update the count deliberately");
     }
 
     /// The decision above, made executable. Rendering with ts-rs's default

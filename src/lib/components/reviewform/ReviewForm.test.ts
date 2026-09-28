@@ -37,6 +37,7 @@ function fixture(over: Partial<GameReview> = {}): GameReview {
       champion: "Lee Sin",
       matchup: "Vi",
       result: "loss",
+      recording_offset_ms: null,
     },
     review: null,
     death_markers: 7,
@@ -57,6 +58,7 @@ function fixture(over: Partial<GameReview> = {}): GameReview {
       },
     ],
     takeaways: [],
+    notes: [],
     ...over,
   };
 }

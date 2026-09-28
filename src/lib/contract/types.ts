@@ -260,17 +260,32 @@ review: ReviewInput | null,
  * `None` where there is nothing to count, which is not the same as zero:
  * no recording, or a recording the poller never saw.
  */
-death_markers: number | null, objectives: Array<GameObjective>, takeaways: Array<Takeaway>, };
+death_markers: number | null, objectives: Array<GameObjective>, takeaways: Array<Takeaway>, 
+/**
+ * Timed notes, in game-time order.
+ */
+notes: Array<Note>, };
 
 export type GameSummary = { id: number, recording_id: number | null, started_at: number, ended_at: number | null, block_id: number | null, champion: string | null, 
 /**
  * The lane opponent's champion, or `None` where no board says who.
  */
-matchup: string | null, result: GameResult | null, };
+matchup: string | null, result: GameResult | null, 
+/**
+ * The game clock when the recording started, in milliseconds: negative
+ * when capture began on the loading screen, before the clock started.
+ * `None` for a game with no recording, or one nothing ever clocked. See
+ * `recording_offset_ms`.
+ */
+recording_offset_ms: number | null, };
 
 export type LaneRating = "win" | "neutral" | "loss";
 
 export type MentalRating = "good" | "neutral" | "bad";
+
+export type Note = { id: number, game_id: number, ts_ms: number, kind: NoteKind, body: string, created_at: number, };
+
+export type NoteKind = "note" | "mistake" | "good" | "question" | "takeaway";
 
 export type Objective = { id: number, body: string, category: ObjectiveCategory, status: ObjectiveStatus, created_at: number, retired_at: number | null, };
 

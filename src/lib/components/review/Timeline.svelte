@@ -10,6 +10,7 @@
 <script lang="ts">
 import { formatTime } from "../../../format";
 import type { MarkerRow } from "../../../types";
+import { noteStyle, type PlacedNote } from "../../review/notes";
 import { CLUSTER_PX, clusterCentre, clusterMarkers, leadMarker } from "../../timeline/clusters";
 import {
   GRAPH_HEIGHT,
@@ -36,6 +37,8 @@ interface Props {
   /** Click-to-seek and hold-to-scrub, shared with the in-player bar. */
   onscrub: (track: HTMLElement, clientX: number) => void;
   onscrubstart: (track: HTMLElement, e: PointerEvent) => void;
+  /** Timed notes, placed in the recording (#258). A layer of their own. */
+  notes?: readonly PlacedNote[];
 }
 
 const {
@@ -48,7 +51,14 @@ const {
   onseek,
   onscrub,
   onscrubstart,
+  notes = [],
 }: Props = $props();
+
+// Only the notes the viewing window reaches: `windowFraction` clamps, so a
+// note outside it would be drawn stuck to an edge, at a moment it is not at.
+const visibleNotes = $derived(
+  notes.filter((n) => n.videoTimeS >= window.start && n.videoTimeS <= window.end),
+);
 
 let body = $state<HTMLElement>();
 let tooltip = $state<HTMLElement>();
@@ -200,6 +210,27 @@ function hideTooltip(e: MouseEvent) {
         </button>
       {/each}
     </div>
+
+    <!--
+      The user's notes, as pins along the top edge, apart from the game's
+      markers: a note is the user's, and it should not be clustered into a
+      burst of kills. The text is the hover title, interpolated as text.
+    -->
+    {#if visibleNotes.length > 0}
+      <div class="timeline-notes">
+        {#each visibleNotes as placed (placed.note.id)}
+          {@const style = noteStyle(placed.note.kind)}
+          <button
+            type="button"
+            class="note-pin"
+            style="left:{(windowFraction(placed.videoTimeS, window) * 100).toFixed(3)}%; --note-color:{style.color}"
+            title="{style.label} at {formatTime(placed.note.ts_ms / 1000)}: {placed.note.body}"
+            aria-label="{style.label} at {formatTime(placed.note.ts_ms / 1000)}: {placed.note.body}"
+            onclick={() => onseek(placed.videoTimeS)}
+          ></button>
+        {/each}
+      </div>
+    {/if}
 
     <div class="timeline-ruler" style="--minor-gap:{((ruler.step / 4) / (window.span || 1)) * 100}%">
       {#each ruler.labels as t (t)}

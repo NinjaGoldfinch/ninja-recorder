@@ -165,7 +165,7 @@ erDiagram
         TEXT    champion "nullable"
         TEXT    matchup "nullable"
         TEXT    result "win or loss, nullable"
-        INTEGER recording_offset_ms "nullable until P1"
+        INTEGER recording_offset_ms "game clock at the first frame; filled on open, NULL if nothing clocked"
     }
     blocks {
         INTEGER id PK
@@ -181,6 +181,7 @@ erDiagram
         INTEGER smites_at_clear
         INTEGER deaths "NULL = count the death markers"
         TEXT    free_notes "plain text"
+        INTEGER stamps_converted "0 or 1; migration 14"
     }
     objectives {
         INTEGER id PK
@@ -199,10 +200,11 @@ erDiagram
         INTEGER id PK
         INTEGER game_id FK "CASCADE"
         INTEGER ts_ms "game time"
-        TEXT    kind "mistake, good, question, takeaway"
-        TEXT    body
+        TEXT    kind "note, mistake, good, question, takeaway"
+        TEXT    body "plain text"
         INTEGER objective_id FK "SET NULL"
         INTEGER marker_id FK "SET NULL"
+        INTEGER created_at "unix millis; migration 14"
     }
     takeaways {
         INTEGER id PK
@@ -278,6 +280,7 @@ user's own account of their sessions.
 | 8 | `samples.gold_diff_est` → `gold_diff`, existing values cleared | The column stops claiming to be an estimate because it stops being one: gold now comes from the LCU's match timeline, which is Riot's own per-participant accounting. The old values are cleared rather than carried across: every one of them is the item-price estimate, and leaving them under a column named `gold_diff` would relabel a known-wrong number as Riot's. NULL renders as "no gold data", which is true; a flat line near zero read as "you were even", which was the bug |
 | 7 | `recordings.diagnostics_json` (nullable) | What the app *observed* while making the recording, as against what the recording contains: how many Live Client Data polls landed, whether we were ever found in `allPlayers`, the alignment the markers were mapped through, which capture backend was live. None of it is derivable afterwards: the live API is gone the moment the game ends. JSON rather than a child table for the same reasons as `audio_tracks_json`, plus one more: a column is disposed of with its row, so retention and `delete_recording` need no cascade to get wrong |
 | 13 | `games`, `blocks`, `game_reviews`, `objectives`, `game_objectives`, `notes`, `takeaways`, and six indexes | WS9's VOD review. Hung off `games` rather than `recordings` so a review survives its VOD (see "The review tables outlive the recording" above). Reuses `markers` for events instead of adding an event table (#249). `takeaways` enforces exactly one owner with `CHECK ((game_id IS NULL) <> (block_id IS NULL))` |
+| 14 | `notes` rebuilt: `kind` gains `note`, and `created_at`; `game_reviews.stamps_converted` | WS9 P1's timed notes (#258). `note` is the neutral kind a note gets when none is picked, and every converted stamp's (#251). SQLite cannot alter a CHECK, so the table is rebuilt; nothing had written to it, but the copy keeps any rows. `stamps_converted` is a once-flag for turning the `m:ss` stamps P1's first `n` key wrote into the free notes into notes: existing reviews start at 0 and are converted on their next open (`Db::open_game_for_review`), and reviews made after the migration start at 1, so a time typed into their free notes stays text |
 
 ### The audio layout is JSON, not a child table
 

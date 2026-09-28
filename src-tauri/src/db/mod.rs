@@ -427,6 +427,41 @@ static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
         CREATE INDEX idx_takeaways_game_id ON takeaways(game_id);
         CREATE INDEX idx_takeaways_block_id ON takeaways(block_id);
         ",
+    ), M::up(
+        "
+        -- Timed notes (WS9 P1, #258).
+        --
+        -- `note` joins the four kinds as the neutral default (#251): a note
+        -- made without picking a kind, and every `6:36 ...` stamp converted
+        -- out of the free notes, has to be something. SQLite cannot alter a
+        -- CHECK, so the table is rebuilt. Nothing wrote to it before this
+        -- migration, but the copy keeps any rows all the same. `created_at`
+        -- orders two notes at the same game time.
+        CREATE TABLE notes_new (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id       INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+            ts_ms         INTEGER NOT NULL, -- game time
+            kind          TEXT NOT NULL
+                          CHECK (kind IN ('note', 'mistake', 'good', 'question', 'takeaway')),
+            body          TEXT NOT NULL,
+            objective_id  INTEGER REFERENCES objectives(id) ON DELETE SET NULL,
+            marker_id     INTEGER REFERENCES markers(id) ON DELETE SET NULL,
+            created_at    INTEGER NOT NULL DEFAULT 0 -- unix millis
+        );
+        INSERT INTO notes_new (id, game_id, ts_ms, kind, body, objective_id, marker_id)
+            SELECT id, game_id, ts_ms, kind, body, objective_id, marker_id FROM notes;
+        DROP TABLE notes;
+        ALTER TABLE notes_new RENAME TO notes;
+        CREATE INDEX idx_notes_game_id_ts_ms ON notes(game_id, ts_ms);
+
+        -- Whether this review's `m:ss` stamps have been turned into notes.
+        -- Before P1's notes, `n` wrote a stamp into the free notes; now it
+        -- makes a note. Existing reviews are converted once, on the next
+        -- open (`Db::open_game_for_review`). A review made from now on starts
+        -- converted, so a time typed into its free notes stays text.
+        ALTER TABLE game_reviews ADD COLUMN stamps_converted INTEGER NOT NULL DEFAULT 1;
+        UPDATE game_reviews SET stamps_converted = 0;
+        ",
     )];
     let count = migrations.len() as i64;
     (Migrations::new(migrations), count)

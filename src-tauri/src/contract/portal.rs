@@ -660,6 +660,16 @@ pub fn dev_command_manifest() -> Vec<DevCommandSpec> {
 macro_rules! production_form_table {
     ($m:ident) => {
         $m! {
+    add_note {
+        group: "Review",
+        danger: false,
+        args: [
+            { name: "gameId", kind: "number", default: "1", help: "", optional: false },
+            { name: "tsMs", kind: "number", default: "0", help: "game time in milliseconds", optional: false },
+            { name: "kind", kind: "string", default: "note", help: "note, mistake, good, question or takeaway", optional: false },
+            { name: "body", kind: "string", default: "", help: "", optional: false },
+        ],
+    }
     add_takeaway {
         group: "Review",
         danger: false,
@@ -691,6 +701,13 @@ macro_rules! production_form_table {
         danger: true,
         args: [
             { name: "recordingId", kind: "number", default: "", help: "", optional: false },
+        ],
+    }
+    delete_note {
+        group: "Review",
+        danger: true,
+        args: [
+            { name: "noteId", kind: "number", default: "", help: "", optional: false },
         ],
     }
     delete_takeaway {
@@ -952,6 +969,15 @@ macro_rules! production_form_table {
         group: "Recorder",
         danger: true,
         args: [],
+    }
+    update_note {
+        group: "Review",
+        danger: false,
+        args: [
+            { name: "noteId", kind: "number", default: "", help: "", optional: false },
+            { name: "kind", kind: "string", default: "note", help: "note, mistake, good, question or takeaway", optional: false },
+            { name: "body", kind: "string", default: "", help: "", optional: false },
+        ],
     }
     update_objective {
         group: "Review",

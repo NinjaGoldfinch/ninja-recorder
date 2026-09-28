@@ -18,32 +18,39 @@
 -->
 
 <script lang="ts">
-import { tick, untrack } from "svelte";
+import { untrack } from "svelte";
 import { assetUrl, call } from "../../../bridge";
 import { formatTime, vodHeading } from "../../../format";
 import { showView } from "../../../router";
 import type { AudioLayout } from "../../../types";
+import type { NoteKind } from "../../contract/types";
 import { recordedWithout } from "../../library/problems";
 import { laneOpponent, selfPlayer } from "../../library/scoreboard";
-import { gameClockAt } from "../../review/clock";
+import { gameClockAt, noteTimeAt } from "../../review/clock";
 import { reviewFacts } from "../../review/facts";
 import { type HotkeyContext, hotkeyAction, SEEK_STEP_S } from "../../review/hotkeys";
+import { placeNotes } from "../../review/notes";
 import { parseAudioLayout, videoErrorReport } from "../../review/playback";
 import { railOpenSaved, saveRailOpen } from "../../review/rail";
-import { closeReview, openReviewForRecording } from "../../stores/gameReview.svelte";
+import {
+  addNote,
+  closeReview,
+  gameReview,
+  openReviewForRecording,
+} from "../../stores/gameReview.svelte";
 import { closeRecording, review, setDuration } from "../../stores/review.svelte";
 import { toast } from "../../stores/toast.svelte";
 import type { MetricKey } from "../../timeline/graph";
 import { nextMarker } from "../../timeline/navigate";
 import { stemCorrection } from "../../timeline/stem";
-import { clamp, displayTime } from "../../timeline/window";
+import { clamp } from "../../timeline/window";
+import NoteEditor from "./NoteEditor.svelte";
 import PlayerControls from "./PlayerControls.svelte";
 import ReviewRail from "./ReviewRail.svelte";
 import Timeline from "./Timeline.svelte";
 
 let video = $state<HTMLVideoElement>();
 let playerWrap = $state<HTMLElement>();
-let rail = $state<ReturnType<typeof ReviewRail>>();
 
 /** The player's own state. None of it belongs in the store. */
 let playhead = $state(0);
@@ -323,25 +330,43 @@ function gameClockNow(): number | null {
   return gameClockAt(video.currentTime, review.samples, review.markers);
 }
 
+/** The game's timed notes, placed in this recording (#258). */
+const placedNotes = $derived(
+  placeNotes(
+    gameReview.current?.notes ?? [],
+    gameReview.current?.game.recording_offset_ms ?? null,
+    review.markers,
+    review.samples,
+  ),
+);
+
+/** The note being written at the playhead, if any: its game time in ms. */
+let composing = $state<{ tsMs: number } | null>(null);
+
 /**
- * Pauses and starts a note at the current game time: the `n` key and the
- * notes' stamp button. Opens the rail if theatre mode had it folded away,
- * because a note nobody can see being written is not one.
+ * Pauses and opens a timed note at the playhead: the `n` key and the form's
+ * "+ Note" button (#258). The editor sits over the player rather than in the
+ * rail, so it works in theatre mode without unfolding anything.
  *
- * Falls back to the time the player shows when the recording has nothing to
- * read the game clock from; a note's stamp is for finding the moment again,
- * and the player's clock does that.
+ * Stamped in game time (`noteTimeAt`): the game clock where the player is,
+ * or the stored offset, or the video time for a recording nothing clocked.
+ * `placeNotes` reads it back through the same mapping.
  */
-async function noteAtPlayhead() {
-  if (!video) return;
+function noteAtPlayhead() {
+  if (!video || !gameReview.current) return;
   video.pause();
-  if (!railOpen) {
-    railOpen = true;
-    saveRailOpen(true);
-    await tick();
-  }
-  const at = gameClockNow() ?? displayTime(video.currentTime, review.window);
-  await rail?.noteAt(formatTime(at));
+  const gameTimeS = noteTimeAt(
+    video.currentTime,
+    gameReview.current.game.recording_offset_ms,
+    review.markers,
+    review.samples,
+  );
+  composing = { tsMs: Math.round(gameTimeS * 1000) };
+}
+
+async function saveNote(kind: NoteKind, body: string) {
+  if (!composing) return;
+  if (await addNote(composing.tsMs, kind, body)) composing = null;
 }
 
 function toggleRail() {
@@ -501,7 +526,7 @@ $effect(() => {
         toggleRail();
         break;
       case "noteAtPlayhead":
-        void noteAtPlayhead();
+        noteAtPlayhead();
         break;
       case "leaveField":
         (document.activeElement as HTMLElement | null)?.blur();
@@ -641,6 +666,16 @@ $effect(() => {
         </div>
       {/if}
 
+      {#if composing}
+        <div class="note-composer">
+          <NoteEditor
+            label="Note at {formatTime(composing.tsMs / 1000)}"
+            onsave={saveNote}
+            oncancel={() => (composing = null)}
+          />
+        </div>
+      {/if}
+
       <PlayerControls
         atS={Math.max(0, playhead - review.window.start)}
         totalS={review.window.span}
@@ -680,6 +715,7 @@ $effect(() => {
       onseek={seekTo}
       onscrub={moveScrub}
       onscrubstart={startScrub}
+      notes={placedNotes}
     />
 
     <p class="hint review-keys">
@@ -689,13 +725,13 @@ $effect(() => {
   </div>
 
   <ReviewRail
-    bind:this={rail}
     open={railOpen}
     markers={review.markers}
     beyond={review.footage.beyond}
     onseek={seekTo}
     currentTimeS={playhead}
     {gameClockNow}
-    onstamp={() => void noteAtPlayhead()}
+    onstamp={noteAtPlayhead}
+    notes={placedNotes}
   />
 </div>
