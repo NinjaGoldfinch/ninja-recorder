@@ -577,8 +577,9 @@ flowchart LR
   small editor over the player (`NoteEditor.svelte`), with the text box focused
   and a dropdown for the kind: note (the default), mistake, good, question or
   takeaway. **One key and a picker**, rather than the spec's key per kind: `m`
-  was already mute, and one key is less to remember. Enter saves, Shift+Enter
-  starts a new line, and Escape cancels. The editor swallows its own keys, so
+  was already mute, and one key is less to remember. Enter saves, from the
+  text box or the kind dropdown (picking a kind leaves the focus there),
+  Shift+Enter starts a new line, and Escape cancels. The editor swallows its own keys, so
   typing never reaches the player's hotkeys. It sits over the player rather than
   in the rail, so it works in theatre mode without unfolding anything. The
   form's "+ Note" button does the same as `n`.
