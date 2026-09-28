@@ -59,6 +59,9 @@
   /* The review view is wider than the rest: the player and the review rail
    * sit side by side, and the player is the thing worth the width. */
   --review-max: 1600px;
+  /* The library is wider than the rest too: its row scales with the width
+   * it has (#341), so the extra room becomes bigger art. */
+  --library-max: 1400px;
 
   --font-sans: -apple-system, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono", monospace;

@@ -313,6 +313,14 @@ body:has(.review-view:not([hidden])) .app-bar-inner {
   max-width: var(--review-max);
 }
 
+/* The library gets a wider column too (#341). Its row scales with the width
+ * it has, so a wide window buys bigger art rather than empty margins; the
+ * app bar stays at the usual width, since nothing in the library lines up
+ * with it. */
+.container:has(> #library-view:not([hidden])) {
+  max-width: var(--library-max);
+}
+
 /* Nothing follows the review's last line, so the page's usual bottom margin
  * would only be a strip for the window to scroll into. */
 .container:has(> .review-view:not([hidden])) {
@@ -1467,72 +1475,77 @@ button.armed {
 /* One row per game, not a grid of cards.
  *
  * A library is scanned, not browsed: the question is almost always "which
- * game was that", answered by champion, result and roughly when — and a
- * card grid answers it in two dimensions when one would do. Rows also give
- * the scoreboard, items and team compositions somewhere to go without a
- * redesign (#85), which a fixed-width card does not. */
+ * game was that", answered by champion, result and roughly when, and a
+ * card grid answers it in two dimensions when one would do.
+ *
+ * **Every row is drawn whole at every window size, and scales instead of
+ * shedding** (#341). Nothing is hidden at a narrow window; the art, the text
+ * and the gaps get smaller. The breakpoints this replaced asked how wide the
+ * *window* was, while the row lives in a capped column, so the answer and
+ * the question disagreed and rows drew past their card at both ends of the
+ * range (#342). Every size below is in `cqi`, 1% of the list's own width,
+ * and clamped, so the row answers to the width it actually has.
+ *
+ * **One grid for the whole list.** The list owns the columns and every row
+ * is a subgrid of it, so a column is the same width on every row by
+ * construction. Rows used to be a grid each, which is why their art tracks
+ * had to be stated in pixels: an `auto` track sized to *that* row's content
+ * drifted from the row above it. With one grid, `auto` is safe.
+ *
+ * **The data columns take the width they need and no more**, and the spare
+ * width collects in one place, before the size and the actions. `fr` data
+ * columns each absorbed a slice of it, which left gaps either side of the
+ * builds and threw everything else at the right edge. */
 .vod-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
-}
-
-/* Columns are capped rather than content-sized or free-growing: values
- * line up down the list, so a column can be read vertically without the
- * eye re-finding it on every row.
- *
- * **The slack sits before the actions, not inside the data.** One column
- * at `1fr` stretched the champion cell across half the window and threw
- * everything else at the right edge, which read as two unrelated clusters
- * with a hole between them. Every data column now has a maximum, so they
- * stay a group at the left and the leftover width collects in one place.
- *
- * The team compositions took a column of their own rather than the slack
- * they were once earmarked for (#85): a fixed grid of squares dropped into
- * a `1fr` track leaves the leftover width *inside* a data column, where it
- * is invisible to read but real to every future column. Slack that stays
- * slack keeps the rule above true rather than nearly true. */
-.vod-row {
-  /* Portrait, "vs", their line, and seven item squares with their gaps. One
-   * number so the track and the block cannot disagree. */
-  --versus-w: 15.5rem;
+  container: library / inline-size;
+  --slot: clamp(15px, 2.15cqi, 30px);
+  --row-gap: clamp(4px, 0.9cqi, 14px);
+  --row-fs: clamp(11px, 1.15cqi, 15px);
+  --row-fs-sub: clamp(10px, 0.95cqi, 12.5px);
   display: grid;
   grid-template-columns:
-    minmax(8.5rem, 11rem) /* queue / when / patch / length · result */
-    auto /* portrait */
-    minmax(6rem, 12rem) /* champion + role */
-    minmax(6rem, 9rem) /* KDA + ratio */
-    minmax(4.5rem, 6rem) /* CS + per minute */
-    minmax(5rem, 7rem) /* rank + LP */
-    38px /* spells + runes — two columns of 18px + 2px */
-    166px /* items — seven of 22px + six 2px gaps */
-    var(--versus-w) /* the lane matchup */
-    minmax(0, 1fr) /* slack — see above */
-    auto /* size */
+    minmax(0, calc(var(--row-fs) * 13)) /* game, capped: a filename cannot widen it */
+    auto /* portrait + spells and runes */
+    minmax(0, max-content) /* our line */
+    auto /* our build */
+    auto /* vs */
+    auto /* their portrait + spells and runes */
+    minmax(0, max-content) /* their line */
+    auto /* their build */
+    minmax(0, 1fr) /* slack: size, and a capture note */
     auto; /* actions */
+  column-gap: var(--row-gap);
+  row-gap: var(--sp-2);
+}
+
+.vod-row {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: center;
-  /* The art tracks are stated rather than left `auto`, and that is the fix
-   * for rows that would not line up. `auto` sizes a track to *that row's*
-   * content, and every `.vod-row` is its own grid — so a row whose player
-   * sold an item, or whose scoreboard is missing, computed different track
-   * widths from the row above it and the whole list shifted about. The
-   * blocks are fixed grids of fixed squares internally, so the widths were
-   * never really variable; they only looked it. Column reads down the list
-   * now, which is the entire reason the row is a grid.
-   *
-   * Tighter than the page's usual rhythm. Eleven columns at `--sp-3` spend
-   * more than a hundred pixels on gaps, which at the 960px minimum window
-   * is the difference between the items strip fitting and not. */
-  gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-4);
+  font-size: var(--row-fs);
+  padding: calc(var(--row-gap) * 0.8) var(--row-gap) calc(var(--row-gap) * 0.8)
+    calc(var(--row-gap) * 1.2);
   border: 1px solid var(--border);
   border-left: 4px solid var(--border-strong);
   border-radius: var(--r-md);
   background-color: var(--bg-surface);
   cursor: pointer;
+  /* The safety net, not the mechanism. Nothing is sized to overflow, and
+   * the layout gate (#345) checks that from box positions, which a clip
+   * does not hide. The margin keeps a focus ring on the action buttons. */
+  overflow: clip;
+  overflow-clip-margin: 4px;
   transition:
     background-color var(--dur) var(--ease),
     border-color var(--dur) var(--ease);
+}
+
+/* A grid item defaults to `min-width: auto`, which refuses to shrink below
+ * its content and would let one long name widen its column past what the
+ * track allows. */
+.vod-row > * {
+  min-width: 0;
 }
 
 .vod-row:hover {
@@ -1541,18 +1554,10 @@ button.armed {
 }
 
 /* Outcome on the leading edge, and a wash of the same colour that fades
- * out across the first few centimetres of the row.
- *
- * There was a Win/Loss badge here too and it was redundant: the edge
- * already said it, in the same place on every row, and the badge cost a
- * whole column to repeat it. The wash is the compensation for dropping it
- * — it makes the edge read as the row's state rather than as a decoration
- * beside it, without tinting forty rows into a wall of red and green.
- *
- * The *word* did not go with the badge. It moved into the queue sub-line
- * (`.vod-outcome`), where it costs no column, so the result is still
- * legible to someone who cannot separate green from red — which is exactly
- * the pair this encodes. Colour and text, one place each. */
+ * out across the first few centimetres of the row. The *word* is in the
+ * left block (`.vod-outcome`), so the result is still legible to someone
+ * who cannot separate green from red, which is exactly the pair this
+ * encodes. Colour and text, one place each. */
 .vod-row[data-outcome="win"] {
   border-left-color: var(--win-fg);
   background-image: linear-gradient(to right, var(--win-bg), transparent 18rem);
@@ -1563,89 +1568,76 @@ button.armed {
   background-image: linear-gradient(to right, var(--loss-bg), transparent 18rem);
 }
 
-/* Spells and runes in a 2x2 block, items in a strip. Both are grids of
- * fixed boxes rather than a flow of images: an empty slot has to hold its
- * place, because a build with four items is a different thing from a game
- * that has no scoreboard at all, and a row that shrank to fit would say
- * neither. */
-/* Fills **down** each column, not across each row: spells in the left
- * column, runes in the right, which is how every scoreboard in the game
- * arranges them. Row-major filling put the second spell where the keystone
- * belongs, so the four read as one undifferentiated block. */
-.vod-perks {
-  display: grid;
-  grid-template-rows: repeat(2, 18px);
-  grid-auto-flow: column;
-  gap: 2px;
-}
-
-.vod-items {
-  display: grid;
-  grid-template-columns: repeat(7, 22px);
-  gap: 2px;
-}
-
-/* Both team compositions: five across the top, five across the bottom.
- *
- * Row-major, which is the default flow and deliberately the opposite of
- * `.vod-perks` above — a team is a line of five, so the line has to be the
- * thing the eye picks up. Filling by column would interleave the two
- * sides.
- *
- * Smaller than the item squares, and not by accident: this is the block
- * you scan rather than read, and ten boxes at item size would out-weigh
- * the champion, the KDA and the result that the row is actually about. */
-/* The lane matchup, at one width whatever it holds — an unknown opponent
- * takes exactly as much room as a known one, so the column does not move
- * between rows. */
+/* The matchup spans its four columns (vs, portrait, line, build) as a
+ * subgrid of the row, so its parts sit in the same columns as every other
+ * row's. With no opponent, the message takes the three after the "vs". */
 .vod-versus {
-  display: flex;
+  display: grid;
+  grid-column: span 4;
+  grid-template-columns: subgrid;
   align-items: center;
-  gap: var(--sp-2);
-  width: var(--versus-w);
+  column-gap: var(--row-gap);
+}
+
+.vod-versus > * {
+  min-width: 0;
 }
 
 .vod-versus-label {
-  flex-shrink: 0;
-  font-size: var(--fs-sm);
+  font-size: var(--row-fs-sub);
   color: var(--text-subtle);
   font-variant: small-caps;
 }
 
-.vod-versus-portrait {
-  flex-shrink: 0;
-  width: 26px;
-  height: 26px;
+.vod-versus-none {
+  grid-column: span 3;
 }
 
-/* Narrower than our own KDA cell: this is the side being compared against,
- * and giving it equal weight would make the row read as two players rather
- * than as one player's game. */
-.vod-versus-line {
-  width: 4.5rem;
-  flex-shrink: 0;
+/* A portrait and its 2x2 of spells and runes, as one cell. */
+.vod-champion {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
-/* An opponent nothing could name says so in words rather than drawing seven
- * blank boxes — that reads as art that failed to load, which is a bug report
- * waiting to happen. The block keeps its width either way, so the columns on
- * both sides stay where they are. */
-.vod-versus[data-unknown="true"] .vod-sub {
-  color: var(--text-subtle);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* Filled down each column, not across: spells in the left column, runes
+ * in the right, which is how every scoreboard in the game arranges them. */
+.vod-perks {
+  display: grid;
+  grid-template-rows: repeat(2, var(--slot));
+  grid-auto-flow: column;
+  gap: 2px;
+}
+
+/* 4x2, the trinket top right (`build.ts`). */
+.vod-items {
+  display: grid;
+  grid-template-columns: repeat(4, var(--slot));
+  gap: 2px;
 }
 
 .vod-slot {
+  display: block;
+  width: var(--slot);
+  height: var(--slot);
   border-radius: 3px;
   background-color: var(--bg-inset);
   overflow: hidden;
-  aspect-ratio: 1;
 }
 
-.vod-perks .vod-slot {
+/* Runes are round and spells square, as the game draws them. */
+.vod-rune {
   border-radius: 50%;
+}
+
+/* The same height as the two-row build beside it, so the block reads as
+ * one unit. Holds its space before the art arrives, so the row does not
+ * reflow when the icon lands a moment after the list. */
+.vod-slot.vod-portrait {
+  width: calc(var(--slot) * 2 + 2px);
+  height: calc(var(--slot) * 2 + 2px);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
 }
 
 .vod-slot img {
@@ -1661,9 +1653,8 @@ button.armed {
   box-shadow: inset 0 0 0 1px var(--border);
 }
 
-/* The result as a word, inside the sub-line rather than in a column of its
- * own. Coloured as well as written, so it carries both channels at once
- * for anyone who can use either. */
+/* The result as a word, coloured as well as written, so it carries both
+ * channels at once for anyone who can use either. */
 .vod-outcome {
   font-weight: 600;
 }
@@ -1677,74 +1668,56 @@ button.armed {
 }
 
 /* Stacked lines in one grid cell: the value, and the things that qualify
- * it. `min-width: 0` because a grid item defaults to `auto`, which refuses
- * to shrink below its content and would let one long champion name widen
- * the column past its own maximum. */
+ * it. */
 .vod-cell,
-.vod-meta {
+.vod-meta,
+.vod-slack {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  gap: 0.1rem;
+  gap: 1px;
 }
 
-/* The block that sets the row's height: what the game was, when, on which
- * patch, how long, and how it went. Four short lines rather than four
- * columns, because none of them is a number worth comparing down the list
- * — they answer "is this the game I mean", which is read once per row. */
-.vod-meta {
-  gap: 0.05rem;
+.vod-slack {
+  align-items: flex-end;
 }
 
-.vod-queue {
-  font-weight: 600;
+.vod-line,
+.vod-rank {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.vod-queue {
+  font-weight: 600;
+}
+
+.vod-rank {
+  font-size: var(--row-fs-sub);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
 .vod-sub {
-  font-size: var(--fs-xs);
+  font-size: var(--row-fs-sub);
   color: var(--text-subtle);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* "Recorded without game audio" (#10), in the slack column that is otherwise
- * empty, so the row keeps its shape. Truncated rather than wrapped: the
- * tooltip carries every reason. */
-.vod-without {
-  font-size: var(--fs-xs);
-  color: var(--warn-fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: right;
-}
-
-/* Holds its space before the portrait arrives, so a row does not reflow
- * when the icon lands a moment after the list. Empty until then, and empty
- * forever for a champion the CDN never answered for — the name beside it
- * has always been the real label. */
-.vod-portrait {
-  width: 46px;
-  height: 46px;
-  border-radius: var(--r-sm);
-  border: 1px solid var(--border);
-  background-color: var(--bg-inset);
-  overflow: hidden;
-}
-
-.vod-portrait img {
-  width: 100%;
-  height: 100%;
-  display: block;
-}
-
 .vod-champ {
   font-weight: 600;
-  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+/* "Recorded without game audio" (#10), above the file size. Truncated
+ * rather than wrapped: the tooltip carries every reason. */
+.vod-without {
+  max-width: 100%;
+  font-size: var(--row-fs-sub);
+  color: var(--warn-fg);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1754,7 +1727,8 @@ button.armed {
  * middle number, which is the one people look for first, and the
  * separators stop competing with the digits for it. */
 .vod-kda {
-  font-size: var(--fs-md);
+  font-weight: 600;
+  font-size: calc(var(--row-fs) * 1.05);
 }
 
 .vod-deaths {
@@ -1763,19 +1737,18 @@ button.armed {
 
 .vod-slash {
   color: var(--text-subtle);
+  margin: 0 1px;
 }
 
 .vod-size {
   white-space: nowrap;
 }
 
-/* Tabular figures so the digits sit in the same columns from row to row —
+/* Tabular figures so the digits sit in the same columns from row to row:
  * the point of a list is that a number can be compared down it without
- * being read. */
+ * being read. Numbers never truncate; the gate (#345) checks it. */
 .vod-value {
   font-variant-numeric: tabular-nums;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -2193,52 +2166,6 @@ button.small {
 }
 
 /* --- Narrow windows ---------------------------------------------- */
-
-/* The team block is the first thing to go when the window is too narrow
- * to hold the row.
- *
- * At the 960px minimum the columns already sum to within about fifty
- * pixels of the space there is, so the ten squares do not fit and
- * something has to give. This is the right thing to drop: every other
- * block answers something about the row's own player — who they were, how
- * they did, what they built — and this one is context around that. Losing
- * it costs recognition, not the ability to tell one row from another.
- *
- * Every row loses it at the same moment, so the list stays one shape,
- * which is the whole reason a missing *value* renders as `—` rather than
- * vanishing. The rule is about data, not about window width.
- *
- * The threshold is where the row's own tracks stop fitting, not a round
- * number: the columns before it need about 965px, and the window has to
- * carry the container's padding, the row's padding and the gaps on top of
- * that. Below roughly 1200px the squares are what no longer has room.
- *
- * It sheds in two stages now that the block is a matchup rather than ten
- * portraits, because the two halves are worth different amounts. The
- * opponent's *build* is the wide part — seven squares and their gaps, 166px
- * — and the least of what the block says; who you played against and how
- * they did survives another 240px of narrowing. Dropping the whole thing at
- * the first pinch would throw away the useful half to save the decorative
- * one.
- *
- * The numbers are the row's own tracks, not round figures: with the build
- * the row needs about 1430px, and without it about 1180px. */
-@media (max-width: 1440px) {
-  .vod-versus .vod-items {
-    display: none;
-  }
-
-  .vod-row {
-    /* Portrait, "vs" and their line — the build's 166px and one gap gone. */
-    --versus-w: 7.5rem;
-  }
-}
-
-@media (max-width: 1200px) {
-  .vod-versus {
-    display: none;
-  }
-}
 
 @media (max-width: 760px) {
   .app-bar-inner {

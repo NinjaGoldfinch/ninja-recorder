@@ -32,10 +32,13 @@ export function laneOpponent(row: RecordingRow): ScoreboardPlayer | null {
   return players.find((p) => p.team !== us.team && p.position === us.position) ?? null;
 }
 
-/** "8.3 /min", or null when either half is missing. */
-export function csPerMinute(row: RecordingRow): string | null {
-  if (row.cs === null || row.duration_s === null || row.duration_s <= 0) return null;
-  return `${(row.cs / (row.duration_s / 60)).toFixed(1)} /min`;
+/**
+ * `"8.3/m"`, or null when either half is missing. Plain numbers rather than a
+ * row, because the opponent's line uses the same game length and their own CS.
+ */
+export function csPerMinute(cs: number | null, durationS: number | null): string | null {
+  if (cs === null || durationS === null || durationS <= 0) return null;
+  return `${(cs / (durationS / 60)).toFixed(1)}/m`;
 }
 
 /** What the row's `data-outcome` attribute carries. */

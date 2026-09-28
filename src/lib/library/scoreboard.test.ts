@@ -85,16 +85,16 @@ describe("selfPlayer", () => {
 
 describe("csPerMinute", () => {
   it("divides creep score by the length in minutes", () => {
-    expect(csPerMinute({ cs: 200, duration_s: 1200 } as RecordingRow)).toBe("10.0 /min");
+    expect(csPerMinute(200, 1200)).toBe("10.0/m");
   });
 
   it("is null when either half is missing", () => {
-    expect(csPerMinute({ cs: null, duration_s: 1200 } as RecordingRow)).toBeNull();
-    expect(csPerMinute({ cs: 200, duration_s: null } as RecordingRow)).toBeNull();
+    expect(csPerMinute(null, 1200)).toBeNull();
+    expect(csPerMinute(200, null)).toBeNull();
   });
 
   it("refuses to divide by zero", () => {
-    expect(csPerMinute({ cs: 200, duration_s: 0 } as RecordingRow)).toBeNull();
+    expect(csPerMinute(200, 0)).toBeNull();
   });
 });
 

@@ -87,13 +87,20 @@ describe("a row with nothing known", () => {
     // The shape is the point. An imported file has a path and a size and
     // nothing else, and it has to sit in the same grid as a ranked game.
     const el = render(row());
-    expect(el.querySelector(".vod-meta")).not.toBeNull();
-    expect(el.querySelector(".vod-portrait")).not.toBeNull();
-    expect(el.querySelectorAll(".vod-cell").length).toBeGreaterThanOrEqual(4);
-    expect(el.querySelector(".vod-perks")).not.toBeNull();
-    expect(el.querySelector(".vod-items")).not.toBeNull();
-    expect(el.querySelector(".vod-versus")).not.toBeNull();
-    expect(el.querySelector(".vod-actions")).not.toBeNull();
+    // Each is one column (the matchup four), and the row's columns are the
+    // list's: a missing block would shift every column after it (#341).
+    for (const block of [
+      ".vod-meta",
+      ".vod-portrait",
+      ".vod-perks",
+      ".vod-stats",
+      ".vod-items",
+      ".vod-versus",
+      ".vod-slack",
+      ".vod-actions",
+    ]) {
+      expect(el.querySelector(block), block).not.toBeNull();
+    }
   });
 
   it("marks the missing values rather than leaving gaps", () => {
@@ -141,7 +148,7 @@ describe("KDA", () => {
   it("shows all three, with deaths picked out", () => {
     const el = render(row({ kda_k: 7, kda_d: 2, kda_a: 11 }));
     const kda = el.querySelector(".vod-kda");
-    expect(kda?.textContent?.replace(/\s+/g, " ")).toContain("7 / 2 / 11");
+    expect(kda?.textContent?.replace(/\s+/g, "")).toBe("7/2/11");
     expect(kda?.querySelector(".vod-deaths")?.textContent).toBe("2");
   });
 
@@ -237,7 +244,69 @@ describe("a row with a full scoreboard", () => {
     const versus = el.querySelector(".vod-versus");
     expect(versus?.getAttribute("data-unknown")).toBeNull();
     expect(versus?.textContent).toContain("4");
-    expect(versus?.textContent).toContain("198 cs");
+    expect(versus?.textContent).toContain("198 CS");
+  });
+
+  const laner = (
+    champion: string,
+    team: string,
+    position: string,
+    over: Record<string, unknown> = {},
+  ) => ({
+    champion,
+    team,
+    position,
+    is_us: team === "ORDER",
+    level: 16,
+    kills: 1,
+    deaths: 2,
+    assists: 3,
+    cs: 200,
+    items: [6672, 3031, 3094, 3363],
+    trinket: 3363,
+    spells: ["Flash", "Heal"],
+    ...over,
+  });
+
+  const boxesOf = (el: HTMLElement) =>
+    [...el.querySelectorAll(".vod-items")].map((grid) => [...grid.querySelectorAll(".vod-slot")]);
+
+  it("puts the trinket in the fourth box, and gives a bot laner an eighth for boots", () => {
+    const board = {
+      players: [
+        laner("Jinx", "ORDER", "Bottom", { role_item: 3006 }),
+        laner("Caitlyn", "CHAOS", "Bottom", { role_item: 3008 }),
+      ],
+    };
+    const [ours, theirs] = boxesOf(render(row({ scoreboard_json: JSON.stringify(board) })));
+    expect(ours).toHaveLength(8);
+    expect(ours?.[3]?.getAttribute("title")).toBe("Item 3363");
+    expect(ours?.[7]?.getAttribute("title")).toBe("Item 3006");
+    expect(theirs).toHaveLength(8);
+    expect(theirs?.[7]?.getAttribute("title")).toBe("Item 3008");
+  });
+
+  it("draws seven boxes for every other role, and never its quest token", () => {
+    // 1209 is the jungle quest reward: a marker, not an item.
+    const board = {
+      players: [
+        laner("Viego", "ORDER", "Jungle", { role_item: 1209 }),
+        laner("Qiyana", "CHAOS", "Jungle", { role_item: 1209 }),
+      ],
+    };
+    const el = render(row({ scoreboard_json: JSON.stringify(board) }));
+    for (const grid of boxesOf(el)) expect(grid).toHaveLength(7);
+    expect(el.querySelector('[title="Item 1209"]')).toBeNull();
+  });
+
+  it("draws the opponent in our shape: portrait, spells, line and build", () => {
+    // The pair reads as a comparison only if the two halves are the same
+    // blocks in the same order (#341).
+    const versus = render(withBoard()).querySelector(".vod-versus");
+    expect(versus?.querySelector(".vod-portrait")).not.toBeNull();
+    expect(versus?.querySelector(".vod-perks")).not.toBeNull();
+    expect(versus?.querySelector(".vod-stats")).not.toBeNull();
+    expect(versus?.querySelector(".vod-items")).not.toBeNull();
   });
 
   it("renders every inventory slot, filled or not", () => {
@@ -448,7 +517,7 @@ describe("what a capture failure cost", () => {
     );
     const line = el.querySelector(".vod-without");
     // In the slack column, so the row keeps its shape.
-    expect(line?.classList.contains("vod-slack")).toBe(true);
+    expect(line?.closest(".vod-slack")).not.toBeNull();
     expect(line?.textContent).toBe("Recorded without game audio");
     expect(line?.getAttribute("title")).toBe(
       "Recorded without game audio (process-loopback activation for PID 7 was refused: (0x80070005)).",
