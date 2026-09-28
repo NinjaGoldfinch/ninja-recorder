@@ -54,8 +54,11 @@ let clearInvalid = $state(false);
 let smitesInvalid = $state(false);
 let deathsInvalid = $state(false);
 let newTakeaway = $state("");
-/** The takeaway being rewritten in place, and its text so far. */
-let editingTakeaway = $state<{ id: number; text: string } | null>(null);
+/** The takeaway being rewritten in place, and its text so far. Two values,
+ *  not one nullable object: `bind:value` reads the text back a tick after
+ *  each keystroke, and Escape can clear the edit inside that tick. */
+let editingTakeaway = $state<number | null>(null);
+let editingText = $state("");
 let shownGame: number | null = null;
 
 $effect(() => {
@@ -113,8 +116,8 @@ function takeawayKey(event: KeyboardEvent) {
 
 async function saveTakeaway(event: SubmitEvent) {
   event.preventDefault();
-  if (!editingTakeaway) return;
-  if (await updateTakeaway(editingTakeaway.id, editingTakeaway.text)) editingTakeaway = null;
+  if (editingTakeaway === null) return;
+  if (await updateTakeaway(editingTakeaway, editingText)) editingTakeaway = null;
 }
 
 /** The same keys as adding one, and Escape puts the text back. Every key
@@ -254,12 +257,12 @@ const deathsHint = $derived.by(() => {
         <ul class="review-takeaways">
           {#each gameReview.current.takeaways as takeaway (takeaway.id)}
             <li>
-              {#if editingTakeaway?.id === takeaway.id}
+              {#if editingTakeaway === takeaway.id}
                 <form class="takeaway-add takeaway-edit" onsubmit={saveTakeaway}>
                   <textarea
                     aria-label="Takeaway"
                     title="Enter saves; Shift+Enter starts a new line; Esc cancels"
-                    bind:value={editingTakeaway.text}
+                    bind:value={editingText}
                     onkeydown={editTakeawayKey}
                     use:focusAtEnd
                   ></textarea>
@@ -269,7 +272,7 @@ const deathsHint = $derived.by(() => {
                   <button
                     type="submit"
                     class="primary"
-                    disabled={editingTakeaway.text.trim() === ""}>Save</button
+                    disabled={editingText.trim() === ""}>Save</button
                   >
                 </form>
               {:else}
@@ -279,7 +282,10 @@ const deathsHint = $derived.by(() => {
                   class="icon-btn"
                   aria-label="Edit takeaway"
                   title="Edit takeaway"
-                  onclick={() => (editingTakeaway = { id: takeaway.id, text: takeaway.body })}
+                  onclick={() => {
+                    editingTakeaway = takeaway.id;
+                    editingText = takeaway.body;
+                  }}
                   >✎</button
                 >
                 {#if takeaway.promoted_to_id === null}
