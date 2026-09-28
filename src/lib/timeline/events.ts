@@ -7,9 +7,10 @@
  */
 
 import type { MarkerRow } from "../../types";
+import type { PlacedNote } from "../review/notes";
 import { markerLabel } from "./markers";
 
-export type EventFilter = "all" | "kills" | "deaths" | "objectives";
+export type EventFilter = "all" | "kills" | "deaths" | "objectives" | "notes";
 
 /**
  * Fights, deaths and map objectives. Assists and aces count as fights, since
@@ -20,6 +21,9 @@ const FILTER_KINDS: Record<Exclude<EventFilter, "all">, ReadonlySet<string>> = {
   kills: new Set(["kill", "assist", "multikill", "first_blood", "ace"]),
   deaths: new Set(["death"]),
   objectives: new Set(["dragon", "baron", "herald", "voidgrubs", "turret", "inhibitor"]),
+  // Notes are not markers, so no marker kind matches: the chip shows the
+  // notes alone (`listItems`).
+  notes: new Set(),
 };
 
 export function matchesFilter(kind: string, filter: EventFilter): boolean {
@@ -86,6 +90,54 @@ export function currentRow(rows: readonly EventRow[], videoTimeS: number): numbe
   let current = -1;
   rows.forEach((row, i) => {
     if (!row.beyond && row.marker.video_time_s <= videoTimeS + 0.5) current = i;
+  });
+  return current;
+}
+
+/**
+ * One line of the Events tab: a game event (or a burst of them), or one of
+ * the user's timed notes (#258).
+ */
+export type ListItem =
+  | { type: "event"; row: EventRow; videoTimeS: number }
+  | { type: "note"; placed: PlacedNote; videoTimeS: number };
+
+/**
+ * The events and the notes, in playback order. Notes show under "All" and
+ * under "Notes", and not under a filter that names a kind of event: a note
+ * is the user's, not the game's. At the same moment the event comes first,
+ * since the note is usually about it.
+ */
+export function listItems(
+  rows: readonly EventRow[],
+  notes: readonly PlacedNote[],
+  filter: EventFilter,
+): ListItem[] {
+  const items: ListItem[] = rows.map((row) => ({
+    type: "event",
+    row,
+    videoTimeS: row.marker.video_time_s,
+  }));
+  if (filter === "all" || filter === "notes") {
+    for (const placed of notes) items.push({ type: "note", placed, videoTimeS: placed.videoTimeS });
+  }
+  return items
+    .map((item, i) => ({ item, i }))
+    .sort(
+      (a, b) =>
+        a.item.videoTimeS - b.item.videoTimeS ||
+        (a.item.type === b.item.type ? a.i - b.i : a.item.type === "event" ? -1 : 1),
+    )
+    .map(({ item }) => item);
+}
+
+/** The item the playhead most recently passed, or -1. Events past the end
+ *  of the footage are never current: there is nothing there to be at. */
+export function currentItem(items: readonly ListItem[], videoTimeS: number): number {
+  let current = -1;
+  items.forEach((item, i) => {
+    if (item.type === "event" && item.row.beyond) return;
+    if (item.videoTimeS <= videoTimeS + 0.5) current = i;
   });
   return current;
 }

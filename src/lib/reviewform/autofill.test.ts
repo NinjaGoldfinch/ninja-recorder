@@ -12,11 +12,13 @@ const game = (over: Partial<GameReview> = {}): GameReview => ({
     champion: "Viego",
     matchup: "Talon",
     result: "win",
+    recording_offset_ms: null,
   },
   review: null,
   death_markers: 3,
   objectives: [],
   takeaways: [],
+  notes: [],
   ...over,
 });
 

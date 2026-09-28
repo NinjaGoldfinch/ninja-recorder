@@ -10,7 +10,8 @@
 
 <script lang="ts">
 import type { MarkerRow } from "../../../types";
-import { gameReview } from "../../stores/gameReview.svelte";
+import type { PlacedNote } from "../../review/notes";
+import { deleteNote, gameReview, updateNote } from "../../stores/gameReview.svelte";
 import ReviewForm from "../reviewform/ReviewForm.svelte";
 import MarkerList from "./MarkerList.svelte";
 
@@ -24,19 +25,14 @@ interface Props {
   currentTimeS: number;
   /** The game clock at the playhead, for the form's clock button. */
   gameClockNow: () => number | null;
-  /** The player's "note at the playhead", for the form's stamp button. */
+  /** The player's "note at the playhead", for the form's note button. */
   onstamp: () => void;
+  /** The game's timed notes, placed in the recording, for the Events tab. */
+  notes: readonly PlacedNote[];
 }
 
-const { open, markers, beyond, onseek, currentTimeS, gameClockNow, onstamp }: Props = $props();
-
-let form = $state<ReturnType<typeof ReviewForm>>();
-
-/** Shows the Review tab and starts a note at `stamp` in it. */
-export async function noteAt(stamp: string): Promise<boolean> {
-  tab = "review";
-  return (await form?.noteAt(stamp)) ?? false;
-}
+const { open, markers, beyond, onseek, currentTimeS, gameClockNow, onstamp, notes }: Props =
+  $props();
 
 type Tab = "review" | "events";
 let tab = $state<Tab>("review");
@@ -82,7 +78,7 @@ const STATUS_COPY = {
     aria-labelledby="rail-tab-review"
     hidden={tab !== "review"}
   >
-    <ReviewForm bind:this={form} {gameClockNow} {onstamp} />
+    <ReviewForm {gameClockNow} {onstamp} />
   </div>
 
   <div
@@ -92,6 +88,14 @@ const STATUS_COPY = {
     aria-labelledby="rail-tab-events"
     hidden={tab !== "events"}
   >
-    <MarkerList {markers} {beyond} {onseek} {currentTimeS} />
+    <MarkerList
+      {markers}
+      {beyond}
+      {onseek}
+      {currentTimeS}
+      {notes}
+      onnoteupdate={updateNote}
+      onnotedelete={(id) => void deleteNote(id)}
+    />
   </div>
 </aside>

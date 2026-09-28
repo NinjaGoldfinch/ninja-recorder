@@ -12,7 +12,14 @@
  */
 
 import { client } from "../../bridge";
-import type { GameReview, ObjectiveCategory, ReviewInput, Takeaway } from "../contract/types";
+import type {
+  GameReview,
+  Note,
+  NoteKind,
+  ObjectiveCategory,
+  ReviewInput,
+  Takeaway,
+} from "../contract/types";
 import { EMPTY_REVIEW, prefill, type RecordingFacts } from "../reviewform/autofill";
 import { createAutosave, type SaveStatus } from "../reviewform/autosave";
 import { toast } from "./toast.svelte";
@@ -182,6 +189,55 @@ export async function promoteTakeaway(
 }
 
 /** Test seam: back to a freshly loaded module. */
+// --- timed notes (WS9 P1, #258) ---------------------------------------------
+
+/** Game-time order, as the backend returns them, so a new note lands where a
+ *  reload would put it. */
+function byTime(a: Note, b: Note): number {
+  return a.ts_ms - b.ts_ms || a.created_at - b.created_at || a.id - b.id;
+}
+
+/**
+ * Adds a note at `tsMs` of game time. Resolves to the note, or null when
+ * there is no game open or the save failed (which says so in a toast).
+ */
+export async function addNote(tsMs: number, kind: NoteKind, body: string): Promise<Note | null> {
+  if (!current || body.trim() === "") return null;
+  const game = current;
+  try {
+    const added = await client.add_note(game.game.id, Math.max(0, Math.round(tsMs)), kind, body);
+    game.notes = [...game.notes, added].sort(byTime);
+    return added;
+  } catch (err) {
+    toast(`Couldn't save the note: ${err}`, "error");
+    return null;
+  }
+}
+
+export async function updateNote(noteId: number, kind: NoteKind, body: string): Promise<boolean> {
+  if (!current || body.trim() === "") return false;
+  const game = current;
+  try {
+    const updated = await client.update_note(noteId, kind, body);
+    game.notes = game.notes.map((n) => (n.id === noteId ? updated : n));
+    return true;
+  } catch (err) {
+    toast(`Couldn't save the note: ${err}`, "error");
+    return false;
+  }
+}
+
+export async function deleteNote(noteId: number): Promise<void> {
+  if (!current) return;
+  const game = current;
+  try {
+    await client.delete_note(noteId);
+    game.notes = game.notes.filter((n) => n.id !== noteId);
+  } catch (err) {
+    toast(`Couldn't delete the note: ${err}`, "error");
+  }
+}
+
 export function resetGameReviewForTests(): void {
   autosave.cancel();
   generation = 0;

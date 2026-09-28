@@ -4163,9 +4163,9 @@ is the one that closes it.
 
 | Default | Question | Settled by |
 |---|---|---|
-| First clear time is entered by hand, as mm:ss on the review form | [#248](https://github.com/NinjaGoldfinch/ninja-recorder/issues/248) | P1 |
+| First clear time is entered by hand, as mm:ss on the review form. **Decided, not built:** derive it after the game from the match timeline's per-minute jungle CS, with manual entry as the override | [#248](https://github.com/NinjaGoldfinch/ninja-recorder/issues/248) | P1; the derivation waits on a captured timeline document, which #357 needs too |
 | A new block starts when a game begins more than 2 hours after the previous one ended | [#250](https://github.com/NinjaGoldfinch/ninja-recorder/issues/250) | P3 |
-| Note, takeaway, objective and free-note bodies are plain text | [#251](https://github.com/NinjaGoldfinch/ninja-recorder/issues/251) | P1 |
+| Note, takeaway, objective and free-note bodies are plain text. **Settled** (#251, closed): plain text with a `kind` tag, and `note` added as the neutral kind | [#251](https://github.com/NinjaGoldfinch/ninja-recorder/issues/251) | P1, done |
 
 **Why these.** Each is the one that costs nothing to change later. Manual entry
 stores the same `first_clear_ms` that a derived value would. The gap is one
@@ -4197,3 +4197,16 @@ keep this from putting words in the user's mouth:
 The clear-time clock button fills in the game clock at the playhead. It is a
 faster way of entering the time by hand, not a derived value, so #248 stays
 open.
+
+**Timed notes are stored in game time** (#258). A note belongs to the game,
+and a review outlives its recording, so `notes.ts_ms` is the game clock and the
+player maps it onto the video. Storing video time would have been simpler to
+draw and wrong the moment a recording was deleted or re-imported.
+`games.recording_offset_ms`, filled when a game is opened, keeps the one number
+that still places notes when a recording's markers and samples are gone.
+
+**One key makes a note; a dropdown picks its kind.** The specification gave
+each kind a key (M, G, ?). M was already mute, and the person using this asked
+for one key to remember, so `n` opens an editor with a kind picker, and the
+kind defaults to a neutral `note`. That needed a fifth kind, so it came with a
+migration rather than overloading one of the four.

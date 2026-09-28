@@ -1151,6 +1151,148 @@ body:has(.review-view:not([hidden])) .app-bar-inner {
   white-space: nowrap;
 }
 
+/* --- Timed notes (WS9 P1, #258) ----------------------------------- */
+
+/* A note's row in the Events tab. The body wraps rather than ellipsizing:
+ * it is the user's own words, and a note cut off mid-thought is worse than
+ * a taller row. Edit and delete appear on hover or focus, like a library
+ * row's actions. */
+.marker-list li.note-row {
+  position: relative;
+  align-items: flex-start;
+}
+
+.note-body {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Over the time, on hover or focus, rather than beside it: a hidden button
+ * that still takes its width would push a note's time left of every event's
+ * time, and the column would stop reading down the list. */
+.note-actions {
+  position: absolute;
+  top: 50%;
+  right: var(--sp-2);
+  transform: translateY(-50%);
+  display: inline-flex;
+  gap: 0.1rem;
+  padding-left: var(--sp-2);
+  background-color: var(--bg-surface);
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease);
+}
+
+.note-actions .icon-btn {
+  border-color: transparent;
+  background: none;
+}
+
+.note-row:hover .note-actions,
+.note-row:focus-within .note-actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .note-actions {
+    position: static;
+    transform: none;
+    opacity: 1;
+  }
+}
+
+.marker-list li.note-row.editing {
+  display: block;
+  cursor: default;
+}
+
+/* The editor `n` opens, and the one a note row edits in place. */
+.note-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.note-editor-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.note-editor-label {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.note-editor-kind {
+  margin-left: auto;
+  border-left: 4px solid var(--note-color, var(--border-strong));
+}
+
+.note-editor-text {
+  width: 100%;
+  resize: vertical;
+  min-height: 2.8rem;
+}
+
+.note-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.note-editor-actions .hint {
+  margin-right: auto;
+  font-size: var(--fs-xs);
+}
+
+/* Over the player's lower third, above its controls, so writing a note never
+ * hides the frame it is about entirely, and works in theatre mode without
+ * unfolding the rail. */
+.note-composer {
+  position: absolute;
+  left: 50%;
+  bottom: 4.5rem;
+  transform: translateX(-50%);
+  width: min(32rem, calc(100% - 2rem));
+  padding: var(--sp-3);
+  border-radius: var(--r-md);
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-2);
+  z-index: 3;
+}
+
+/* Notes on the timeline: pins along the top edge, apart from the game's
+ * markers so a note is never clustered into a burst of kills. */
+.timeline-notes {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 0.9rem;
+  pointer-events: none;
+}
+
+.note-pin {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  width: 0.7rem;
+  height: 0.9rem;
+  padding: 0;
+  border: none;
+  border-radius: 0 0 0.35rem 0.35rem;
+  background-color: var(--note-color, var(--text-muted));
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.note-pin:hover,
+.note-pin:focus-visible {
+  height: 1.1rem;
+}
+
 .marker-list .hint {
   margin-left: auto;
   flex-shrink: 0;
