@@ -21,7 +21,7 @@
 import { untrack } from "svelte";
 import { assetUrl, call } from "../../../bridge";
 import { formatTime, vodHeading } from "../../../format";
-import { showView } from "../../../router";
+import { onViewChange, showView } from "../../../router";
 import type { AudioLayout } from "../../../types";
 import type { NoteKind } from "../../contract/types";
 import { recordedWithout } from "../../library/problems";
@@ -424,7 +424,18 @@ function onVideoError() {
   );
 }
 
-function close() {
+/**
+ * Tears the session down: the file, the stem, and the store.
+ *
+ * Separate from `close` because the Back button is not the only way out. The
+ * app bar's Objectives and Settings leave the review too, and a session left
+ * open behind them is still "open" to the store: the hidden video keeps
+ * playing and the hotkeys keep driving it, and opening the same recording
+ * again assigns an unchanged row, so the load effect never re-runs and
+ * `loadedmetadata` never re-publishes the duration the store just zeroed. The
+ * window is then empty, and the player cannot play or place a marker.
+ */
+function teardown() {
   stopLoop();
   menuOpen = false;
   detachStem();
@@ -442,8 +453,20 @@ function close() {
   // Not awaited: the save is flushed in the background, and the library does
   // not need to wait for it to show.
   void closeReview();
+}
+
+function close() {
+  teardown();
   showView("library");
 }
+
+// Any other way out of the review closes it too. Nothing navigates back to
+// `review` except opening a recording, so there is no session to come back to.
+$effect(() =>
+  onViewChange((view) => {
+    if (view !== "review" && untrack(() => review.isOpen)) teardown();
+  }),
+);
 
 /**
  * Loads whichever recording the store says is open.

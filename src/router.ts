@@ -50,8 +50,13 @@ export function currentView(): View {
   return current;
 }
 
-export function onViewChange(cb: (view: View) => void) {
+/** Subscribes to view changes, and returns the way to stop. */
+export function onViewChange(cb: (view: View) => void): () => void {
   listeners.push(cb);
+  return () => {
+    const i = listeners.indexOf(cb);
+    if (i !== -1) listeners.splice(i, 1);
+  };
 }
 
 // Hiding stays on the `hidden` attribute rather than a class: the review

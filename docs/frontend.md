@@ -554,7 +554,16 @@ flowchart LR
     PLAYER -->|same effect, untracked| LOAD["gameReview.openReviewForRecording<br/>flush · open_game_for_recording · get_game_review"]
     LOAD --> RAIL["ReviewRail<br/>Review tab: ReviewForm<br/>Events tab: MarkerList"]
     BACK["← Back"] --> CLOSE["closeRecording + closeReview<br/>(flushes, then drops the game)"]
+    LEAVE["app bar: Objectives / Settings<br/>(onViewChange)"] --> CLOSE
 ```
+
+- **Leaving the review by any route closes it**, not only Back. Nothing
+  navigates back to `review` except opening a recording, so a session left open
+  behind Objectives or Settings has no way back. Left open, it kept playing
+  hidden, answered the hotkeys, and broke the next open of the same recording:
+  the unchanged row never re-ran the load effect, so the duration the store had
+  just zeroed was never re-published and the player could neither play nor
+  place a marker.
 
 - **The rail has two tabs, and both stay mounted.** Review holds the form and
   Events holds the marker list. A hidden tab keeps its half-typed text and its
