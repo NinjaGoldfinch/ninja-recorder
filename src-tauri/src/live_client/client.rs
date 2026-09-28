@@ -4,6 +4,7 @@
 
 use super::events::AllGameData;
 use crate::fixtures;
+use std::sync::Arc;
 use std::time::Duration;
 
 const BASE_URL: &str = "https://127.0.0.1:2999";
@@ -111,7 +112,11 @@ impl LiveClientDataClient {
     /// or the game just ended — which is the expected steady state most of
     /// the time, not exceptional; callers (the poller) treat it as "not up
     /// right now" rather than a hard failure.
-    pub async fn fetch_all_game_data(&self) -> Result<AllGameData, LiveClientError> {
+    ///
+    /// Returns the text beside the parse: the supervisor archives the last
+    /// good snapshot as it arrived (#349), which keeps every field
+    /// `AllGameData` deliberately drops. The clone is one ~50 KB copy a second.
+    pub async fn fetch_all_game_data(&self) -> Result<(AllGameData, Arc<str>), LiveClientError> {
         let text = self
             .client
             .get(format!("{BASE_URL}{ALL_GAME_DATA_PATH}"))
@@ -123,7 +128,8 @@ impl LiveClientDataClient {
 
         fixtures::record("live-client", ALL_GAME_DATA_PATH, &text);
 
-        parse_all_game_data(text)
+        let raw: Arc<str> = Arc::from(text.as_str());
+        Ok((parse_all_game_data(text)?, raw))
     }
 
     /// The same request, returned unparsed. The dev portal wants the raw

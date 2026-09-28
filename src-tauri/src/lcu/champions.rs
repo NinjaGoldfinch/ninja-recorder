@@ -161,16 +161,26 @@ pub async fn champion_name(
     lockfile: &LockfileInfo,
     id: i64,
 ) -> Option<String> {
+    resolve(&*champion_names(client, lockfile).await?, id)
+}
+
+/// The whole id-to-name table, from the cache or the client. The document
+/// archive persists it (#349), so a re-derivation can name champions with no
+/// client running.
+pub async fn champion_names(
+    client: &LcuHttpClient,
+    lockfile: &LockfileInfo,
+) -> Option<Arc<ChampionNames>> {
     let key = cache_key(lockfile);
     if let Some(names) = cached(&key) {
-        return resolve(&names, id);
+        return Some(names);
     }
 
     match fetch(client).await {
         Ok(names) => {
             let names = Arc::new(names);
             store(&key, Arc::clone(&names));
-            resolve(&names, id)
+            Some(names)
         }
         Err(e) => {
             warn!("lcu", "could not read the champion asset store: {e}");

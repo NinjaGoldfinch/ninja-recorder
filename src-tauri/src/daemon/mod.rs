@@ -688,6 +688,20 @@ async fn start(paths: Paths) -> Result<Option<Started>, DaemonError> {
         Err(e) => error!("retention", "failed to load policy: {e}"),
     }
 
+    // Recordings an older extraction wrote are re-derived from their archived
+    // documents (#349): locally, no client, no network. Off the runtime and
+    // not awaited, so a large library never delays the pipe coming up; rows
+    // update in the open library through the event, like any other edit.
+    {
+        let db = db.clone();
+        let events = events.clone();
+        tokio::task::spawn_blocking(move || {
+            if crate::derive::rederive_outdated(&db) > 0 {
+                events.publish(Event::LibraryChanged { reason: LibraryChangeReason::Edited });
+            }
+        });
+    }
+
     wire_finalize_work(&supervisor, &events, &db, paths.ffmpeg.clone());
     supervisor.start();
 
@@ -967,15 +981,38 @@ fn wire_finalize_work(
         let db = Arc::clone(db);
         let events = events.clone();
         let runtime = runtime.clone();
+        // Weak: the closure lives inside the supervisor, and a strong
+        // reference back to it would be a cycle neither could drop.
+        let supervisor_ref = Arc::downgrade(supervisor);
         supervisor.set_summary_resumer(Box::new(move |lockfile| {
             let db = Arc::clone(&db);
             let events = events.clone();
+            let supervisor_ref = supervisor_ref.clone();
             runtime.spawn(async move {
-                let now_ms = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as i64)
-                    .unwrap_or(0);
-                if match_summary::resume_pending(&db, &lockfile, now_ms).await > 0 {
+                let now_ms = || {
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(0)
+                };
+                if match_summary::resume_pending(&db, &lockfile, now_ms()).await > 0 {
+                    events.publish(Event::LibraryChanged {
+                        reason: LibraryChangeReason::Edited,
+                    });
+                }
+                // Then the recordings from before the document archive
+                // (#349), fetched a few seconds apart, and only while no
+                // game is on: the same rule the updater uses. It stops the
+                // moment one starts, and the next connect picks it up.
+                let is_quiet = || {
+                    supervisor_ref.upgrade().is_some_and(|s| {
+                        matches!(
+                            s.status().state,
+                            state_machine::GameState::Idle | state_machine::GameState::ClientRunning
+                        )
+                    })
+                };
+                if crate::catch_up::run(&db, &lockfile, is_quiet, env!("CARGO_PKG_VERSION"), now_ms).await > 0 {
                     events.publish(Event::LibraryChanged {
                         reason: LibraryChangeReason::Edited,
                     });

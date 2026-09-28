@@ -4210,3 +4210,61 @@ each kind a key (M, G, ?). M was already mute, and the person using this asked
 for one key to remember, so `n` opens an editor with a kind picker, and the
 kind defaults to a neutral `note`. That needed a fifth kind, so it came with a
 migration rather than overloading one of the four.
+
+## 21. Derived data: keep the documents, re-derive the rest (#349)
+
+**Decision.** Keep each game's raw League documents, gzipped as received, and
+treat everything shown about a game as an extraction over them. The documents
+are the match-history game, its timeline, the end-of-game block, the current
+summoner (which is what says which player was "us"), and the last live
+`allgamedata` snapshot that had players.
+
+**Why.** Every field the app has added since v1 (positions, the lane matchup,
+the trinket, the ADC's boots, every player's runes) reached recordings made
+*before* it only by fetching from the League client again, and only as far
+back as the client's match history goes. Recordings from before #346 show no
+opponent runes for exactly that reason. Keeping only the extracted columns
+makes every change to an extraction a data loss for older games; keeping the
+documents makes it a re-run.
+
+**Why not model every field instead.** A match document has about 150 fields
+per player and the app reads about 20. Modelling all of them now would be a
+large, speculative schema, and it would still lose whatever Riot adds next.
+
+**Costs.**
+
+- **Size.** A document is tens of kilobytes of JSON and a few once gzipped,
+  beside a recording of a gigabyte or more. They go with the recording
+  (CASCADE), so retention needs nothing new.
+- **Privacy.** The match-history documents name the nine other players; the
+  live snapshot names only us, because the client anonymises the rest. That is
+  fine on the user's own disk. **Anything that ever exports or shares a
+  recording must leave `game_documents` behind.**
+
+**Versioned, so a change finds the rows it has not reached.** Each derivation
+has a version (`derive::SCOREBOARD_VERSION`), and each row records which
+version wrote it. The daemon re-derives older rows from their documents at
+every start, locally and off the runtime. Nothing here needs a backfill button.
+
+**The version is enforced, not remembered.** A golden test derives the paired
+game's documents and pins the output to the version
+(`fixtures/derived/scoreboard.golden.json`). A change to the output without a
+bump fails CI and says to bump; a bump is then followed by rewriting the file
+with `UPDATE_GOLDEN=1 cargo test`, which refuses to rewrite it unless the
+version was bumped. The failure this prevents is quiet: without a bump, rows
+already written would never be re-derived, and old games would disagree with
+new ones about the same field.
+
+**Older recordings catch up by themselves.** Recordings from before the
+archive have no documents. When the client connects, and only while no game is
+on, the daemon fetches them by game id, a few seconds apart, and re-derives:
+that is what gives a library recorded before #346 the opponent's runes and the
+trinket's box without anyone asking. The client's match history bounds it; a
+game it no longer has is recorded as missing and retried only by a newer app
+version, never in a loop.
+
+**Never worse than what is there.** A derivation that cannot name a champion
+(the match document says ids; the client's name table was never kept, and no
+live board names it) writes nothing and retries at a later start. A blank
+champion is worse than the board already stored.
+

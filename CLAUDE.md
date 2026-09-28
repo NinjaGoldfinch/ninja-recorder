@@ -274,8 +274,8 @@ This applies to `docs/*.md` too — see `windows-verification.md`, where WS0's
 new material is §5.2 rather than a second §5.0, because §5.0 was taken.
 
 v2 adds §16 (capture gate and Option B, measured), §17 (contract and transport),
-§18 (licensing exit plan), §19 (the Svelte migration) and §20 (WS9's
-provisional defaults). §18 is reserved for WS8 and does not exist yet, which is
+§18 (licensing exit plan), §19 (the Svelte migration), §20 (WS9's
+provisional defaults) and §21 (derived data and the document archive). §18 is reserved for WS8 and does not exist yet, which is
 why §19 follows §17. §16's measurement
 table is deliberately empty until the box fills it: an empty cell is a true
 statement and a plausible number is not. Nothing above them moves.
@@ -331,6 +331,12 @@ workstream should be rewritten to say what it means.
   for `reconcile` and the no-id fallback. A new query that lists recordings has
   to decide whether it wants `finished_at IS NOT NULL`, and the answer is
   almost always yes (DEVELOPMENT.md §4.3).
+- **Changing an extraction means bumping its version.** What the app shows
+  about a game is derived from archived documents (`db::documents`, #349), and
+  `derive::SCOREBOARD_VERSION` is what makes older rows re-derive on the next
+  start. `scoreboard_output_is_pinned_to_its_version` fails if the output
+  changes without a bump; bump, then `UPDATE_GOLDEN=1 cargo test` rewrites the
+  golden file. Never write a one-off backfill for a derived field: bump instead.
 - **Append migrations, never edit them.** Shipped builds have already run the
   old ones. WS6 changed connection handling, not the schema.
 - **A `Db` method reads or it writes, and the connection enforces which.**

@@ -235,10 +235,15 @@ fn prefer_live_fields(db: &Db, recording_id: i64, players: &mut [ScoreboardPlaye
     else {
         return;
     };
+    carry_live_fields(players, &previous.players);
+}
 
+/// `prefer_live_fields`' rule without the database: what a rebuilt board
+/// takes from `previous`. Pure, and shared with the re-derivation from
+/// archived documents (`derive`), so the two cannot merge differently.
+pub(crate) fn carry_live_fields(players: &mut [ScoreboardPlayer], previous: &[ScoreboardPlayer]) {
     for player in players.iter_mut() {
         let mut matches = previous
-            .players
             .iter()
             .filter(|old| old.team == player.team && old.champion == player.champion);
         // Exactly one, or nothing: an ambiguous match is not a match.
@@ -340,13 +345,20 @@ pub(crate) async fn scoreboard_player(
     lockfile: &lcu::LockfileInfo,
     participant: &lcu::ParticipantSummary,
 ) -> ScoreboardPlayer {
+    // Best effort, like everywhere else this resolves a champion: a name it
+    // cannot find costs one label, and the row draws the portrait from the
+    // id-less name it does have elsewhere.
+    let champion = lcu::champion_name(client, lockfile, participant.champion_id)
+        .await
+        .unwrap_or_default();
+    board_player(participant, champion)
+}
+
+/// A participant as the scoreboard stores them, once their champion has a
+/// name. Pure, and shared with the re-derivation from archived documents.
+pub(crate) fn board_player(participant: &lcu::ParticipantSummary, champion: String) -> ScoreboardPlayer {
     ScoreboardPlayer {
-        // Best effort, like everywhere else this resolves a champion: a
-        // name it cannot find costs one label, and the row draws the
-        // portrait from the id-less name it does have elsewhere.
-        champion: lcu::champion_name(client, lockfile, participant.champion_id)
-            .await
-            .unwrap_or_default(),
+        champion,
         team: participant.team.clone().unwrap_or_default(),
         is_us: participant.is_us,
         level: participant.level,
@@ -365,6 +377,84 @@ pub(crate) async fn scoreboard_player(
         role_item: participant.role_item,
         runes: runes_of(participant),
     }
+}
+
+/// Archives a game's post-game documents against its recording (#349): the
+/// match-history game, its timeline, the current summoner it is read as, and
+/// the end-of-game block if the client's current one is this game's.
+///
+/// Each is fetched and kept as the text it arrived as, independently: one
+/// the client cannot give costs that one. Returns how many were written.
+///
+/// The end-of-game block is the client's *latest* game, not a game by id, so
+/// it is kept only when its `gameId` says it is this one. On the deferred
+/// patch it usually is; on a later resume sweep it usually is not.
+/// What `archive_lcu_documents` did.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Archived {
+    /// Documents written.
+    pub written: usize,
+    /// The client answered 404 for the match-history game: it does not have
+    /// it, rather than failing to say.
+    pub match_not_found: bool,
+}
+
+pub(crate) async fn archive_lcu_documents(
+    db: &Db,
+    client: &lcu::LcuHttpClient,
+    lockfile: &lcu::LockfileInfo,
+    recording_id: i64,
+    game_id: i64,
+    now_ms: i64,
+) -> Archived {
+    use crate::db::documents::DocumentKind;
+
+    let fetches = [
+        (DocumentKind::Summoner, "/lol-summoner/v1/current-summoner".to_string()),
+        (DocumentKind::Match, format!("/lol-match-history/v1/games/{game_id}")),
+        (DocumentKind::Timeline, format!("/lol-match-history/v1/game-timelines/{game_id}")),
+        (DocumentKind::Eog, "/lol-end-of-game/v1/eog-stats-block".to_string()),
+    ];
+    let mut written = 0;
+    let mut match_not_found = false;
+    for (kind, path) in fetches {
+        let text = match client.get_text(&path).await {
+            Ok(text) => text,
+            Err(e) => {
+                match_not_found |= kind == DocumentKind::Match && e.is_not_found();
+                debug!("documents", "no {} document for game {game_id}: {e}", kind.as_str());
+                continue;
+            }
+        };
+        if kind == DocumentKind::Eog && !is_eog_for(&text, game_id) {
+            debug!("documents", "the end-of-game block is another game's; not kept for {game_id}");
+            continue;
+        }
+        match db.put_document(recording_id, kind, &text, now_ms) {
+            Ok(true) => written += 1,
+            Ok(false) => {}
+            Err(e) => warn!("documents", "could not archive the {} document: {e}", kind.as_str()),
+        }
+    }
+    if written > 0 {
+        debug!("documents", "archived {written} document(s) for recording {recording_id}");
+    }
+    // The champion names too: the match document names champions by id, and
+    // re-deriving it later must not need the client to read them (#349).
+    if let Some(names) = lcu::champion_names(client, lockfile).await
+        && let Err(e) = db.put_champion_names(&names)
+    {
+        warn!("documents", "could not keep the champion names: {e}");
+    }
+    Archived { written, match_not_found }
+}
+
+/// Whether an end-of-game block is the one for `game_id`. Pure.
+fn is_eog_for(text: &str, game_id: i64) -> bool {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| v.get("gameId").and_then(serde_json::Value::as_i64))
+        == Some(game_id)
 }
 
 /// A participant's rune page, if match history said anything about it. A
@@ -473,6 +563,7 @@ pub async fn resume_pending(db: &Db, lockfile: &lcu::LockfileInfo, now_ms: i64) 
 
         // The gold series first, matching `patch`: it is the slower half and
         // the caller only learns "something changed" once.
+        archive_lcu_documents(db, &client, lockfile, recording_id, game_id, now_ms).await;
         write_gold_series(db, &client, recording_id, game_id).await;
         write_scoreboard(db, &client, lockfile, recording_id, game_id).await;
 
@@ -572,6 +663,18 @@ pub async fn patch(db: &Db, request: &SummaryRequest) -> bool {
     // caller only learns "something changed" once. Its own failures are
     // logged and swallowed: a game with no timeline still has a name, an
     // outcome and a queue, and those are worth more than a curve.
+    // The raw documents, before anything is derived from them, so every
+    // field the client has for this game is kept even where nothing here
+    // reads it yet (#349). Best effort, like the halves below it.
+    archive_lcu_documents(
+        db,
+        &client,
+        &request.lockfile,
+        request.recording_id,
+        request.game_id,
+        now_ms(),
+    )
+    .await;
     write_gold_series(db, &client, request.recording_id, request.game_id).await;
     // The LCU's scoreboard replaces the live one (#127). Champion *ids*
     // rather than display names, and settled numbers rather than the last
@@ -1478,5 +1581,15 @@ mod tests {
         for key in ["trinket", "role_item", "runes"] {
             assert!(!written.contains(key), "{key} written with no value: {written}");
         }
+    }
+
+    /// The end-of-game block is the client's latest game, whatever was asked
+    /// for, so it is only archived when it says it is this one.
+    #[test]
+    fn an_end_of_game_block_is_kept_only_for_its_own_game() {
+        assert!(is_eog_for(r#"{"gameId": 711444953, "teams": []}"#, 711444953));
+        assert!(!is_eog_for(r#"{"gameId": 1, "teams": []}"#, 711444953));
+        assert!(!is_eog_for(r#"{"teams": []}"#, 711444953));
+        assert!(!is_eog_for("not json", 711444953));
     }
 }

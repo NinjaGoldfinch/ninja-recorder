@@ -1,5 +1,6 @@
 mod audio_tracks;
 mod backfill;
+mod catch_up;
 mod contract;
 /// The TypeScript emitter, re-exported for the `gen-contract` binary.
 ///
@@ -13,6 +14,7 @@ mod core;
 pub mod daemon;
 mod db;
 mod ddragon;
+mod derive;
 #[cfg(feature = "devtools")]
 mod dev;
 mod fixtures;
