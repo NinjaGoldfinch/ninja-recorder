@@ -33,7 +33,7 @@ export default defineConfig({
       instances: [{ browser: "chromium" }],
       // The largest window a test asks for, so a width is never clamped
       // to whatever the runner's default happened to be.
-      viewport: { width: 2560, height: 900 },
+      viewport: { width: 3440, height: 1440 },
     },
   },
 });

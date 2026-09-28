@@ -638,52 +638,90 @@ flowchart LR
   yet, because this form is the only writer. When P1 or P2 adds a second one,
   the stores should move to an event like everything else.
 
-### The timeline stays above the fold
+### The review fits the window
 
-The review view is a page that scrolls, but the ruler under the advantage
-curve is not optional furniture: it is how a position in the game is read off
-the timeline at all, and having to scroll to it defeats the widget.
+The review is the one view that does not scroll. The ruler under the advantage
+curve is how a position in the game is read off the timeline at all, the rail
+is where the review is written while watching, and having to scroll to either
+defeats the page. So on any window at least 900×480 (the app's own minimum is
+960×640) the review is exactly as tall as the window leaves it, and everything
+in it is sized from the room it actually has.
 
-So the player is capped, and **the cap is a `max-width`, not a `max-height`**.
-`.player-wrap` takes the vertical space left over after the app bar, the review
-header and the whole timeline, and multiplies it by the recording's own aspect
-ratio; `review.ts` publishes that ratio as `--player-ratio` on `loadedmetadata`,
-falling back to the same 16/9 the video's `aspect-ratio` placeholder already
-uses so the two never disagree before metadata lands.
+```mermaid
+flowchart TB
+    VIEW[".review-view<br/><small>fills the window under the app bar</small>"] --> HEAD[".review-header<br/><small>auto height</small>"]
+    VIEW --> BODY[".review-body<br/><small>size container: cqw/cqh = the room left</small>"]
+    BODY --> GRID[".review-layout<br/><small>player column | rail, minmax(22rem, 30rem)</small>"]
+    GRID --> MAIN[".review-main<br/><small>inline-size container</small>"]
+    GRID --> RAIL[".review-rail<br/><small>stretched to the row; panels scroll inside</small>"]
+    MAIN --> AREA[".player-area<br/><small>size container, ≤ the video's height at full width</small>"]
+    MAIN --> TL[".vod-timeline<br/><small>5.5rem, + up to 5.5rem of spare height</small>"]
+    MAIN --> KEYS[".review-keys<br/><small>one line</small>"]
+    AREA --> PLAYER[".player-wrap<br/><small>min(100cqw, 100cqh × ratio)</small>"]
+```
 
+A 16/9 player beside a rail fits one window shape exactly, and every other
+shape has space left over in one direction. The layout decides where it goes
+instead of leaving it as a gap:
+
+- **Wider than that shape:** the player is as large as the height allows, the
+  rail widens up to 30rem, and only then does the player's column grow; the
+  video centres in it and the timeline takes the full width. The grid does the
+  ordering: the column is `minmax(<fitted width>, 1fr)`, and a `fr` gets
+  nothing until the rail has reached its maximum.
+- **Taller than that shape:** the player is as wide as its column, and the
+  timeline grows by the height left over, up to twice its usual size. Anything
+  beyond that goes under the key hint, never between the player and the
+  timeline.
+
+**The cap is still a width, never a height.** `.player-wrap` is
+`min(100cqw, 100cqh × --player-ratio)` inside `.player-area`, the largest box
+of the recording's own shape that fits, so there is nothing to letterbox.
 Capping the height directly is the version that looks right and is wrong: the
 element keeps its full width, `object-fit: contain` letterboxes inside it, and
 resizing the window grows and shrinks black bars, which is why the original
 `max-height: 60vh` was removed ([DEVELOPMENT.md §5.1](../DEVELOPMENT.md)).
-Making the player narrower rather than shorter leaves nothing to letterbox.
+`Review.svelte` publishes the ratio on `.review-body` at `loadedmetadata`,
+falling back to the 16/9 placeholder the video already uses, because the
+column widths and the timeline's growth are worked out from it too.
 
-Two details that are load-bearing rather than tidy:
+Details that are load-bearing rather than tidy:
 
-- **`--player-chrome` is one number, and deliberately a little generous.** It
-  is a sum of measured heights, and the app bar's is the one most likely to
-  move. A rem too many costs a slightly smaller player; a rem too few puts the
-  ruler back under the fold.
-- **Fullscreen sets `max-width: none`.** The cap is about clearing a fold, and
-  fullscreen has neither a fold nor a timeline beneath it; left on, it would
-  clamp the video to a fraction of the screen.
+- **`--below-player` is the only estimate, and it is small.** It is the
+  timeline at its smallest plus the one-line key hint, both fixed sizes inside
+  this component, and it feeds only the column's width and the timeline's
+  growth. The player's own height is measured by layout (`.player-area` is a
+  flex item), so an estimate a little off costs a sliver of width, never the
+  ruler. It replaced `--player-chrome` and `--rail-chrome`, which summed the
+  app bar, the padding and the header by hand, fit one window shape, and moved
+  silently whenever anything above the player did.
+- **The key hint never wraps in the fitted layout.** A second line would be a
+  line the estimate does not know about. It is about 48.5em of text, so below
+  that column width its font gets a little smaller, and only past a 0.7rem
+  floor is it cut.
+- **`--spare-height` is a registered `<length>`.** It is computed on
+  `.review-layout` against `.review-body`; unregistered, it would be
+  substituted as text into `.timeline-body` and its `cqw` resolved against
+  `.review-main`, the nearest container there.
+- **Fullscreen sets `max-width: none` and its own size.** The `:fullscreen`
+  rules come after the fitted ones and outrank them, since fullscreen has no
+  timeline or rail to leave room for.
 
-On a tall window the cap never binds, because the content column's own width is
-the smaller of the two, so this changes nothing for anyone who was not scrolling
-in the first place.
+Below 900px wide or 480px tall the rail drops under the player, the page
+scrolls, and the player keeps the old `--player-chrome` cap. No app window
+gets there; a browser pointed at the dev server can.
 
-**The review rail keeps to the same fold.** The review view widens to
-`--review-max` (the app bar's content follows it, so the two stay aligned), and
-splits into the player column and a `--rail-width` rail. The rail is as tall as
-the window leaves it (`--rail-chrome`, measured the same way as
-`--player-chrome`) and its panels scroll inside it, so a long form never makes
-the page scroll away from the player. At the default 1340×850 window that is a
-924×520 player and a 352px rail, with nothing below the fold. Below 1100px wide
-the rail drops under the player, and the page scrolls to it.
+`Review.layout.test.ts` holds all of this in place: the real `Review` under the
+real stylesheet, at every combination of eleven widths from 960 to 3440 and
+nine heights from 640 to 1440, with the rail open and in theatre mode. It
+fails if the page scrolls, the ruler, hint or rail ends below the window, the
+player is not the recording's shape or is under 28rem, or space is left over
+that something should have taken.
 
 **Theatre mode folds the rail away** (the ◧ button in the review header, or
 `t`), and the player column takes the width. The player's height cap still
-binds, so at 1340×850 the video grows to 942×530 and centres rather than
-pushing the ruler down. The rail is hidden, not unmounted, so a half-typed
+binds, so the video grows only as far as the height allows and centres rather
+than pushing the ruler down. The rail is hidden, not unmounted, so a half-typed
 field survives it. Whether the rail is open is a layout preference of this
 window's alone, so `review/rail.ts` keeps it in `localStorage` rather than in
 SQLite with the real preferences.

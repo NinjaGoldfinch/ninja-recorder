@@ -59,7 +59,7 @@ last, and appending them kept the numbers above them.
 | 10 | `scripts/smoke-daemon.ps1` | the daemon actually runs | WS3.3 |
 | 11 | `scripts/smoke-ui.ps1` | the UI starts and finds it | WS3.3 |
 | 12 | `scripts/measure.ps1 -SelfTest`, then a short `-Cpu -Role` run | the measurement script parses and computes right in Windows PowerShell 5.1 | #243 |
-| 13 | `npx playwright install chromium`, then `npm run test:layout` | the layout gate: library rows draw nothing outside their card, cut no number short and keep their columns aligned, at every window width from 960 to 2560, in Chromium | #345 |
+| 13 | `npx playwright install chromium`, then `npm run test:layout` | the layout gate: library rows draw nothing outside their card, cut no number short and keep their columns aligned, at every window width from 960 to 2560, in Chromium; and the review page fits the window, with the player unletterboxed and no space left that the rail or the timeline should have taken, at every window shape from 960×640 to 3440×1440 | #345 |
 
 **The layout gate is the only frontend test that measures a pixel.** Every
 other one runs in jsdom, where every box is zero by zero, which is how #342
