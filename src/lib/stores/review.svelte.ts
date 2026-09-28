@@ -12,7 +12,7 @@
 import { call } from "../../bridge";
 import type { MarkerRow, RecordingRow, SampleRow } from "../../types";
 import type { MetricKey } from "../timeline/graph";
-import { splitByFootage } from "../timeline/markers";
+import { isShown, splitByFootage } from "../timeline/markers";
 import {
   measureGameEnd,
   measureGameStart,
@@ -42,6 +42,15 @@ export const review = {
   },
   get markers() {
     return markers;
+  },
+  /**
+   * The markers the review draws: all of them bar the kinds it hides
+   * (`HIDDEN_KINDS`). `markers` stays whole, because the game clock and the
+   * placing of notes read every marker's two times, and a hidden one is as
+   * good a reading as any.
+   */
+  get shown() {
+    return markers.filter(isShown);
   },
   get samples() {
     return samples;
@@ -76,7 +85,7 @@ export const review = {
    * recording rather than about either widget.
    */
   get footage() {
-    return splitByFootage(markers, duration);
+    return splitByFootage(this.shown, duration);
   },
   get isOpen() {
     return recording !== null;

@@ -160,6 +160,21 @@ export async function addTakeaway(body: string): Promise<boolean> {
   }
 }
 
+/** Rewrite a takeaway's text. False, with a toast, if it did not save. */
+export async function updateTakeaway(takeawayId: number, body: string): Promise<boolean> {
+  if (!current || body.trim() === "") return false;
+  const game = current;
+  try {
+    const updated = await client.update_takeaway(takeawayId, body);
+    const row = game.takeaways.find((t) => t.id === takeawayId);
+    if (row) row.body = updated.body;
+    return true;
+  } catch (err) {
+    toast(`Couldn't save the takeaway: ${err}`, "error");
+    return false;
+  }
+}
+
 export async function deleteTakeaway(takeawayId: number): Promise<void> {
   if (!current) return;
   const game = current;

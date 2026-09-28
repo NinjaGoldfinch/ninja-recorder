@@ -519,13 +519,30 @@ fn plan_markers(spec: &SeedSpec, rng: &mut Rng, duration_s: f64) -> Vec<db::NewM
         // same bug wearing the other hat, silently doubling one kind's
         // share of every seeded library.
         let marker = match rng.range_usize(0, 13) {
-            0..=2 => mk("kill", t, serde_json::json!({ "victim": rng.pick(ENEMIES) })),
-            3..=4 => mk("death", t, serde_json::json!({ "killer": rng.pick(ENEMIES) })),
-            5 => mk(
-                "assist",
-                t,
-                serde_json::json!({ "victim": rng.pick(ENEMIES), "killer": rng.pick(CHAMPIONS) }),
-            ),
+            // The seeded names are champions already, so each one doubles
+            // as its own `*_champion`, and one draw per name keeps every
+            // seed producing the library it always did.
+            0..=2 => {
+                let victim = rng.pick(ENEMIES);
+                mk("kill", t, serde_json::json!({ "victim": victim, "victim_champion": victim }))
+            }
+            3..=4 => {
+                let killer = rng.pick(ENEMIES);
+                mk("death", t, serde_json::json!({ "killer": killer, "killer_champion": killer }))
+            }
+            5 => {
+                let (victim, killer) = (rng.pick(ENEMIES), rng.pick(CHAMPIONS));
+                mk(
+                    "assist",
+                    t,
+                    serde_json::json!({
+                        "victim": victim,
+                        "victim_champion": victim,
+                        "killer": killer,
+                        "killer_champion": killer,
+                    }),
+                )
+            }
             6 => mk(
                 "dragon",
                 t,
@@ -764,9 +781,9 @@ mod tests {
         for marker in plan_markers(&spec, &mut rng, 1800.0) {
             let payload: serde_json::Value = serde_json::from_str(&marker.payload_json).unwrap();
             let required: &[&str] = match marker.kind.as_str() {
-                "kill" => &["victim"],
-                "death" => &["killer"],
-                "assist" => &["victim", "killer"],
+                "kill" => &["victim", "victim_champion"],
+                "death" => &["killer", "killer_champion"],
+                "assist" => &["victim", "victim_champion", "killer", "killer_champion"],
                 "dragon" => &["killer", "dragon_type"],
                 "turret" => &["killer", "turret"],
                 "baron" | "herald" | "voidgrubs" => &["killer"],

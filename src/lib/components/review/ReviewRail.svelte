@@ -10,8 +10,9 @@
 
 <script lang="ts">
 import type { MarkerRow } from "../../../types";
+import type { Note } from "../../contract/types";
 import type { PlacedNote } from "../../review/notes";
-import { deleteNote, gameReview, updateNote } from "../../stores/gameReview.svelte";
+import { deleteNote, gameReview } from "../../stores/gameReview.svelte";
 import ReviewForm from "../reviewform/ReviewForm.svelte";
 import MarkerList from "./MarkerList.svelte";
 
@@ -25,14 +26,25 @@ interface Props {
   currentTimeS: number;
   /** The game clock at the playhead, for the form's clock button. */
   gameClockNow: () => number | null;
-  /** The player's "note at the playhead", for the form's note button. */
+  /** The player's "note at the playhead", for the Events tab's note button. */
   onstamp: () => void;
+  /** Opens a note in the player's editor: the Events tab's edit button. */
+  onnoteedit: (note: Note) => void;
   /** The game's timed notes, placed in the recording, for the Events tab. */
   notes: readonly PlacedNote[];
 }
 
-const { open, markers, beyond, onseek, currentTimeS, gameClockNow, onstamp, notes }: Props =
-  $props();
+const {
+  open,
+  markers,
+  beyond,
+  onseek,
+  currentTimeS,
+  gameClockNow,
+  onstamp,
+  onnoteedit,
+  notes,
+}: Props = $props();
 
 type Tab = "review" | "events";
 let tab = $state<Tab>("review");
@@ -78,7 +90,7 @@ const STATUS_COPY = {
     aria-labelledby="rail-tab-review"
     hidden={tab !== "review"}
   >
-    <ReviewForm {gameClockNow} {onstamp} />
+    <ReviewForm {gameClockNow} />
   </div>
 
   <div
@@ -94,7 +106,8 @@ const STATUS_COPY = {
       {onseek}
       {currentTimeS}
       {notes}
-      onnoteupdate={updateNote}
+      {onnoteedit}
+      {onstamp}
       onnotedelete={(id) => void deleteNote(id)}
     />
   </div>

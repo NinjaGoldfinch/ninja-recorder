@@ -340,7 +340,7 @@ export const COMMANDS: PortalCommand[] = [
     dev: false,
     overRpc: true,
     danger: false,
-    description: "The review's game for a recording, made from the recording if it has none: every recording from before VOD review, and anything reconcile imported. A game made this way has no objective snapshot. Also fills the game's recording offset from the recording's clocked points, and turns any m:ss stamps left in the review's free notes into timed notes, once.",
+    description: "The review's game for a recording, made from the recording if it has none: every recording from before VOD review, and anything reconcile imported. A game made this way has no objective snapshot. Also fills the game's recording offset from the recording's clocked points, turns any m:ss stamps left in the review's free notes into timed notes, and moves the rest of the free notes into a takeaway, each once.",
     args: [
       { name: "recordingId", kind: "number", default: "", help: "", optional: false },
     ],
@@ -552,6 +552,18 @@ export const COMMANDS: PortalCommand[] = [
     args: [
       { name: "noteId", kind: "number", default: "", help: "", optional: false },
       { name: "kind", kind: "string", default: "note", help: "note, mistake, good, question or takeaway", optional: false },
+      { name: "body", kind: "string", default: "", help: "", optional: false },
+    ],
+  },
+  {
+    name: "update_takeaway",
+    group: "Review",
+    dev: false,
+    overRpc: true,
+    danger: false,
+    description: "Rewrites a takeaway's text. Refuses an empty body and a takeaway that does not exist. An objective it was promoted to keeps its own text.",
+    args: [
+      { name: "takeawayId", kind: "number", default: "", help: "", optional: false },
       { name: "body", kind: "string", default: "", help: "", optional: false },
     ],
   },

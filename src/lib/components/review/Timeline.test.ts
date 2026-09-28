@@ -291,3 +291,31 @@ describe("the cluster tooltip", () => {
     expect(label).toContain("1:30");
   });
 });
+
+describe("a note pin", () => {
+  const placed = (body: string) => ({
+    note: { id: 7, game_id: 1, ts_ms: 90_000, kind: "note", body, created_at: 0 },
+    videoTimeS: 95,
+  });
+
+  it("shows its note in the timeline's own tooltip, not the system's", async () => {
+    const el = render({ notes: [placed("Greedy fight <b>here</b>")] });
+    const pin = el.querySelector<HTMLElement>(".note-pin");
+    if (!pin) throw new Error("no note pin");
+    // A `title` draws the operating system's tooltip beside this one.
+    expect(pin.hasAttribute("title")).toBe(false);
+
+    pin.dispatchEvent(new MouseEvent("mouseenter", { bubbles: false }));
+    flushSync();
+    const tooltip = el.querySelector<HTMLElement>(".timeline-tooltip");
+    expect(tooltip?.hidden).toBe(false);
+    // As text: a note is the user's words, never markup.
+    expect(tooltip?.querySelector(".tooltip-note")?.textContent).toBe("Greedy fight <b>here</b>");
+    expect(tooltip?.querySelector("b")).toBeNull();
+    expect(tooltip?.textContent).toContain("1:30");
+
+    pin.dispatchEvent(new MouseEvent("mouseleave", { bubbles: false }));
+    flushSync();
+    expect(tooltip?.hidden).toBe(true);
+  });
+});

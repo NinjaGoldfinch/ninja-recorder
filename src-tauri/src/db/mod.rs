@@ -517,6 +517,18 @@ static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
             outcome       TEXT NOT NULL CHECK (outcome IN ('archived', 'missing', 'failed'))
         );
         ",
+    ), M::up(
+        "
+        -- Whether this review's free notes have been moved into a takeaway.
+        -- The review rail's Notes panel is gone: anything about one moment is
+        -- a timed note, and anything about the game is a takeaway. Existing
+        -- reviews are converted once, on the next open
+        -- (`Db::open_game_for_review`), after their stamps; a review made
+        -- from now on starts converted, so a later use of the column is not
+        -- swept into a takeaway.
+        ALTER TABLE game_reviews ADD COLUMN notes_converted INTEGER NOT NULL DEFAULT 1;
+        UPDATE game_reviews SET notes_converted = 0;
+        ",
     )];
     let count = migrations.len() as i64;
     (Migrations::new(migrations), count)

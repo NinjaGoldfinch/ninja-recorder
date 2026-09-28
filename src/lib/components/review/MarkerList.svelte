@@ -14,7 +14,7 @@
 <script lang="ts">
 import { formatTime } from "../../../format";
 import type { MarkerRow } from "../../../types";
-import type { NoteKind } from "../../contract/types";
+import type { Note } from "../../contract/types";
 import { noteStyle, type PlacedNote } from "../../review/notes";
 import {
   currentItem,
@@ -25,7 +25,6 @@ import {
 } from "../../timeline/events";
 import { markerStyle } from "../../timeline/markers";
 import MarkerTimes from "./MarkerTimes.svelte";
-import NoteEditor from "./NoteEditor.svelte";
 
 interface Props {
   markers: readonly MarkerRow[];
@@ -43,7 +42,10 @@ interface Props {
   currentTimeS?: number;
   /** The game's timed notes, placed in the recording (#258). */
   notes?: readonly PlacedNote[];
-  onnoteupdate?: (noteId: number, kind: NoteKind, body: string) => Promise<boolean>;
+  /** Opens the note in the player's editor, where there is room to write. */
+  onnoteedit?: (note: Note) => void;
+  /** Pauses and opens a new note at the playhead, the same as the `n` key. */
+  onstamp?: () => void;
   onnotedelete?: (noteId: number) => void;
 }
 
@@ -53,12 +55,19 @@ const {
   onseek,
   currentTimeS = -1,
   notes = [],
-  onnoteupdate,
+  onnoteedit,
+  onstamp,
   onnotedelete,
 }: Props = $props();
 
-/** The note being rewritten in place, if any. */
-let editing = $state<number | null>(null);
+/**
+ * The note shown in full, if any. The rest are cut to two lines, so one long
+ * note cannot take the space of ten kills. Opened by the same click that
+ * seeks to it, since the note just jumped to is the one being read, and not
+ * by the playhead: rows changing height under a list that scrolls to follow
+ * it would jump about.
+ */
+let expanded = $state<number | null>(null);
 
 const FILTERS: { value: EventFilter; label: string }[] = [
   { value: "all", label: "All" },
@@ -98,18 +107,32 @@ $effect(() => {
 });
 </script>
 
-{#if markers.length > 0 || notes.length > 0}
-  <div class="event-filters" role="group" aria-label="Show">
-    {#each FILTERS as f (f.value)}
+{#if markers.length > 0 || notes.length > 0 || onstamp}
+  <div class="event-filters">
+    {#if markers.length > 0 || notes.length > 0}
+      <div class="event-filter-chips" role="group" aria-label="Show">
+        {#each FILTERS as f (f.value)}
+          <button
+            type="button"
+            class="event-filter"
+            aria-pressed={filter === f.value}
+            disabled={counts[f.value] === 0}
+            onclick={() => (filter = f.value)}
+            >{f.label} <span class="event-filter-count">{counts[f.value]}</span></button
+          >
+        {/each}
+      </div>
+    {/if}
+    <!-- The mouse's way to the `n` key, beside the notes it adds to. It sat
+         over the Review tab's free-notes box until that box went. -->
+    {#if onstamp}
       <button
         type="button"
-        class="event-filter"
-        aria-pressed={filter === f.value}
-        disabled={counts[f.value] === 0}
-        onclick={() => (filter = f.value)}
-        >{f.label} <span class="event-filter-count">{counts[f.value]}</span></button
+        class="ghost stamp-btn"
+        title="Pause and add a timed note at the playhead (n)"
+        onclick={onstamp}>+ Note</button
       >
-    {/each}
+    {/if}
   </div>
 {/if}
 
@@ -161,36 +184,36 @@ $effect(() => {
         </li>
       {:else}
         <!--
-          A note is the user's words, so it is edited here, in place, with the
-          same editor `n` opens. Its text is interpolated, never `{@html}`.
+          A note is the user's words, so its text is interpolated, never
+          `{@html}`. Edit opens it in the editor over the player, the one `n`
+          opens, rather than in the row.
         -->
         {@const note = item.placed.note}
         {@const style = noteStyle(note.kind)}
-        {#if editing === note.id}
-          <li class="note-row editing">
-            <NoteEditor
-              label="Note at {formatTime(note.ts_ms / 1000)}"
-              kind={note.kind}
-              body={note.body}
-              onsave={async (kind, body) => {
-                if ((await onnoteupdate?.(note.id, kind, body)) ?? false) editing = null;
-              }}
-              oncancel={() => (editing = null)}
-            />
-          </li>
-        {:else}
-          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <li
-            class="note-row"
-            class:current={i === current}
-            aria-current={i === current ? "true" : undefined}
-            style="--marker-color:{style.color}"
-            onclick={() => onseek(item.placed.videoTimeS)}
-          >
-            <span class="marker-icon" title={style.label}>{style.icon}</span>
-            <span class="note-body">{note.body}</span>
-            <!-- The same two clocks, in the same columns, as an event's. -->
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <li
+          class="note-row"
+          class:expanded={expanded === note.id}
+          class:current={i === current}
+          aria-current={i === current ? "true" : undefined}
+          style="--marker-color:{style.color}"
+          onclick={() => {
+            // A drag that selected some of the note, to copy it, ends in a
+            // click as well; that one is not a seek.
+            if (!(window.getSelection()?.isCollapsed ?? true)) return;
+            onseek(item.placed.videoTimeS);
+            expanded = expanded === note.id ? null : note.id;
+          }}
+        >
+          <span class="marker-icon" title={style.label}>{style.icon}</span>
+          <span class="note-body">{note.body}</span>
+          <!--
+            The same two clocks, in the same columns, as an event's. The
+            actions share their box so that on hover they cover exactly the
+            clocks, whatever height the body wraps to.
+          -->
+          <span class="note-side">
             <span class="marker-times">
               <span class="marker-game-time" title="Game clock">{formatTime(note.ts_ms / 1000)}</span>
               <span class="hint" title="Position in the recording"
@@ -205,7 +228,7 @@ $effect(() => {
                 title="Edit"
                 onclick={(e) => {
                   e.stopPropagation();
-                  editing = note.id;
+                  onnoteedit?.(note);
                 }}>✎</button
               >
               <button
@@ -219,8 +242,8 @@ $effect(() => {
                 }}>✕</button
               >
             </span>
-          </li>
-        {/if}
+          </span>
+        </li>
       {/if}
     {/each}
   {/if}

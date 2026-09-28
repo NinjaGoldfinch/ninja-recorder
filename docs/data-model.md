@@ -201,6 +201,7 @@ erDiagram
         INTEGER deaths "NULL = count the death markers"
         TEXT    free_notes "plain text"
         INTEGER stamps_converted "0 or 1; migration 14"
+        INTEGER notes_converted "0 or 1; migration 18"
     }
     objectives {
         INTEGER id PK
@@ -303,6 +304,7 @@ user's own account of their sessions.
 | 15 | `game_documents` | The raw League documents each recording's data is derived from (#349): the match-history game, its timeline, the end-of-game block when it was this game's, the current summoner that says which player was us, and the last live `allgamedata` poll that had players. Gzipped JSON as received, not re-serialised, so the fields no struct models are kept too. CASCADE, like `markers` and `samples`. See "Derived data is re-derived from the archive" below |
 | 16 | `recordings.scoreboard_version` (nullable), `champion_names` | Versioned re-derivation (#349): which version of the scoreboard extraction wrote a row, so a newer one re-derives it from the archive at the next start; and the client's champion id-to-name table, so that can happen with no client running. NULL is every row from before the migration, which is re-derived once |
 | 17 | `archive_attempts` | The fetch-once catch-up (#349): the last attempt to fetch a pre-archive recording's documents, with the app version that made it and whether the match document was `archived`, `missing` (the client answered 404) or `failed`. A missing game is asked about again only by a newer version, not on every connect |
+| 18 | `game_reviews.notes_converted` | The review rail's free-notes box was removed: a moment is a timed note, the game is a takeaway. A once-flag like `stamps_converted`: existing reviews start at 0, and their next open (`Db::open_game_for_review`) moves what is left of the free notes, after the stamps, into one takeaway and empties them. Reviews made after the migration start at 1, so a later use of the column is never swept into a takeaway |
 
 ### Derived data is re-derived from the archive
 

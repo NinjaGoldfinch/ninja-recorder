@@ -582,11 +582,12 @@ flowchart LR
   small editor over the player (`NoteEditor.svelte`), with the text box focused
   and a dropdown for the kind: note (the default), mistake, good, question or
   takeaway. **One key and a picker**, rather than the spec's key per kind: `m`
-  was already mute, and one key is less to remember. Enter saves, Shift+Enter
-  starts a new line, and Escape cancels. The editor swallows its own keys, so
+  was already mute, and one key is less to remember. Enter saves, from the
+  text box or the kind dropdown (picking a kind leaves the focus there),
+  Shift+Enter starts a new line, and Escape cancels. The editor swallows its own keys, so
   typing never reaches the player's hotkeys. It sits over the player rather than
   in the rail, so it works in theatre mode without unfolding anything. The
-  form's "+ Note" button does the same as `n`.
+  Events tab's "+ Note" button, beside the filter chips, does the same as `n`.
 - **A note is stored in game time and drawn in video time.** It belongs to the
   game and outlives the recording, so `notes.ts_ms` is the game clock.
   `review/clock.ts` maps it both ways, `noteTimeAt` to stamp it and `videoAt` to
@@ -599,16 +600,29 @@ flowchart LR
   Events tab both draw the placed list.
 - **Notes are pins on the timeline and rows in the Events tab.** On the
   timeline they are pins along the top edge, apart from the game's markers, so
-  a note is never clustered into a burst of kills. The hover title is the note
-  itself, and a click seeks there. In the Events tab they are rows interleaved
+  a note is never clustered into a burst of kills. Hovering one opens the
+  markers' own tooltip, not the system's, with the note cut to four lines, and
+  a click seeks there. In the Events tab they are rows interleaved
   with the events in playback order, with a Notes chip of their own and the same
-  two clocks in the same columns as an event. A row is edited or deleted in
-  place, with the same editor.
+  two clocks in the same columns as an event. A note is cut to two lines until
+  it is clicked, and the click that seeks to it opens it in full, one at a time;
+  the playhead opens nothing, because rows changing height under a list that
+  follows it would jump about. Edit and delete appear over the row's clocks
+  on hover. Delete is immediate; edit pauses and opens the note in the editor
+  `n` opens, over the player, where it has room. It edited in place in the
+  rail at first, which left a long note three lines tall wherever its row
+  happened to be scrolled.
 - **The stamps the first `n` wrote are converted, once** (#258). Before timed
   notes, `n` typed `6:36 ` into the free notes. Opening a review that still has
   them turns each `m:ss text` line into a `note`-kind note and leaves the rest
   of the text where it was (`db::review::split_stamps`, in the same transaction
-  as the open). The free notes stay for anything that is not about one moment.
+  as the open).
+- **There is no free-notes box.** A moment is a timed note and the game as a
+  whole is a takeaway, so the Review tab's Notes panel was one box too many.
+  Its text was not dropped with it: the same open that converts stamps then
+  moves whatever the free notes still hold into one takeaway, once
+  (`convert_free_notes`, flagged by `notes_converted`), and empties them. The
+  column stays, unwritten by the form, for overall notes somewhere else.
 - **The Events tab is the marker list, made for a rail** (#326). Filter chips
   narrow it to fights, deaths, objectives or notes, each with its count. A burst of
   the same event collapses into one row ("Voidgrubs ×3"), but only when the
@@ -616,6 +630,12 @@ flowchart LR
   row the playhead most recently passed is lit and scrolled into view while
   the video plays, unless the pointer is over the list. `timeline/events.ts`
   holds all three decisions.
+- **The announcer's markers are recorded and never drawn.** A multikill,
+  first blood and an ace are each the same moment as a kill already on
+  screen, so `timeline/markers.ts`'s `HIDDEN_KINDS` keeps them out of the
+  timeline, the Events tab and `[`/`]`, through the store's `review.shown`.
+  `review.markers` stays whole, because the game clock and note placement
+  read every marker's two times.
 - **Loads race, and the newer one wins.** Opening one VOD after another starts
   two loads; `gameReview` counts them and drops any answer that is not the
   latest's, so a slow daemon cannot put the previous game's review beside the
@@ -627,7 +647,13 @@ flowchart LR
   value written. The rail's tab bar shows Saved, Unsaved changes, Saving… or
   Not saved. Closing the player, or opening another game, flushes first.
 - **Ticks and takeaways save as they happen.** A tick is optimistic and
-  reverts if the save fails.
+  reverts if the save fails. A takeaway is edited in place, in the add box's
+  own form: Enter saves, Shift+Enter is a new line, Escape puts the text back.
+  An objective it was promoted to keeps its own text.
+- **What the user wrote can be selected and copied.** The app is
+  `user-select: none` by default, like a native window; takeaways, objectives
+  and timed notes are on the list that opts back in. A note row seeks on
+  click, so the click that ends a drag-selection is ignored.
 - **A blank box means "not entered", never zero.** For deaths, that is what
   lets the form fall back to the death markers the recording counted.
   `reviewform/fields.ts` holds those rules, and the clear time's `m:ss` shape.
@@ -701,6 +727,14 @@ column widths and the timeline's growth are worked out from it too.
 
 Details that are load-bearing rather than tidy:
 
+- **The height comes down an unbroken flex chain from `<body>`.** `body` is
+  `100vh`, and `.container`, `.review-view` and `.review-body` each flex to
+  fill their parent. `.review-body` is a size container, so its content gives
+  it no height: one plain block anywhere in that chain makes it zero, and the
+  player and rail with it. `#app-root`, the element `App.svelte` mounts into,
+  is `display: contents` for that reason, and `Review.layout.test.ts` builds
+  the page under a real `#app-root` so a wrapper that breaks the chain fails
+  the gate. Alpha.174 shipped with the harness leaving it out.
 - **`--below-player` is the only estimate, and it is small.** It is the
   timeline at its smallest plus the one-line key hint, both fixed sizes inside
   this component, and it feeds only the column's width and the timeline's
@@ -878,15 +912,19 @@ inside the glyph container.
 
 Two shapes, and the split is about who the marker is *about*.
 
-**Kills name people**: `Killed Nautilus`, `Killed by Akali`, `Blitzcrank killed
-Jarvan IV`. The name is the whole content: it is never yours, and it is what
-you would scrub for.
+**Kills name champions**: `Killed Nautilus`, `Killed by Akali`, `Blitzcrank
+killed Jarvan IV`. The champion is the whole content: it is never yours, and it
+is what you would scrub for. The event names only the *player*, so
+`classify_event` looks the name up in `allPlayers` and records the champion
+beside it (`victim_champion`, `killer_champion`); the scoreboard stores no
+names, so that is the one moment the two can be joined. A marker from before
+that, or a killer that is not a player (a turret), has no champion, and the
+label falls back to the name.
 
 **Objectives name nobody**: `Dragon`, `Baron`, `Herald`, `Turret`,
-`Inhibitor`, `Ace`, `First Blood`. `classify_event` only writes one of these
-when you took part. Every objective branch is gated on `took_part()`, and
-`Ace` and `FirstBlood` on it being *you*, so the killer was always you or an
-ally you assisted. Printing it told you your own champion's name, which is the
+`Inhibitor`. `classify_event` only writes one of these
+when you took part. Every objective branch is gated on `took_part()`, so the
+killer was always you or an ally you assisted. Printing it told you your own champion's name, which is the
 one thing you already know.
 
 The elemental dragon type went the same way. It says which drake, not which
@@ -1083,7 +1121,7 @@ a shipped build.
 | `open_game_for_recording` | the game's id | review rail, whenever the player opens a recording; makes the game for a recording from before WS9 |
 | `get_game_review` / `save_game_review` | `GameReview \| null` / nothing | review form: load, then the debounced autosave of the whole `ReviewInput` |
 | `set_objective_ticked` | nothing | review form → "Reviewing against" |
-| `add_takeaway` / `delete_takeaway` / `promote_takeaway` | `Takeaway` / nothing / `Objective` | review form → Takeaways |
+| `add_takeaway` / `update_takeaway` / `delete_takeaway` / `promote_takeaway` | `Takeaway` / `Takeaway` / nothing / `Objective` | review form → Takeaways |
 | `list_objectives` / `create_objective` / `update_objective` / `set_objective_status` | `Vec<Objective>` / `Objective` | Objectives view |
 | `split_block` / `merge_blocks` | new block id / nothing | nothing in the UI yet: the block view is WS9 P3. The dev portal's Commands panel drives them |
 | `import_review_rows` | `ImportReport` | Objectives view → "Import spreadsheet…", with the rows `reviewform/sheet.ts` parsed from the chosen CSV |

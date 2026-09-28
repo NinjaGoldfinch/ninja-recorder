@@ -7,7 +7,11 @@
   control. The spec's per-kind keys (M, G, ?) were dropped for this: M was
   already mute, and one key plus a picker is less to learn than four.
 
-  Enter saves and Shift+Enter starts a new line. Escape cancels. Every key
+  Enter saves and Shift+Enter starts a new line, in the text box and on the
+  kind dropdown alike: picking a kind leaves the focus on the dropdown, and
+  Enter there did nothing, so the note could not be saved from the keyboard
+  without tabbing back. Enter on Cancel or Save still presses that button.
+  Escape cancels. Every key
   pressed in here stops at this element, so typing never reaches the player's
   hotkeys (`review/hotkeys.ts`, on the document), and `m` in a note is a
   letter rather than a mute.
@@ -38,6 +42,7 @@ let kind = $state<NoteKind>(untrack(() => props.kind ?? "note"));
 let body = $state(untrack(() => props.body ?? ""));
 let saving = $state(false);
 let text = $state<HTMLTextAreaElement>();
+let picker = $state<HTMLSelectElement>();
 
 const empty = $derived(body.trim() === "");
 
@@ -62,7 +67,7 @@ function onKey(e: KeyboardEvent) {
   if (e.key === "Escape") {
     e.preventDefault();
     props.oncancel();
-  } else if (e.key === "Enter" && !e.shiftKey && e.target === text) {
+  } else if (e.key === "Enter" && !e.shiftKey && (e.target === text || e.target === picker)) {
     e.preventDefault();
     void save();
   }
@@ -76,6 +81,7 @@ function onKey(e: KeyboardEvent) {
     <select
       class="note-editor-kind"
       aria-label="Kind"
+      bind:this={picker}
       bind:value={kind}
       style="--note-color:{noteStyle(kind).color}"
     >

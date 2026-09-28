@@ -14,6 +14,7 @@ const client = vi.hoisted(() => ({
   save_game_review: vi.fn(),
   set_objective_ticked: vi.fn(),
   add_takeaway: vi.fn(),
+  update_takeaway: vi.fn(),
   delete_takeaway: vi.fn(),
   promote_takeaway: vi.fn(),
 }));
@@ -399,6 +400,44 @@ describe("takeaways", () => {
     expect(el.querySelector(".review-takeaways")?.textContent).toContain("Promoted");
   });
 
+  it("edits one in place: Enter saves, and the row shows the new text", async () => {
+    client.get_game_review.mockResolvedValue(fixture({ takeaways: [takeaway(1)] }));
+    client.update_takeaway.mockResolvedValue(takeaway(1, { body: "Base with no resources" }));
+    const el = await open();
+    el.querySelector<HTMLButtonElement>('[aria-label="Edit takeaway"]')?.click();
+    await settle();
+    const box = el.querySelector<HTMLTextAreaElement>('[aria-label="Takeaway"]');
+    if (!box) throw new Error("not editing");
+    expect(box.value).toBe("takeaway 1");
+    expect(document.activeElement).toBe(box);
+
+    type(box, "Base with no resources");
+    await settle();
+    box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await settle();
+    expect(client.update_takeaway).toHaveBeenCalledWith(1, "Base with no resources");
+    expect(el.querySelector('[aria-label="Takeaway"]')).toBeNull();
+    expect(el.querySelector(".takeaway-body")?.textContent).toBe("Base with no resources");
+  });
+
+  it("puts the text back on Escape, and the key goes no further", async () => {
+    client.get_game_review.mockResolvedValue(fixture({ takeaways: [takeaway(1)] }));
+    const el = await open();
+    el.querySelector<HTMLButtonElement>('[aria-label="Edit takeaway"]')?.click();
+    await settle();
+    const box = el.querySelector<HTMLTextAreaElement>('[aria-label="Takeaway"]');
+    if (!box) throw new Error("not editing");
+    type(box, "half a thought");
+    const reachedDocument = vi.fn();
+    document.addEventListener("keydown", reachedDocument);
+    box.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    document.removeEventListener("keydown", reachedDocument);
+    await settle();
+    expect(reachedDocument).not.toHaveBeenCalled();
+    expect(client.update_takeaway).not.toHaveBeenCalled();
+    expect(el.querySelector(".takeaway-body")?.textContent).toBe("takeaway 1");
+  });
+
   it("deletes one", async () => {
     client.get_game_review.mockResolvedValue(fixture({ takeaways: [takeaway(1), takeaway(2)] }));
     const el = await open();
@@ -409,15 +448,23 @@ describe("takeaways", () => {
   });
 });
 
+describe("free notes", () => {
+  it("have no box: a moment is a timed note, and the game is a takeaway", async () => {
+    const el = await open();
+    expect(el.querySelector('[aria-label="Notes"]')).toBeNull();
+    expect(el.querySelector(".stamp-btn")).toBeNull();
+  });
+});
+
 describe("closing the review", () => {
   it("writes anything unsaved, then lets the game go", async () => {
     const el = await open();
-    const notes = el.querySelector<HTMLTextAreaElement>('[aria-label="Notes"]');
-    if (!notes) throw new Error("no notes");
-    type(notes, "tilted after first death");
+    const clear = el.querySelector<HTMLInputElement>("#review-clear");
+    if (!clear) throw new Error("no clear time");
+    type(clear, "2:58");
     await store.closeReview();
     await settle();
-    expect(lastSaved().free_notes).toBe("tilted after first death");
+    expect(lastSaved().first_clear_ms).toBe(178_000);
     expect(store.gameReview.current).toBeNull();
   });
 });

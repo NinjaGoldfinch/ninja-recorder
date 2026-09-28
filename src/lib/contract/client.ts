@@ -102,6 +102,8 @@ export function createClient(invoke: Invoke) {
       invoke("set_objective_status", { objectiveId, status }) as Promise<Objective>,
     add_takeaway: (owner: TakeawayOwner, body: string): Promise<Takeaway> =>
       invoke("add_takeaway", { owner, body }) as Promise<Takeaway>,
+    update_takeaway: (takeawayId: number, body: string): Promise<Takeaway> =>
+      invoke("update_takeaway", { takeawayId, body }) as Promise<Takeaway>,
     delete_takeaway: (takeawayId: number): Promise<null> =>
       invoke("delete_takeaway", { takeawayId }) as Promise<null>,
     add_note: (gameId: number, tsMs: number, kind: NoteKind, body: string): Promise<Note> =>

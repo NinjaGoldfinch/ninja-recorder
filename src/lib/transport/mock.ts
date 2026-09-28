@@ -499,6 +499,15 @@ function reviewMock(
         game.notes = game.notes.filter((n) => n.id !== args.noteId);
       }
       return { value: null };
+    case "update_takeaway":
+      for (const game of GAMES.values()) {
+        const found = game.takeaways.find((t) => t.id === args.takeawayId);
+        if (found) {
+          found.body = String(args.body).trim();
+          return { value: { ...found } };
+        }
+      }
+      throw new Error(`no takeaway ${String(args.takeawayId)}`);
     case "delete_takeaway":
       for (const game of GAMES.values()) {
         game.takeaways = game.takeaways.filter((t) => t.id !== args.takeawayId);

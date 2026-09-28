@@ -577,6 +577,35 @@ fn convert_stamps(tx: &Transaction, game_id: i64, now: i64) -> Result<(), DbErro
     Ok(())
 }
 
+/// Moves a review's free notes into one takeaway, once, and empties them.
+/// Runs after `convert_stamps`, so the stamps have already become timed
+/// notes and only the text that was about the game is left. Blank notes
+/// make no takeaway; the flag is set either way.
+fn convert_free_notes(tx: &Transaction, game_id: i64, now: i64) -> Result<(), DbError> {
+    let Some(free_notes) = tx
+        .query_row(
+            "SELECT free_notes FROM game_reviews WHERE game_id = ?1 AND notes_converted = 0",
+            [game_id],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?
+    else {
+        return Ok(());
+    };
+    let body = free_notes.trim();
+    if !body.is_empty() {
+        tx.execute(
+            "INSERT INTO takeaways (game_id, body, created_at) VALUES (?1, ?2, ?3)",
+            params![game_id, body, now],
+        )?;
+    }
+    tx.execute(
+        "UPDATE game_reviews SET free_notes = '', notes_converted = 1 WHERE game_id = ?1",
+        [game_id],
+    )?;
+    Ok(())
+}
+
 fn snapshot_active_objectives(tx: &Transaction, game_id: i64) -> Result<(), DbError> {
     tx.execute(
         "INSERT OR IGNORE INTO game_objectives (game_id, objective_id)
@@ -963,6 +992,17 @@ impl Db {
         get_takeaway(&conn, conn.last_insert_rowid())
     }
 
+    /// Rewrites a takeaway's text. An objective it was promoted to keeps its
+    /// own: the objective is a copy made at promotion, and edited on its own.
+    pub fn update_takeaway(&self, id: i64, body: &str) -> Result<Takeaway, DbError> {
+        let body = non_empty(body, "a takeaway")?;
+        let conn = self.pool.write();
+        if conn.execute("UPDATE takeaways SET body = ?2 WHERE id = ?1", params![id, body])? == 0 {
+            return Err(refuse(format!("no takeaway {id}")));
+        }
+        get_takeaway(&conn, id)
+    }
+
     pub fn delete_takeaway(&self, id: i64) -> Result<(), DbError> {
         self.pool.write().execute("DELETE FROM takeaways WHERE id = ?1", [id])?;
         Ok(())
@@ -973,8 +1013,9 @@ impl Db {
     /// The review's game for a recording, made ready for the review player,
     /// in one transaction: the game is made if it has none
     /// (`ensure_game_in`), its `recording_offset_ms` is filled from the
-    /// recording's clocked points if it is still empty, and any `m:ss` stamps
-    /// its free notes still hold become notes, once.
+    /// recording's clocked points if it is still empty, any `m:ss` stamps
+    /// its free notes still hold become notes, once, and what is left of the
+    /// free notes becomes a takeaway, once.
     ///
     /// **A write, on the open path, on purpose.** Reads go to `query_only`
     /// connections and cannot write, and a stamp has to leave the free notes
@@ -986,6 +1027,7 @@ impl Db {
         let game_id = ensure_game_in(&tx, recording_id)?;
         fill_recording_offset(&tx, game_id, recording_id)?;
         convert_stamps(&tx, game_id, now)?;
+        convert_free_notes(&tx, game_id, now)?;
         tx.commit()?;
         Ok(game_id)
     }
@@ -1595,6 +1637,21 @@ mod tests {
     }
 
     #[test]
+    fn a_takeaway_can_be_rewritten_but_not_emptied() {
+        let db = db();
+        let game = db.start_game(None, 0).unwrap();
+        let t = db.add_takeaway(TakeawayOwner::Game(game), "ward river", 5).unwrap();
+
+        let edited = db.update_takeaway(t.id, "  ward river at 2:45 ").unwrap();
+        assert_eq!(edited.body, "ward river at 2:45");
+        assert_eq!((edited.id, edited.created_at), (t.id, t.created_at));
+        assert_eq!(db.get_game_review(game).unwrap().unwrap().takeaways, vec![edited]);
+
+        assert!(matches!(db.update_takeaway(t.id, " "), Err(DbError::Refused(_))));
+        assert!(matches!(db.update_takeaway(999, "x"), Err(DbError::Refused(_))));
+    }
+
+    #[test]
     fn promoting_a_takeaway_makes_an_active_objective_once() {
         let db = db();
         let game = db.start_game(None, 0).unwrap();
@@ -1862,6 +1919,53 @@ mod tests {
         let review = db.get_game_review(game).unwrap().unwrap();
         assert_eq!(review.notes.len(), 1);
         assert_eq!(review.review.unwrap().free_notes, "9:00 typed later");
+    }
+
+    /// A review whose free notes predate the Notes panel's removal: flagged
+    /// for both conversions, as the migrations leave every existing review.
+    fn a_review_with_free_notes(db: &Db, free_notes: &str) -> (i64, i64) {
+        let recording = db.begin_recording("C:/vods/a.mp4", 1000, None).unwrap();
+        let game = db.ensure_game_for_recording(recording).unwrap();
+        exec(
+            db,
+            &format!(
+                "INSERT INTO game_reviews (game_id, free_notes, stamps_converted, notes_converted)
+                 VALUES ({game}, '{free_notes}', 0, 0)"
+            ),
+        )
+        .unwrap();
+        (recording, game)
+    }
+
+    /// The stamps become timed notes first, and what is left becomes one
+    /// takeaway, so nothing the Notes panel held is lost with it.
+    #[test]
+    fn free_notes_become_a_takeaway_once_on_open() {
+        let db = db();
+        let (recording, game) = a_review_with_free_notes(&db, "early gank\n6:36 burnt flash\n");
+        db.open_game_for_review(recording, 7000).unwrap();
+
+        let review = db.get_game_review(game).unwrap().unwrap();
+        assert_eq!(review.review.as_ref().unwrap().free_notes, "");
+        assert_eq!(review.notes.len(), 1, "the stamp is a timed note");
+        assert_eq!(review.takeaways.len(), 1);
+        let takeaway = &review.takeaways[0];
+        assert_eq!((takeaway.body.as_str(), takeaway.created_at), ("early gank", 7000));
+
+        // Once: text written to the column afterwards stays where it is.
+        exec(&db, &format!("UPDATE game_reviews SET free_notes = 'later' WHERE game_id = {game}")).unwrap();
+        db.open_game_for_review(recording, 8000).unwrap();
+        let review = db.get_game_review(game).unwrap().unwrap();
+        assert_eq!(review.takeaways.len(), 1);
+        assert_eq!(review.review.unwrap().free_notes, "later");
+    }
+
+    #[test]
+    fn blank_free_notes_make_no_takeaway() {
+        let db = db();
+        let (recording, game) = a_review_with_free_notes(&db, "  \n ");
+        db.open_game_for_review(recording, 0).unwrap();
+        assert!(db.get_game_review(game).unwrap().unwrap().takeaways.is_empty());
     }
 
     /// A review made after this change starts converted: a time typed into

@@ -74,6 +74,10 @@ pub fn add_takeaway(ctx: &Ctx, owner: TakeawayOwner, body: String) -> Result<Tak
     ctx.db.add_takeaway(owner, &body, now_millis()).map_err(|e| e.to_string())
 }
 
+pub fn update_takeaway(ctx: &Ctx, takeaway_id: i64, body: String) -> Result<Takeaway, String> {
+    ctx.db.update_takeaway(takeaway_id, &body).map_err(|e| e.to_string())
+}
+
 pub fn delete_takeaway(ctx: &Ctx, takeaway_id: i64) -> Result<(), String> {
     ctx.db.delete_takeaway(takeaway_id).map_err(|e| e.to_string())
 }
