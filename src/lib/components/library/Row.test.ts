@@ -104,13 +104,33 @@ describe("a row with nothing known", () => {
   });
 
   it("marks the missing values rather than leaving gaps", () => {
-    // Queue, length, KDA, CS and rank are all unknown here.
-    expect(render(row()).querySelectorAll(".vod-missing").length).toBeGreaterThanOrEqual(5);
+    // Queue, rank, length and KDA are all unknown here. The role says so by
+    // having no badge, which the role test covers.
+    expect(render(row()).querySelectorAll(".vod-missing").length).toBeGreaterThanOrEqual(4);
   });
 
-  it("says Unknown for the role, in words", () => {
-    const el = render(row());
-    expect(el.textContent).toContain("Unknown");
+  it("badges our portrait with the role, and nothing when it is unknown", () => {
+    const known = render(row({ champion: "Viego", role: "Jungle" }));
+    const badge = known.querySelector(".vod-champion > .vod-portrait-wrap .vod-role");
+    expect(badge?.getAttribute("title")).toBe("Jungle");
+    // The opponent played the same role, so theirs carries no badge.
+    expect(known.querySelectorAll(".vod-role")).toHaveLength(1);
+
+    for (const role of [null, "Arena"]) {
+      expect(
+        render(row({ champion: "Viego", role })).querySelector(".vod-role"),
+        String(role),
+      ).toBeNull();
+    }
+  });
+
+  it("says the champion and role in words only when there is no portrait", () => {
+    // With a champion, the portrait and its badge say both.
+    expect(
+      render(row({ champion: "Viego", role: "Jungle" })).querySelector(".vod-champ"),
+    ).toBeNull();
+    // Without one, the title is an imported file's name, drawn nowhere else.
+    expect(render(row()).querySelector(".vod-champ")?.textContent).toBe("recording-1.mp4");
   });
 
   it("says there is no matchup rather than drawing empty boxes", () => {
