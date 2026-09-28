@@ -389,6 +389,16 @@ pub(crate) fn board_player(participant: &lcu::ParticipantSummary, champion: Stri
 /// The end-of-game block is the client's *latest* game, not a game by id, so
 /// it is kept only when its `gameId` says it is this one. On the deferred
 /// patch it usually is; on a later resume sweep it usually is not.
+/// What `archive_lcu_documents` did.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Archived {
+    /// Documents written.
+    pub written: usize,
+    /// The client answered 404 for the match-history game: it does not have
+    /// it, rather than failing to say.
+    pub match_not_found: bool,
+}
+
 pub(crate) async fn archive_lcu_documents(
     db: &Db,
     client: &lcu::LcuHttpClient,
@@ -396,7 +406,7 @@ pub(crate) async fn archive_lcu_documents(
     recording_id: i64,
     game_id: i64,
     now_ms: i64,
-) -> usize {
+) -> Archived {
     use crate::db::documents::DocumentKind;
 
     let fetches = [
@@ -406,10 +416,12 @@ pub(crate) async fn archive_lcu_documents(
         (DocumentKind::Eog, "/lol-end-of-game/v1/eog-stats-block".to_string()),
     ];
     let mut written = 0;
+    let mut match_not_found = false;
     for (kind, path) in fetches {
         let text = match client.get_text(&path).await {
             Ok(text) => text,
             Err(e) => {
+                match_not_found |= kind == DocumentKind::Match && e.is_not_found();
                 debug!("documents", "no {} document for game {game_id}: {e}", kind.as_str());
                 continue;
             }
@@ -434,7 +446,7 @@ pub(crate) async fn archive_lcu_documents(
     {
         warn!("documents", "could not keep the champion names: {e}");
     }
-    written
+    Archived { written, match_not_found }
 }
 
 /// Whether an end-of-game block is the one for `game_id`. Pure.

@@ -19,6 +19,14 @@ pub enum LcuClientError {
     Parse(#[from] serde_json::Error),
 }
 
+impl LcuClientError {
+    /// The client answered 404: it does not have what was asked for. For a
+    /// match-history game, that is a game past the reach of its history.
+    pub fn is_not_found(&self) -> bool {
+        matches!(self, Self::Request(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND))
+    }
+}
+
 pub struct LcuHttpClient {
     client: reqwest::Client,
     base_url: String,

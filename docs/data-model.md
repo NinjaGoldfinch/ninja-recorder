@@ -88,6 +88,7 @@ erDiagram
     recordings ||--o{ markers : "has"
     recordings ||--o{ samples : "has"
     recordings ||--o{ game_documents : "derived from"
+    recordings ||--o| archive_attempts : "fetched once"
     recordings |o--o| games : "VOD of, SET NULL"
     blocks ||--o{ games : "groups"
     games ||--o| game_reviews : "has"
@@ -139,6 +140,12 @@ erDiagram
     champion_names {
         INTEGER id PK "the client's champion id"
         TEXT    name
+    }
+    archive_attempts {
+        INTEGER recording_id PK "and FK, ON DELETE CASCADE"
+        TEXT    app_version
+        INTEGER attempted_at "unix millis"
+        TEXT    outcome "archived, missing, failed"
     }
     game_documents {
         INTEGER recording_id PK "and FK, ON DELETE CASCADE"
@@ -295,6 +302,7 @@ user's own account of their sessions.
 | 14 | `notes` rebuilt: `kind` gains `note`, and `created_at`; `game_reviews.stamps_converted` | WS9 P1's timed notes (#258). `note` is the neutral kind a note gets when none is picked, and every converted stamp's (#251). SQLite cannot alter a CHECK, so the table is rebuilt; nothing had written to it, but the copy keeps any rows. `stamps_converted` is a once-flag for turning the `m:ss` stamps P1's first `n` key wrote into the free notes into notes: existing reviews start at 0 and are converted on their next open (`Db::open_game_for_review`), and reviews made after the migration start at 1, so a time typed into their free notes stays text |
 | 15 | `game_documents` | The raw League documents each recording's data is derived from (#349): the match-history game, its timeline, the end-of-game block when it was this game's, the current summoner that says which player was us, and the last live `allgamedata` poll that had players. Gzipped JSON as received, not re-serialised, so the fields no struct models are kept too. CASCADE, like `markers` and `samples`. See "Derived data is re-derived from the archive" below |
 | 16 | `recordings.scoreboard_version` (nullable), `champion_names` | Versioned re-derivation (#349): which version of the scoreboard extraction wrote a row, so a newer one re-derives it from the archive at the next start; and the client's champion id-to-name table, so that can happen with no client running. NULL is every row from before the migration, which is re-derived once |
+| 17 | `archive_attempts` | The fetch-once catch-up (#349): the last attempt to fetch a pre-archive recording's documents, with the app version that made it and whether the match document was `archived`, `missing` (the client answered 404) or `failed`. A missing game is asked about again only by a newer version, not on every connect |
 
 ### Derived data is re-derived from the archive
 
@@ -317,6 +325,22 @@ board where there is one, taking what only the live capture knew through
 `carry_live_fields`. Champion ids resolve through `champion_names`, kept
 whenever the client's table is read; a champion nothing can name leaves the row
 as it is rather than writing a blank.
+
+**Recordings from before the archive are caught up once, automatically.**
+They have no documents, so nothing can re-derive them. Whenever the League
+client connects, after the resume sweep, `catch_up::run` fetches the documents
+for every finished recording that has a game id and no match document, a few
+seconds apart, and only while the supervisor is `Idle` or `ClientRunning` (the
+updater's rule): it stops the moment a game starts, and the next connect picks
+it up. It then re-derives. `archive_attempts` keeps the last try for each. A
+game the client answers 404 for (past its history's reach, or a custom game) is
+`missing` and is asked about again only by a newer app version; a `failed` try
+is retried on the next connect.
+
+**New documents make a derived board stale.** `put_document` clears
+`scoreboard_version` for the kinds a scoreboard is derived from, so a board
+derived from the live snapshot alone is re-derived when the match document
+arrives later, from the patch, the resume sweep or the catch-up.
 
 The point is that an extraction can change after a game is recorded. With only
 the extracted columns kept, a new field (the opponent's runes, the trinket's

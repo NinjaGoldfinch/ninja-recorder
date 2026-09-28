@@ -4255,6 +4255,14 @@ version was bumped. The failure this prevents is quiet: without a bump, rows
 already written would never be re-derived, and old games would disagree with
 new ones about the same field.
 
+**Older recordings catch up by themselves.** Recordings from before the
+archive have no documents. When the client connects, and only while no game is
+on, the daemon fetches them by game id, a few seconds apart, and re-derives:
+that is what gives a library recorded before #346 the opponent's runes and the
+trinket's box without anyone asking. The client's match history bounds it; a
+game it no longer has is recorded as missing and retried only by a newer app
+version, never in a loop.
+
 **Never worse than what is there.** A derivation that cannot name a champion
 (the match document says ids; the client's name table was never kept, and no
 live board names it) writes nothing and retries at a later start. A blank

@@ -40,6 +40,11 @@ pub enum DocumentKind {
 impl DocumentKind {
     pub const ALL: [DocumentKind; 5] = [Self::Match, Self::Timeline, Self::Eog, Self::Summoner, Self::Live];
 
+    /// Whether a scoreboard is derived from this kind (`derive::Sources`).
+    pub fn feeds_the_scoreboard(self) -> bool {
+        matches!(self, Self::Match | Self::Summoner | Self::Live)
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Match => "match",
@@ -47,6 +52,28 @@ impl DocumentKind {
             Self::Eog => "eog",
             Self::Summoner => "summoner",
             Self::Live => "live",
+        }
+    }
+}
+
+/// How a catch-up attempt went (`archive_attempts.outcome`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveOutcome {
+    /// The match document was fetched and kept.
+    Archived,
+    /// The client answered and does not have this game: past the reach of
+    /// its match history, or a custom game, which never reaches it.
+    Missing,
+    /// The client did not answer usefully. Retried on the next connect.
+    Failed,
+}
+
+impl ArchiveOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Archived => "archived",
+            Self::Missing => "missing",
+            Self::Failed => "failed",
         }
     }
 }
@@ -81,14 +108,23 @@ impl Db {
         now: i64,
     ) -> Result<bool, DbError> {
         let body = compress(text);
-        let conn = self.pool.write();
-        let written = conn.execute(
+        let mut conn = self.pool.write();
+        let tx = conn.transaction()?;
+        let written = tx.execute(
             "INSERT INTO game_documents (recording_id, kind, fetched_at, body)
              SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM recordings WHERE id = ?1)
              ON CONFLICT (recording_id, kind)
              DO UPDATE SET fetched_at = excluded.fetched_at, body = excluded.body",
             params![recording_id, kind.as_str(), now, body],
         )?;
+        // **New documents make the derived scoreboard stale**, whatever its
+        // version: a board derived from the live snapshot alone is current
+        // code over incomplete data, and the match document arriving later
+        // must re-derive it (`derive::rederive_outdated`).
+        if written > 0 && kind.feeds_the_scoreboard() {
+            tx.execute("UPDATE recordings SET scoreboard_version = NULL WHERE id = ?1", [recording_id])?;
+        }
+        tx.commit()?;
         Ok(written > 0)
     }
 
@@ -157,6 +193,46 @@ impl Db {
         )?;
         let rows = stmt.query_map([version], |r| r.get(0))?;
         Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Finished recordings with a game id and no match document, that this
+    /// app version has not already found missing: the fetch-once catch-up's
+    /// work list, newest first. A failed attempt is retried; a missing game
+    /// is asked about again only by a newer version.
+    pub fn recordings_to_archive(&self, app_version: &str) -> Result<Vec<(i64, i64)>, DbError> {
+        let conn = self.pool.read();
+        let mut stmt = conn.prepare(
+            "SELECT r.id, r.game_id FROM recordings r
+             WHERE r.finished_at IS NOT NULL AND r.game_id IS NOT NULL
+               AND NOT EXISTS (SELECT 1 FROM game_documents d
+                               WHERE d.recording_id = r.id AND d.kind = 'match')
+               AND NOT EXISTS (SELECT 1 FROM archive_attempts a
+                               WHERE a.recording_id = r.id AND a.app_version = ?1
+                                 AND a.outcome = 'missing')
+             ORDER BY r.started_at DESC",
+        )?;
+        let rows = stmt.query_map([app_version], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Records the last catch-up attempt for a recording.
+    pub fn record_archive_attempt(
+        &self,
+        recording_id: i64,
+        app_version: &str,
+        outcome: ArchiveOutcome,
+        now: i64,
+    ) -> Result<(), DbError> {
+        self.pool.write().execute(
+            "INSERT INTO archive_attempts (recording_id, app_version, attempted_at, outcome)
+             SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM recordings WHERE id = ?1)
+             ON CONFLICT (recording_id) DO UPDATE SET
+                app_version = excluded.app_version,
+                attempted_at = excluded.attempted_at,
+                outcome = excluded.outcome",
+            params![recording_id, app_version, now, outcome.as_str()],
+        )?;
+        Ok(())
     }
 
     /// Writes a re-derived scoreboard and the version that derived it. The CS

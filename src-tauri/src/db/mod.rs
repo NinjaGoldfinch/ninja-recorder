@@ -503,6 +503,20 @@ static MIGRATIONS: LazyLock<(Migrations<'static>, i64)> = LazyLock::new(|| {
             name  TEXT NOT NULL
         );
         ",
+    ), M::up(
+        "
+        -- The fetch-once catch-up (#349): recordings from before the archive
+        -- have no documents, and the daemon fetches them from the client
+        -- when it is connected and no game is on. This is the last attempt
+        -- for each, so a game the client no longer has is asked about once
+        -- per app version rather than on every connect.
+        CREATE TABLE archive_attempts (
+            recording_id  INTEGER PRIMARY KEY REFERENCES recordings(id) ON DELETE CASCADE,
+            app_version   TEXT NOT NULL,
+            attempted_at  INTEGER NOT NULL, -- unix millis
+            outcome       TEXT NOT NULL CHECK (outcome IN ('archived', 'missing', 'failed'))
+        );
+        ",
     )];
     let count = migrations.len() as i64;
     (Migrations::new(migrations), count)

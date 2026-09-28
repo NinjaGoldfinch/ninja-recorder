@@ -1,5 +1,6 @@
 mod audio_tracks;
 mod backfill;
+mod catch_up;
 mod contract;
 /// The TypeScript emitter, re-exported for the `gen-contract` binary.
 ///
