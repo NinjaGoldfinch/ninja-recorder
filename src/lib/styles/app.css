@@ -284,24 +284,20 @@ button:disabled {
   flex-shrink: 0;
 }
 
-/* Everything above and below the player that has to stay on screen with
- * it: the app bar, the container's padding, the review header, the whole
- * timeline down past the ruler, and the key hint under it. One number, in one place, because
- * the only reason it exists is to be adjusted when that furniture
- * changes.
- *
- * Deliberately a little generous — it is a sum of measured heights, and
- * the app bar's is the one most likely to move. Being a rem over costs a
- * slightly smaller player; being a rem under puts the ruler back under the
- * fold, which is the whole thing this exists to prevent. */
 .review-view {
+  /* The rail's width. It never gets narrower than the form needs, and on a
+   * window wider than the player can use it takes the spare room, up to a
+   * width past which a longer line only reads worse. */
+  --rail-min: 22rem;
+  --rail-max: 30rem;
+  /* What sits under the player in its column: the timeline at its smallest
+   * and the key hint. It only has to be close, because the player's own
+   * height comes from layout (see `.player-area`); this is what the column's
+   * width and the timeline's growth are estimated from. */
+  --below-player: 11rem;
+  /* Only for the stacked layout, where the page scrolls anyway: everything
+   * above and below the player that should stay on screen with it. */
   --player-chrome: 20rem;
-  /* The rail's width, and everything above and below it that it has to
-   * leave room for so it ends at the bottom of the window: the app bar, the
-   * container's padding and the review header. Measured, like the chrome
-   * above, and a little generous for the same reason. */
-  --rail-width: 22rem;
-  --rail-chrome: 10rem;
 }
 
 /* The review view gets the wider column, and so does the app bar above it,
@@ -373,7 +369,7 @@ body:has(.review-view:not([hidden])) .app-bar-inner {
  * the side. */
 .review-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--rail-width);
+  grid-template-columns: minmax(0, 1fr) var(--rail-min);
   gap: var(--sp-4);
   align-items: start;
 }
@@ -407,14 +403,12 @@ body:has(.review-view:not([hidden])) .app-bar-inner {
   font-size: var(--fs-sm);
 }
 
-/* The rail is exactly as tall as the window leaves it, and its panels scroll
- * inside it, so the form and the events never push the page into scrolling
- * away from the player. */
+/* The rail is exactly as tall as the window leaves it (the fitted layout
+ * stretches it to its row), and its panels scroll inside it, so the form and
+ * the events never push the page into scrolling away from the player. */
 .review-rail {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - var(--rail-chrome));
-  min-height: 24rem;
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   background-color: var(--bg-surface);
@@ -534,10 +528,149 @@ body:has(.review-view:not([hidden])) .app-bar-inner {
   background-color: var(--accent-soft);
 }
 
+/* Registered so it is worked out once, where it is declared, against
+ * `.review-body`. Unregistered, it would be substituted as text into
+ * `.timeline-body` and its `cqw` resolved against `.review-main`, the
+ * nearest container there, which is the wrong width. */
+@property --spare-height {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+/* The fitted layout: the review is exactly as tall as the window leaves it,
+ * and nothing in it is sized by a guess at how tall everything else is.
+ *
+ * A 16/9 player beside a rail fits one window shape exactly. Every other
+ * shape has space left over in one direction, and this decides where it
+ * goes rather than leaving it as a gap:
+ *
+ * - wider than that shape: the player is as big as the height allows, the
+ *   rail widens up to `--rail-max`, and only then does the player's column
+ *   grow (the video centres in it; the timeline takes the full width);
+ * - taller than that shape: the player is as wide as the column, and the
+ *   timeline grows, up to twice its usual height, so the height goes to a
+ *   bigger graph and less crowded markers instead of a strip of nothing.
+ *
+ * `.review-body` is a size container, so `cqw`/`cqh` below are the room the
+ * layout actually has: the app bar, the strips and the header are measured
+ * by layout and never summed by hand. The window never goes below 960×640,
+ * so the stacked layout underneath is for a browser, not the app. */
+@media (min-width: 900px) and (min-height: 480px) {
+  body:has(.review-view:not([hidden])) {
+    height: 100vh;
+  }
+
+  .container:has(> .review-view:not([hidden])) {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .review-view:not([hidden]) {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .review-body {
+    flex: 1 1 0;
+    min-height: 0;
+    container-type: size;
+  }
+
+  .review-layout {
+    /* The room left for the player once the rail has its narrowest and the
+     * gap is taken. Theatre mode has neither. */
+    --rail-reserve: calc(var(--rail-min) + var(--sp-4));
+    /* The widest the player can be for the height it has. */
+    --player-fit: calc((100cqh - var(--below-player)) * var(--player-ratio, 1.7778));
+    /* How much taller than the player's column needs the window is, when
+     * the player is held to the column's width. Zero when height is what
+     * limits it, which is every window wider than the one shape. */
+    --spare-height: calc(
+      100cqh -
+      var(--below-player) -
+      (100cqw - var(--rail-reserve)) /
+      var(--player-ratio, 1.7778)
+    );
+
+    height: 100%;
+    align-items: stretch;
+    /* The player's column starts at the player's fitted width; the rail
+     * grows to its max before a `fr` gets anything, so extra width goes to
+     * the rail first and the player's column second. */
+    grid-template-columns:
+      minmax(min(var(--player-fit), calc(100cqw - var(--rail-reserve))), 1fr)
+      minmax(var(--rail-min), var(--rail-max));
+  }
+
+  .review-layout.rail-closed {
+    --rail-reserve: 0rem;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .review-main {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  /* The player's box, measured by layout: whatever height the column has
+   * left after the timeline and the hint, but no taller than the video at
+   * the column's full width (`cqw` here is `.review-main`'s), so height the
+   * player cannot use goes to the timeline and then under the hint, never
+   * between the two. The player is the largest box of its own shape that
+   * fits, so it is never letterboxed (DEVELOPMENT.md §5.1). */
+  .player-area {
+    flex: 0 1 calc(100cqw / var(--player-ratio, 1.7778));
+    min-height: 0;
+    container-type: size;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+  }
+
+  /* Through the area, so it outranks the base rule further down; the
+   * `:fullscreen` rule still outranks this by coming after it. */
+  .player-area > .player-wrap {
+    flex: none;
+    width: min(100cqw, 100cqh * var(--player-ratio, 1.7778));
+    max-width: none;
+    margin-inline: 0;
+  }
+
+  .review-body .timeline-body {
+    height: calc(5.5rem + clamp(0rem, var(--spare-height), 5.5rem));
+  }
+
+  .review-rail {
+    height: auto;
+    min-height: 0;
+  }
+
+  /* The key hint stays on one line, so the height under the player is the
+   * constant above rather than a line more wherever the column is narrow.
+   * It is about 48.5em of text: below that it gets a little smaller, and
+   * only past the floor is it cut. */
+  .review-main {
+    container-type: inline-size;
+  }
+
+  .review-keys {
+    font-size: clamp(0.7rem, 100cqw / 49, var(--fs-sm));
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
 /* Too narrow for the two side by side: the rail goes under the player and
  * the page scrolls to it, which is the one layout where that is acceptable,
  * because there is no room to show both anyway. */
-@media (max-width: 1100px) {
+@media (max-width: 899.98px), (max-height: 479.98px) {
   .review-layout {
     grid-template-columns: minmax(0, 1fr);
   }

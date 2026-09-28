@@ -1,10 +1,8 @@
 import { flushSync, mount } from "svelte";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { page } from "vitest/browser";
-import regular from "../../../../fixtures/fonts/selawk.woff2?url";
-import bold from "../../../../fixtures/fonts/selawkb.woff2?url";
-import semibold from "../../../../fixtures/fonts/selawksb.woff2?url";
 import live from "../../../../fixtures/live-client/allgamedata-paired.json";
+import { useLayoutFonts } from "../../../layout-fonts";
 import type { RecordingRow, Scoreboard, ScoreboardPlayer } from "../../../types";
 import "../../styles/app.css";
 import Row from "./Row.svelte";
@@ -28,50 +26,13 @@ import Row from "./Row.svelte";
  * 4. a column starts at a different x on different rows. The list is one grid
  *    and every row a subgrid of it (#341), and this is the property that buys.
  *
- * **Fonts.** Text width decides most of this, so the row's font stack is
- * pinned: each family resolves to the real Segoe UI where it is installed
- * (Windows, which is what users run and what CI runs) and to Selawik, the
- * metric-compatible open font in `fixtures/fonts/`, where it is not.
+ * **Fonts.** Text width decides most of this, so the font stack is pinned;
+ * see `src/layout-fonts.ts`.
  */
 
 // The scrollbar WebView2 draws, which the page loses from a window's width.
 const SCROLLBAR = 17;
 const WIDTHS = Array.from({ length: (2560 - 960) / 16 + 1 }, (_, i) => 960 + i * 16);
-
-function installFonts() {
-  const faces: [string, string, number, string][] = [
-    ["Segoe UI Variable Text", "Segoe UI Variable Text", 400, regular],
-    ["Segoe UI Variable Text", "Segoe UI Variable Text Semibold", 600, semibold],
-    ["Segoe UI Variable Text", "Segoe UI Variable Text Bold", 700, bold],
-    ["Segoe UI", "Segoe UI", 400, regular],
-    ["Segoe UI", "Segoe UI Semibold", 600, semibold],
-    ["Segoe UI", "Segoe UI Bold", 700, bold],
-  ];
-  const style = document.createElement("style");
-  style.textContent = faces
-    .map(
-      ([family, local, weight, url]) =>
-        `@font-face{font-family:"${family}";font-weight:${weight};src:local("${local}"),url("${url}") format("woff2")}`,
-    )
-    .join("\n");
-  document.head.append(style);
-}
-
-/** A font that fails its first fetch is never retried, and text then has no
- *  width at all; so ask until it answers. */
-async function loadFonts() {
-  for (const weight of [400, 600, 700]) {
-    for (let attempt = 0; attempt < 10; attempt++) {
-      try {
-        if ((await document.fonts.load(`${weight} 14px "Segoe UI"`)).length > 0) break;
-      } catch {
-        // retried below
-      }
-      await new Promise((r) => setTimeout(r, 100));
-    }
-  }
-  await document.fonts.ready;
-}
 
 // --- the rows ---------------------------------------------------------------
 
@@ -338,8 +299,7 @@ describe("library rows at every window width", () => {
   let host: HTMLElement;
 
   beforeAll(async () => {
-    installFonts();
-    await loadFonts();
+    await useLayoutFonts();
 
     // The same nesting the app renders, so the library's column cap applies.
     host = document.createElement("main");
