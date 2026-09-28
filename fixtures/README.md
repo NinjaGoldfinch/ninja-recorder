@@ -24,6 +24,11 @@ recording backend.
 - LCU / Live Client Data JSON fixtures land here — every response shape
   the app depends on gets captured the first time it's seen, per
   DEVELOPMENT.md §3.3.
+- `fonts/`: Selawik (regular, semibold, bold), Microsoft's open font with
+  Segoe UI's metrics, under the SIL Open Font License 1.1 (`fonts/LICENSE.txt`).
+  Test-only: the layout gate (#345) loads it where Segoe UI itself is not
+  installed, so text measures on Linux close to how it does on Windows. It is
+  never bundled or shipped.
 - `review/spreadsheet.csv` — a CSV export in the shape of the review
   spreadsheet the WS9 importer replaces. It has quoted multi-line bullet
   cells, a doubled quote, a day-first date with a weekday, 12- and 24-hour

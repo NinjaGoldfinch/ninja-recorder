@@ -14,7 +14,7 @@ below them is skipped until a commit reaches `main`.
 ```mermaid
 flowchart TB
     subgraph PR["Pull request"]
-        T1["<b>Test</b> (windows-latest)<br/>biome ci · typecheck · check:svelte · vitest<br/>cargo deny check · gen-contract --check<br/>cargo test ×2<br/>cargo clippy ×2<br/>smoke-daemon.ps1 · smoke-ui.ps1<br/>measure.ps1 -SelfTest (PS 5.1)<br/><small>±devtools, no --all-targets</small>"]
+        T1["<b>Test</b> (windows-latest)<br/>biome ci · typecheck · check:svelte · vitest<br/>cargo deny check · gen-contract --check<br/>cargo test ×2<br/>cargo clippy ×2<br/>smoke-daemon.ps1 · smoke-ui.ps1<br/>measure.ps1 -SelfTest (PS 5.1)<br/>layout gate (Chromium)<br/><small>±devtools, no --all-targets</small>"]
         N1["<b>Notices</b> (ubuntu)<br/>notices.mjs --check<br/><small>cargo-about + the Vite bundle</small>"]
     end
     subgraph MAIN["Push to main / manual dispatch"]
@@ -38,12 +38,12 @@ flowchart TB
 
 ### What `test` runs
 
-Twelve steps, and the order is part of the design: the cheap gates run first, so
-a formatting mistake fails in seconds rather than after a four-minute compile.
-Steps 10 and 11 are the odd ones out and run late for the same reason, from the
-other end: they need everything already compiled. Step 12 needs nothing built
-and takes seconds; it is last only because it was added last, and appending it
-kept the numbers above it.
+Thirteen steps, and the order is part of the design: the cheap gates run first,
+so a formatting mistake fails in seconds rather than after a four-minute
+compile. Steps 10 and 11 are the odd ones out and run late for the same reason,
+from the other end: they need everything already compiled. Steps 12 and 13 need
+nothing built and take seconds; they are last only because they were added
+last, and appending them kept the numbers above them.
 
 | # | Step | Gate | Added by |
 |---|---|---|---|
@@ -59,6 +59,16 @@ kept the numbers above it.
 | 10 | `scripts/smoke-daemon.ps1` | the daemon actually runs | WS3.3 |
 | 11 | `scripts/smoke-ui.ps1` | the UI starts and finds it | WS3.3 |
 | 12 | `scripts/measure.ps1 -SelfTest`, then a short `-Cpu -Role` run | the measurement script parses and computes right in Windows PowerShell 5.1 | #243 |
+| 13 | `npx playwright install chromium`, then `npm run test:layout` | the layout gate: library rows draw nothing outside their card, cut no number short and keep their columns aligned, at every window width from 960 to 2560, in Chromium | #345 |
+
+**The layout gate is the only frontend test that measures a pixel.** Every
+other one runs in jsdom, where every box is zero by zero, which is how #342
+shipped with the whole list above green. `src/**/*.layout.test.ts` runs under
+its own config (`vitest.layout.config.ts`), so `npx vitest run` still needs no
+browser. Text width decides most of what it checks, so it pins the row's font
+stack: the real Segoe UI where installed (the Windows runner) and Selawik, the
+metric-compatible open font in `fixtures/fonts/`, anywhere else. To run it on a
+dev box, `npx playwright install chromium` once, then `npm run test:layout`.
 
 ### Trimming libobs is opt-in, and only ever reaches the devtools installer
 
