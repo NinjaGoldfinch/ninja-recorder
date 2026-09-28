@@ -1,13 +1,8 @@
 import { call } from "../../bridge";
 import type { GameState, LcuStatus, SupervisorStatus } from "../../types";
-import { finalizedLine, gamePill, lcuLine, lcuPill } from "../settings/about";
-import {
-  setAboutGameState,
-  setAboutLastFinalized,
-  setAboutLcu,
-  setGamePill,
-  setLcuPill,
-} from "./about.svelte";
+import { finalizedLine, lcuLine } from "../settings/about";
+import { setAboutGameState, setAboutLastFinalized, setAboutLcu } from "./about.svelte";
+import { setClientFailed, setClientGame, setClientLcu } from "./client.svelte";
 import { refreshDiskUsage, refreshLibrary } from "./library.svelte";
 import { refreshCaptureBackend } from "./settings.svelte";
 import { refreshUpdateStatus } from "./update.svelte";
@@ -46,7 +41,6 @@ let lcuCountdown = 0;
 let lastLcu: LcuStatus | null = null;
 let prevState: GameState | null = null;
 let prevFinalizedPath: string | null = null;
-let recordingElapsed: number | null = null;
 let lastSafetyRefresh = 0;
 
 /// `document.hidden` is only read when the *next* delay is chosen, so without
@@ -96,8 +90,6 @@ async function pollOnce(): Promise<GameState> {
   }
   lcuCountdown -= 1;
 
-  recordingElapsed = status.recording_elapsed_s;
-
   renderGame(status);
 
   // Whether an offered update can be installed depends on this exact value,
@@ -141,23 +133,23 @@ async function pollOnce(): Promise<GameState> {
   return status.state;
 }
 
-// The wording lives in `lib/settings/about.ts` since WS4.4 so that it could be
-// tested, and WS4.6 took the elements away too: both the About lines and the
-// app bar's pills now go to a store. This module keeps the poll, which is the
-// thing it was always for.
+// The About lines are worded in `lib/settings/about.ts`; the app bar's client
+// pill takes the raw answers and words them itself (`lib/shell/client.ts`),
+// because the pill and its hover card say different things about one answer.
+// This module keeps the poll, which is the thing it was always for.
 function renderLcu(status: LcuStatus) {
-  setLcuPill(lcuPill(status));
+  setClientLcu(status);
   setAboutLcu(lcuLine(status));
 }
 
 function renderGame(status: SupervisorStatus) {
-  setGamePill(gamePill(status.state, recordingElapsed));
+  setClientGame(status);
   setAboutGameState(status.state);
   setAboutLastFinalized(finalizedLine(status));
 }
 
 function renderError(err: unknown) {
-  setGamePill({ state: "error", copy: "Status unavailable" });
+  setClientFailed();
   setAboutGameState(`Failed to read: ${err}`);
 }
 

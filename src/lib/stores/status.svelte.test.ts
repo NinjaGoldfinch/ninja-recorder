@@ -24,6 +24,7 @@ vi.mock("./settings.svelte", () => ({ refreshCaptureBackend }));
 
 let status: typeof import("./status.svelte");
 let about: typeof import("./about.svelte");
+let client: typeof import("./client.svelte");
 
 const supervisor = (state: GameState, over: Record<string, unknown> = {}) => ({
   state,
@@ -57,6 +58,7 @@ beforeEach(async () => {
   refreshCaptureBackend.mockReset();
 
   about = await import("./about.svelte");
+  client = await import("./client.svelte");
   status = await import("./status.svelte");
 });
 
@@ -71,13 +73,13 @@ const settle = async () => {
 };
 
 describe("the first tick", () => {
-  it("fills in both pills", async () => {
+  it("fills in the client store and the About lines", async () => {
     backend(supervisor("Idle"));
     status.initStatus();
     await settle();
 
-    expect(about.about.lcuPill.copy).toBe("Ninja");
-    expect(about.about.gamePill.copy).toBe("Idle");
+    expect(client.client.lcu?.summoner).toBe("Ninja");
+    expect(client.client.game).toBe("Idle");
     expect(about.about.gameState).toBe("Idle");
   });
 
@@ -219,8 +221,7 @@ describe("when the backend cannot answer", () => {
     status.initStatus();
     await settle();
 
-    expect(about.about.gamePill.state).toBe("error");
-    expect(about.about.gamePill.copy).toBe("Status unavailable");
+    expect(client.client.failed).toBe(true);
     expect(about.about.gameState).toContain("Failed to read");
   });
 

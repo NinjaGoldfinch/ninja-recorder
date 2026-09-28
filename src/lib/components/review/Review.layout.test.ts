@@ -92,6 +92,11 @@ function problemsAt(host: HTMLElement, theatre: boolean): string[] {
 
   if (root.scrollHeight > root.clientHeight + 1) out.push("the page scrolls");
   if (root.scrollWidth > root.clientWidth + 1) out.push("the page scrolls sideways");
+  // The body never scrolls since the app bar became the title bar; what would
+  // is the box under it, so that is the one that has to fit.
+  const scroller = document.querySelector(".app-scroll") as HTMLElement;
+  if (scroller.scrollHeight > scroller.clientHeight + 1) out.push("the view scrolls");
+  if (scroller.scrollWidth > scroller.clientWidth + 1) out.push("the view scrolls sideways");
 
   const player = box(host, ".player-wrap");
   const video = box(host, "#review-video");
@@ -169,17 +174,19 @@ describe("the review page at every window shape", () => {
     // The DOM `index.html` and `App.svelte` build: everything is rendered
     // into `#app-root`, never straight into `<body>`. The review's height
     // comes down a flex chain from `<body>`, so a harness that left the
-    // wrapper out passed while the app drew a zero-height player.
+    // wrapper out passed while the app drew a zero-height player. Under it,
+    // the title bar (its height fixed by the stylesheet) and the scroll box
+    // that holds the views.
     appRoot = document.createElement("div");
     appRoot.id = "app-root";
-    // The app bar's real height: a 2.5rem button row in its padding.
-    const appBar = document.createElement("header");
-    appBar.className = "app-bar";
-    appBar.innerHTML = `<div class="app-bar-inner"><div style="height:2.5rem"></div></div>`;
+    appRoot.innerHTML = `<header class="app-bar"><div class="app-bar-inner"></div></header>`;
+    const scroller = document.createElement("div");
+    scroller.className = "app-scroll";
     host = document.createElement("main");
     host.className = "container";
     host.innerHTML = `<section id="review-view" class="review-view"></section>`;
-    appRoot.append(appBar, host);
+    scroller.append(host);
+    appRoot.append(scroller);
     document.body.append(appRoot);
 
     const store = await import("../../stores/review.svelte");

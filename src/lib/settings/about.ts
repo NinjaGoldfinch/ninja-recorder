@@ -8,8 +8,7 @@
  * can be tested and the component can read them from a store.
  */
 
-import { formatTime } from "../../format";
-import type { GameState, LcuStatus, SupervisorStatus } from "../../types";
+import type { LcuStatus, SupervisorStatus } from "../../types";
 
 export function lcuLine(status: LcuStatus): string {
   if (status.error) return `Error: ${status.error}`;
@@ -18,33 +17,6 @@ export function lcuLine(status: LcuStatus): string {
   // us yet, so this falls back on falsiness rather than nullishness.
   const who = status.summoner || "signed in";
   return `Connected as ${who} — phase ${status.phase ?? "?"}.`;
-}
-
-/** The app bar's pill, which is the short form of the same answer. */
-export function lcuPill(status: LcuStatus): { state: string; copy: string } {
-  if (status.error) return { state: "error", copy: "Client error" };
-  if (!status.connected) return { state: "offline", copy: "Client not running" };
-  return { state: "online", copy: status.summoner || "signed in" };
-}
-
-const GAME_COPY: Record<GameState, { state: string; copy: string }> = {
-  Idle: { state: "idle", copy: "Idle" },
-  ClientRunning: { state: "idle", copy: "Waiting for a game" },
-  WaitingForGame: { state: "armed", copy: "Game starting…" },
-  Recording: { state: "recording", copy: "Recording" },
-  Finalizing: { state: "finalizing", copy: "Saving…" },
-};
-
-export function gamePill(
-  state: GameState,
-  recordingElapsedS: number | null,
-): { state: string; copy: string } {
-  const { state: pill, copy } = GAME_COPY[state];
-  const elapsed =
-    state === "Recording" && recordingElapsedS !== null
-      ? ` — ${formatTime(recordingElapsedS)}`
-      : "";
-  return { state: pill, copy: `${copy}${elapsed}` };
 }
 
 /**

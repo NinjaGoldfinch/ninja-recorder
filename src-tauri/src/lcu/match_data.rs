@@ -80,6 +80,11 @@ pub struct CurrentSummoner {
     pub game_name: Option<String>,
     #[serde(rename = "tagLine", default)]
     pub tag_line: Option<String>,
+    /// The profile icon the account has chosen, which the app bar's client
+    /// card draws beside the Riot ID. Data Dragon files the art under this
+    /// id (`ddragon::profile_icon`).
+    #[serde(rename = "profileIconId", default)]
+    pub profile_icon_id: Option<i64>,
 }
 
 impl CurrentSummoner {
@@ -1122,6 +1127,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(me.display().as_deref(), Some("ninja#NA1"));
+    }
+
+    #[test]
+    fn reads_the_profile_icon_and_tolerates_its_absence() {
+        let me: CurrentSummoner =
+            serde_json::from_str(r#"{"gameName": "ninja", "profileIconId": 5367}"#).unwrap();
+        assert_eq!(me.profile_icon_id, Some(5367));
+        let bare: CurrentSummoner = serde_json::from_str(r#"{"gameName": "ninja"}"#).unwrap();
+        assert_eq!(bare.profile_icon_id, None);
     }
 
     #[test]

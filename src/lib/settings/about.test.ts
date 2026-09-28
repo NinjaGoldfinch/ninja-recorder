@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LcuStatus, SupervisorStatus } from "../../types";
-import { finalizedLine, gamePill, lcuLine, lcuPill } from "./about";
+import { finalizedLine, lcuLine } from "./about";
 
 describe("lcuLine", () => {
   it("reports an error over everything else", () => {
@@ -25,34 +25,6 @@ describe("lcuLine", () => {
 
   it("says the phase is unknown rather than printing undefined", () => {
     expect(lcuLine({ connected: true, summoner: "Ninja" } as LcuStatus)).toContain("phase ?");
-  });
-});
-
-describe("lcuPill", () => {
-  it("is the short form of the same answer", () => {
-    expect(lcuPill({ error: "x" } as LcuStatus).state).toBe("error");
-    expect(lcuPill({ connected: false } as LcuStatus).state).toBe("offline");
-    expect(lcuPill({ connected: true, summoner: "Ninja" } as LcuStatus)).toEqual({
-      state: "online",
-      copy: "Ninja",
-    });
-  });
-});
-
-describe("gamePill", () => {
-  it("names each state", () => {
-    expect(gamePill("Idle", null).copy).toBe("Idle");
-    expect(gamePill("ClientRunning", null).copy).toBe("Waiting for a game");
-    expect(gamePill("Finalizing", null).copy).toBe("Saving\u2026");
-  });
-
-  it("shows the elapsed time only while recording", () => {
-    expect(gamePill("Recording", 90).copy).toContain("1:30");
-    expect(gamePill("Idle", 90).copy).toBe("Idle");
-  });
-
-  it("omits the clock when there is no elapsed time yet", () => {
-    expect(gamePill("Recording", null).copy).toBe("Recording");
   });
 });
 

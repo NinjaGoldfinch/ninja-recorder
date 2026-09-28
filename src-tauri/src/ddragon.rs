@@ -521,6 +521,19 @@ pub async fn rune_icon(dir: &Path, rune_id: i64) -> Option<PathBuf> {
     cached_file(dir, &version, "rune", &name, url).await
 }
 
+/// The cached art for a profile icon id, for the app bar's client card.
+///
+/// Like items, filed under the id the client reports. A brand-new icon can
+/// be missing from the CDN for a patch; the card falls back to an initial.
+pub async fn profile_icon(dir: &Path, icon_id: i64) -> Option<PathBuf> {
+    if icon_id < 0 {
+        return None;
+    }
+    let version = version(dir).await?;
+    let url = format!("{CDN}/cdn/{version}/img/profileicon/{icon_id}.png");
+    cached_file(dir, &version, "profileicon", &format!("{icon_id}.png"), url).await
+}
+
 /// What a page of rows needs drawing, asked for in one go.
 ///
 /// A row carries up to seven items, two spells, three runes and a
@@ -542,6 +555,9 @@ pub struct IconRequest {
     pub spell_ids: Vec<i64>,
     #[serde(default)]
     pub runes: Vec<i64>,
+    /// The signed-in account's icon, from `LcuStatus::profile_icon_id`.
+    #[serde(default)]
+    pub profile_icons: Vec<i64>,
 }
 
 /// Paths for everything that resolved. **Anything that did not is simply
@@ -555,6 +571,7 @@ pub struct IconSet {
     pub spells: HashMap<String, String>,
     pub spell_ids: HashMap<String, String>,
     pub runes: HashMap<String, String>,
+    pub profile_icons: HashMap<String, String>,
 }
 
 /// How many icons to have in flight at once.
@@ -604,6 +621,10 @@ pub async fn resolve_icons(dir: &Path, request: &IconRequest) -> IconSet {
         .await,
         runes: resolve_each(dedup(&request.runes), |id: i64| async move {
             rune_icon(dir, id).await
+        })
+        .await,
+        profile_icons: resolve_each(dedup(&request.profile_icons), |id: i64| async move {
+            profile_icon(dir, id).await
         })
         .await,
     }
