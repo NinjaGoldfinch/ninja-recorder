@@ -33,7 +33,7 @@ flowchart TB
     QUITS["lib/stores/quit.svelte.ts<br/><small>owns: the two-process quit flow</small>"]
     TOASTS["lib/stores/toast.svelte.ts<br/><small>owns: the transient message</small>"]
     ABOUT["lib/stores/about.svelte.ts<br/><small>owns: the three live About lines</small>"]
-    LIBV["lib/components/library/<br/><small>Library, Row, Toolbar, StatsBar,<br/>Perks, Build, StatLine, Matchup,<br/>Slot, RowActions</small>"]
+    LIBV["lib/components/library/<br/><small>Library, Row, Toolbar, StatsBar,<br/>Perks, Build, StatLine, Matchup,<br/>Slot, RoleIcon, RowActions</small>"]
     LIBS["lib/stores/library.svelte.ts<br/><small>owns: the row set + every control</small>"]
     ICONS["lib/stores/icons.svelte.ts<br/><small>owns: when art has arrived</small>"]
     REVV["lib/components/review/<br/><small>Review (imperative island), Timeline,<br/>PlayerControls, ReviewRail, MarkerList,<br/>MarkerTimes, NoteEditor</small>"]
@@ -296,9 +296,14 @@ when, and a card grid answers that in two dimensions when one would do. Rows
 also left somewhere for the scoreboard, items and team compositions to go
 without a second redesign (#85), which is where all three now are.
 
-**A stacked block on the left says what the game was**, in four short lines:
-the queue and patch, the rank and LP it was played at, the champion and role,
-and the length, result and when. Lines rather than columns, because none of
+**A stacked block on the left says what the game was**, in three short lines:
+the queue and patch, the rank and LP it was played at, and the length, result
+and when. The champion and role are not written out: the portrait is the
+champion, and a lane badge on its bottom-left corner is the role
+(`RoleIcon`). The opponent's portrait carries none, since they played the same
+role. A recording with no champion gets a fourth line with its title
+(`vodTitle`), which for a file `reconcile` imported is the filename, and
+nothing else on the row identifies it. Lines rather than columns, because none of
 them is a number worth comparing down the list; together they answer "is this
 the game I mean", which is read once per row. The rank sits beside the queue it
 belongs to (#341).
@@ -425,7 +430,7 @@ scattering `??` through the row template:
 | CS per minute (`csPerMinute`) | CS ÷ length → nothing | Both players use the same game length. Either half missing leaves the CS alone rather than inventing a rate |
 | Trinket (`buildBoxes`) | the scoreboard's `trinket` → the last item, if it is a known trinket → an empty box four | Every board written before #346 lacks the field, so the fallback is most of a library on the day the row shipped. A real item is never taken for the trinket: a player with no trinket gets an empty box four, not a shuffled build |
 | Runes (`runesOf`) | the player's own page → `our_runes`, for us only → no rune column | Older boards carry only our page. The opponent's is never borrowed from ours; with no page, the rune column is left out, as for a game with no rune page at all (#281) |
-| Role | Live Client Data's position → the LCU's inference → `Unknown` | The live value is what the game assigned; the LCU's `timeline.lane`/`role` is Riot working it out afterwards and confuses top with jungle, so it fills a gap rather than correcting one. `Unknown` is written out rather than left blank, because a row that hides an empty slot is a different shape per recording |
+| Role | Live Client Data's position → the LCU's inference → no badge | The live value is what the game assigned; the LCU's `timeline.lane`/`role` is Riot working it out afterwards and confuses top with jungle, so it fills a gap rather than correcting one. The badge sits on the portrait rather than in a slot of its own, so a row without one is still the same shape. The five icons are drawn in `RoleIcon` rather than fetched, because Data Dragon has no position art and `ddragon.rs` is the only source art comes from |
 | Outcome | the leading accent, plus the word on the left block's last line | Undecided rows are excluded from the win-rate tile too, so an unknown never reads as a loss; it gets the neutral edge, no wash and no word. A Win/Loss badge used to sit in its own column and was dropped as redundant with the edge; the word moved into the sub-line rather than being dropped with it, because the accent alone is colour only |
 | Rank (`rankLabel`, `lpLabel`) | `tier` + `division` → the missing-value placeholder, on the game block's second line | The ladder a game was played at. That placeholder covers three different things the column cannot tell apart (a queue with no ladder, a player unranked in it, and a patch that landed too late for the reading to still describe the game) so the row does not pretend to. LP is shown only beside a tier, since a number with no scale is not a standing. Master and above have no division and are labelled with none |
 | When (`formatRelative`) | relative inside a week → absolute date | "6 weeks ago" is worse than a date at that distance: nobody counts weeks, and the date is what a person searches their memory by. The absolute form is on the `title` either way |
@@ -508,8 +513,8 @@ queue id still files under what it says. Two ids that print the same name
 (1700 and 1710 are both "Arena") group together, which is the intent.
 
 **"Unknown" is a value you can filter *to*,** offered only when something is
-actually missing it. "Which of my games never got a role" is the question the
-`Unknown` on the row itself prompts, and the backfill leaves plenty of them.
+actually missing it. "Which of my games never got a role" is the question a
+portrait with no lane badge prompts, and the backfill leaves plenty of them.
 See [data-model.md](data-model.md) for what it can and cannot fill.
 
 **An empty result says which kind of empty it is.** "Nothing recorded yet" and
@@ -1365,6 +1370,7 @@ lib/components/library/
   Matchup.svelte               the lane opponent
   RowActions.svelte            pin, delete, inspect
   Slot.svelte                  one art box
+  RoleIcon.svelte              the lane badge on our portrait
 ```
 
 **Four things went away rather than being ported.**

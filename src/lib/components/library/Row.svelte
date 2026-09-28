@@ -35,6 +35,7 @@ import { laneOpponent, outcomeAttr, selfPlayer } from "../../library/scoreboard"
 import Build from "./Build.svelte";
 import Matchup from "./Matchup.svelte";
 import Perks from "./Perks.svelte";
+import RoleIcon from "./RoleIcon.svelte";
 import RowActions from "./RowActions.svelte";
 import Slot from "./Slot.svelte";
 import StatLine from "./StatLine.svelte";
@@ -116,7 +117,7 @@ function onCardKey(e: KeyboardEvent) {
   onkeydown={onCardKey}
 >
   <!--
-    What the game was and how it went, in four short lines rather than four
+    What the game was and how it went, in three short lines rather than three
     columns: none of them is a number worth comparing down the list. They
     answer "is this the game I mean", which is read once per row. The rank
     sits here, beside the queue it belongs to (#341).
@@ -137,12 +138,15 @@ function onCardKey(e: KeyboardEvent) {
           {lp}{/if}
       {/if}
     </span>
-    <span class="vod-sub">
-      <span class="vod-champ" {title}>{title}</span> &middot;
-      {#if row.role === null}
-        <span class="vod-missing">Unknown</span>
-      {:else}{row.role}{/if}
-    </span>
+    <!--
+      The champion is the portrait and the role its badge, so a row that has
+      one says neither in words. A recording with no champion gets its title
+      instead, which for a file `reconcile` imported is the filename: the one
+      thing that identifies it, and drawn nowhere else.
+    -->
+    {#if row.champion === null}
+      <span class="vod-sub"><span class="vod-champ" {title}>{title}</span></span>
+    {/if}
     <span class="vod-sub">
       {#if length === null}
         <span class="vod-missing">&mdash;</span>
@@ -156,8 +160,15 @@ function onCardKey(e: KeyboardEvent) {
     </span>
   </span>
 
+  <!--
+    Our role on our portrait and not the opponent's: the opponent is the one
+    who played it too, so a second badge would say the same thing twice.
+  -->
   <span class="vod-champion">
-    <Slot kind="champion" key={row.champion ?? ""} extra="vod-portrait" />
+    <span class="vod-portrait-wrap">
+      <Slot kind="champion" key={row.champion ?? ""} title={row.champion ?? ""} extra="vod-portrait" />
+      <RoleIcon role={row.role} />
+    </span>
     <Perks player={us} runes={ourRunes} />
   </span>
 

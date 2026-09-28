@@ -1859,9 +1859,14 @@ button.armed {
 }
 
 .vod-versus-label {
-  font-size: var(--row-fs-sub);
-  color: var(--text-subtle);
-  font-variant: small-caps;
+  font-size: calc(var(--row-fs) * 1.05);
+  font-weight: 800;
+  font-style: italic;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  line-height: 1;
+  color: var(--text-muted);
+  padding: 0 2px;
 }
 
 .vod-versus-none {
@@ -1913,6 +1918,42 @@ button.armed {
   height: calc(var(--slot) * 2 + 2px);
   border-radius: var(--r-sm);
   border: 1px solid var(--border);
+}
+
+/* Our role, on our portrait's bottom-left corner (`RoleIcon`). Hangs a few
+ * pixels past the portrait, which the row's padding has room for; the
+ * portrait itself clips, so the badge sits on a wrapper beside it rather
+ * than inside it. */
+.vod-portrait-wrap {
+  position: relative;
+  display: block;
+}
+
+/* Whole pixels, and even ones, so the icon inside starts on a pixel edge
+ * rather than between two: at this size a half-pixel offset is most of what
+ * makes a shape look smudged (`RoleIcon`). */
+.vod-role {
+  --role-size: max(12px, round(down, calc(var(--slot) * 0.64), 2px));
+  position: absolute;
+  left: -3px;
+  bottom: -3px;
+  width: var(--role-size);
+  height: var(--role-size);
+  border-radius: 50%;
+  background-color: var(--bg-inset);
+  box-shadow:
+    0 0 0 1px var(--border-strong),
+    0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+.vod-role svg {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: calc(var(--role-size) - 2px);
+  height: calc(var(--role-size) - 2px);
+  fill: var(--text);
+  opacity: 0.85;
 }
 
 .vod-slot img {
