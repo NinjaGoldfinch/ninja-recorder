@@ -33,7 +33,7 @@ flowchart TB
     QUITS["lib/stores/quit.svelte.ts<br/><small>owns: the two-process quit flow</small>"]
     TOASTS["lib/stores/toast.svelte.ts<br/><small>owns: the transient message</small>"]
     ABOUT["lib/stores/about.svelte.ts<br/><small>owns: the three live About lines</small>"]
-    LIBV["lib/components/library/<br/><small>Library, Row, Toolbar, StatsBar,<br/>Loadout, Matchup, Slot, RowActions</small>"]
+    LIBV["lib/components/library/<br/><small>Library, Row, Toolbar, StatsBar,<br/>Perks, Build, StatLine, Matchup,<br/>Slot, RowActions</small>"]
     LIBS["lib/stores/library.svelte.ts<br/><small>owns: the row set + every control</small>"]
     ICONS["lib/stores/icons.svelte.ts<br/><small>owns: when art has arrived</small>"]
     REVV["lib/components/review/<br/><small>Review (imperative island), Timeline,<br/>PlayerControls, ReviewRail, MarkerList,<br/>MarkerTimes</small>"]
@@ -42,7 +42,7 @@ flowchart TB
     SETS["lib/stores/settings.svelte.ts<br/><small>owns: autostart, audio, capture backend,<br/>retention, the folder, mirrored prefs</small>"]
     UPD["lib/stores/update.svelte.ts<br/><small>owns: the update status</small>"]
     TL["lib/timeline/<br/><small>window, clusters, graph, stem,<br/>markers, events, navigate · pure, tested</small>"]
-    LIBP["lib/library/<br/><small>filters, sort, stats, scoreboard,<br/>problems · pure, tested</small>"]
+    LIBP["lib/library/<br/><small>filters, sort, stats, scoreboard,<br/>build, problems · pure, tested</small>"]
     SETP["lib/settings/<br/><small>notes, backfill, retention, audio,<br/>capture, update, about · pure, tested</small>"]
     REVP["lib/review/<br/><small>hotkeys, playback, rail,<br/>clock, facts · pure, tested</small>"]
     RFV["lib/components/reviewform/<br/><small>ReviewForm, RatingControl</small>"]
@@ -296,41 +296,35 @@ when, and a card grid answers that in two dimensions when one would do. Rows
 also left somewhere for the scoreboard, items and team compositions to go
 without a second redesign (#85), which is where all three now are.
 
-**A stacked block on the left sets the row's height**: what the game was, when
-it was, which patch, how long it ran, and how it went. Four short lines rather
-than four columns, because none of them is a number worth comparing down the
-list. Together they answer "is this the game I mean", which is read once per
-row and then never again.
+**A stacked block on the left says what the game was**, in four short lines:
+the queue and patch, the rank and LP it was played at, the champion and role,
+and the length, result and when. Lines rather than columns, because none of
+them is a number worth comparing down the list; together they answer "is this
+the game I mean", which is read once per row. The rank sits beside the queue it
+belongs to (#341).
 
-What *is* worth comparing gets a column: the champion, and the KDA. Deaths are
-coloured and the slashes are not, so the eye lands on the middle number without
-having to read the other two.
+What *is* worth comparing is the line: K/D/A, the ratio, and CS with CS per
+minute, the same three lines for us and for the opponent (`StatLine`). Deaths
+are coloured and the slashes are not, so the eye lands on the middle number
+without having to read the other two.
 
-Every column is *capped*, so values line up down the list and a column can be
-read vertically without the eye re-finding it on each row. Cells ellipsize
-rather than widening the row.
+**The data columns take the width they need, and no more.** The text columns
+are `minmax(0, max-content)` and the art columns `auto`, so the group stays
+tight at the left. The leftover width collects in one column before the size
+and the actions. Sharing it out in `fr` units left gaps either side of the
+builds, and one `1fr` column once stretched the champion cell across half the
+window. The game block is the exception: it is capped at thirteen times the
+row's font size, so an imported file's long name cannot widen it for every row.
 
-**The leftover width collects in one place, before the actions.** A single
-column at `1fr` stretched the champion cell across half the window and threw
-everything else at the right edge, so the row read as two unrelated clusters
-with a hole between them. With every data column capped they stay one group at
-the left, the actions stay pinned right, and the slack sits between them.
-
-The team compositions were once earmarked for that slack and took a column of
-their own instead. A fixed grid of squares dropped into a `1fr` track leaves
-the leftover width *inside* a data column, where it is invisible to read but
-real to every column added after it; slack that stays slack keeps the rule
-above true rather than nearly true.
-
-**One thing may sit in the slack: what a capture failure cost** (#10). A
+**The slack holds the file size, and what a capture failure cost** (#10). A
 recording whose `diagnostics_json` lists capture problems says "Recorded
-without game audio" there, right-aligned, ellipsized, with every reason in its
-tooltip. It is the one cell that is empty on almost every row, so a row that
-says it is still the same shape as one that does not.
+without game audio" above its size, right-aligned, ellipsized, with every
+reason in its tooltip.
 
 **The lane matchup, not the lobby.** The row shows the one opponent who
-played your position, with their champion, their line and their build, where it
-used to show all ten portraits. Ten champions told you who was in the game;
+played your position, drawn in our shape: portrait, spells and runes, the same
+three-line stat block and the same build grid, so the pair reads as a
+comparison box for box. It used to show all ten portraits. Ten champions told you who was in the game;
 one tells you who you actually played against, which is what a person is
 reconstructing when they scan a library. "The Darius game" is a matchup, not a
 lobby. The other nine are still in `scoreboard_json` for anything that wants
@@ -342,8 +336,8 @@ list whose order nothing promises. Where the position is missing, which covers
 every recording made before the field existed and any mode with no positions to
 assign, there is no matchup, and the block **says so in words**. Seven blank
 boxes beside a "vs" read as art that failed to load, which is a bug report
-waiting to happen; "No matchup recorded" reads as what it is. The block keeps
-its width either way, so the columns on both sides stay put.
+waiting to happen; "No matchup recorded" reads as what it is. It spans the same
+four columns either way, so the columns after it stay put.
 
 **The position has to survive the LCU rebuild.** The deferred patch replaces the
 live scoreboard with the LCU's (#127), which is better at almost everything:
@@ -363,19 +357,55 @@ the matchup then picks the enemy in the wrong lane, and the row shows a
 plausible opponent who is not the one you played. An empty matchup announces
 itself; a wrong one does not.
 
-**The art tracks are stated, not `auto`.** Every `.vod-row` is its own grid, so
-an `auto` track sizes to *that row's* content, and a row whose player sold an
-item, or whose scoreboard is missing, computed different widths from the row
-above it. The blocks are fixed grids of fixed squares internally, so the widths
-were never really variable; they only looked it. Stating them is what makes a
-column read down the list, which is the entire reason the row is a grid at all.
+**Every row is drawn whole at every window size, and scales instead of
+shedding** (#341). The row used to drop the opponent's build below a 1440px
+window and the whole matchup below 1200px. Those were *window* widths, while
+the row lives in a capped column, so the thresholds were answering the wrong
+question and rows drew past their card at both ends of the range (#342). Now
+every size on the row, the art squares, the text and the gaps, is set in `cqi`
+(1% of the list's own width) and clamped:
 
-**It sheds in two stages**, because its halves are worth different amounts. The
-opponent's build is the wide part, seven squares and their gaps at 166px, and
-the least of what the block says; who you played and how they did survives
-another 240px of narrowing. Below about 1440px the build goes, below about
-1200px the rest follows. The thresholds are the row's own tracks rather than
-round numbers: with the build it needs about 1430px, without it about 1180px.
+| Size | Rule | At a 960px window | At 1340px (default) | Ceiling |
+|---|---|---|---|---|
+| Item, spell and rune square (`--slot`) | `clamp(15px, 2.15cqi, 30px)` | 19px | 27px | 30px |
+| Text (`--row-fs`) | `clamp(11px, 1.15cqi, 15px)` | 11px | 14.7px | 15px |
+| Gaps (`--row-gap`) | `clamp(4px, 0.9cqi, 14px)` | 8px | 11.5px | 14px |
+
+The portrait is two squares plus the gap, so it is exactly as tall as the
+two-row build beside it. The library's column is wider than the other views'
+(`--library-max`, 1400px), so a wide window buys bigger art rather than empty
+margins.
+
+**One grid for the whole list.** `.vod-list` owns the columns and every row is
+`grid-template-columns: subgrid`, so a column is the same width on every row by
+construction; the matchup is a subgrid of the row in turn, spanning its four.
+Rows used to be a grid each, which is why their art tracks had to be stated in
+pixels: an `auto` track sized to *that* row's content drifted from the row above
+it. With one grid, `auto` is safe, and a row with no scoreboard lines up with
+one that has everything.
+
+**Nothing is drawn outside the card.** Every row child is `min-width: 0` and the
+row is `overflow: clip`, but the clip is the safety net, not the mechanism: the
+layout gate (#345) checks box positions across every width from 960 to 2560,
+which a clip does not hide.
+
+**The build is a 4×2 grid, and the trinket is always the fourth box** (top
+right), so it is in the same place on every row whatever was bought.
+`library/build.ts` decides which item goes where:
+
+```
+Bot lane                 Every other role
+┌────┬────┬────┬────┐    ┌────┬────┬────┬────┐
+│ 1  │ 2  │ 3  │ T  │    │ 1  │ 2  │ 3  │ T  │    T = trinket
+├────┼────┼────┼────┤    ├────┼────┼────┼────┘
+│ 4  │ 5  │ 6  │ B  │    │ 4  │ 5  │ 6  │         B = the role quest's boots
+└────┴────┴────┴────┘    └────┴────┴────┘
+```
+
+The eighth box exists only for a bot laner, holding the boots the role quest
+moves out of the inventory (`role_item`, from match history only; #346). Every
+other role's role slot holds a quest token rather than an item, so its grid
+stops at seven: an empty eighth box would read as a missing item.
 
 ### What a row says when the data is missing
 
@@ -391,10 +421,13 @@ scattering `??` through the row template:
 | Heading (`vodHeading`) | `vodTitle` + ` vs <opponent>` + the outcome word | The long form, for the review view's heading and the row's accessible name, where there is room for what actually identifies a game. Each half is added only when known, so it degrades through `Viego vs Darius`, `Viego` plus the outcome, and `Viego` alone, rather than emitting `vs undefined`. An undecided game says nothing about a result, exactly as the row's own outcome word does |
 | Queue (`queueOrModeLabel`) | `queue` id → `game_mode` | `CLASSIC` renders as "Summoner's Rift", the *map*: the mode string cannot tell blind from draft from ranked, and naming one would be a guess in a slot read as fact |
 | Patch (`patchLabel`) | stored build → its first two parts, a major from 16 on shown ten higher | The column keeps the whole build string the game reported, because the build is what tells two sides of a hotfix apart. Riot numbers patches by year from 2026 while the build kept its old sequence, so build 16.19 is patch 26.19 (#280); majors below 16 predate that and show as they are. The label is what the patch filter lists and sorts, and the mapping keeps it numerically ordered |
-| KDA (`formatKda`) | all three or nothing | A partial KDA reads as a real one. The ratio (`kdaRatio`) is a hover hint, not a fourth number in a column three numbers wide |
+| KDA (`formatKda`) | all three or nothing | A partial KDA reads as a real one. The ratio (`kdaRatio`) is the line under it, and a deathless game is named ("Perfect KDA") rather than divided by zero |
+| CS per minute (`csPerMinute`) | CS ÷ length → nothing | Both players use the same game length. Either half missing leaves the CS alone rather than inventing a rate |
+| Trinket (`buildBoxes`) | the scoreboard's `trinket` → the last item, if it is a known trinket → an empty box four | Every board written before #346 lacks the field, so the fallback is most of a library on the day the row shipped. A real item is never taken for the trinket: a player with no trinket gets an empty box four, not a shuffled build |
+| Runes (`runesOf`) | the player's own page → `our_runes`, for us only → no rune column | Older boards carry only our page. The opponent's is never borrowed from ours; with no page, the rune column is left out, as for a game with no rune page at all (#281) |
 | Role | Live Client Data's position → the LCU's inference → `Unknown` | The live value is what the game assigned; the LCU's `timeline.lane`/`role` is Riot working it out afterwards and confuses top with jungle, so it fills a gap rather than correcting one. `Unknown` is written out rather than left blank, because a row that hides an empty slot is a different shape per recording |
 | Outcome | the leading accent, plus the word on the left block's last line | Undecided rows are excluded from the win-rate tile too, so an unknown never reads as a loss; it gets the neutral edge, no wash and no word. A Win/Loss badge used to sit in its own column and was dropped as redundant with the edge; the word moved into the sub-line rather than being dropped with it, because the accent alone is colour only |
-| Rank (`rankLabel`, `lpLabel`) | `tier` + `division` → the missing-value placeholder | The ladder a game was played at. That placeholder covers three different things the column cannot tell apart (a queue with no ladder, a player unranked in it, and a patch that landed too late for the reading to still describe the game) so the row does not pretend to. LP is shown only beside a tier, since a number with no scale is not a standing. Master and above have no division and are labelled with none |
+| Rank (`rankLabel`, `lpLabel`) | `tier` + `division` → the missing-value placeholder, on the game block's second line | The ladder a game was played at. That placeholder covers three different things the column cannot tell apart (a queue with no ladder, a player unranked in it, and a patch that landed too late for the reading to still describe the game) so the row does not pretend to. LP is shown only beside a tier, since a number with no scale is not a standing. Master and above have no division and are labelled with none |
 | When (`formatRelative`) | relative inside a week → absolute date | "6 weeks ago" is worse than a date at that distance: nobody counts weeks, and the date is what a person searches their memory by. The absolute form is on the `title` either way |
 
 An unrecognised queue id shows as `Queue 1234` and an unrecognised mode
@@ -732,8 +765,9 @@ game arranges them. The markup order is therefore load-bearing: spell 1, spell
 **The rune column is the one exception to holding its place.** A game with no
 rune page, which is every augment mode such as ARAM Mayhem (#281), stores no
 `our_runes` at all, and two empty frames would draw a page that never existed.
-`Loadout` leaves the column out instead. The perks track in `.vod-row` is a
-fixed 38px, so the item strip beside it does not move.
+`Perks` leaves the column out instead. The column is `auto` in the list's
+shared grid, so it is as wide as the widest row's and the build beside it does
+not move.
 
 The team block fills the other way, across each row, for the same reason: a
 team is a line of five, so the line has to be what the eye picks up. Filling by
@@ -1245,7 +1279,7 @@ the way up cannot take a working frontend down with it.
 ### What the library looks like now
 
 `library.ts` is gone. 777 lines of it, plus the `#library-view` markup, are
-eight components, a store and the pure modules WS4.2 extracted.
+ten components, a store and the pure modules WS4.2 extracted.
 
 ```
 lib/stores/library.svelte.ts   the row set, the disk figure, every control
@@ -1255,7 +1289,9 @@ lib/components/library/
   StatsBar.svelte              the four numbers
   Toolbar.svelte               search, facets, outcome, pinned, sort, actions
   Row.svelte                   one recording
-  Loadout.svelte               spells, runes, items
+  Perks.svelte                 spells and runes, for either player
+  Build.svelte                 the 4×2 build, for either player
+  StatLine.svelte              K/D/A, ratio, CS: the same three lines for both
   Matchup.svelte               the lane opponent
   RowActions.svelte            pin, delete, inspect
   Slot.svelte                  one art box
@@ -1332,7 +1368,7 @@ over a JS import would be the flash the script exists to prevent.
 Svelte scopes a component's `<style>` to that component's own template, so a
 rule written in one component and matching an element another renders silently
 stops applying. `.vod-items .vod-slot` is the shape of the problem: the
-positioning belongs to `Loadout`, the box belongs to `Slot`, and distributing
+positioning belongs to `Build`, the box belongs to `Slot`, and distributing
 them needs `:global()` in exactly the places where it is easy to be wrong. With
 1,900 lines of that, no visual test anywhere in this repo, and no way to look
 at the result, it is a change whose failure mode is invisible to whoever makes

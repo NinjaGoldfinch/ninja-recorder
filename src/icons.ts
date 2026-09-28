@@ -13,7 +13,7 @@
  * gets forever.
  */
 import { assetUrl, call } from "./bridge";
-import type { IconSet, RecordingRow, Scoreboard } from "./types";
+import type { IconSet, RecordingRow, Scoreboard, ScoreboardRunes } from "./types";
 
 /** Resolved paths, and the misses. A `null` is "asked and not found", which
  *  is different from "not asked yet" and stops a missing icon being
@@ -69,6 +69,13 @@ export function parseScoreboard(json: string | null): Scoreboard | null {
   }
 }
 
+function addPage(wanted: Wanted, page: ScoreboardRunes | null | undefined) {
+  if (!page) return;
+  wanted.runes.add(page.keystone_id);
+  wanted.runes.add(page.primary_tree_id);
+  wanted.runes.add(page.secondary_tree_id);
+}
+
 function collect(rows: RecordingRow[]): Wanted {
   const wanted: Wanted = {
     champions: new Set(),
@@ -96,21 +103,26 @@ function collect(rows: RecordingRow[]): Wanted {
     // `laneOpponent`'s answer, so this cannot disagree with it about who
     // that is — and the set converges on the item catalogue, a few hundred
     // squares, whatever the library's size.
+    //
+    // Spells and runes follow for the same reason, now that the opponent is
+    // drawn in our shape (#341): their spells and their page, not only ours.
+    // Both sets are small and bounded by the game, not the library.
     for (const player of board?.players ?? []) {
       if (player.champion) wanted.champions.add(player.champion);
       for (const item of player.items) wanted.items.add(item);
+      for (const spell of player.spells) wanted.spells.add(spell);
+      for (const id of player.spell_ids ?? []) wanted.spellIds.add(id);
+      addPage(wanted, player.runes);
+      // A bot laner's boots live in the role slot, not in `items`. Every
+      // other role's role slot is a quest token the row never draws, so its
+      // art is not asked for.
+      if (player.position === "Bottom" && player.role_item != null) {
+        wanted.items.add(player.role_item);
+      }
     }
 
-    const us = board?.players.find((p) => p.is_us);
-    if (!us) continue;
-
-    for (const spell of us.spells) wanted.spells.add(spell);
-    for (const id of us.spell_ids ?? []) wanted.spellIds.add(id);
-    if (board?.our_runes) {
-      wanted.runes.add(board.our_runes.keystone_id);
-      wanted.runes.add(board.our_runes.primary_tree_id);
-      wanted.runes.add(board.our_runes.secondary_tree_id);
-    }
+    // Older boards carry our page here and nowhere else.
+    addPage(wanted, board?.our_runes);
   }
   return wanted;
 }

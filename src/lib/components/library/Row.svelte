@@ -19,9 +19,7 @@ import {
   formatBytes,
   formatClock,
   formatDateTime,
-  formatKda,
   formatRelative,
-  kdaRatio,
   lpLabel,
   patchLabel,
   queueOrModeLabel,
@@ -29,13 +27,17 @@ import {
   vodHeading,
   vodTitle,
 } from "../../../format";
+import { parseScoreboard } from "../../../icons";
 import type { RecordingRow } from "../../../types";
+import { runesOf } from "../../library/build";
 import { recordedWithout } from "../../library/problems";
-import { csPerMinute, laneOpponent, outcomeAttr } from "../../library/scoreboard";
-import Loadout from "./Loadout.svelte";
+import { laneOpponent, outcomeAttr, selfPlayer } from "../../library/scoreboard";
+import Build from "./Build.svelte";
 import Matchup from "./Matchup.svelte";
+import Perks from "./Perks.svelte";
 import RowActions from "./RowActions.svelte";
 import Slot from "./Slot.svelte";
+import StatLine from "./StatLine.svelte";
 
 interface Props {
   row: RecordingRow;
@@ -49,8 +51,7 @@ interface Props {
 const { row, onopen, onpin, ondelete, oninspect, showInspect }: Props = $props();
 
 const title = $derived(vodTitle(row));
-const kda = $derived(formatKda(row.kda_k, row.kda_d, row.kda_a));
-const ratio = $derived(kdaRatio(row.kda_k, row.kda_d, row.kda_a));
+const queue = $derived(queueOrModeLabel(row));
 const patch = $derived(patchLabel(row.patch));
 const rank = $derived(rankLabel(row.tier, row.division));
 // Only beside a rank. LP with no tier is a number with no scale, and the
@@ -58,6 +59,12 @@ const rank = $derived(rankLabel(row.tier, row.division));
 // a row from before migration 10 has neither.
 const lp = $derived(rank === null ? null : lpLabel(row.lp_after));
 const length = $derived(row.duration_s === null ? null : formatClock(row.duration_s));
+
+const us = $derived(selfPlayer(row));
+const ourRunes = $derived(runesOf(parseScoreboard(row.scoreboard_json), us));
+// The scoreboard's own position first; the recording's `role` where a board
+// predates positions. It decides whether our build has a boots box.
+const ourPosition = $derived(us?.position ?? row.role);
 
 // Said once, in the left block, and shown once as the leading accent. The
 // word is what makes the row readable without colour, since green and red
@@ -70,8 +77,8 @@ const outcomeWord = $derived(row.win === null ? null : row.win ? "Win" : "Loss")
 
 // What a capture failure cost this recording (#10), from its diagnostics:
 // short in the row, every reason in the tooltip. In the slack column, which is
-// otherwise empty, so a row that says it is still the same shape as one that
-// does not.
+// otherwise only the file size, so a row that says it is still the same shape
+// as one that does not.
 const without = $derived(recordedWithout(row.diagnostics_json));
 
 function onCardKey(e: KeyboardEvent) {
@@ -108,106 +115,64 @@ function onCardKey(e: KeyboardEvent) {
   onclick={() => onopen(row)}
   onkeydown={onCardKey}
 >
+  <!--
+    What the game was and how it went, in four short lines rather than four
+    columns: none of them is a number worth comparing down the list. They
+    answer "is this the game I mean", which is read once per row. The rank
+    sits here, beside the queue it belongs to (#341).
+  -->
   <span class="vod-meta">
-    <span class="vod-queue">
-      {#if queueOrModeLabel(row) === null}
+    <span class="vod-line">
+      {#if queue === null}
+        <span class="vod-queue vod-missing">&mdash;</span>
+      {:else}
+        <span class="vod-queue">{queue}</span>
+      {/if}{#if patch !== null}<span class="vod-sub">&nbsp;&middot; {patch}</span>{/if}
+    </span>
+    <span class="vod-rank">
+      {#if rank === null}
         <span class="vod-missing">&mdash;</span>
       {:else}
-        <span>{queueOrModeLabel(row)}</span>
+        <span title="The rank this game was played at">{rank}</span>{#if lp !== null}&nbsp;&middot;
+          {lp}{/if}
       {/if}
     </span>
-    <time
-      datetime={new Date(row.started_at).toISOString()}
-      class="vod-sub"
-      title={formatDateTime(row.started_at)}>{formatRelative(row.started_at)}</time
-    >
     <span class="vod-sub">
-      {#if patch === null}&nbsp;{:else}Patch {patch}{/if}
-    </span>
-    <span class="vod-sub">
-      {#if length === null}
-        <span class="vod-missing">&mdash;</span>
-      {:else}
-        <span>{length}</span>
-      {/if}{#if outcomeWord}
-        &middot; <span class="vod-outcome">{outcomeWord}</span>
-      {/if}
-    </span>
-  </span>
-
-  <span class="vod-portrait" aria-hidden="true">
-    <Slot kind="champion" key={row.champion ?? ""} />
-  </span>
-
-  <span class="vod-cell">
-    <span class="vod-champ" {title}>{title}</span>
-    <span class="vod-sub">
+      <span class="vod-champ" {title}>{title}</span> &middot;
       {#if row.role === null}
         <span class="vod-missing">Unknown</span>
       {:else}{row.role}{/if}
     </span>
-  </span>
-
-  <span class="vod-cell">
-    <span class="vod-value vod-kda">
-      <!--
-        Deaths in their own colour, which is the one number on a row people
-        look for first. Built from the three integers rather than by splitting
-        `formatKda`'s string, so nothing here parses its own output. But
-        `formatKda` still owns the all-three-or-nothing rule, which is why the
-        condition is on it.
-      -->
-      {#if kda === null}
+    <span class="vod-sub">
+      {#if length === null}
         <span class="vod-missing">&mdash;</span>
-      {:else}
-        {row.kda_k}
-        <span class="vod-slash">/</span>
-        <span class="vod-deaths">{row.kda_d}</span>
-        <span class="vod-slash">/</span>
-        {row.kda_a}
+      {:else}{length}{/if}{#if outcomeWord}&nbsp;&middot;
+        <span class="vod-outcome">{outcomeWord}</span>
       {/if}
+      &middot;
+      <time datetime={new Date(row.started_at).toISOString()} title={formatDateTime(row.started_at)}
+        >{formatRelative(row.started_at)}</time
+      >
     </span>
-    <span class="vod-sub">{#if ratio}{ratio}{:else}&nbsp;{/if}</span>
   </span>
 
-  <span class="vod-cell">
-    <span class="vod-value">
-      {#if row.cs === null}
-        <span class="vod-missing">&mdash;</span>
-      {:else}
-        <span>{row.cs} cs</span>
-      {/if}
-    </span>
-    <span class="vod-sub">{#if csPerMinute(row)}{csPerMinute(row)}{:else}&nbsp;{/if}</span>
+  <span class="vod-champion">
+    <Slot kind="champion" key={row.champion ?? ""} extra="vod-portrait" />
+    <Perks player={us} runes={ourRunes} />
   </span>
 
-  <!--
-    The rank the game was played at. Dashed on everything that had no ladder,
-    like every other column: most libraries hold a mix of ranked and unranked
-    games.
-  -->
-  <span class="vod-cell">
-    <span class="vod-value">
-      {#if rank === null}
-        <span class="vod-missing">&mdash;</span>
-      {:else}
-        <span title="The rank this game was played at">{rank}</span>
-      {/if}
-    </span>
-    <span class="vod-sub">{#if lp === null}&nbsp;{:else}{lp}{/if}</span>
-  </span>
+  <StatLine kills={row.kda_k} deaths={row.kda_d} assists={row.kda_a} cs={row.cs} durationS={row.duration_s} />
 
-  <Loadout {row} />
+  <Build player={us} position={ourPosition} />
 
   <Matchup {row} />
 
-  {#if without}
-    <span class="vod-slack vod-without" title={without.full}>{without.short}</span>
-  {:else}
-    <span class="vod-slack" aria-hidden="true"></span>
-  {/if}
-
-  <span class="vod-sub vod-size">{formatBytes(row.size_bytes)}</span>
+  <span class="vod-slack">
+    {#if without}
+      <span class="vod-without" title={without.full}>{without.short}</span>
+    {/if}
+    <span class="vod-sub vod-size">{formatBytes(row.size_bytes)}</span>
+  </span>
 
   <RowActions {row} {onpin} {ondelete} {oninspect} {showInspect} />
 </article>
