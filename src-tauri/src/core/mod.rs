@@ -424,6 +424,9 @@ pub struct LcuStatus {
     pub connected: bool,
     pub phase: Option<String>,
     pub summoner: Option<String>,
+    /// The account's profile icon, as an id for `resolve_icons` rather than
+    /// a path: resolving it can mean a CDN round trip, and this is polled.
+    pub profile_icon_id: Option<i64>,
     pub error: Option<String>,
 }
 
@@ -983,6 +986,7 @@ pub async fn lcu_status() -> LcuStatus {
         connected: false,
         phase: None,
         summoner: None,
+        profile_icon_id: None,
         error,
     };
 
@@ -1004,10 +1008,12 @@ pub async fn lcu_status() -> LcuStatus {
         .get_json::<lcu::match_data::CurrentSummoner>("/lol-summoner/v1/current-summoner")
         .await;
 
+    let summoner = summoner.ok();
     LcuStatus {
         connected: true,
         phase: phase.ok().map(|p| format!("{p:?}")),
-        summoner: summoner.ok().and_then(|s| s.display()),
+        profile_icon_id: summoner.as_ref().and_then(|s| s.profile_icon_id),
+        summoner: summoner.and_then(|s| s.display()),
         error: None,
     }
 }

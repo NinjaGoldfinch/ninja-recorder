@@ -1,15 +1,33 @@
 <!--
-  The header: who we are, what the client and the game are doing, and the two
-  buttons that are not views.
+  The title bar. The window has no native one (`lib.rs::create_main_window`),
+  so this is where it is dragged from, double-clicked to maximise, and closed.
+
+  Left to right: who we are, the two top-level views as tabs, empty bar to
+  drag by, the League client pill, the settings and dev-portal buttons, and the
+  window controls.
+
+  **The drag region is `deep`**, so a press anywhere in the bar drags the
+  window unless it lands on something clickable: Tauri's drag script treats a
+  button, a link or anything with a `tabindex` as a hole in the region, which
+  is what keeps the tabs and the pill working without marking each one.
 -->
 
 <script lang="ts">
 import { call, hasDevCommands } from "../../../bridge";
-import { showView } from "../../../router";
-import { about } from "../../stores/about.svelte";
+import { currentView, onViewChange, showView, type View } from "../../../router";
+import { settings } from "../../stores/settings.svelte";
 import { update } from "../../stores/update.svelte";
+import ClientStatus from "./ClientStatus.svelte";
+import WindowControls from "./WindowControls.svelte";
 
 let devAvailable = $state(false);
+let view = $state<View>(currentView());
+
+// The review belongs to the library tab: it is opened from a library row, and
+// the tab is the way back.
+const tab = $derived(view === "review" ? "library" : view);
+
+$effect(() => onViewChange((next) => (view = next)));
 
 // **Detected rather than configured.** The portal and its `dev_*` commands
 // are compiled out unless the `devtools` Cargo feature is on, so the button
@@ -29,62 +47,83 @@ function openDevPortal() {
 }
 </script>
 
-<header class="app-bar">
+<header class="app-bar" data-tauri-drag-region="deep">
   <div class="app-bar-inner">
     <div class="brand">
       <span class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
-          <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6" />
-          <circle cx="12" cy="12" r="3.4" fill="currentColor" />
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none">
+          <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" />
+          <circle cx="12" cy="12" r="3.6" fill="currentColor" />
         </svg>
       </span>
-      <div class="brand-text">
-        <span class="brand-name">ninja&#8209;recorder</span>
-        <span class="brand-sub">VOD library</span>
-      </div>
+      <span class="brand-name">ninja&#8209;recorder</span>
+      <span class="brand-version selectable">v{settings.version}</span>
     </div>
 
-    <div class="status-strip" role="status" aria-live="polite">
-      <span class="status-pill" data-state={about.lcuPill.state}>
-        <span class="status-dot" aria-hidden="true"></span>
-        <span>{about.lcuPill.copy}</span>
-      </span>
-      <span class="status-pill" data-state={about.gamePill.state}>
-        <span class="status-dot" aria-hidden="true"></span>
-        <span>{about.gamePill.copy}</span>
-      </span>
-    </div>
+    <span class="app-bar-sep" aria-hidden="true"></span>
 
-    <button
-      type="button"
-      class="icon-btn ghost"
-      aria-label="Objectives"
-      title="Objectives"
-      onclick={() => showView("objectives")}
-    >
-      <svg
-        viewBox="0 0 24 24"
-        width="18"
-        height="18"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.7"
-        stroke-linecap="round"
-        stroke-linejoin="round"
+    <nav class="app-tabs" aria-label="Views">
+      <button
+        type="button"
+        class="app-tab"
+        aria-current={tab === "library" ? "page" : undefined}
+        onclick={() => showView("library")}
       >
-        <path d="M9 6h11" />
-        <path d="M9 12h11" />
-        <path d="M9 18h11" />
-        <path d="m3.5 6 1.5 1.5L7.5 5" />
-        <path d="m3.5 12 1.5 1.5L7.5 11" />
-        <path d="m3.5 18 1.5 1.5L7.5 17" />
-      </svg>
-    </button>
+        <svg
+          viewBox="0 0 24 24"
+          width="15"
+          height="15"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <rect x="3" y="4" width="18" height="16" rx="2" />
+          <path d="m10 9 5 3-5 3z" />
+        </svg>
+        Library
+      </button>
+      <button
+        type="button"
+        class="app-tab"
+        aria-current={tab === "objectives" ? "page" : undefined}
+        onclick={() => showView("objectives")}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          width="15"
+          height="15"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M9 6h11" />
+          <path d="M9 12h11" />
+          <path d="M9 18h11" />
+          <path d="m3.5 6 1.5 1.5L7.5 5" />
+          <path d="m3.5 12 1.5 1.5L7.5 11" />
+          <path d="m3.5 18 1.5 1.5L7.5 17" />
+        </svg>
+        Objectives
+      </button>
+    </nav>
+
+    <span class="app-bar-fill"></span>
+
+    <ClientStatus />
+
+    <span class="app-bar-sep" aria-hidden="true"></span>
 
     <button
       type="button"
       class="icon-btn ghost has-badge"
       aria-label="Settings"
+      aria-current={tab === "settings" ? "page" : undefined}
       title="Settings"
       onclick={() => showView("settings")}
     >
@@ -138,5 +177,7 @@ function openDevPortal() {
         </svg>
       </button>
     {/if}
+
+    <WindowControls />
   </div>
 </header>

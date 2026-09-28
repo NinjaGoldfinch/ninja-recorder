@@ -73,6 +73,7 @@ impl Stream {
                     connected: false,
                     phase: None,
                     summoner: None,
+                    profile_icon_id: None,
                     error: None,
                 }),
             }),
@@ -183,6 +184,7 @@ impl Stream {
                     connected: false,
                     phase: None,
                     summoner: None,
+                    profile_icon_id: None,
                     error: None,
                 },
             };

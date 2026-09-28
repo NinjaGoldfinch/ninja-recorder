@@ -135,6 +135,7 @@ export interface LcuStatus {
   connected: boolean;
   phase: string | null;
   summoner: string | null;
+  profile_icon_id: number | null;
   error: string | null;
 }
 
@@ -228,6 +229,7 @@ export interface IconSet {
   spells: Record<string, string>;
   spell_ids: Record<string, string>;
   runes: Record<string, string>;
+  profile_icons: Record<string, string>;
 }
 
 export interface ReconcileReport {

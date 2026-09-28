@@ -68,27 +68,30 @@ $effect(() => {
 
 <AppBar />
 
-<DaemonStrip />
+<!-- The app bar is the title bar and stays put; this is what scrolls. -->
+<div class="app-scroll">
+  <DaemonStrip />
 
-<CaptureStrip />
+  <CaptureStrip />
 
-<main class="container">
-  <section bind:this={libraryNode} id="library-view">
-    <Library />
-  </section>
+  <main class="container">
+    <section bind:this={libraryNode} id="library-view">
+      <Library />
+    </section>
 
-  <section bind:this={reviewNode} id="review-view" class="review-view" hidden>
-    <Review />
-  </section>
+    <section bind:this={reviewNode} id="review-view" class="review-view" hidden>
+      <Review />
+    </section>
 
-  <section bind:this={settingsNode} id="settings-view" class="view" hidden>
-    <Settings />
-  </section>
+    <section bind:this={settingsNode} id="settings-view" class="view" hidden>
+      <Settings />
+    </section>
 
-  <section bind:this={objectivesNode} id="objectives-view" class="view" hidden>
-    <Objectives />
-  </section>
-</main>
+    <section bind:this={objectivesNode} id="objectives-view" class="view" hidden>
+      <Objectives />
+    </section>
+  </main>
+</div>
 
 <QuitDialog bind:this={quitDialog} />
 <Toast />

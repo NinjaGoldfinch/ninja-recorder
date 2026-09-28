@@ -588,7 +588,13 @@ pub(crate) fn test_snapshot(ctx: &Arc<Ctx>) -> SnapshotSource {
         Snapshot::assemble(
             &ctx,
             0,
-            crate::core::LcuStatus { connected: false, phase: None, summoner: None, error: None },
+            crate::core::LcuStatus {
+                connected: false,
+                phase: None,
+                summoner: None,
+                profile_icon_id: None,
+                error: None,
+            },
         )
     })
 }

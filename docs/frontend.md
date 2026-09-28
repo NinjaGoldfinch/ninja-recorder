@@ -25,8 +25,10 @@ flowchart TB
     THEME["theme.ts<br/><small>owns: html[data-theme]</small>"]
     PREFS["prefs.ts<br/><small>owns: the preference cache</small>"]
     DESK["desktop.ts<br/><small>owns: the browser behaviours we suppress</small>"]
-    APP["lib/App.svelte<br/><small>the root: app bar, strip, five views,<br/>quit dialog, toast</small>"]
-    SHELL["lib/components/shell/<br/><small>AppBar, DaemonStrip, CaptureStrip,<br/>QuitDialog, Toast</small>"]
+    APP["lib/App.svelte<br/><small>the root: title bar, then a scroll box<br/>of strips and views; quit dialog, toast</small>"]
+    SHELL["lib/components/shell/<br/><small>AppBar (the title bar), ClientStatus,<br/>WindowControls, DaemonStrip,<br/>CaptureStrip, QuitDialog, Toast</small>"]
+    CLIENTS["lib/stores/client.svelte.ts<br/><small>owns: the poll's raw client<br/>and recorder answers</small>"]
+    SHELLP["lib/shell/<br/><small>client · pure, tested</small>"]
     STATUS["lib/stores/status.svelte.ts<br/><small>owns: the poll timer</small>"]
     DAEMONS["lib/stores/daemon.svelte.ts<br/><small>owns: whether the recorder is there</small>"]
     CAPS["lib/stores/capture.svelte.ts<br/><small>owns: what the last recording lost</small>"]
@@ -74,6 +76,7 @@ flowchart TB
     STATUS --> LIBS
     STATUS --> UPD
     STATUS --> ABOUT
+    STATUS --> CLIENTS
     STATUS --> BRIDGE
     APP --> SHELL
     APP --> LIBV
@@ -100,7 +103,12 @@ flowchart TB
     SHELL --> QUITS
     SHELL --> TOASTS
     SHELL --> UPD
-    SHELL --> ABOUT
+    SHELL --> CLIENTS
+    SHELL --> SHELLP
+    SHELL --> ICONS
+    SHELL --> LIBS
+    SHELL --> SETS
+    SHELL --> SETP
     LIBV --> LIBS
     LIBV --> LIBP
     LIBV --> ICONS
@@ -134,6 +142,8 @@ flowchart TB
     style QUITS fill:#fff3e0,stroke:#ef6c00
     style TOASTS fill:#fff3e0,stroke:#ef6c00
     style ABOUT fill:#fff3e0,stroke:#ef6c00
+    style CLIENTS fill:#fff3e0,stroke:#ef6c00
+    style SHELLP fill:#e8f5e9,stroke:#2e7d32
     style REVV fill:#fff3e0,stroke:#ef6c00
     style REVS fill:#fff3e0,stroke:#ef6c00
     style SETV fill:#fff3e0,stroke:#ef6c00
@@ -536,10 +546,11 @@ stateDiagram-v2
     [*] --> library
     library --> review: click a VOD card
     review --> library: back (saves the review first)
-    library --> objectives: objectives button
-    objectives --> library: back
+    library --> objectives: Objectives tab
+    objectives --> library: Library tab, or back
     library --> settings: settings button
     review --> settings: settings button
+    review --> objectives: Objectives tab
     settings --> library: close (always returns to library)
 ```
 
@@ -689,7 +700,7 @@ in it is sized from the room it actually has.
 
 ```mermaid
 flowchart TB
-    VIEW[".review-view<br/><small>fills the window under the app bar</small>"] --> HEAD[".review-header<br/><small>auto height</small>"]
+    VIEW[".review-view<br/><small>fills .app-scroll, the box under the title bar</small>"] --> HEAD[".review-header<br/><small>auto height</small>"]
     VIEW --> BODY[".review-body<br/><small>size container: cqw/cqh = the room left</small>"]
     BODY --> GRID[".review-layout<br/><small>player column | rail, minmax(22rem, 30rem)</small>"]
     GRID --> MAIN[".review-main<br/><small>inline-size container</small>"]
@@ -728,8 +739,8 @@ column widths and the timeline's growth are worked out from it too.
 Details that are load-bearing rather than tidy:
 
 - **The height comes down an unbroken flex chain from `<body>`.** `body` is
-  `100vh`, and `.container`, `.review-view` and `.review-body` each flex to
-  fill their parent. `.review-body` is a size container, so its content gives
+  `100vh`, and `.app-scroll` (the box under the title bar), `.container`,
+  `.review-view` and `.review-body` each flex to fill their parent. `.review-body` is a size container, so its content gives
   it no height: one plain block anywhere in that chain makes it zero, and the
   player and rail with it. `#app-root`, the element `App.svelte` mounts into,
   is `display: contents` for that reason, and `Review.layout.test.ts` builds
@@ -818,6 +829,7 @@ See [DEVELOPMENT.md §5.4](../DEVELOPMENT.md) for why the file is not cut, and
 | Item | Data Dragon | the numeric id the game reports |
 | Rune | Data Dragon | rune or tree id → an icon *path*, from an unversioned part of the CDN |
 | Summoner spell | Data Dragon | display name *and* numeric id → art key (`Flash`, `4`, `74`, `2202` → `SummonerFlash`) |
+| Profile icon | Data Dragon | the `profileIconId` the LCU reports for the signed-in account, via `LcuStatus::profile_icon_id`; drawn in the client card, an initial where the CDN has no art yet |
 
 Spells are the odd one out because `summoner.json` lists one entry per
 game-mode *variant* rather than one per spell: `Flash` is `SummonerFlash`,
@@ -1095,7 +1107,7 @@ a shipped build.
 | `list_recordings` | `Vec<RecordingRow>` | library grid |
 | `rescan_recordings` | `ReconcileReport` | library toolbar → rescan |
 | `backfill_match_metadata` | `BackfillReport` | settings → storage → fill in |
-| `resolve_icons` | `IconSet` | library row art, after the list paints |
+| `resolve_icons` | `IconSet` | library row art, after the list paints; the client card's profile icon |
 | `get_recording_markers` | `Vec<MarkerRow>` | review timeline |
 | `get_recording_samples` | `Vec<SampleRow>` | advantage curve |
 | `get_disk_usage` | `DiskUsage` | library stats bar |
@@ -1110,8 +1122,8 @@ a shipped build.
 | `list_audio_inputs` | `Vec<AudioInputDevice>` | settings → microphone picker |
 | `get_capture_backend` / `set_capture_backend` | `CaptureBackendStatus` | settings → advanced → capture backend |
 | `extract_audio_track` | path to a cached sidecar | review player, stem selection |
-| `lcu_status` | `LcuStatus` | header strip |
-| `game_state_status` | `SupervisorStatus` | header strip, About block |
+| `lcu_status` | `LcuStatus` | the title bar's client pill and card, About block |
+| `game_state_status` | `SupervisorStatus` | the client pill and card, About block |
 | `dev_open_portal` | nothing | the header's dev button, and the 🔎 on each library row (which passes a `recordingId` so the portal opens on it) |
 | `get_update_status` | `UpdateStatus` | settings → About (version + changelog), and the badge on the gear |
 | none | the `updateChannel` pref | the channel dropdown rides `get_ui_prefs`/`set_ui_pref`, so it needs no command of its own |
@@ -1340,6 +1352,76 @@ game clock is first seen to advance, which is not the same as `0`).
 Nothing sends one yet: WS3.1 is where a pipe exists to send it down. The type is
 declared now for the same reason the four unwired events are, which the table
 above records.
+
+## The title bar
+
+The main window has no native title bar (`lib.rs::create_main_window` builds it
+with `decorations(false)`; [DEVELOPMENT.md §5.5](../DEVELOPMENT.md) has why).
+`shell/AppBar.svelte` is the title bar instead, the full width of the window
+and 44px tall:
+
+```mermaid
+flowchart LR
+    BRAND["brand + version"] --> TABS["Library · Objectives<br/><small>tabs; the review lights Library</small>"]
+    TABS --> FILL["empty bar<br/><small>drag here</small>"]
+    FILL --> PILL["ClientStatus<br/><small>pill + hover card</small>"]
+    PILL --> ICONS["settings (update dot)<br/>dev portal, devtools only"]
+    ICONS --> WC["WindowControls<br/><small>minimise · maximise · close</small>"]
+```
+
+- **The whole bar drags the window.** The header carries
+  `data-tauri-drag-region="deep"`, and Tauri's drag script treats any button,
+  link or element with a `tabindex` inside it as a hole, so the tabs and the
+  pill need no marking. Double-clicking the bar maximises, which is the drag
+  script too. The four window permissions this needs are in
+  `capabilities/default.json`.
+- **Close is `close()`.** `WindowControls.svelte` raises `CloseRequested`
+  like the native button did, so close-to-tray, close-the-window and the quit
+  prompt (`on_window_event` in `lib.rs`) are untouched. Outside Tauri the
+  controls are left out.
+- **The body does not scroll; `.app-scroll` does.** `<body>` is exactly the
+  window, `#app-root` is `display: contents`, and everything under the bar
+  (the two strips and the views) sits in one scroll box. A page scrollbar
+  would otherwise run the window's height, through the bar and past the close
+  button. The review's fitted layout takes its height from that box, and
+  `Review.layout.test.ts` builds the same shell and fails if the box scrolls.
+
+### The client pill
+
+One pill replaces the two the header used to have (the Riot ID and "Waiting for
+a game"). `status.svelte.ts` keeps polling and writes the raw `LcuStatus` and
+`SupervisorStatus` to `stores/client.svelte.ts`; `lib/shell/client.ts` words
+them, and **the LCU's own phase names are never shown**:
+
+| LCU phase | Pill | Card's "Phase" row |
+|---|---|---|
+| `None` | Home · name | In the client |
+| `Lobby` | In lobby · name | In a lobby |
+| `Matchmaking` | In queue · name | Searching for a match |
+| `ReadyCheck` | Match found | Accept or decline |
+| `ChampSelect` | Champion select | Champion select |
+| `GameStart` | Loading in | Loading screen |
+| `InProgress` | In game (Loading in until capture starts) | In game |
+| `WaitingForStats` / `PreEndOfGame` / `EndOfGame` | Post-game · name | Waiting for stats / Honor and progression / Post-game lobby |
+| `Reconnect` | Reconnecting | Reconnect available |
+| anything else, including `Unknown("…")` | Connected · name | the value split into words |
+
+**The recorder beats the client**: while it records the pill is red with the
+clock ("Recording · 14:32"), and while it saves it says so. Before the first
+poll it says "Checking client…"; with no lockfile, "League closed"; when the
+client refuses, "Can't reach client".
+
+**The card** opens on hover or keyboard focus, and a click pins it until the
+next click, Escape or a click elsewhere. It shows the Riot ID with the tag
+drawn quieter, the account's profile icon, a five-step track (Lobby, Queue,
+Select, In game, Post) outside the home screen, the phase, the recorder, and
+the last recording's champion, result and age. **The recorder row says Ready**
+unless there is something to say: "Recording" or "Saving…", "Not running" or
+"Restart needed" when this window has lost the daemon, "Can't record" when the
+saved capture backend cannot be built (`settings/capture.ts`'s `refusalNote`),
+and "Software encoding" when the own backend fell back (its `softwareNote`).
+The reason is the chip's tooltip. The capture status is read once the daemon
+is reachable, since Settings only reads it when that view opens.
 
 ## Routing and the tray
 

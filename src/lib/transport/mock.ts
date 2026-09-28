@@ -317,7 +317,8 @@ const MOCKS: Record<string, unknown> = {
   lcu_status: {
     connected: true,
     phase: "None",
-    summoner: "FixtureSummoner",
+    summoner: "FixtureSummoner#OCE",
+    profile_icon_id: 29,
     error: null,
   } satisfies LcuStatus,
   game_state_status: {
