@@ -168,8 +168,9 @@ export interface Scoreboard {
   /** Absent when the live poller never matched us in `allPlayers`, in which
    *  case the row cannot say which half is ours and shows neither. */
   our_team?: string;
-  /** Ours only — the live API gives a full rune page for the active player
-   *  and a reduced one for everybody else. */
+  /** Our page, as every board already on disk carries it. Newer boards also
+   *  put a page on each player (`ScoreboardPlayer.runes`); read ours from
+   *  there first and fall back to this. */
   our_runes?: ScoreboardRunes;
 }
 
@@ -198,6 +199,16 @@ export interface ScoreboardPlayer {
   /** The same two spells as ids. A scoreboard captured live has names; one
    *  rebuilt from match history has ids. Either finds the art. */
   spell_ids?: number[];
+  /** Slot 6, the trinket, on its own (#346). Also still inside `items`, so
+   *  drawing it in its own box means taking this one id out of `items`.
+   *  Absent on boards written before it existed. */
+  trinket?: number | null;
+  /** Match history's `roleBoundItem`: boots for a bot laner, a quest-reward
+   *  token for every other role. Only a bot laner's is drawn. Absent on a
+   *  board captured live, which has no such slot. */
+  role_item?: number | null;
+  /** This player's keystone and trees. Absent on older boards. */
+  runes?: ScoreboardRunes | null;
 }
 
 export interface ScoreboardRunes {

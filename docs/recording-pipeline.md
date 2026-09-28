@@ -43,7 +43,7 @@ sequenceDiagram
         S->>S: MarkerTracker → new markers (kill, death, dragon …)
         S->>S: team_diff → one advantage sample
         S->>S: LiveSummary::absorb → champion, KDA, mode, outcome
-        S->>S: scoreboard (last good) → items, spells, runes
+        S->>S: scoreboard (last good) → items, trinket, spells, every player's runes
         S->>S: GameIdentity::absorb → game id, queue
         S->>D: write them as they arrive (so a crash keeps them)
         opt the response is unreadable (not a 404)

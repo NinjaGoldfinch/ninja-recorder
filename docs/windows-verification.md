@@ -984,14 +984,16 @@ modes here are silent, and the app's own UI will not show you most of them.
       sync across seeks, speed changes and pauses, and mute/volume behave.
       Confirm the sidecar cache lands in `recordings/audio-tracks/` and that
       deleting the VOD removes it.
-- [ ] **The two post-game LCU shapes, which no one here has seen.** Both
-      `/lol-end-of-game/v1/eog-stats-block` and
-      `/lol-match-history/v1/games/{gameId}` are modelled from the LCU's own
-      OpenAPI spec, not from a captured response. Run `dev_lcu_get` on each
-      after a real game, commit the trimmed responses under `fixtures/lcu/`,
-      and correct the parsers if they differ. Specifically: does the eog block
-      carry `teams[].isPlayerTeam`/`isWinningTeam`, and are its scoreboard keys
+- [ ] **The end-of-game block, which no one here has seen.**
+      `/lol-end-of-game/v1/eog-stats-block` is modelled from the LCU's own
+      OpenAPI spec, not from a captured response. Run `dev_lcu_get` on it
+      after a real game, commit the trimmed response under `fixtures/lcu/`,
+      and correct the parser if it differs. Specifically: does it carry
+      `teams[].isPlayerTeam`/`isWinningTeam`, and are its scoreboard keys
       really `CHAMPIONS_KILLED`/`NUM_DEATHS`/`ASSISTS`?
+      `/lol-match-history/v1/games/{gameId}` was on this line too and is done:
+      it is captured in `fixtures/lcu/match-history-game.json` (16.17) and
+      `match-history-paired.json` (16.19, with its live twin; #346).
 - [ ] **The deferred patch end to end.** Play a game, then watch the card fill
       in `role` and a queue label on its own within a minute of the finalize,
       with no manual refresh. `dev_patch_match_summary` drives the same path against

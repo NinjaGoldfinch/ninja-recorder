@@ -45,9 +45,10 @@ pub struct ActivePlayer {
     pub current_gold: f64,
     #[serde(default)]
     pub level: i64,
-    /// Our own runes. Only the active player gets these in full — the
-    /// other nine carry a reduced `runes` object — which is why the
-    /// scoreboard records runes for us and not for them.
+    /// Our own runes. Only the active player gets these in full; the other
+    /// nine carry a reduced `runes` object (`PlayerEntry::runes`). Reduced
+    /// is still the keystone and both trees, which is everything a row
+    /// draws, so the scoreboard records a page for every player.
     #[serde(rename = "fullRunes", default)]
     pub full_runes: FullRunes,
 }
@@ -122,6 +123,12 @@ pub struct PlayerEntry {
     pub summoner_spells: SummonerSpells,
     #[serde(default)]
     pub scores: PlayerScores,
+    /// The reduced page every player carries: the keystone and the two
+    /// trees, and nothing else. That is all a row draws, so it is enough for
+    /// the opponent's runes (#346). `activePlayer.fullRunes` is the same
+    /// three plus the rest of the page, for us only.
+    #[serde(default, deserialize_with = "lenient_runes")]
+    pub runes: FullRunes,
 }
 
 /// One inventory slot. Only the id and the slot are read: the id is what
@@ -396,6 +403,25 @@ where
         Some(serde_json::Value::Number(n)) => n.as_i64(),
         Some(serde_json::Value::String(s)) => s.trim().parse().ok(),
         _ => None,
+    })
+}
+
+/// `allPlayers[].runes`, where a page that does not parse costs the page.
+///
+/// `FullRunes` defaults every field, but `default` only covers a missing
+/// key: a `null` keystone, or a page sent as something other than an object,
+/// would otherwise fail the whole `PlayerEntry` and take the poll with it.
+/// Nine of the ten pages are someone else's and none is worth that.
+fn lenient_runes<'de, D>(deserializer: D) -> Result<FullRunes, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(match Option::<serde_json::Value>::deserialize(deserializer)? {
+        None | Some(serde_json::Value::Null) => FullRunes::default(),
+        Some(value) => FullRunes::deserialize(&value).unwrap_or_else(|e| {
+            debug!("live-client", "skipped an unreadable allPlayers[].runes ({e}): {value}");
+            FullRunes::default()
+        }),
     })
 }
 
@@ -694,8 +720,10 @@ pub struct Scoreboard {
     /// neither.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub our_team: Option<String>,
-    /// Ours only: the live API gives the full rune page for the active
-    /// player and a reduced one for everybody else.
+    /// Our page. Every player's is on `ScoreboardPlayer::runes` now, and
+    /// this is still written because it is the only page every board
+    /// already on disk carries: a reader takes ours from the player first
+    /// and falls back to this.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub our_runes: Option<ScoreboardRunes>,
 }
@@ -750,7 +778,35 @@ pub struct ScoreboardPlayer {
         deserialize_with = "lenient_scoreboard_spell_ids"
     )]
     pub spell_ids: Vec<i64>,
+    /// Slot 6, the trinket, named on its own so the row can put it in the
+    /// same box on every row (#346). `items` is flattened, so without this
+    /// the trinket is only "probably the last id", and an empty slot 5 makes
+    /// it indistinguishable from an item.
+    ///
+    /// **Also still inside `items`**, so a build that predates this field
+    /// reads a newer board exactly as before. `None` when the slot was empty,
+    /// and on every board written before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trinket: Option<i64>,
+    /// Match history's `roleBoundItem`: the role quest's slot. Boots for a
+    /// bot laner; for every other role a quest-reward token that costs
+    /// nothing and is not on the map, which the row does not draw.
+    ///
+    /// **Match history only.** The Live Client reports slots 0-6 and nothing
+    /// for this one, so a board captured live never has it and a board the
+    /// LCU rebuilt is the one that does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_item: Option<i64>,
+    /// This player's keystone and trees. Every player now, not just us:
+    /// both sources carry all ten. `Scoreboard::our_runes` stays beside it,
+    /// because every board already on disk has that and nothing here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runes: Option<ScoreboardRunes>,
 }
+
+/// Where the trinket lives, in both sources: `slot` 6 in the Live Client,
+/// `item6` in match history.
+pub const TRINKET_SLOT: i64 = 6;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 pub struct ScoreboardRunes {
@@ -800,6 +856,13 @@ pub fn scoreboard(snapshot: &AllGameData) -> Option<Scoreboard> {
                 // to be it and a build that reshuffles between polls would
                 // make the row flicker.
                 items.sort_by_key(|(slot, _)| *slot);
+                // Read before `items` is flattened, which is the moment the
+                // slot number stops existing. An empty slot is absent here
+                // rather than zero, so there is nothing to mistake for one.
+                let trinket = items
+                    .iter()
+                    .find(|(slot, _)| *slot == TRINKET_SLOT)
+                    .map(|(_, id)| *id);
 
                 ScoreboardPlayer {
                     champion: normalize_champion(&player.champion_name),
@@ -822,21 +885,29 @@ pub fn scoreboard(snapshot: &AllGameData) -> Option<Scoreboard> {
                     // The live API gives names; ids are the match-history
                     // rebuild's half of this.
                     spell_ids: Vec::new(),
+                    trinket,
+                    // Not in this source at all: see the field.
+                    role_item: None,
+                    runes: scoreboard_runes(&player.runes),
                 }
             })
             .collect(),
         our_team: us.map(|p| p.team.clone()).filter(|t| !t.is_empty()),
-        our_runes: snapshot.active_player.as_ref().and_then(|active| {
-            let runes = &active.full_runes;
-            // A rune page with no keystone id is the loading screen's
-            // empty shape, not a page worth storing.
-            (runes.keystone.id > 0).then(|| ScoreboardRunes {
-                keystone_id: runes.keystone.id,
-                keystone: runes.keystone.display_name.clone(),
-                primary_tree_id: runes.primary_tree.id,
-                secondary_tree_id: runes.secondary_tree.id,
-            })
-        }),
+        our_runes: snapshot
+            .active_player
+            .as_ref()
+            .and_then(|active| scoreboard_runes(&active.full_runes)),
+    })
+}
+
+/// A page as the scoreboard stores it. A page with no keystone id is the
+/// loading screen's empty shape, not a page worth storing.
+fn scoreboard_runes(runes: &FullRunes) -> Option<ScoreboardRunes> {
+    (runes.keystone.id > 0).then(|| ScoreboardRunes {
+        keystone_id: runes.keystone.id,
+        keystone: runes.keystone.display_name.clone(),
+        primary_tree_id: runes.primary_tree.id,
+        secondary_tree_id: runes.secondary_tree.id,
     })
 }
 
@@ -1856,6 +1927,96 @@ mod tests {
             .count();
         assert_eq!(named, 1, "everyone but us should be anonymised");
         assert!(snapshot.all_players.iter().all(|p| !p.summoner_name.is_empty()));
+    }
+
+    /// Ranked game 711444953 at 31:34, captured live. Its post-game half is
+    /// `fixtures/lcu/match-history-paired.json`, and `lcu::match_data` holds
+    /// the two against each other.
+    fn paired() -> AllGameData {
+        let json = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/live-client/allgamedata-paired.json"
+        ));
+        serde_json::from_str(json).expect("the paired payload must deserialize")
+    }
+
+    fn player<'a>(board: &'a Scoreboard, champion: &str) -> &'a ScoreboardPlayer {
+        board.players.iter().find(|p| p.champion == champion).unwrap()
+    }
+
+    /// The trinket is `slot: 6` for all ten, and is kept in `items` as well.
+    #[test]
+    fn the_trinket_is_slot_six() {
+        let board = scoreboard(&paired()).unwrap();
+        assert_eq!(board.players.len(), 10);
+        for p in &board.players {
+            let trinket = p.trinket.expect("every player carried a trinket");
+            assert!([3340, 3363, 3364].contains(&trinket), "{}: {trinket}", p.champion);
+            assert_eq!(p.items.last(), Some(&trinket), "{}", p.champion);
+        }
+    }
+
+    /// Live, an empty slot is *absent*, not zero. Twitch has no slot 5, and
+    /// the trinket is still found by its slot rather than its position in the
+    /// list.
+    #[test]
+    fn a_missing_slot_does_not_move_the_trinket() {
+        let board = scoreboard(&paired()).unwrap();
+        let twitch = player(&board, "Twitch");
+        assert_eq!(twitch.items, vec![1086, 6676, 3031, 2512, 3035, 3340]);
+        assert_eq!(twitch.trinket, Some(3340));
+    }
+
+    /// Kalista's boots are match history's `roleBoundItem` and appear nowhere
+    /// in this payload: the Live Client has no role slot. So a live board
+    /// never claims one.
+    #[test]
+    fn a_live_board_has_no_role_slot() {
+        let board = scoreboard(&paired()).unwrap();
+        assert!(board.players.iter().all(|p| p.role_item.is_none()));
+        let kalista = player(&board, "Kalista");
+        assert!(!kalista.items.contains(&3008), "the boots are not in the live inventory");
+    }
+
+    /// Every player's page, from `allPlayers[].runes`, and ours agrees with
+    /// the `our_runes` older boards rely on.
+    #[test]
+    fn every_player_carries_a_rune_page() {
+        let board = scoreboard(&paired()).unwrap();
+        assert!(board.players.iter().all(|p| p.runes.is_some()));
+
+        let qiyana = player(&board, "Qiyana").runes.clone().unwrap();
+        assert_eq!(
+            (qiyana.keystone_id, qiyana.keystone.as_str(), qiyana.primary_tree_id, qiyana.secondary_tree_id),
+            (8369, "First Strike", 8300, 8100)
+        );
+
+        let us = board.players.iter().find(|p| p.is_us).expect("we are Viego");
+        assert_eq!(us.champion, "Viego");
+        assert_eq!(us.runes, board.our_runes);
+    }
+
+    /// One malformed page costs that page. It must not fail the player, and
+    /// with it the poll: nine of the ten pages are someone else's.
+    #[test]
+    fn an_unreadable_rune_page_costs_only_the_page() {
+        for runes in [
+            r#"null"#,
+            r#""Lethal Tempo""#,
+            r#"{"keystone": null, "primaryRuneTree": {"id": 8000}}"#,
+            r#"{"keystone": {"id": "not a number"}}"#,
+        ] {
+            let json = format!(
+                r#"{{"allPlayers": [{{"championName": "Twitch", "team": "CHAOS",
+                    "items": [{{"itemID": 3340, "slot": 6}}], "runes": {runes}}}],
+                    "events": {{"Events": []}}, "gameData": {{"gameMode": "CLASSIC", "gameTime": 60.0}}}}"#
+            );
+            let snapshot: AllGameData =
+                serde_json::from_str(&json).unwrap_or_else(|e| panic!("{runes} sank the poll: {e}"));
+            let board = scoreboard(&snapshot).unwrap();
+            assert_eq!(board.players[0].runes, None, "{runes}");
+            assert_eq!(board.players[0].trinket, Some(3340), "{runes}: the rest survives");
+        }
     }
 
     /// Marker extraction over a real game, cross-checked against a number

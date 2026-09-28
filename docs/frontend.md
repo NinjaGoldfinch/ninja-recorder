@@ -351,7 +351,7 @@ champion ids rather than display names, settled numbers rather than the last
 poll. It is *worse* at position: that comes from Riot's `lane`/`role` inference
 and is sometimes absent. Replacing the board wholesale therefore threw away the
 positions the live capture had, and every patched recording lost its matchup.
-`prefer_live_positions` keeps them, matched on team **and** champion together
+`prefer_live_fields` keeps them, matched on team **and** champion together
 since neither is unique alone; a blind-pick game can have the same champion on
 both sides.
 

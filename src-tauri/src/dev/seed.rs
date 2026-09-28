@@ -327,8 +327,18 @@ fn seeded_scoreboard(plan: &RecordingPlan) -> crate::live_client::Scoreboard {
         "Ahri", "Garen", "Blitzcrank", "Jinx", "Thresh", "Zed", "Lux", "Nautilus", "Akali",
         "Pantheon",
     ];
-    const ITEMS: [i64; 6] = [3089, 3157, 3020, 3135, 3116, 3363];
+    const ITEMS: [i64; 5] = [3089, 3157, 3020, 3135, 3116];
+    const TRINKET: i64 = 3363;
     const SPELLS: [&str; 2] = ["Flash", "Ignite"];
+    const POSITIONS: [&str; 5] = ["Top", "Jungle", "Middle", "Bottom", "Support"];
+    // What match history really puts in `roleBoundItem` (16.19): boots for
+    // the bot laner, a quest-reward token for everyone else. The tokens are
+    // seeded so the row's "only bot lane draws this slot" rule is exercised,
+    // not just the happy case.
+    const ROLE_ITEMS: [i64; 5] = [1220, 1209, 1206, 3006, 1208];
+    // Keystone and the tree it belongs to, so the pair is a real page.
+    const KEYSTONES: [(i64, i64); 5] =
+        [(8010, 8000), (8112, 8100), (8229, 8200), (8008, 8000), (8465, 8400)];
 
     let ours = plan.champion.clone();
     let players = CAST
@@ -353,15 +363,23 @@ fn seeded_scoreboard(plan: &RecordingPlan) -> crate::live_client::Scoreboard {
                 // Five positions per side, in the cast's order, so a seeded
                 // library draws a real matchup rather than an empty one —
                 // the block is meant to be exercised without playing a game.
-                position: Some(
-                    ["Top", "Jungle", "Middle", "Bottom", "Support"][i % 5].to_string(),
-                ),
-                items: ITEMS[..(4 + i % 3)].to_vec(),
+                position: Some(POSITIONS[i % 5].to_string()),
+                // The trinket stays inside `items` as well, as both writers
+                // leave it.
+                items: ITEMS[..(3 + i % 3)].iter().copied().chain([TRINKET]).collect(),
                 spells: SPELLS.iter().map(|s| (*s).to_string()).collect(),
                 // Names, matching a live capture. The match-history rebuild
                 // is the half that carries ids, and a seeded row is
                 // standing in for a recording the app made itself.
                 spell_ids: Vec::new(),
+                trinket: Some(TRINKET),
+                role_item: Some(ROLE_ITEMS[i % 5]),
+                runes: Some(ScoreboardRunes {
+                    keystone_id: KEYSTONES[i % 5].0,
+                    keystone: String::new(),
+                    primary_tree_id: KEYSTONES[i % 5].1,
+                    secondary_tree_id: 8300,
+                }),
             }
         })
         .collect();

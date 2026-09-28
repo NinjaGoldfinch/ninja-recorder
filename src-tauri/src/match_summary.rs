@@ -190,9 +190,10 @@ fn outcome(win: bool) -> &'static str {
     }
 }
 
-/// Gives the live capture's position back to a rebuilt scoreboard.
+/// Gives the live capture's answers back to a rebuilt scoreboard: its
+/// position, its trinket and its rune page.
 ///
-/// **The live value wins where both exist**, which is the rule `role` has
+/// **Position: the live value wins where both exist**, which is the rule `role` has
 /// followed all along and states in `update_match_metadata`: Live Client Data
 /// reports where we actually played, while the LCU's `timeline.lane`/`role` is
 /// Riot inferring it afterwards from where time was spent. *The inference is a
@@ -213,7 +214,17 @@ fn outcome(win: bool) -> &'static str {
 /// Idempotent across re-runs. The carried value is written back into the
 /// board, so a second patch reads it as the previous board's answer and keeps
 /// it; the live position propagates rather than decaying to the inference.
-fn prefer_live_positions(db: &Db, recording_id: i64, players: &mut [ScoreboardPlayer]) {
+///
+/// **Trinket and runes: the live value only fills a gap.** Both sources read
+/// the same slot and the same page, so neither is an inference and the LCU's
+/// is not wrong where it exists; what the replace must not do is erase one
+/// the LCU's document happens not to carry, which is the same quiet loss
+/// positions suffered (#346).
+///
+/// **`role_item` is not carried at all.** The Live Client has no such slot,
+/// so a live board never holds one to give back, and the LCU's value, or its
+/// absence, is the only answer there is.
+fn prefer_live_fields(db: &Db, recording_id: i64, players: &mut [ScoreboardPlayer]) {
     let Ok(Some(row)) = db.get_recording(recording_id) else {
         return;
     };
@@ -239,6 +250,12 @@ fn prefer_live_positions(db: &Db, recording_id: i64, players: &mut [ScoreboardPl
         // left at that point.
         if old.position.is_some() {
             player.position = old.position.clone();
+        }
+        if player.trinket.is_none() {
+            player.trinket = old.trinket;
+        }
+        if player.runes.is_none() {
+            player.runes = old.runes.clone();
         }
     }
 }
@@ -293,7 +310,7 @@ async fn write_scoreboard(
     // better source. Replacing the whole scoreboard threw it away, and a row
     // with no positions has no lane opponent — so the matchup silently
     // emptied on every recording the deferred patch touched.
-    prefer_live_positions(db, recording_id, &mut players);
+    prefer_live_fields(db, recording_id, &mut players);
 
     let us = participants.iter().find(|p| p.is_us);
     let scoreboard = Scoreboard {
@@ -344,18 +361,22 @@ pub(crate) async fn scoreboard_player(
         // need the CDN in a path that otherwise only talks to the client.
         spells: Vec::new(),
         spell_ids: participant.spell_ids.clone(),
+        trinket: participant.trinket,
+        role_item: participant.role_item,
+        runes: runes_of(participant),
     }
 }
 
-/// Our rune page, if match history said anything about it. A page with no
-/// keystone is the shape of a response that did not carry perks, not a
-/// game played without one.
-pub(crate) fn runes_of(us: &lcu::ParticipantSummary) -> Option<ScoreboardRunes> {
+/// A participant's rune page, if match history said anything about it. A
+/// page with no keystone is the shape of a response that did not carry
+/// perks, not a game played without one. Called for every participant:
+/// match history carries all ten pages.
+pub(crate) fn runes_of(participant: &lcu::ParticipantSummary) -> Option<ScoreboardRunes> {
     Some(ScoreboardRunes {
-        keystone_id: us.keystone_id?,
+        keystone_id: participant.keystone_id?,
         keystone: String::new(),
-        primary_tree_id: us.primary_tree_id.unwrap_or(0),
-        secondary_tree_id: us.secondary_tree_id.unwrap_or(0),
+        primary_tree_id: participant.primary_tree_id.unwrap_or(0),
+        secondary_tree_id: participant.secondary_tree_id.unwrap_or(0),
     })
 }
 
@@ -1248,7 +1269,7 @@ mod tests {
             board_player("Viego", "ORDER", None),
             board_player("Vi", "CHAOS", None),
         ];
-        prefer_live_positions(&db, id, &mut rebuilt);
+        prefer_live_fields(&db, id, &mut rebuilt);
 
         assert_eq!(rebuilt[0].position.as_deref(), Some("Jungle"));
         assert_eq!(rebuilt[1].position.as_deref(), Some("Jungle"));
@@ -1268,7 +1289,7 @@ mod tests {
         let id = a_row_with_scoreboard(&db, &[board_player("Viego", "ORDER", Some("Jungle"))]);
 
         let mut rebuilt = vec![board_player("Viego", "ORDER", Some("Top"))];
-        prefer_live_positions(&db, id, &mut rebuilt);
+        prefer_live_fields(&db, id, &mut rebuilt);
         assert_eq!(rebuilt[0].position.as_deref(), Some("Jungle"));
     }
 
@@ -1280,7 +1301,7 @@ mod tests {
         let id = a_row_with_scoreboard(&db, &[board_player("Viego", "ORDER", None)]);
 
         let mut rebuilt = vec![board_player("Viego", "ORDER", Some("Jungle"))];
-        prefer_live_positions(&db, id, &mut rebuilt);
+        prefer_live_fields(&db, id, &mut rebuilt);
         assert_eq!(rebuilt[0].position.as_deref(), Some("Jungle"));
     }
 
@@ -1294,7 +1315,7 @@ mod tests {
 
         // First rebuild: the inference is overridden.
         let mut first = vec![board_player("Viego", "ORDER", Some("Top"))];
-        prefer_live_positions(&db, id, &mut first);
+        prefer_live_fields(&db, id, &mut first);
         let board = Scoreboard {
             our_team: Some("ORDER".into()),
             our_runes: None,
@@ -1304,7 +1325,7 @@ mod tests {
 
         // Second rebuild, against the board the first one wrote.
         let mut second = vec![board_player("Viego", "ORDER", Some("Top"))];
-        prefer_live_positions(&db, id, &mut second);
+        prefer_live_fields(&db, id, &mut second);
         assert_eq!(second[0].position.as_deref(), Some("Jungle"), "must not decay");
     }
 
@@ -1326,7 +1347,7 @@ mod tests {
             board_player("Yasuo", "CHAOS", None),
             board_player("Yasuo", "ORDER", None),
         ];
-        prefer_live_positions(&db, id, &mut rebuilt);
+        prefer_live_fields(&db, id, &mut rebuilt);
         assert_eq!(rebuilt[0].position.as_deref(), Some("Top"), "the CHAOS one");
         assert_eq!(rebuilt[1].position.as_deref(), Some("Middle"), "the ORDER one");
     }
@@ -1346,7 +1367,7 @@ mod tests {
         );
 
         let mut rebuilt = vec![board_player("Yasuo", "ORDER", None)];
-        prefer_live_positions(&db, id, &mut rebuilt);
+        prefer_live_fields(&db, id, &mut rebuilt);
         assert_eq!(rebuilt[0].position, None);
     }
 
@@ -1364,7 +1385,98 @@ mod tests {
             .unwrap();
 
         let mut rebuilt = vec![board_player("Viego", "ORDER", None)];
-        prefer_live_positions(&db, id, &mut rebuilt);
+        prefer_live_fields(&db, id, &mut rebuilt);
         assert_eq!(rebuilt[0].position, None);
+    }
+
+    // --- trinket, runes and the role slot (#346) ---------------------
+
+    fn page(keystone_id: i64) -> ScoreboardRunes {
+        ScoreboardRunes {
+            keystone_id,
+            keystone: String::new(),
+            primary_tree_id: 8000,
+            secondary_tree_id: 8200,
+        }
+    }
+
+    /// The same quiet loss positions suffered: a document without the field
+    /// must not erase what the live capture read.
+    #[test]
+    fn a_trinket_and_runes_the_lcu_lacks_are_kept_from_the_live_capture() {
+        let db = Db::open_temporary().unwrap();
+        let live = ScoreboardPlayer {
+            trinket: Some(3340),
+            runes: Some(page(9923)),
+            ..board_player("Viego", "ORDER", Some("Jungle"))
+        };
+        let id = a_row_with_scoreboard(&db, &[live]);
+
+        let mut rebuilt = vec![board_player("Viego", "ORDER", None)];
+        prefer_live_fields(&db, id, &mut rebuilt);
+        assert_eq!(rebuilt[0].trinket, Some(3340));
+        assert_eq!(rebuilt[0].runes.as_ref().map(|r| r.keystone_id), Some(9923));
+    }
+
+    /// Unlike a position, neither of these is an inference: both sources read
+    /// the same slot and the same page. So the LCU's own value stands, and the
+    /// live one only fills a gap.
+    #[test]
+    fn the_lcus_trinket_and_runes_are_not_overwritten() {
+        let db = Db::open_temporary().unwrap();
+        let live = ScoreboardPlayer {
+            trinket: Some(3340),
+            runes: Some(page(9923)),
+            ..board_player("Viego", "ORDER", None)
+        };
+        let id = a_row_with_scoreboard(&db, &[live]);
+
+        let mut rebuilt = vec![ScoreboardPlayer {
+            trinket: Some(3364),
+            runes: Some(page(8010)),
+            ..board_player("Viego", "ORDER", None)
+        }];
+        prefer_live_fields(&db, id, &mut rebuilt);
+        assert_eq!(rebuilt[0].trinket, Some(3364));
+        assert_eq!(rebuilt[0].runes.as_ref().map(|r| r.keystone_id), Some(8010));
+    }
+
+    /// The Live Client has no role slot, so there is nothing to carry, and a
+    /// value that somehow sat on the old board must not outlive the LCU saying
+    /// there is none. The LCU is the only source of this field.
+    #[test]
+    fn the_role_item_is_the_lcus_alone() {
+        let db = Db::open_temporary().unwrap();
+        let old = ScoreboardPlayer {
+            role_item: Some(3006),
+            ..board_player("Twitch", "CHAOS", Some("Bottom"))
+        };
+        let id = a_row_with_scoreboard(&db, &[old]);
+
+        let mut rebuilt = vec![board_player("Twitch", "CHAOS", None)];
+        prefer_live_fields(&db, id, &mut rebuilt);
+        assert_eq!(rebuilt[0].role_item, None);
+    }
+
+    /// Every board on disk was written before these fields existed. It has to
+    /// read back with all three absent and nothing else disturbed, and a new
+    /// board must not write keys for values it does not have, so that a build
+    /// predating the fields reads it exactly as it reads an old one.
+    #[test]
+    fn boards_from_before_the_new_fields_read_back_unchanged() {
+        let old = r#"{"players":[{"champion":"Viego","team":"ORDER","is_us":true,
+            "level":17,"kills":11,"deaths":3,"assists":5,"cs":197,
+            "position":"Jungle","items":[6676,3036,3340],"spells":["Flash"]}],
+            "our_team":"ORDER"}"#;
+        let board: Scoreboard = serde_json::from_str(old).unwrap();
+        let us = &board.players[0];
+        assert_eq!((us.trinket, us.role_item), (None, None));
+        assert!(us.runes.is_none());
+        assert_eq!(us.items, vec![6676, 3036, 3340], "items keep their old meaning");
+
+        let written = serde_json::to_string(&board).unwrap();
+        for key in ["trinket", "role_item", "runes"] {
+            assert!(!written.contains(key), "{key} written with no value: {written}");
+        }
     }
 }

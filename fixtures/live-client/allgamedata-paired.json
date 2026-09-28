@@ -1,0 +1,1009 @@
+{
+  "_comment": "Trimmed from a real /liveclientdata/allgamedata response captured at the end of a ranked game on patch 16.19 (game 711444953, gameTime 1894 of 1897). Its post-game half is fixtures/lcu/match-history-paired.json: the same game, from match history, so a test can hold the two sources against each other (#346). Kept: every allPlayers field the parsers read, with values as sent; activePlayer's identity, gold, level and rune page; gameData. Dropped: activePlayer.abilities and championStats, each item's canUse/consumable/raw* strings, each rune's raw* strings, skins, respawn timers, and all but three events (the marker path is pinned by captured-allgamedata.json). Only the active player is named, as the client sends it: the other nine are anonymised at source (riotId \"#\", summonerName = champion). What this file establishes: item slots run 0-6 with the trinket at 6, an empty slot is absent rather than zero (Twitch has no slot 5), there is no role-bound slot, and every player carries runes.",
+  "activePlayer": {
+    "currentGold": 1649.930419921875,
+    "fullRunes": {
+      "generalRunes": [
+        {
+          "displayName": "Hail of Blades",
+          "id": 9923
+        },
+        {
+          "displayName": "Sudden Impact",
+          "id": 8143
+        },
+        {
+          "displayName": "Sixth Sense",
+          "id": 8137
+        },
+        {
+          "displayName": "Treasure Hunter",
+          "id": 8135
+        },
+        {
+          "displayName": "Triumph",
+          "id": 9111
+        },
+        {
+          "displayName": "Legend: Alacrity",
+          "id": 9104
+        }
+      ],
+      "keystone": {
+        "displayName": "Hail of Blades",
+        "id": 9923
+      },
+      "primaryRuneTree": {
+        "displayName": "Domination",
+        "id": 8100
+      },
+      "secondaryRuneTree": {
+        "displayName": "Precision",
+        "id": 8000
+      },
+      "statRunes": [
+        {
+          "id": 5005
+        },
+        {
+          "id": 5008
+        },
+        {
+          "id": 5001
+        }
+      ]
+    },
+    "level": 17,
+    "riotId": "NinjaGoldfinch#OCENZ",
+    "riotIdGameName": "NinjaGoldfinch",
+    "riotIdTagLine": "OCENZ",
+    "summonerName": "NinjaGoldfinch#OCENZ",
+    "teamRelativeColors": false
+  },
+  "allPlayers": [
+    {
+      "championName": "Volibear",
+      "isBot": false,
+      "isDead": false,
+      "items": [
+        {
+          "count": 1,
+          "displayName": "Plated Steelcaps",
+          "itemID": 3047,
+          "price": 600,
+          "slot": 0
+        },
+        {
+          "count": 1,
+          "displayName": "Zhonya's Hourglass",
+          "itemID": 3157,
+          "price": 450,
+          "slot": 1
+        },
+        {
+          "count": 1,
+          "displayName": "Hextech Gunblade",
+          "itemID": 3146,
+          "price": 600,
+          "slot": 2
+        },
+        {
+          "count": 1,
+          "displayName": "Terminus",
+          "itemID": 3302,
+          "price": 1100,
+          "slot": 3
+        },
+        {
+          "count": 1,
+          "displayName": "Guinsoo's Rageblade",
+          "itemID": 3124,
+          "price": 1025,
+          "slot": 4
+        },
+        {
+          "count": 1,
+          "displayName": "Statikk Shiv",
+          "itemID": 3087,
+          "price": 625,
+          "slot": 5
+        },
+        {
+          "count": 1,
+          "displayName": "Stealth Ward",
+          "itemID": 3340,
+          "price": 0,
+          "slot": 6
+        }
+      ],
+      "level": 20,
+      "position": "TOP",
+      "rawChampionName": "game_character_displayname_Volibear",
+      "riotId": "#",
+      "riotIdGameName": "",
+      "riotIdTagLine": "",
+      "runes": {
+        "keystone": {
+          "displayName": "Lethal Tempo",
+          "id": 8008
+        },
+        "primaryRuneTree": {
+          "displayName": "Precision",
+          "id": 8000
+        },
+        "secondaryRuneTree": {
+          "displayName": "Sorcery",
+          "id": 8200
+        }
+      },
+      "scores": {
+        "assists": 3,
+        "creepScore": 300,
+        "deaths": 5,
+        "kills": 16,
+        "wardScore": 33.152957916259766
+      },
+      "summonerName": "Volibear",
+      "summonerSpells": {
+        "summonerSpellOne": {
+          "displayName": "Flash"
+        },
+        "summonerSpellTwo": {
+          "displayName": "Ignite"
+        }
+      },
+      "team": "ORDER"
+    },
+    {
+      "championName": "Viego",
+      "isBot": false,
+      "isDead": true,
+      "items": [
+        {
+          "count": 1,
+          "displayName": "The Collector",
+          "itemID": 6676,
+          "price": 525,
+          "slot": 0
+        },
+        {
+          "count": 1,
+          "displayName": "Lord Dominik's Regards",
+          "itemID": 3036,
+          "price": 550,
+          "slot": 1
+        },
+        {
+          "count": 1,
+          "displayName": "Immortal Shieldbow",
+          "itemID": 6673,
+          "price": 825,
+          "slot": 2
+        },
+        {
+          "count": 1,
+          "displayName": "Mercury's Treads",
+          "itemID": 3111,
+          "price": 550,
+          "slot": 3
+        },
+        {
+          "count": 1,
+          "displayName": "B. F. Sword",
+          "itemID": 1038,
+          "price": 1300,
+          "slot": 4
+        },
+        {
+          "count": 1,
+          "displayName": "Pickaxe",
+          "itemID": 1037,
+          "price": 875,
+          "slot": 5
+        },
+        {
+          "count": 1,
+          "displayName": "Stealth Ward",
+          "itemID": 3340,
+          "price": 0,
+          "slot": 6
+        }
+      ],
+      "level": 17,
+      "position": "JUNGLE",
+      "rawChampionName": "game_character_displayname_Viego",
+      "riotId": "NinjaGoldfinch#OCENZ",
+      "riotIdGameName": "NinjaGoldfinch",
+      "riotIdTagLine": "OCENZ",
+      "runes": {
+        "keystone": {
+          "displayName": "Hail of Blades",
+          "id": 9923
+        },
+        "primaryRuneTree": {
+          "displayName": "Domination",
+          "id": 8100
+        },
+        "secondaryRuneTree": {
+          "displayName": "Precision",
+          "id": 8000
+        }
+      },
+      "scores": {
+        "assists": 5,
+        "creepScore": 190,
+        "deaths": 3,
+        "kills": 11,
+        "wardScore": 28.969453811645508
+      },
+      "summonerName": "NinjaGoldfinch#OCENZ",
+      "summonerSpells": {
+        "summonerSpellOne": {
+          "displayName": "Primal Smite"
+        },
+        "summonerSpellTwo": {
+          "displayName": "Flash"
+        }
+      },
+      "team": "ORDER"
+    },
+    {
+      "championName": "Hwei",
+      "isBot": false,
+      "isDead": false,
+      "items": [
+        {
+          "count": 1,
+          "displayName": "Needlessly Large Rod",
+          "itemID": 1058,
+          "price": 1200,
+          "slot": 0
+        },
+        {
+          "count": 1,
+          "displayName": "Shadowflame",
+          "itemID": 4645,
+          "price": 900,
+          "slot": 1
+        },
+        {
+          "count": 1,
+          "displayName": "Spellslinger's Shoes",
+          "itemID": 3175,
+          "price": 0,
+          "slot": 2
+        },
+        {
+          "count": 1,
+          "displayName": "Blackfire Torch",
+          "itemID": 2503,
+          "price": 700,
+          "slot": 3
+        },
+        {
+          "count": 1,
+          "displayName": "Dark Seal",
+          "itemID": 1082,
+          "price": 350,
+          "slot": 4
+        },
+        {
+          "count": 1,
+          "displayName": "Needlessly Large Rod",
+          "itemID": 1058,
+          "price": 1200,
+          "slot": 5
+        },
+        {
+          "count": 1,
+          "displayName": "Farsight Alteration",
+          "itemID": 3363,
+          "price": 0,
+          "slot": 6
+        }
+      ],
+      "level": 17,
+      "position": "MIDDLE",
+      "rawChampionName": "game_character_displayname_Hwei",
+      "riotId": "#",
+      "riotIdGameName": "",
+      "riotIdTagLine": "",
+      "runes": {
+        "keystone": {
+          "displayName": "Arcane Comet",
+          "id": 8229
+        },
+        "primaryRuneTree": {
+          "displayName": "Sorcery",
+          "id": 8200
+        },
+        "secondaryRuneTree": {
+          "displayName": "Precision",
+          "id": 8000
+        }
+      },
+      "scores": {
+        "assists": 11,
+        "creepScore": 220,
+        "deaths": 7,
+        "kills": 4,
+        "wardScore": 30.10890769958496
+      },
+      "summonerName": "Hwei",
+      "summonerSpells": {
+        "summonerSpellOne": {
+          "displayName": "Unleashed Teleport"
+        },
+        "summonerSpellTwo": {
+          "displayName": "Flash"
+        }
+      },
+      "team": "ORDER"
+    },
+    {
+      "championName": "Kalista",
+      "isBot": false,
+      "isDead": false,
+      "items": [
+        {
+          "count": 1,
+          "displayName": "Randuin's Omen",
+          "itemID": 3143,
+          "price": 800,
+          "slot": 0
+        },
+        {
+          "count": 1,
+          "displayName": "Statikk Shiv",
+          "itemID": 3087,
+          "price": 625,
+          "slot": 1
+        },
+        {
+          "count": 1,
+          "displayName": "Guinsoo's Rageblade",
+          "itemID": 3124,
+          "price": 1025,
+          "slot": 2
+        },
+        {
+          "count": 1,
+          "displayName": "Terminus",
+          "itemID": 3302,
+          "price": 1100,
+          "slot": 3
+        },
+        {
+          "count": 1,
+          "displayName": "Dagger",
+          "itemID": 1042,
+          "price": 250,
+          "slot": 4
+        },
+        {
+          "count": 1,
+          "displayName": "Doran's Bow",
+          "itemID": 1086,
+          "price": 400,
+          "slot": 5
+        },
+        {
+          "count": 1,
+          "displayName": "Farsight Alteration",
+          "itemID": 3363,
+          "price": 0,
+          "slot": 6
+        }
+      ],
+      "level": 16,
+      "position": "BOTTOM",
+      "rawChampionName": "game_character_displayname_Kalista",
+      "riotId": "#",
+      "riotIdGameName": "",
+      "riotIdTagLine": "",
+      "runes": {
+        "keystone": {
+          "displayName": "Lethal Tempo",
+          "id": 8008
+        },
+        "primaryRuneTree": {
+          "displayName": "Precision",
+          "id": 8000
+        },
+        "secondaryRuneTree": {
+          "displayName": "Inspiration",
+          "id": 8300
+        }
+      },
+      "scores": {
+        "assists": 8,
+        "creepScore": 240,
+        "deaths": 4,
+        "kills": 7,
+        "wardScore": 35.457523345947266
+      },
+      "summonerName": "Kalista",
+      "summonerSpells": {
+        "summonerSpellOne": {
+          "displayName": "Cleanse"
+        },
+        "summonerSpellTwo": {
+          "displayName": "Flash"
+        }
+      },
+      "team": "ORDER"
+    },
+    {
+      "championName": "Tahm Kench",
+      "isBot": false,
+      "isDead": false,
+      "items": [
+        {
+          "count": 1,
+          "displayName": "Celestial Opposition",
+          "itemID": 3869,
+          "price": 0,
+          "slot": 0
+        },
+        {
+          "count": 1,
+          "displayName": "Locket of the Iron Solari",
+          "itemID": 3190,
+          "price": 700,
+          "slot": 1
+        },
+        {
+          "count": 1,
+          "displayName": "Plated Steelcaps",
+          "itemID": 3047,
+          "price": 600,
+          "slot": 2
+        },
+        {
+          "count": 1,
+          "displayName": "Thornmail",
+          "itemID": 3075,
+          "price": 450,
+          "slot": 3
+        },
+        {
+          "count": 1,
+          "displayName": "Cloth Armor",
+          "itemID": 1029,
+          "price": 300,
+          "slot": 4
+        },
+        {
+          "count": 1,
+          "displayName": "Cloth Armor",
+          "itemID": 1029,
+          "price": 300,
+          "slot": 5
+        },
+        {
+          "count": 1,
+          "displayName": "Oracle Lens",
+          "itemID": 3364,
+          "price": 0,
+          "slot": 6
+        }
+      ],
+      "level": 14,
+      "position": "UTILITY",
+      "rawChampionName": "game_character_displayname_TahmKench",
+      "riotId": "#",
+      "riotIdGameName": "",
+      "riotIdTagLine": "",
+      "runes": {
+        "keystone": {
+          "displayName": "Guardian",
+          "id": 8465
+        },
+        "primaryRuneTree": {
+          "displayName": "Resolve",
+          "id": 8400
+        },
+        "secondaryRuneTree": {
+          "displayName": "Domination",
+          "id": 8100
+        }
+      },
+      "scores": {
+        "assists": 14,
+        "creepScore": 40,
+        "deaths": 5,
+        "kills": 1,
+        "wardScore": 95.13562774658205
+      },
+      "summonerName": "Tahm Kench",
+      "summonerSpells": {
+        "summonerSpellOne": {
+          "displayName": "Exhaust"
+        },
+        "summonerSpellTwo": {
+          "displayName": "Flash"
+        }
+      },
+      "team": "ORDER"
+    },
+    {
+      "championName": "Trundle",
+      "isBot": false,
+      "isDead": true,
+      "items": [
+        {
+          "count": 1,
+          "displayName": "Doran's Blade",
+          "itemID": 1055,
+          "price": 450,
+          "slot": 0
+        },
+        {
+          "count": 1,
+          "displayName": "Hullbreaker",
+          "itemID": 3181,
+          "price": 175,
+          "slot": 1
+        },
+        {
+          "count": 1,
+          "displayName": "Ravenous Hydra",
+          "itemID": 3074,
+          "price": 150,
+          "slot": 2
+        },
+        {
+          "count": 1,
+          "displayName": "Plated Steelcaps",
+          "itemID": 3047,
+          "price": 600,
+          "slot": 3
+        },
+        {
+          "count": 1,
+          "displayName": "Trinity Force",
+          "itemID": 3078,
+          "price": 133,
+          "slot": 4
+        },
+        {
+          "count": 1,
+          "displayName": "Spectre's Cowl",
+          "itemID": 3211,
+          "price": 150,
+          "slot": 5
+        },
+        {
+          "count": 1,
+          "displayName": "Stealth Ward",
+          "itemID": 3340,
+          "price": 0,
+          "slot": 6
+        }
+      ],
+      "level": 16,
+      "position": "TOP",
+      "rawChampionName": "game_character_displayname_Trundle",
+      "riotId": "#",
+      "riotIdGameName": "",
+      "riotIdTagLine": "",
+      "runes": {
+        "keystone": {
+          "displayName": "Lethal Tempo",
+          "id": 8008
+        },
+        "primaryRuneTree": {
+          "displayName": "Precision",
+          "id": 8000
+        },
+        "secondaryRuneTree": {
+          "displayName": "Resolve",
+          "id": 8400
+        }
+      },
+      "scores": {
+        "assists": 3,
+        "creepScore": 200,
+        "deaths": 14,
+        "kills": 4,
+        "wardScore": 32.1456184387207
+      },
+      "summonerName": "Trundle",
+      "summonerSpells": {
+        "summonerSpellOne": {
+          "displayName": "Ignite"
+        },
+        "summonerSpellTwo": {
+          "displayName": "Flash"
+        }
+      },
+      "team": "CHAOS"
+    },
+    {
+      "championName": "Qiyana",
+      "isBot": false,
+      "isDead": false,
+      "items": [
+        {
+          "count": 1,
+          "displayName": "Serylda's Grudge",
+          "itemID": 6694,
+          "price": 500,
+          "slot": 0
+        },
+        {
+          "count": 1,
+          "displayName": "Axiom Arc",
+          "itemID": 6696,
+          "price": 363,
+          "slot": 1
+        },
+        {
+          "count": 1,
+          "displayName": "Bastionbreaker",
+          "itemID": 2520,
+          "price": 663,
+          "slot": 2
+        },
+        {
+          "count": 1,
+          "displayName": "Serrated Dirk",
+          "itemID": 3134,
+          "price": 300,
+          "slot": 3
+        },
+        {
+          "count": 1,
+          "displayName": "Voltaic Cyclosword",
+          "itemID": 6699,
+          "price": 963,
+          "slot": 4
+        },
+        {
+          "count": 1,
+          "displayName": "Ionian Boots of Lucidity",
+          "itemID": 3158,
+          "price": 350,
+          "slot": 5
+        },
+        {
+          "count": 1,
+          "displayName": "Oracle Lens",
+          "itemID": 3364,
+          "price": 0,
+          "slot": 6
+        }
+      ],
+      "level": 17,
+      "position": "JUNGLE",
+      "rawChampionName": "game_character_displayname_Qiyana",
+      "riotId": "#",
+      "riotIdGameName": "",
+      "riotIdTagLine": "",
+      "runes": {
+        "keystone": {
+          "displayName": "First Strike",
+          "id": 8369
+        },
+        "primaryRuneTree": {
+          "displayName": "Inspiration",
+          "id": 8300
+        },
+        "secondaryRuneTree": {
+          "displayName": "Domination",
+          "id": 8100
+        }
+      },
+      "scores": {
+        "assists": 4,
+        "creepScore": 130,
+        "deaths": 4,
+        "kills": 5,
+        "wardScore": 62.36733627319336
+      },
+      "summonerName": "Qiyana",
+      "summonerSpells": {
+        "summonerSpellOne": {
+          "displayName": "Flash"
+        },
+        "summonerSpellTwo": {
+          "displayName": "Primal Smite"
+        }
+      },
+      "team": "CHAOS"
+    },
+    {
+      "championName": "Pantheon",
+      "isBot": false,
+      "isDead": true,
+      "items": [
+        {
+          "count": 1,
+          "displayName": "Doran's Blade",
+          "itemID": 1055,
+          "price": 450,
+          "slot": 0
+        },
+        {
+          "count": 1,
+          "displayName": "Eclipse",
+          "itemID": 6692,
+          "price": 625,
+          "slot": 1
+        },
+        {
+          "count": 1,
+          "displayName": "Black Cleaver",
+          "itemID": 3071,
+          "price": 225,
+          "slot": 2
+        },
+        {
+          "count": 1,
+          "displayName": "Chainlaced Crushers",
+          "itemID": 3173,
+          "price": 0,
+          "slot": 3
+        },
+        {
+          "count": 1,
+          "displayName": "Sundered Sky",
+          "itemID": 6610,
+          "price": 900,
+          "slot": 4
+        },
+        {
+          "count": 1,
+          "displayName": "Long Sword",
+          "itemID": 1036,
+          "price": 350,
+          "slot": 5
+        },
+        {
+          "count": 1,
+          "displayName": "Oracle Lens",
+          "itemID": 3364,
+          "price": 0,
+          "slot": 6
+        }
+      ],
+      "level": 15,
+      "position": "MIDDLE",
+      "rawChampionName": "game_character_displayname_Pantheon",
+      "riotId": "#",
+      "riotIdGameName": "",
+      "riotIdTagLine": "",
+      "runes": {
+        "keystone": {
+          "displayName": "Press the Attack",
+          "id": 8005
+        },
+        "primaryRuneTree": {
+          "displayName": "Precision",
+          "id": 8000
+        },
+        "secondaryRuneTree": {
+          "displayName": "Sorcery",
+          "id": 8200
+        }
+      },
+      "scores": {
+        "assists": 3,
+        "creepScore": 180,
+        "deaths": 8,
+        "kills": 6,
+        "wardScore": 17.51228713989258
+      },
+      "summonerName": "Pantheon",
+      "summonerSpells": {
+        "summonerSpellOne": {
+          "displayName": "Ignite"
+        },
+        "summonerSpellTwo": {
+          "displayName": "Flash"
+        }
+      },
+      "team": "CHAOS"
+    },
+    {
+      "championName": "Twitch",
+      "isBot": false,
+      "isDead": true,
+      "items": [
+        {
+          "count": 1,
+          "displayName": "Doran's Bow",
+          "itemID": 1086,
+          "price": 400,
+          "slot": 0
+        },
+        {
+          "count": 1,
+          "displayName": "The Collector",
+          "itemID": 6676,
+          "price": 525,
+          "slot": 1
+        },
+        {
+          "count": 1,
+          "displayName": "Infinity Edge",
+          "itemID": 3031,
+          "price": 725,
+          "slot": 2
+        },
+        {
+          "count": 1,
+          "displayName": "Fiendhunter Bolts",
+          "itemID": 2512,
+          "price": 850,
+          "slot": 3
+        },
+        {
+          "count": 1,
+          "displayName": "Last Whisper",
+          "itemID": 3035,
+          "price": 750,
+          "slot": 4
+        },
+        {
+          "count": 1,
+          "displayName": "Stealth Ward",
+          "itemID": 3340,
+          "price": 0,
+          "slot": 6
+        }
+      ],
+      "level": 14,
+      "position": "BOTTOM",
+      "rawChampionName": "game_character_displayname_Twitch",
+      "riotId": "#",
+      "riotIdGameName": "",
+      "riotIdTagLine": "",
+      "runes": {
+        "keystone": {
+          "displayName": "Lethal Tempo",
+          "id": 8008
+        },
+        "primaryRuneTree": {
+          "displayName": "Precision",
+          "id": 8000
+        },
+        "secondaryRuneTree": {
+          "displayName": "Sorcery",
+          "id": 8200
+        }
+      },
+      "scores": {
+        "assists": 3,
+        "creepScore": 210,
+        "deaths": 10,
+        "kills": 7,
+        "wardScore": 16.37786293029785
+      },
+      "summonerName": "Twitch",
+      "summonerSpells": {
+        "summonerSpellOne": {
+          "displayName": "Barrier"
+        },
+        "summonerSpellTwo": {
+          "displayName": "Flash"
+        }
+      },
+      "team": "CHAOS"
+    },
+    {
+      "championName": "Zilean",
+      "isBot": false,
+      "isDead": true,
+      "items": [
+        {
+          "count": 1,
+          "displayName": "Solstice Sleigh",
+          "itemID": 3876,
+          "price": 0,
+          "slot": 0
+        },
+        {
+          "count": 1,
+          "displayName": "Shurelya's Battlesong",
+          "itemID": 2065,
+          "price": 400,
+          "slot": 1
+        },
+        {
+          "count": 1,
+          "displayName": "Locket of the Iron Solari",
+          "itemID": 3190,
+          "price": 700,
+          "slot": 2
+        },
+        {
+          "count": 1,
+          "displayName": "Bandlepipes",
+          "itemID": 2524,
+          "price": 800,
+          "slot": 3
+        },
+        {
+          "count": 1,
+          "displayName": "Ionian Boots of Lucidity",
+          "itemID": 3158,
+          "price": 350,
+          "slot": 4
+        },
+        {
+          "count": 1,
+          "displayName": "Oracle Lens",
+          "itemID": 3364,
+          "price": 0,
+          "slot": 6
+        }
+      ],
+      "level": 14,
+      "position": "UTILITY",
+      "rawChampionName": "game_character_displayname_Zilean",
+      "riotId": "#",
+      "riotIdGameName": "",
+      "riotIdTagLine": "",
+      "runes": {
+        "keystone": {
+          "displayName": "Summon Aery",
+          "id": 8214
+        },
+        "primaryRuneTree": {
+          "displayName": "Sorcery",
+          "id": 8200
+        },
+        "secondaryRuneTree": {
+          "displayName": "Inspiration",
+          "id": 8300
+        }
+      },
+      "scores": {
+        "assists": 12,
+        "creepScore": 60,
+        "deaths": 3,
+        "kills": 2,
+        "wardScore": 91.59417724609376
+      },
+      "summonerName": "Zilean",
+      "summonerSpells": {
+        "summonerSpellOne": {
+          "displayName": "Flash"
+        },
+        "summonerSpellTwo": {
+          "displayName": "Heal"
+        }
+      },
+      "team": "CHAOS"
+    }
+  ],
+  "events": {
+    "Events": [
+      {
+        "EventID": 0,
+        "EventName": "GameStart",
+        "EventTime": 0.03303249925374985
+      },
+      {
+        "EventID": 1,
+        "EventName": "MinionsSpawning",
+        "EventTime": 30.032041549682617
+      },
+      {
+        "Acer": "Volibear",
+        "AcingTeam": "ORDER",
+        "EventID": 96,
+        "EventName": "Ace",
+        "EventTime": 1882.7779541015625
+      }
+    ]
+  },
+  "gameData": {
+    "gameMode": "CLASSIC",
+    "gameTime": 1894.225830078125,
+    "mapName": "Map11",
+    "mapNumber": 11,
+    "mapTerrain": "Default"
+  }
+}
