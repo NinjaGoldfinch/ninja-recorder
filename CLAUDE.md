@@ -95,7 +95,9 @@ The layout gate (#345) is the only frontend test that measures a pixel: jsdom
 does no layout, which is how rows drew past their card with every gate green
 (#342). It runs `src/**/*.layout.test.ts` under `vitest.layout.config.ts`, so
 `npx vitest run` never needs a browser. **A change to the library row's markup
-or its CSS runs it**, and a new kind of row belongs in its `ROWS` list.
+or its CSS runs it**, and a new kind of row belongs in its `ROWS` list. So does
+a change to the review page's layout, or to anything above it that takes
+height: `Review.layout.test.ts` checks it fits every window shape.
 
 The last two are the only gates that **start the binary**, and the only ones a
 Linux box cannot run. One launches `--daemon`, waits for the named pipe, does

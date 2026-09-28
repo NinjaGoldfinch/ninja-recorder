@@ -150,6 +150,15 @@ describe("onViewChange", () => {
     expect(a).toEqual(["review"]);
     expect(b).toEqual(["review"]);
   });
+
+  it("stops reporting once unsubscribed", () => {
+    const seen: string[] = [];
+    const stop = router.onViewChange((v) => seen.push(v));
+    router.showView("settings");
+    stop();
+    router.showView("review");
+    expect(seen).toEqual(["settings"]);
+  });
 });
 
 describe("initRouting", () => {
