@@ -158,15 +158,71 @@ fn read_windows_install_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Finds the first candidate path with a parseable lockfile.
+/// Finds the first candidate path with a parseable lockfile whose client is
+/// still running.
+///
+/// ## A lockfile is not proof of a client
+///
+/// The client deletes its lockfile when it exits cleanly, and only then. One
+/// that crashes, is killed, or is closed underneath the Riot Client leaves the
+/// file behind, and a lockfile that outlives its process held the state
+/// machine in `ClientRunning` indefinitely, with Settings reporting a client
+/// connected that was not running. So the pid it names has to be alive.
 pub fn discover() -> Result<Option<LockfileInfo>, LockfileError> {
     let env_override = std::env::var("NINJA_RECORDER_LOCKFILE_PATH").ok();
     for path in candidate_paths(env_override.as_deref()) {
-        if let Some(info) = read_lockfile(&path)? {
+        if let Some(info) = read_lockfile(&path)?
+            && process_is_running(info.pid)
+        {
             return Ok(Some(info));
         }
     }
     Ok(None)
+}
+
+/// Whether `pid` names a process that has not exited.
+///
+/// Opened with `PROCESS_QUERY_LIMITED_INFORMATION`, the least a handle can
+/// carry: the client is read, never touched (DEVELOPMENT.md §1.1).
+///
+/// Errs towards "running" wherever it cannot tell. A refused handle is a
+/// process that exists, and wrongly calling the client gone would stop a
+/// recording, which is far worse than the status line this exists to correct.
+/// For the same reason the executable's name is not compared: which League
+/// process the lockfile's pid belongs to has not been checked on a real
+/// client, and a wrong guess there would mean never seeing one. A pid recycled
+/// onto another process is the case that leaves open.
+#[cfg(target_os = "windows")]
+fn process_is_running(pid: u32) -> bool {
+    use windows::Win32::Foundation::{CloseHandle, ERROR_ACCESS_DENIED, STILL_ACTIVE};
+    use windows::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    // SAFETY: plain call; the handle it returns is closed below.
+    let handle = match unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) } {
+        Ok(handle) => handle,
+        // No such process is `ERROR_INVALID_PARAMETER`.
+        Err(e) => return e.code() == ERROR_ACCESS_DENIED.to_hresult(),
+    };
+
+    let mut code = 0u32;
+    // SAFETY: the handle is live with query rights and `code` is a live
+    // out-parameter.
+    let exited = unsafe { GetExitCodeProcess(handle, &mut code) }.is_ok()
+        && code != STILL_ACTIVE.0 as u32;
+
+    // SAFETY: the handle came from `OpenProcess` above and is not used again.
+    let _ = unsafe { CloseHandle(handle) };
+
+    !exited
+}
+
+/// Anywhere else, a lockfile is taken at its word. macOS is the only other
+/// platform with a client, and nothing here has run against one.
+#[cfg(not(target_os = "windows"))]
+fn process_is_running(_pid: u32) -> bool {
+    true
 }
 
 /// A point-in-time snapshot used by the watch loop to detect transitions.
