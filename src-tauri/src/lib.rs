@@ -548,6 +548,15 @@ pub(crate) fn create_main_window(app: &tauri::AppHandle, view: Option<&str>) -> 
         // timeline is deliberately left to scroll.
         .inner_size(1340.0, 850.0)
         .min_inner_size(960.0, 640.0)
+        // **No native title bar.** The app bar is the title bar: it carries
+        // the drag region and its own minimise, maximise and close buttons
+        // (`WindowControls.svelte`), and those ask for exactly the window
+        // permissions `capabilities/default.json` grants. Close goes through
+        // `CloseRequested` like the native one did, so close-to-tray and the
+        // quit prompt behave the same. Tauri keeps the resize border and,
+        // on Windows 11, the shadow and rounded corners of an undecorated
+        // window (DEVELOPMENT.md §5.5).
+        .decorations(false)
         .build()?;
     Ok(())
 }

@@ -182,7 +182,12 @@ supported: boolean, };
 
 export type DiskUsage = { total_bytes: number, recording_count: number, free_bytes: number, };
 
-export type LcuStatus = { connected: boolean, phase: string | null, summoner: string | null, error: string | null, };
+export type LcuStatus = { connected: boolean, phase: string | null, summoner: string | null, 
+/**
+ * The account's profile icon, as an id for `resolve_icons` rather than
+ * a path: resolving it can mean a CDN round trip, and this is polled.
+ */
+profile_icon_id: number | null, error: string | null, };
 
 export type QuitOutcome = { "outcome": "shuttingDown" } | { "outcome": "recordingInFlight" };
 
@@ -329,9 +334,13 @@ spellIds: Array<number>, runes: Array<number>,
  * Roles, as the five words DEVELOPMENT.md §3.1 names. The one kind
  * here that is not Data Dragon's: see `crate::cdragon`.
  */
-positions: Array<string>, };
+positions: Array<string>, 
+/**
+ * The signed-in account's icon, from `LcuStatus::profile_icon_id`.
+ */
+profileIcons: Array<number>, };
 
-export type IconSet = { champions: { [key in string]: string }, items: { [key in string]: string }, spells: { [key in string]: string }, spell_ids: { [key in string]: string }, runes: { [key in string]: string }, positions: { [key in string]: string }, };
+export type IconSet = { champions: { [key in string]: string }, items: { [key in string]: string }, spells: { [key in string]: string }, spell_ids: { [key in string]: string }, runes: { [key in string]: string }, positions: { [key in string]: string }, profile_icons: { [key in string]: string }, };
 
 export type GameflowPhase = "None" | "Lobby" | "Matchmaking" | "CheckedIntoTournament" | "ReadyCheck" | "ChampSelect" | "GameStart" | "FailedToLaunch" | "InProgress" | "Reconnect" | "WaitingForStats" | "PreEndOfGame" | "EndOfGame" | "TerminatedInError" | { "Unknown": string };
 

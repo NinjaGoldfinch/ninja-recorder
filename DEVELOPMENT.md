@@ -1651,6 +1651,42 @@ only, and a tail-*only* cut additionally asserts that the front did not move.
 
 ---
 
+### 5.5 Decision: the window draws its own title bar
+
+The main window is built with `decorations(false)`, and the app bar is the title
+bar: the brand, the Library and Objectives tabs, the League client pill, the
+settings button, and minimise, maximise and close. The native bar was a strip
+of 30-odd pixels that said "ninja-recorder" above a header that also said
+"ninja-recorder", which is what every comparable League app has already
+dropped.
+
+**What we keep from the platform.** Tauri leaves an undecorated window its
+resize border, and on Windows 11 its shadow and rounded corners, so none of that
+is reimplemented. Double-click to maximise and drag-to-move come from Tauri's
+own drag script (`data-tauri-drag-region="deep"` on the header), which also
+treats every button in the bar as a hole in the region, so nothing has to be
+marked by hand. Snap layouts on hovering the maximise button are the one thing
+lost; getting them back means answering `WM_NCHITTEST` with `HTMAXBUTTON` from a
+subclassed window procedure, which is a Win32 hook for a hover menu, and not
+worth it yet.
+
+**Closing means the same thing it did.** The close button calls
+`getCurrentWindow().close()`, which raises `CloseRequested`, which is where the
+close-to-tray setting and the quit prompt already live (`on_window_event` in
+`lib.rs`). A button that called `destroy()` or `hide()` would have been a
+second definition of closing, and the two would drift.
+
+**The body stopped scrolling.** With the bar as part of the page, a page
+scrollbar runs the full height of the window, through the bar and beside the
+close button. So `<body>` is exactly the window and one box under the bar,
+`.app-scroll`, holds the strips and the views and scrolls. Nothing depended on
+the document being the scroller, and the review's fitted layout takes its
+height from that box the same way it took it from the body.
+
+**The capability grows by four permissions** (minimise, toggle-maximise,
+close, start-dragging), on the main window only. The dev portal keeps its
+native frame: it is a tool window, and it has no bar to drag it by.
+
 ## 6. Disk management (launch feature, not a later one)
 
 1080p60 @ 8 Mbps ≈ **3.5 GB/hour**. A ranked session ≈ 15 GB. Without retention, we fill the user's SSD in two weeks and get uninstalled.

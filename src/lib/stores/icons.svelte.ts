@@ -21,7 +21,7 @@
  * it.
  */
 
-import { loadIcons } from "../../icons";
+import { loadIcons, loadProfileIcon } from "../../icons";
 import type { RecordingRow } from "../../types";
 
 let version = $state(0);
@@ -49,4 +49,9 @@ export async function fillInArt(rows: readonly RecordingRow[]): Promise<void> {
   for (let i = 0; i < rows.length; i += ART_CHUNK) {
     if (await loadIcons(rows.slice(i, i + ART_CHUNK))) version += 1;
   }
+}
+
+/** The same, for the account icon the app bar's client card draws. */
+export async function fillInProfileIcon(id: number): Promise<void> {
+  if (await loadProfileIcon(id)) version += 1;
 }

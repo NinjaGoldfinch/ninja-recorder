@@ -26,6 +26,7 @@ const cache = {
   spellIds: new Map<number, string | null>(),
   runes: new Map<number, string | null>(),
   positions: new Map<string, string | null>(),
+  profileIcons: new Map<number, string | null>(),
 };
 
 export function championIcon(name: string | null): string | null {
@@ -53,6 +54,29 @@ export function runeIcon(id: number): string | null {
  *  is all it carries, and the stylesheet decides its colour. */
 export function positionIcon(role: string | null): string | null {
   return role === null ? null : (cache.positions.get(role) ?? null);
+}
+
+/** The signed-in account's icon, for the app bar's client card. */
+export function profileIcon(id: number | null): string | null {
+  return id === null ? null : (cache.profileIcons.get(id) ?? null);
+}
+
+/**
+ * Fills the cache for one profile icon. Apart from `loadIcons` because it is
+ * not row art: it comes from the client poll, one id at a time, and changes
+ * only when someone picks a new icon.
+ */
+export async function loadProfileIcon(id: number): Promise<boolean> {
+  if (cache.profileIcons.has(id)) return false;
+  let path: string | undefined;
+  try {
+    const set = await call<IconSet>("resolve_icons", { request: { profileIcons: [id] } });
+    path = set.profile_icons?.[id];
+  } catch {
+    // Offline, or outside the Tauri webview; the card keeps its initial.
+  }
+  cache.profileIcons.set(id, path ? assetUrl(path) : null);
+  return true;
 }
 
 /** Everything one page of rows wants drawn. */
@@ -174,7 +198,15 @@ export async function loadIcons(rows: RecordingRow[]): Promise<boolean> {
   } catch {
     // Offline, or the command is unavailable outside the Tauri webview.
     // Record the misses so the same lookup is not retried on every render.
-    set = { champions: {}, items: {}, spells: {}, spell_ids: {}, runes: {}, positions: {} };
+    set = {
+      champions: {},
+      items: {},
+      spells: {},
+      spell_ids: {},
+      runes: {},
+      positions: {},
+      profile_icons: {},
+    };
   }
 
   // Everything asked for is recorded, hit or miss. A key the backend left

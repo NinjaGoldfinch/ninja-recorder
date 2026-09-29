@@ -135,6 +135,7 @@ export interface LcuStatus {
   connected: boolean;
   phase: string | null;
   summoner: string | null;
+  profile_icon_id: number | null;
   error: string | null;
 }
 
@@ -231,6 +232,7 @@ export interface IconSet {
   /** Keyed by role. Community Dragon's rather than Data Dragon's, which has
    *  no position art (`cdragon.rs`). */
   positions: Record<string, string>;
+  profile_icons: Record<string, string>;
 }
 
 export interface ReconcileReport {
