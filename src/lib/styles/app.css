@@ -2396,7 +2396,7 @@ button.armed {
  * rather than between two: at this size a half-pixel offset is most of what
  * makes a shape look smudged (`RoleIcon`). */
 .vod-role {
-  --role-size: max(12px, round(down, calc(var(--slot) * 0.64), 2px));
+  --role-size: max(18px, round(down, calc(var(--slot) * 0.96), 2px));
   position: absolute;
   left: -3px;
   bottom: -3px;
