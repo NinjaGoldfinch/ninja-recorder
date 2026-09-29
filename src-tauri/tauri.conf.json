@@ -20,7 +20,8 @@
         "scope": [
           "$APPDATA/recordings/*",
           "$APPDATA/recordings/audio-tracks/*",
-          "$APPDATA/ddragon/**"
+          "$APPDATA/ddragon/**",
+          "$APPDATA/cdragon/**"
         ]
       }
     }

@@ -103,7 +103,8 @@ flowchart TB
 | `recorder/remux.rs` | The faststart remux, a `-c copy` through `ffmpeg_command` that moves the index to the front so a fragmented file scrubs. Shared by both Windows backends' `stop` and startup recovery; the argument list is pure. Any failure, the final replace included, deletes `<stem>.faststart.tmp` (#307) | `faststart_args`, `remux_faststart` |
 | `mp4/read.rs` | Reading an MP4's top-level boxes directly, no ffmpeg: fragmented or not, how many whole fragments, how many audio tracks, and what a kill cut short | `summarize`, `Summary` |
 | `mp4/write.rs` | The own backend's fragmented-MP4 muxer: one H.264 track and any number of AAC tracks, a `moof`+`mdat` per flush, an `mfra` at the end, and `repair` for a killed file. Pure Rust, no ffmpeg. Written through by the own backend's `own::mux` since #239, and `repair` is what startup recovery and a dead worker's `stop` run first ([DEVELOPMENT.md §2.5](../DEVELOPMENT.md#25-multi-track-audio)) | `Writer`, `Track`, `repair` |
-| `ddragon.rs` | Champion art from Data Dragon, fetched on first use and cached on disk | `champion_icon` |
+| `ddragon.rs` | Champion, item, spell and rune art from Data Dragon, fetched on first use and cached on disk | `champion_icon`, `resolve_icons` |
+| `cdragon.rs` | Position icons from Community Dragon, the one kind of art Data Dragon lacks: pinned to Data Dragon's patch, reduced to their lit shapes, cached on disk | `position_icon` |
 | `db/mod.rs` | Schema, migrations, every query | `Db` |
 | `db/reconcile.rs` | Reconciling DB rows against files on disk, and finishing the recordings a dead daemon left open: an own-backend file repaired in Rust first (`mp4::write::repair`), then every file remuxed. A file still open elsewhere is left for a later start, and the scan sweeps stale remux temp files (#307) | `reconcile`, `recover_unfinished`, `recovery_action` |
 | `db/in_use.rs` | Whether a file is still open in another process: an exclusive open (`share_mode(0)`) on Windows, retried for up to ten seconds by recovery; always free elsewhere | `is_free`, `wait_for_writer`, `wait_until_free` |
@@ -660,6 +661,7 @@ under the folder is per build:
 | `recordings/` | every recording, and `recordings/audio-tracks/` |
 | `fixtures/` | captured LCU / Live Client responses |
 | `ddragon/` | the Data Dragon art cache |
+| `cdragon/` | the Community Dragon position icons |
 | `logs/` | `daemon.log` / `ui.log` (release), `daemon-devtools.log` / `ui-devtools.log` (devtools), the own backend's capture worker's `worker.log` / `worker-devtools.log`, and the libobs worker's log |
 | `daemon.<build>.sock` | the endpoint, on Unix only |
 

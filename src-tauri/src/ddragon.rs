@@ -44,11 +44,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::warn;
 
-/// The only place art comes from. Spells briefly took a detour through the
-/// running client and Community Dragon, on the theory that Data Dragon's
-/// `img/spell/` set was too old to match the game; the art was never the
-/// problem (see `spell_art_map`), and three sources meant three ways for a
-/// row to draw the wrong picture.
+/// The only place art Data Dragon publishes comes from. Spells briefly took a
+/// detour through the running client and Community Dragon, on the theory that
+/// Data Dragon's `img/spell/` set was too old to match the game; the art was
+/// never the problem (see `spell_art_map`), and three sources meant three
+/// ways for a row to draw the wrong picture. Position icons, which Data Dragon
+/// does not have, are `crate::cdragon`'s, and nothing else is.
 const CDN: &str = "https://ddragon.leagueoflegends.com";
 
 /// How long a resolved version is trusted before asking again. Riot ships a
@@ -555,6 +556,10 @@ pub struct IconRequest {
     pub spell_ids: Vec<i64>,
     #[serde(default)]
     pub runes: Vec<i64>,
+    /// Roles, as the five words DEVELOPMENT.md §3.1 names. The one kind
+    /// here that is not Data Dragon's: see `crate::cdragon`.
+    #[serde(default)]
+    pub positions: Vec<String>,
     /// The signed-in account's icon, from `LcuStatus::profile_icon_id`.
     #[serde(default)]
     pub profile_icons: Vec<i64>,
@@ -571,6 +576,7 @@ pub struct IconSet {
     pub spells: HashMap<String, String>,
     pub spell_ids: HashMap<String, String>,
     pub runes: HashMap<String, String>,
+    pub positions: HashMap<String, String>,
     pub profile_icons: HashMap<String, String>,
 }
 
@@ -590,15 +596,17 @@ pub async fn resolve_icons(dir: &Path, request: &IconRequest) -> IconSet {
     // finding an empty map would each fetch `champion.json` — the
     // duplicate-request problem the cache exists to avoid, multiplied by
     // the concurrency.
-    if let Some(version) = version(dir).await {
+    let version = version(dir).await;
+    if let Some(version) = &version {
+        let version = version.as_str();
         if !request.champions.is_empty() {
-            let _ = art_keys(dir, &version).await;
+            let _ = art_keys(dir, version).await;
         }
         if !request.spells.is_empty() || !request.spell_ids.is_empty() {
-            let _ = spell_art(dir, &version).await;
+            let _ = spell_art(dir, version).await;
         }
         if !request.runes.is_empty() {
-            let _ = rune_icons(dir, &version).await;
+            let _ = rune_icons(dir, version).await;
         }
     }
 
@@ -623,6 +631,20 @@ pub async fn resolve_icons(dir: &Path, request: &IconRequest) -> IconSet {
             rune_icon(dir, id).await
         })
         .await,
+        // A sibling of this cache rather than a directory inside it, so a
+        // file on disk says which CDN it came from. Community Dragon's patch
+        // is picked from Data Dragon's version, so no version means no icons.
+        positions: match &version {
+            Some(version) => {
+                let cdragon = dir.with_file_name("cdragon");
+                resolve_each(dedup(&request.positions), |role: String| {
+                    let cdragon = &cdragon;
+                    async move { crate::cdragon::position_icon(cdragon, version, &role).await }
+                })
+                .await
+            }
+            None => HashMap::new(),
+        },
         profile_icons: resolve_each(dedup(&request.profile_icons), |id: i64| async move {
             profile_icon(dir, id).await
         })

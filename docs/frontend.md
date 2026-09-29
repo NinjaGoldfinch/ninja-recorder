@@ -440,7 +440,7 @@ scattering `??` through the row template:
 | CS per minute (`csPerMinute`) | CS ÷ length → nothing | Both players use the same game length. Either half missing leaves the CS alone rather than inventing a rate |
 | Trinket (`buildBoxes`) | the scoreboard's `trinket` → the last item, if it is a known trinket → an empty box four | Every board written before #346 lacks the field, so the fallback is most of a library on the day the row shipped. A real item is never taken for the trinket: a player with no trinket gets an empty box four, not a shuffled build |
 | Runes (`runesOf`) | the player's own page → `our_runes`, for us only → no rune column | Older boards carry only our page. The opponent's is never borrowed from ours; with no page, the rune column is left out, as for a game with no rune page at all (#281) |
-| Role | Live Client Data's position → the LCU's inference → no badge | The live value is what the game assigned; the LCU's `timeline.lane`/`role` is Riot working it out afterwards and confuses top with jungle, so it fills a gap rather than correcting one. The badge sits on the portrait rather than in a slot of its own, so a row without one is still the same shape. The five icons are drawn in `RoleIcon` rather than fetched, because Data Dragon has no position art and `ddragon.rs` is the only source art comes from |
+| Role | Live Client Data's position → the LCU's inference → no badge | The live value is what the game assigned; the LCU's `timeline.lane`/`role` is Riot working it out afterwards and confuses top with jungle, so it fills a gap rather than correcting one. The badge sits on the portrait rather than in a slot of its own, so a row without one is still the same shape. The icon is the client's own, from Community Dragon, used as a CSS mask so the theme picks its colour; until it is cached there is no badge rather than a stand-in (see the art table below) |
 | Outcome | the leading accent, plus the word on the left block's last line | Undecided rows are excluded from the win-rate tile too, so an unknown never reads as a loss; it gets the neutral edge, no wash and no word. A Win/Loss badge used to sit in its own column and was dropped as redundant with the edge; the word moved into the sub-line rather than being dropped with it, because the accent alone is colour only |
 | Rank (`rankLabel`, `lpLabel`) | `tier` + `division` → the missing-value placeholder, on the game block's second line | The ladder a game was played at. That placeholder covers three different things the column cannot tell apart (a queue with no ladder, a player unranked in it, and a patch that landed too late for the reading to still describe the game) so the row does not pretend to. LP is shown only beside a tier, since a number with no scale is not a standing. Master and above have no division and are labelled with none |
 | When (`formatRelative`) | relative inside a week → absolute date | "6 weeks ago" is worse than a date at that distance: nobody counts weeks, and the date is what a person searches their memory by. The absolute form is on the `title` either way |
@@ -829,7 +829,13 @@ See [DEVELOPMENT.md §5.4](../DEVELOPMENT.md) for why the file is not cut, and
 | Item | Data Dragon | the numeric id the game reports |
 | Rune | Data Dragon | rune or tree id → an icon *path*, from an unversioned part of the CDN |
 | Summoner spell | Data Dragon | display name *and* numeric id → art key (`Flash`, `4`, `74`, `2202` → `SummonerFlash`) |
+| Position | Community Dragon, at Data Dragon's patch | the role word → the client's file (`Support` → `position-utility.svg`), reduced to its lit shapes |
 | Profile icon | Data Dragon | the `profileIconId` the LCU reports for the signed-in account, via `LcuStatus::profile_icon_id`; drawn in the client card, an initial where the CDN has no art yet |
+
+**Each kind has one source and no fallback.** Positions are the only kind Data
+Dragon does not publish, which is the only reason they come from somewhere
+else; `RoleIcon` draws the file as a mask filled with `--text`, never as an
+`<img>`, so the badge follows the theme rather than the client's gold.
 
 Spells are the odd one out because `summoner.json` lists one entry per
 game-mode *variant* rather than one per spell: `Flash` is `SummonerFlash`,

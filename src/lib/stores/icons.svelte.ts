@@ -6,9 +6,9 @@
  * Nothing about that changes here. What this adds is a way for a component to
  * re-read them when the cache grows.
  *
- * **Why a version counter rather than reactive maps.** The cache is keyed five
+ * **Why a version counter rather than reactive maps.** The cache is keyed six
  * different ways and is written from one place; wrapping each map in `$state`
- * would make five reactive structures to keep in step for a signal that is
+ * would make six reactive structures to keep in step for a signal that is
  * always the same one, "more art exists now". A component reads `version`
  * before calling the plain lookup, so it re-runs when that fires and does no
  * work in between.
