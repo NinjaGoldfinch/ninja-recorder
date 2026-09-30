@@ -210,6 +210,7 @@ function hideTooltip(e: MouseEvent) {
         <button
           type="button"
           class="marker-glyph"
+          data-space-plays="true"
           data-cluster={index}
           style="left:{percent.toFixed(3)}%; --marker-color:{style.color}"
           aria-label={cluster.map((m) => `${markerLabel(m)} at ${formatTime(m.video_time_s)}`).join("; ")}
@@ -235,6 +236,7 @@ function hideTooltip(e: MouseEvent) {
           <button
             type="button"
             class="note-pin"
+            data-space-plays="true"
             style="left:{percent.toFixed(3)}%; --note-color:{style.color}"
             aria-label="{style.label} at {formatTime(placed.note.ts_ms / 1000)}: {placed.note.body}"
             onclick={() => onseek(placed.videoTimeS)}

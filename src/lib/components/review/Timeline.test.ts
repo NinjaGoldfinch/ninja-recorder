@@ -284,6 +284,16 @@ describe("the cluster tooltip", () => {
     expect(seeks).toEqual([90]);
   });
 
+  it("leaves Space to the player once it has been clicked", () => {
+    // A clicked glyph keeps focus, and a focused button takes Space for
+    // itself: without the mark, Space pressed it again and snapped the
+    // playhead back instead of playing (`ownsSpace`).
+    const el = render({ markers: [marker({ id: 1, video_time_s: 90 })] });
+    widen(el);
+    const glyph = el.querySelector<HTMLButtonElement>(".marker-glyph");
+    expect(glyph?.dataset.spacePlays).toBe("true");
+  });
+
   it("names every marker in the cluster for a screen reader", () => {
     const el = render({ markers: [marker({ id: 1, video_time_s: 90, kind: "kill" })] });
     widen(el);

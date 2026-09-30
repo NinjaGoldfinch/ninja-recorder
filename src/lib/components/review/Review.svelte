@@ -28,7 +28,7 @@ import { recordedWithout } from "../../library/problems";
 import { laneOpponent, selfPlayer } from "../../library/scoreboard";
 import { gameClockAt, noteTimeAt } from "../../review/clock";
 import { reviewFacts } from "../../review/facts";
-import { type HotkeyContext, hotkeyAction, SEEK_STEP_S } from "../../review/hotkeys";
+import { type HotkeyContext, hotkeyAction, ownsSpace, SEEK_STEP_S } from "../../review/hotkeys";
 import { placeNotes } from "../../review/notes";
 import { parseAudioLayout, videoErrorReport } from "../../review/playback";
 import { railOpenSaved, saveRailOpen } from "../../review/rail";
@@ -531,7 +531,7 @@ $effect(() => {
     const ctx: HotkeyContext = {
       reviewOpen: review.isOpen,
       typing: !!active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA"),
-      onFormControl: !!active && (active.tagName === "BUTTON" || active.tagName === "SELECT"),
+      onFormControl: ownsSpace(active),
       onArrowControl: active?.tagName === "SELECT",
       menuOpen,
     };
