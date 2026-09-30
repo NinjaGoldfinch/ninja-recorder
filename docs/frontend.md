@@ -589,6 +589,12 @@ flowchart LR
   have (`review/hotkeys.ts`, `typing`), so the form can sit beside a player
   that answers Space and the arrows. Two keys still work from inside a field:
   Ctrl+Space plays and pauses, and Escape hands focus back to the player.
+- **Space stands down on a focused button or select, except the timeline's.**
+  Space is how a browser presses a focused button, so the player leaves it to
+  one (`ownsSpace`). A marker glyph or note pin is a button too, and clicking
+  it leaves it focused, so Space pressed it again and snapped the playhead back
+  to it. They carry `data-space-plays`, which hands Space to the player; Enter
+  still presses one.
 - **`n` makes a timed note at the playhead** (#258). It pauses and opens a
   small editor over the player (`NoteEditor.svelte`), with the text box focused
   and a dropdown for the kind: note (the default), mistake, good, question or

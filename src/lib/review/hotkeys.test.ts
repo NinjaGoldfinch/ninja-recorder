@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type HotkeyContext, hotkeyAction } from "./hotkeys";
+import { type HotkeyContext, hotkeyAction, ownsSpace } from "./hotkeys";
 
 const ctx = (over: Partial<HotkeyContext> = {}): HotkeyContext => ({
   reviewOpen: true,
@@ -61,6 +61,27 @@ describe("hotkeyAction", () => {
     it("still takes the arrows there", () => {
       // A `<button>` ignores arrows entirely.
       expect(hotkeyAction("ArrowRight", ctx({ onFormControl: true }))).toBe("seekForward");
+    });
+  });
+
+  describe("which focused elements keep Space", () => {
+    const el = (html: string) => {
+      const host = document.createElement("div");
+      host.innerHTML = html;
+      return host.firstElementChild;
+    };
+
+    it("is a button or a select", () => {
+      expect(ownsSpace(el("<button></button>"))).toBe(true);
+      expect(ownsSpace(el("<select></select>"))).toBe(true);
+      expect(ownsSpace(el("<div></div>"))).toBe(false);
+      expect(ownsSpace(null)).toBe(false);
+    });
+
+    it("is not a button marked to play, like a timeline marker", () => {
+      // Clicking a marker leaves it focused; Space pressed it again and
+      // snapped the playhead back to it.
+      expect(ownsSpace(el('<button data-space-plays="true"></button>'))).toBe(false);
     });
   });
 

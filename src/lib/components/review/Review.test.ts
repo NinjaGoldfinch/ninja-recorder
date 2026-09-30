@@ -289,6 +289,36 @@ describe("the hotkeys", () => {
     key("ArrowRight");
     expect(video(el).currentTime).toBe(105);
   });
+
+  it("plays with Space after a timeline pin is clicked, rather than pressing it again", async () => {
+    // A note pin rather than a marker glyph only because jsdom gives the
+    // timeline no width, and glyphs are clustered by pixels; both carry
+    // `data-space-plays` (Timeline.test.ts).
+    client.get_game_review.mockResolvedValue({
+      ...(await client.get_game_review()),
+      notes: [{ id: 5, game_id: 70, ts_ms: 90_000, kind: "good", body: "gank", created_at: 1 }],
+    });
+    const el = render();
+    await open([marker(60)]);
+    const pin = await vi.waitFor(() => {
+      const found = el.querySelector<HTMLButtonElement>(".note-pin");
+      if (!found) throw new Error("no pin on the timeline");
+      return found;
+    });
+    pin.focus();
+    pin.click();
+    const clicked = video(el).currentTime;
+
+    // Played on past it. A Space the pin kept for itself would press it and
+    // snap the playhead back.
+    video(el).currentTime = clicked + 15;
+    const space = new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true });
+    document.dispatchEvent(space);
+    await Promise.resolve();
+    expect(space.defaultPrevented, "the pin would still be pressed").toBe(true);
+    expect(video(el).paused).toBe(false);
+    expect(video(el).currentTime).toBe(clicked + 15);
+  });
 });
 
 describe("the controls", () => {

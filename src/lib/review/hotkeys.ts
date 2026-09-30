@@ -39,6 +39,21 @@ export interface HotkeyContext {
   menuOpen: boolean;
 }
 
+/**
+ * Whether the focused element does something of its own with Space, which is
+ * what `HotkeyContext.onFormControl` asks.
+ *
+ * A button or a select does, **unless it is marked `data-space-plays`**. The
+ * timeline's markers and note pins are buttons so that a click reaches them,
+ * but a click also leaves them focused, and Space then pressed the marker
+ * again: the playhead snapped back to it instead of the video playing on.
+ * Enter still presses one, which is the keyboard's way to seek there.
+ */
+export function ownsSpace(active: Element | null): boolean {
+  if (!active || (active.tagName !== "BUTTON" && active.tagName !== "SELECT")) return false;
+  return !(active as HTMLElement).dataset.spacePlays;
+}
+
 /** How far the arrow keys seek. */
 export const SEEK_STEP_S = 5;
 
