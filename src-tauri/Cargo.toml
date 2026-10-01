@@ -110,7 +110,7 @@ semver = "1"
 # It is not one: since Tauri v2 the updater artifact *is* the installer, signed
 # in place, so there was never an archive to open and the crate is gone with the
 # code that opened it.
-minisign-verify = "0.2"
+minisign-verify = "0.3"
 # The daemon builds no `tauri::App`, so it cannot ask an `AppHandle` where the
 # data directory is — and `app_data_dir()` is `dirs::data_dir()` joined with the
 # identifier. This is the crate Tauri itself uses, at the version it uses, so
