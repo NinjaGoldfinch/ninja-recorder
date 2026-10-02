@@ -10,9 +10,26 @@ from the dev box: it needs real Windows hardware, a real League client and
 Vanguard active
 ([DEVELOPMENT.md §1.1, §9](../DEVELOPMENT.md#11-riot-vanguard-the-constraint-that-shapes-everything)).
 
-**Still open:** the install-size budget (§5), which is missed rather than met,
-and one §4.1 row that fails (#199). Fill in results inline as each remaining
-step is done.
+**Still open:** the install-size budget (§5), which is missed rather than met
+by the untrimmed bundle, and the rows listed under 2026-10-03 below. Fill in
+results inline as each remaining step is done.
+
+**2026-10-03: the WS1 box runs are copied in, and #199 passes.** Between
+2026-09-24 and 2026-09-26 the own backend was built and checked in lettered
+blocks (A to N), each posted to its issue as a "Box run" comment rather than
+ticked here. This update copies those results into §4, §6, §7.8, §8, §9, §10
+and §11, each with the build it ran on and the issue holding the detail. #199's
+row in §4.1 passes on alpha.103 (#200's comment). Nothing in this update is a
+new measurement; every result here was already posted on its issue.
+
+Five fixes for what the blocks found landed afterwards, and none has run on
+hardware: #293, #295, #296, #297/#313 and #298 (PRs #317, #316, #331, #319,
+#318). Where a row was rewritten for one of them, the block passed against the
+old wording, so the row says so and stays open; the other fixes are named in
+the notes beside the row that found them. They, with the rows no block
+reached, are what WS7.2's pass (#47) has to cover. The rest of what remains
+open needs hardware this box does not have: a Windows 10 machine, a build below
+19041, and a non-NVIDIA GPU (#224).
 
 **2026-09-23, alpha.87 → alpha.89: the whole #130 sheet has a result, and one
 row fails.** The in-app update came back on its own for the first time, which
@@ -137,15 +154,25 @@ than an assumed one.
 For each, confirm the recording continues or recovers cleanly and the final
 VOD is playable:
 
-- [ ] Alt-tab out of League and back mid-game
-- [ ] In-game resolution change mid-recording
-- [ ] Mid-game reconnect: disconnect the client (brief network drop or manual
+- [x] Alt-tab out of League and back mid-game
+- [x] In-game resolution change mid-recording
+- [x] Mid-game reconnect: disconnect the client (brief network drop or manual
       client kill), then reconnect; exercises the `Reconnect` path
-- [ ] Unplug the microphone mid-game on a mic preset. The recording should
+- [x] Unplug the microphone mid-game on a mic preset. The recording should
       survive with its remaining tracks rather than failing
 
 Record: pass/fail per case, and what the output VOD looked like for any
 failure (gap, corruption, truncation).
+
+**2026-09-26, on the own backend (§11.8, block N8; `40cd157`, release
+installer).** All four pass, and each recording plays. Alt-tab leaves no gap; a
+resolution change to another aspect is pillarboxed in black; killing
+`League of Legends.exe` and pressing Reconnect reattached within 4 s into the
+same file (#304); unplugging the headset stopped its sources part-way and the
+recording carried on with its other tracks. These rows were never run on
+libobs, which is now the fallback. The reconnect left the restarted game
+audio pulled into line by slips (#313); #319 re-anchors it instead, and has not
+run on hardware.
 
 ### 4.1 The daemon dying under the UI (WS3.8)
 
@@ -209,10 +236,16 @@ matters: the inherited-markers half of the bug only shows on the recording
 - [x] The UI starts another daemon and the strip clears by itself.
 - [x] The **recording file is playable**. A fragmented MP4 is valid up to the
       point it was cut off, which is the guarantee that survives a crash.
-- [ ] After the restart, the recovered recording **scrubs** in the review
+- [x] After the restart, the recovered recording **scrubs** in the review
       player: drag the playhead to the middle and to near the end. Startup
       recovery remuxes it since #233, and `daemon.log` should hold a
       `remuxed recovered ... in N ms` line for it, with no `WARN [db]`.
+      **2026-09-26:** passes on both backends. Own (block J8 and N7):
+      `remuxed recovered … 4 audio track(s) in 475 ms`, and the recording
+      plays and scrubs. libobs (#309, `40cd157`): `repaired recovered …`, then
+      `remuxed recovered … in 132 ms`, no `WARN [db]`, no `.faststart.tmp`
+      left behind, and both the recovered card and the resumed recording
+      play and scrub.
 
 **2026-09-21, WS3 session: 18 of 28 rows on the #130 sheet pass.** The tray is
 fully exercised and the daemon's headless half holds: a game recorded with no
@@ -269,7 +302,7 @@ that did not reproduce in the custom game.
       the poll that produced them for the same reason the markers are. A
       recovered recording whose timeline has glyphs on it but whose graph is
       blank is the shape of this half being broken.
-- [ ] **Record a second game to completion afterwards. Its markers are its
+- [x] **Record a second game to completion afterwards. Its markers are its
       own.** This is the half that looked right while being wrong: the Live
       Client Data API serves the whole game's event list rather than the events
       since the last poll, so a session starting mid-game used to ingest
@@ -277,6 +310,10 @@ that did not reproduce in the custom game.
       writing. A second recording carrying markers from the killed one, at
       offsets that belong to neither, is a regression.
       **Fails on 2026-09-23 (#199):** exactly that regression, in both runs.
+      **Passes on 2026-09-24, alpha.103** (#205's fix; #200's comment): only
+      post-restart events, none inherited, and at the right video times rather
+      than 0:00 (#198). The same run's recovered card kept its items, spells
+      and runes (#200).
 
 And the version-skew case, which is the one that does **not** recover:
 
@@ -804,7 +841,7 @@ needs a window.
       shows two `ninja-recorder.exe` processes.
 - [x] `app_data_dir()/logs/` now holds both `ui.log` and `daemon.log`, and
       neither rotates the other.
-- [ ] **#202.** With the release and devtools builds both installed and both
+- [x] **#202.** With the release and devtools builds both installed and both
       running, the release build's `logs/` holds `daemon.log` and `ui.log`, the
       devtools build's holds `daemon-devtools.log` and `ui-devtools.log`, and no
       line from one build appears in the other's file. Since #222 those are two
@@ -815,6 +852,12 @@ needs a window.
       worker leaves the first build's file where it was rather than moving
       it to `.1.log`. Each daemon session's first lines name its version,
       build and pid: `ninja-recorder <version> (release build), pid <n>`.
+      **2026-09-24, alpha.103 beside a devtools build:** each build wrote only
+      its own `daemon*`, `ui*` and `libobs*` logs, neither rotated the
+      other's libobs log, and the build lines read `2.0.0-alpha.103 (release
+      build), pid 30576` and `0.8.0 (devtools build), pid 15148` (#202's
+      comment). That was before #222 split the folders; the recordings half
+      failed then and passes in §7.8.
 - [x] **The exit criterion for 3.4.** Start a game and let recording begin.
       Kill the UI process from Task Manager, then launch it again. Within one
       reconnect it shows the recording still in flight, with the elapsed time
@@ -910,7 +953,10 @@ These are the things nobody has been able to answer by reading the code:
 
 - [ ] Does `window_capture` forced to WGC (`method=2`) actually produce frames
       for League's borderless and windowed modes?
-- [ ] Does the faststart remux on stop actually run against a real capture?
+- [x] Does the faststart remux on stop actually run against a real capture?
+      **Yes, on both backends.** Own: `own: remux …: ok in 256–841 ms` on
+      every block F recording (#236). libobs: block A's recordings play and
+      seek after it (#236, `cdf45fe`).
 - [ ] **Does the duration probe work off the bundled `ffmpeg.exe`?** Drop a
       handful of video files the app did not record into the recordings
       folder, press Rescan, and confirm each card shows a real LENGTH rather
@@ -934,7 +980,14 @@ These are the things nobody has been able to answer by reading the code:
 Nothing below can be checked off Windows. Use `ffprobe`, because the failure
 modes here are silent, and the app's own UI will not show you most of them.
 
-- [ ] **Does `wasapi_process_output_capture` produce non-silent samples for a
+**2026-10-03: these rows were written for libobs and are still open there.** The
+own backend's answers to the same questions (track count and order, isolated
+stems, `a:0` the only default, Discord on its own track, every track kept
+through the remux) are in §11.7 and §11.8, and they pass. On libobs, block A
+found four AAC tracks that decode cleanly, and #5 found track switching works.
+Nobody has checked the libobs rows one by one.
+
+- [x] **Does `wasapi_process_output_capture` produce non-silent samples for a
       Vanguard-protected `League of Legends.exe`?** This is the big one: every
       preset naming "game audio" depends on it and there is no automatic
       fallback. If it fails, Desktop is the documented workaround.
@@ -945,13 +998,21 @@ modes here are silent, and the app's own UI will not show you most of them.
       against League on this machine, and a silent one says it does not. Either
       way the spike is then confirming a known answer rather than discovering
       one, which is the cheaper order to do them in. See #67.
-- [ ] **Run `spikes/p0c-audio` for #7**, following
+      **Yes.** The spike ran first in the end (below), and then the own
+      backend's block G recorded the game alone on the Game preset, with the
+      game audible and Discord absent by ear (#237). On libobs, #5's full game
+      and block A's recordings carried their game tracks.
+- [x] **Run `spikes/p0c-audio` for #7**, following
       [its README](../spikes/p0c-audio/README.md): the process-tree report,
       then an include and an exclude capture with League in game and Discord
       audible. Paste the output into #7; the results go in
       [DEVELOPMENT.md §16](../DEVELOPMENT.md#16-the-capture-gate-and-what-it-is-allowed-to-decide)'s
       P0c-1 rows, not here.
-- [ ] **Run `spikes/p0c-video` for #8**, following
+      **2026-09-24, build 26200, unelevated:** include held the game only,
+      exclude held Discord and Spotify with no game, and the root was
+      `League of Legends.exe`, the game window's owner. #7 holds the reports;
+      it is WS1.3's gate result.
+- [x] **Run `spikes/p0c-video` for #8**, following
       [its README](../spikes/p0c-video/README.md): `--list`, a clean
       ten-minute run, a `--kill-after 300` run and a two-minute
       `--encoder software` run, with ninja-recorder quit and League in a
@@ -960,6 +1021,10 @@ modes here are silent, and the app's own UI will not show you most of them.
       results go in
       [DEVELOPMENT.md §16](../DEVELOPMENT.md#16-the-capture-gate-and-what-it-is-allowed-to-decide)'s
       P0c-2 rows, not here.
+      **2026-09-24, build 26200, RTX 4080: every row passes on NVIDIA.** Ten
+      minutes at 0.016 frames of drift, a file killed at 300 s that plays with
+      0.32 s lost, and a software run. A second GPU vendor is still unchecked
+      (#224). #8 holds the reports.
 - [ ] Record with each preset. Confirm the track *count* and order match the
       table in §2.5, and that a Game-only recording contains no microphone
       audio.
@@ -1000,11 +1065,16 @@ modes here are silent, and the app's own UI will not show you most of them.
       an existing row without playing another game. Check the log for a
       disagreement warning: the LCU and Live Client Data must never report a
       different winner, and if they do, the wrong game was matched.
-- [ ] **Start the app during a game.** It should begin recording rather than
+- [x] **Start the app during a game.** It should begin recording rather than
       waiting for the next one; the gameflow watch now reads the current
       phase on connect instead of only reacting to changes (#75). The same
       path is what lets a recording resume after anything interrupts it
       mid-game.
+      **2026-09-23 to 2026-09-26: it does, every time it was tried.** Reopening
+      the app mid-game on alpha.87 started a second recording of the same
+      game, and so did every daemon restart after a kill (§4.1; block J8,
+      "resumed the same game into a second recording within about a second").
+      One game then gives two rows, which is expected after an interruption.
 - [ ] **A recording survives a brief Live Client Data outage.** #74 tolerates
       five consecutive transport failures; confirm a momentary blip no longer
       finalizes the VOD, and that a genuinely ended game still finalizes
@@ -1019,12 +1089,23 @@ modes here are silent, and the app's own UI will not show you most of them.
       read the file. Before #221 only errors and ffmpeg output reached it.
       (A devtools build's worker writes `libobs-devtools.log` instead; see
       the #202 row.)
-- [ ] **Worker lines keep arriving mid-game** (#221). During a long
+      **2026-09-26, everything but the portal half** (block B, devtools
+      `3a9f092`, #221): 228 lines after one game, 0 of them `error:`; the
+      daemon's `[recorder] encoder: JIM_NVENC (available: [JIM_NVENC,
+      FFMPEG_NVENC, OBS_X264])` line; no failed module load. Whether the Log
+      panel reads the file was not recorded.
+- [x] **Worker lines keep arriving mid-game** (#221). During a long
       recording, `libobs.log` should grow every few seconds when libobs has
       something to say (unplugging the microphone is a reliable way to make
       it), rather than all at once when the game ends. `daemon.log` should
       have no `could not reach the capture worker` or `says it is not
       recording` warning for a recording that played back fine.
+      **2026-09-26 (block B5):** five minutes into a game, unplugging the
+      headset took the file from 351 to 362 to 367 lines, with the mic's
+      `Device … invalidated. Retrying` lines arriving live. Three
+      `error: UI task could not be queued, there's no UI task handler!` lines
+      followed; whether libobs's microphone comes back after a replug was not
+      checked, and libobs is due to go in WS8.
 - [ ] Does gameflow report a distinct phase while spectating? If it reports
       `InProgress`, spectated games are currently recorded, which the design
       says they should not be.
@@ -1201,18 +1282,25 @@ before #222 starts with an **empty library**; that is expected.
 
 Install both builds from the same commit and start both, so both daemons run.
 
-- [ ] The portal's Overview shows `app_data_dir`, `db_path` and
+**2026-09-26: block D's six rows pass, and they cover all but the playback row
+below** (block D, release and devtools installers from
+`3a9f092`, both on libobs, one Practice Tool game; #222's comment). Both logs
+identified game 711363951 at the same moment, each library got one card, the
+two files (37.1 MB and 37.2 MB) decoded clean, and after quitting and
+relaunching both, each library still had exactly its one card.
+
+- [x] The portal's Overview shows `app_data_dir`, `db_path` and
       `recordings_dir` under `com.ninjarecorder.app.devtools`, and the release
       build's library is **not** in the portal's Library panel.
-- [ ] Play one game (a Practice Tool game is enough) with both running. Both
+- [x] Play one game (a Practice Tool game is enough) with both running. Both
       daemon logs say `game identified` for it.
-- [ ] **Two recordings, one per build.** One new `.mp4` in
+- [x] **Two recordings, one per build.** One new `.mp4` in
       `%APPDATA%\com.ninjarecorder.app\recordings` and one in
       `%APPDATA%\com.ninjarecorder.app.devtools\recordings`. Each build's
       library shows its own card for the game, and neither shows the other's.
-- [ ] Neither daemon log has `faststart remux failed` for the game, and
+- [x] Neither daemon log has `faststart remux failed` for the game, and
       neither says `os error 32` or `os error 2`.
-- [ ] **Both files decode cleanly.** A full decode, not a probe, with nothing
+- [x] **Both files decode cleanly.** A full decode, not a probe, with nothing
       printed for either file:
 
       ```powershell
@@ -1229,7 +1317,8 @@ Install both builds from the same commit and start both, so both daemons run.
       (Before #222 this printed `Invalid NAL unit size` and `channel element
       ... is not allocated` thousands of times.)
 - [ ] Both recordings play in their own build's review player, with markers.
-- [ ] Restart both daemons (tray → Quit, then relaunch). Neither resume sweep
+      Not one of block D's rows, so it has no result yet.
+- [x] Restart both daemons (tray → Quit, then relaunch). Neither resume sweep
       touches the other build's rows: each library still has exactly its one
       card for the game, and no row is lost.
 
@@ -1252,36 +1341,39 @@ no file at all (the muxer). None of it reaches CI.
 
 ### 8.1 Build and install
 
-- [ ] Run CI by hand (Actions → CI → Run workflow) with **`libobs_trim`**
+- [x] Run CI by hand (Actions → CI → Run workflow) with **`libobs_trim`**
       ticked, and take the `ninja-recorder-devtools-libobs-trim-windows-latest-<sha>`
       artifact. Not the plain `-devtools-` one from the same run, which is
       untrimmed.
-- [ ] From that run's **Trim libobs to the keep-list** step, copy the
+- [x] From that run's **Trim libobs to the keep-list** step, copy the
       `Before:`, `After:` and `Remove:` lines into the table below. They are
       the staged directory before packaging, not the install.
-- [ ] **Quit the release build first** (tray → Quit) and leave it quit for the
+- [x] **Quit the release build first** (tray → Quit) and leave it quit for the
       whole section, because two daemons would both record the game and share
       the GPU's encoder sessions, which muddies what this section measures.
       (They no longer write the same files: since #222 each build has its own
       data folder, see §7.8.)
-- [ ] Before installing the trimmed build, install the **untrimmed** devtools
+- [x] Before installing the trimmed build, install the **untrimmed** devtools
       build of the same commit, record a session, and copy
       `%APPDATA%\com.ninjarecorder.app.devtools\logs\libobs-devtools.log` aside as
       `libobs.untrimmed.log`. It is the baseline the trimmed log is compared
       against in 8.3: the same build and the same source tree, so the only
       difference is the trim.
-- [ ] Install the trimmed devtools build. It installs beside the release one,
+- [x] Install the trimmed devtools build. It installs beside the release one,
       in `%LOCALAPPDATA%\ninja-recorder-dev`.
-- [ ] **It is the trimmed one.** `%LOCALAPPDATA%\ninja-recorder-dev\libobs\`
+- [x] **It is the trimmed one.** `%LOCALAPPDATA%\ninja-recorder-dev\libobs\`
       has no `obs-plugins\64bit\locales\`, no `libobs-opengl.dll` and no
       `coreaudio-encoder.dll`, and does have `obs-ffmpeg-mux.exe`,
       `libobs-winrt.dll` and the three `obs-*-test.exe` probes.
 
 ### 8.2 Record and play
 
-- [ ] With the League client running, `extprocess_recorder.exe` appears and
+- [x] With the League client running, `extprocess_recorder.exe` appears and
       the dev portal's health panel reads `libobs (ready)`, not
       `libobs (unavailable: ...)`.
+      **2026-09-24:** `daemon-devtools.log` said `backend: libobs`, and the
+      portal's top bar read `recorder capturing`. No portal page names the
+      daemon's backend, so the health-panel half was answered from the log.
 - [ ] **A Practice Tool game records**, and `daemon-devtools.log` names a
       hardware encoder rather than the "no hardware H.264 encoder" refusal:
       a `[recorder] encoder: JIM_NVENC (available: [...])` line (or the AMF
@@ -1289,11 +1381,14 @@ no file at all (the muxer). None of it reaches CI.
       libobs (ready)` line. The daemon writes both itself since #221, so
       they do not depend on libobs's output. A refusal logs the list it
       refused from instead.
-- [ ] **A full game records** start to finish. That is the exit criterion's
+      **2026-09-24: recorded on NVENC, but the log did not say so** (the
+      table's row): this pass predates #221. The line has since been seen on
+      an untrimmed devtools build (block B2, `3a9f092`), not on a trimmed one.
+- [x] **A full game records** start to finish. That is the exit criterion's
       "real game", and Practice Tool is the cheap rehearsal for it.
-- [ ] It plays in the review player, seeks (the faststart remux ran against
+- [x] It plays in the review player, seeks (the faststart remux ran against
       the bundled `ffmpeg.exe`), and markers land where they should.
-- [ ] Every audio stem the preset promises is present and not silent, which
+- [x] Every audio stem the preset promises is present and not silent, which
       is `win-wasapi` loaded and working.
 
 ### 8.3 The plugin-load log
@@ -1311,7 +1406,8 @@ below on its own. **If the file holds only `error:` lines, the bridge is not
 working, and that is a finding for #221, not a clean result.** A baseline
 `libobs.untrimmed.log` taken before #221 has the same gap, so take it again.
 
-- [ ] **No failed module loads.**
+- [ ] **No failed module loads.** Still to run on a trimmed build: block B4
+      (2026-09-26) found none on an **untrimmed** devtools build, after #221.
 
       ```powershell
       Select-String -Path "$env:APPDATA\com.ninjarecorder.app.devtools\logs\libobs-devtools.log" `
@@ -1319,7 +1415,7 @@ working, and that is a finding for #221, not a clean result.** A baseline
       ```
 
       Paste whatever it finds into #5, even if it looks harmless.
-- [ ] **Only coreaudio-encoder has gone.** Compare the module and encoder lines
+- [x] **Only coreaudio-encoder has gone.** Compare the module and encoder lines
       against `libobs.untrimmed.log`: `win-capture`, `win-wasapi`,
       `obs-ffmpeg`, `obs-nvenc`, `obs-qsv11` and `obs-x264` should load in
       both, and an encoder the untrimmed log listed should not be missing from
@@ -1331,7 +1427,7 @@ working, and that is a finding for #221, not a clean result.** A baseline
 
 ### 8.4 Size
 
-- [ ] The installed build, with the daemon running:
+- [x] The installed build, with the daemon running:
 
       ```powershell
       .\scripts\measure.ps1 -ProcessName ninja-recorder-dev -ArgumentFilter '--daemon' `
@@ -1339,7 +1435,7 @@ working, and that is a finding for #221, not a clean result.** A baseline
           -InstallPath "$env:LOCALAPPDATA\ninja-recorder-dev"
       ```
 
-- [ ] The `libobs` folder alone, which is the figure that carries across to a
+- [x] The `libobs` folder alone, which is the figure that carries across to a
       release build, since only the app binary differs between the two:
 
       ```powershell
@@ -1348,7 +1444,7 @@ working, and that is a finding for #221, not a clean result.** A baseline
           -InstallPath "$env:LOCALAPPDATA\ninja-recorder-dev\libobs"
       ```
 
-- [ ] The same two against an **untrimmed** devtools build of the same commit,
+- [x] The same two against an **untrimmed** devtools build of the same commit,
       so the saving is a difference between two measurements rather than one
       measurement and a remembered figure.
 
@@ -1387,13 +1483,13 @@ this way is
 The backend comparison WS1.7's exit criterion asks for, both backends
 recording the same game, is part of the exit run, §11.8.
 
-- [ ] **A release build shows the Advanced group**, with a line explaining
+- [x] **A release build shows the Advanced group**, with a line explaining
       each backend: Own the default, libobs the fallback for one release.
-- [ ] **The row renders.** On a fresh install (no saved row) **Own** is
+- [x] **The row renders.** On a fresh install (no saved row) **Own** is
       selected and enabled on build 19041 or newer (Windows 10 2004 and
       later, or Windows 11), and the row says "Automatic: Own, the default." "In use now" reads `own (idle)` with
       no client open.
-- [ ] **The daemon log names the setting.** `daemon.log`'s
+- [x] **The daemon log names the setting.** `daemon.log`'s
       `[recorder] backend:` line reads
       `own (idle) (capture_backend = unset)` on a fresh install.
 - [ ] **Refused mid-game.** Start a Practice Tool game on Own, and in the
@@ -1402,7 +1498,7 @@ recording the same game, is part of the exit run, §11.8.
       changed while a recording is in progress", the recording carries on on
       Own and finalizes normally, and `get_capture_backend` still reports
       `own` as configured.
-- [ ] **Switch, and the next recording uses it.** Back in the lobby with the
+- [x] **Switch, and the next recording uses it.** Back in the lobby with the
       client open, make the same `set_capture_backend` call, or click
       `libobs` in the row. `daemon.log` gains a
       `[recorder] backend: … (capture_backend = libobs, changed in Settings)`
@@ -1453,25 +1549,36 @@ recording the same game, is part of the exit run, §11.8.
 The last two rows need a build below 19041; on anything newer they cannot be
 reached, so leave them empty and say so.
 
+**2026-09-26, on the flip's installers** (`40cd157`, then `d02defa`; block N,
+#287's comments). A fresh install logged `(capture_backend = unset)`, the row
+read "Automatic: Own, the default.", and the game recorded on own (N17).
+Consecutive games recorded on libobs and then on own after switching in the
+lobby (N16), and a stored libobs survived a reinstall (N18). Block M had
+already used the row on a release installer. What those runs did not record is
+the worker count after each switch or `diagnostics_json.backend`, so the switch
+row is ticked on the recordings alone. The mid-game refusal and the
+unbuildable saved backend have not been run; there is no Windows 10 box and
+no box below 19041.
+
 | What | Result | Notes |
 |---|---|---|
-| 9: a release build shows the Advanced group, a line per backend | | |
-| 9: a fresh install has Own selected and in use | | |
-| 9: switch the setting, and the next recording uses the chosen backend | | |
+| 9: a release build shows the Advanced group, a line per backend | Pass | Used on the release installer in blocks M and N |
+| 9: a fresh install has Own selected and in use | Pass | N17: `(capture_backend = unset)`, "Automatic: Own, the default.", recorded on own |
+| 9: switch the setting, and the next recording uses the chosen backend | Pass | N16: libobs, then own, on consecutive games. Worker counts and `diagnostics_json` not recorded |
 | 9: refused mid-game; the recording in flight is unaffected | | |
 | 9: an unbuildable saved libobs records nothing and says why | | |
-| 9: switch to own, and the next recording is made by it | | |
-| 9: Windows 10 2004+, nothing saved: own, "Automatic: Own, the default." | | |
-| 9: below 19041, nothing saved: records on libobs, the log line, "Automatic: libobs, because …" | | |
-| 9: below 19041, `own` saved: refused, the warning, no recording | | |
+| 9: switch to own, and the next recording is made by it | Pass | N16, the second of the two games |
+| 9: Windows 10 2004+, nothing saved: own, "Automatic: Own, the default." | Skipped | No Windows 10 box |
+| 9: below 19041, nothing saved: records on libobs, the log line, "Automatic: libobs, because …" | Skipped | No box below 19041 |
+| 9: below 19041, `own` saved: refused, the warning, no recording | Skipped | No box below 19041 |
 
 ## 10. Installing over a running app (#220)
 
 The installer stops this install's libobs worker before it touches a file
 (`src-tauri/nsis/installer-hooks.nsh`), and the in-app updater shuts the
-worker down before it hands over. Neither has run on Windows yet: makensis
-never runs on the dev box, so the hook has been read, not compiled, until CI
-builds a bundle with it. Why it works this way is
+worker down before it hands over. makensis never runs on the dev box, so the
+hook was read, not compiled, until CI built a bundle with it; both have since
+run on Windows (2026-09-26, below). Why it works this way is
 [DEVELOPMENT.md §14, "The capture backend has to be shut down first"](../DEVELOPMENT.md#the-capture-backend-has-to-be-shut-down-first).
 
 Each box needs `extprocess_recorder.exe` **running** when the installer starts:
@@ -1481,7 +1588,7 @@ Details tab, with the *Image path name* column on, before going on.
 - [ ] **The bundle compiles.** CI's build job gets past `tauri build` for both
       bundles, and its "The installer ships the app" step prints "the installer
       includes the hooks that stop the libobs worker".
-- [ ] **Interactive install over a running app.** Run the new installer by
+- [x] **Interactive install over a running app.** Run the new installer by
       hand and choose the option that does *not* uninstall first (on the
       same version that is "Add/Reinstall"). One prompt, the template's own
       "ninja-recorder is running! Click OK to kill it". **Cancel** aborts the
@@ -1491,7 +1598,7 @@ Details tab, with the *Image path name* column on, before going on.
       writing" box, and the Details tab shows neither afterwards. The
       installer's *Show details* list has a
       `Stopped process <pid> (…\libobs\extprocess_recorder.exe)` line.
-- [ ] **The other build's worker survives.** Install the release and devtools
+- [x] **The other build's worker survives.** Install the release and devtools
       builds side by side, open the client so both workers run, and install
       the **devtools** build over itself. The release build's worker (its
       image path is under `%LOCALAPPDATA%\ninja-recorder\libobs\`) is still
@@ -1502,7 +1609,7 @@ Details tab, with the *Image path name* column on, before going on.
       silently with no dialog, the app comes back, and Settings → About reads
       the new version. Then compare `libobs\` against the new build's artifact:
       every file there should have the new build's timestamps.
-- [ ] **Uninstall with the app running.** Apps & Features → Uninstall: one
+- [x] **Uninstall with the app running.** Apps & Features → Uninstall: one
       prompt, and afterwards `%LOCALAPPDATA%\ninja-recorder\libobs\` does not
       exist at all, nor does the install folder itself (#308: before the
       post-uninstall hook, the worker's DLLs, its executable and three
@@ -1519,6 +1626,19 @@ Details tab, with the *Image path name* column on, before going on.
       uninstaller now removes `libobs\` whole; afterwards the folder is back,
       holds the new build's files, and the app records.
 
+**2026-09-26: everything but the last row has a result** (block E, release and
+devtools installers from `3a9f092`, both on libobs; #220's comment, and #310's
+for the uninstall re-run on `40cd157`). Cancel left the UI, the daemon and the
+worker running, with the template's "ninja-recorder-dev is running!". OK
+stopped all three before the copy, with no locked-file box. The release build's
+worker stayed up through a devtools reinstall. The in-app update handed over
+with no `could not release the capture backend`. Uninstalling while running
+left all 27 libobs files behind on `3a9f092` (#308); on `40cd157` it removed
+the whole install folder. Two halves are unread: the *Show details* line on
+the interactive install was not captured, and the in-app update's file
+timestamps cannot say anything, because NSIS keeps each file's original
+timestamp and the libobs bundle was byte-identical between the two builds.
+
 What this does **not** fix, so do not expect it: an *interactive upgrade* that
 chooses "Uninstall before installing" runs the **previously installed**
 uninstaller before any of this installer's code, and one installed before this
@@ -1528,11 +1648,11 @@ uninstaller it runs is this one.
 
 | What | Result | Notes |
 |---|---|---|
-| 10: the bundle compiles, and includes the hooks | | |
-| 10: interactive install: Cancel leaves both running, OK stops both, no locked-file error | | |
-| 10: the other build's worker survives | | |
-| 10: in-app update replaces every `libobs\` file | | |
-| 10: uninstall with the app running leaves no `libobs\` folder behind | | |
+| 10: the bundle compiles, and includes the hooks | Pass, by effect | The CI-built installers of `3a9f092` ran the hooks (E1, E2); the CI step's line was not read |
+| 10: interactive install: Cancel leaves both running, OK stops both, no locked-file error | Pass | E1, E2. The *Show details* `Stopped process` line was not captured |
+| 10: the other build's worker survives | Pass | E3: the release `extprocess_recorder.exe` (pid 5680) stayed up through a devtools reinstall |
+| 10: in-app update replaces every `libobs\` file | Hand-over passes; replacement unmeasurable | E4: `signature verified`, handed over, no `could not release`. E5 skipped: NSIS keeps original timestamps and the bundle was byte-identical |
+| 10: uninstall with the app running leaves no `libobs\` folder behind | Pass on `40cd157` | Failed on `3a9f092` (#308). After #310: two `Stopped process` lines, every libobs file deleted, `Test-Path` on the folder `False` |
 | 10: uninstall before installing still leaves a complete, working `libobs\` | | |
 
 ## 11. The own backend (WS1.6, #10)
@@ -1562,46 +1682,52 @@ writer, H.264 8 Mbps CBR with a keyframe every two seconds. **No audio track
 is expected**: game audio is #237. Play a Practice Tool game for a couple of
 minutes, then end it.
 
-- [ ] **The pre-warm names the encoder.** Opening the client writes an
+- [x] **The pre-warm names the encoder.** Opening the client writes an
       `own backend warm: capture on <GPU>; encoder own (ready: <encoder>);
       offered: …` line to `worker-devtools.log` (§11.6). On a machine with an NVIDIA, AMD or
       Intel GPU the encoder is that vendor's hardware MFT. A
       `software encoding` line here instead is §2.4's fallback, and the
       reason on the line says why: paste it.
-- [ ] **No border on screen.** No yellow WGC border around the game window at
+- [x] **No border on screen.** No yellow WGC border around the game window at
       any point in the game. `worker-devtools.log` has
       `own backend: WGC border off (borderless access …)`; paste the line
       whichever way it went.
-- [ ] **The encoder is named where the file is.** The log's `recording started:
+- [x] **The encoder is named where the file is.** The log's `recording started:
       backend own (ready: …)` line and the recording's `diagnostics_json`
       (dev portal → Library) `backend` both name the encoder Media Foundation
       loaded, with its vendor id. No `loaded … instead of the hardware
       encoder` warning.
-- [ ] **It plays.** The recording appears in the library and plays in the
+- [x] **It plays.** The recording appears in the library and plays in the
       review player, at the game window's size (rounded down to even), with
       the cursor visible as in a libobs recording.
-- [ ] **It scrubs after the remux.** Drag the scrub bar to the middle and the
+- [x] **It scrubs after the remux.** Drag the scrub bar to the middle and the
       end: it seeks. `daemon.log` has no `faststart remux failed` line.
 - [ ] **Video only, as expected.** `ffprobe` on the file shows one H.264
       stream and no audio stream; the review player's track menu offers
       nothing. That is correct for a build before #237; from #237 on, the Game
       preset adds one AAC stream, which is §11.2's check.
-- [ ] **Markers land where they happened.** A kill's marker seeks to the
+- [x] **Markers land where they happened.** A kill's marker seeks to the
       kill, as on libobs: video time zero is the moment `start` returned.
-- [ ] **Several games in one session.** A second game in the same client
+- [x] **Several games in one session.** A second game in the same client
       session records too, and the Task Manager thread count of the daemon,
       and of the capture worker (§11.6), does not keep growing between games.
 
+**2026-09-25: block F, all rows that apply pass** (#236's comment). Devtools
+build `a4207cd` (#287's CI run 36183685801), backend Own, Game preset, Windows
+11 Pro 26200, RTX 4080 (driver 32.0.16.1714), 2560x1440 borderless, four
+Practice Tool games. The video-only row no longer applies, because #237 had
+already landed.
+
 | What | Result | Notes |
 |---|---|---|
-| 11.1: the pre-warm line names a hardware encoder | | |
-| 11.1: no border on screen | | |
-| 11.1: `backend_name` and `diagnostics_json.backend` name the loaded encoder | | |
-| 11.1: plays | | |
-| 11.1: scrubs after the remux | | |
-| 11.1: one video stream, no audio (expected until #237) | | |
-| 11.1: markers land where they happened | | |
-| 11.1: a second game in the same session records | | |
+| 11.1: the pre-warm line names a hardware encoder | Pass | `own backend warm: capture on NVIDIA GeForce RTX 4080; encoder own (ready: NVIDIA H.264 Encoder MFT); offered: NVIDIA H.264 Encoder MFT [VEN_10DE]; H264 Encoder MFT [software]` |
+| 11.1: no border on screen | Pass | `own backend: WGC border off (borderless access Allowed)` |
+| 11.1: `backend_name` and `diagnostics_json.backend` name the loaded encoder | Pass | `recording started: backend own (ready: NVIDIA H.264 Encoder MFT [VEN_10DE])`. `diagnostics_json` was not read in block F; §11.8 read it |
+| 11.1: plays | Pass | At window size, cursor visible |
+| 11.1: scrubs after the remux | Pass | `own: remux …: ok` in 256–841 ms; full decode clean on every file |
+| 11.1: one video stream, no audio (expected until #237) | Does not apply | #237 had landed: the Game preset wrote one AAC stream (§11.2) |
+| 11.1: markers land where they happened | Pass | A kill marker seeks to the kill |
+| 11.1: a second game in the same session records | Pass | Four games; the daemon at 41 threads during a later one (one reading) |
 
 ### 11.2 Game audio by process loopback (#237)
 
@@ -1619,25 +1745,25 @@ or a Soundboard sound played every few seconds), as for the #7 run. Play a
 Practice Tool game for five minutes or more, making noise throughout (walk,
 cast, attack a dummy), then end it.
 
-- [ ] **The root is the game.** `worker-devtools.log` has `own backend: game audio
+- [x] **The root is the game.** `worker-devtools.log` has `own backend: game audio
       from PID <n>, the game window's owner, named League of Legends.exe`.
       Paste it. Any other wording (by name, the newest of several, a window
       owned by something else) is a finding: paste it with the Task Manager
       Details view of the League processes.
-- [ ] **The QPC answer.** At the first packet `worker-devtools.log` has either
+- [x] **The QPC answer.** At the first packet `worker-devtools.log` has either
       `game audio clock qpc: the first packet's QPC stamp is real, <x> ms
       before it was taken (QPC position …, device position …, taken at …)`,
       or `game audio clock device: …` saying why. **Paste it whichever way it
       went**: this line is what §16 is waiting on.
-- [ ] **The clock at stop.** `worker-devtools.log` has one `own backend: game audio
+- [x] **The clock at stop.** `worker-devtools.log` has one `own backend: game audio
       clock …` line at the end of the game with the raw drift in ppm (QPC mode
       only), the slips, gaps, overlaps and holds, the padding, and the capture's
       packet counts. Paste it. Do not round or summarise the numbers.
-- [ ] **The game is audible and Discord is absent.** Play the recording in
+- [x] **The game is audible and Discord is absent.** Play the recording in
       the review player: game sounds throughout, and none of Discord's.
-- [ ] **In sync.** An ability's sound lands on its animation near the start,
+- [x] **In sync.** An ability's sound lands on its animation near the start,
       in the middle and at the end of the recording.
-- [ ] **One audio track.** `ffprobe` shows one H.264 stream and one AAC
+- [x] **One audio track.** `ffprobe` shows one H.264 stream and one AAC
       stream, 48000 Hz stereo, and the audio ends within a frame of the video.
       The library row's audio layout (dev portal → Library,
       `audio_tracks_json`) is one track, `Game`.
@@ -1647,15 +1773,22 @@ cast, attack a dummy), then end it.
       only. Switch back to Game. From #238 on this row does not apply: every
       preset records, and §11.5 checks them.
 
+**2026-09-25: block G, all six pass** (#237's comment). Same build as §11.1,
+five Practice Tool recordings, four on Game and one on Game + mic + Discord
+with Discord audible in the same headset. **Process-loopback stamps are real**,
+which answers §16's QPC question. Two later recordings on the same build had
+the game audio running short of real time (#297); #319 has landed for it and
+has not run on hardware.
+
 | What | Result | Notes |
 |---|---|---|
-| 11.2: the root line names `League of Legends.exe` as the window's owner | | |
-| 11.2: the QPC answer (`clock qpc` or `clock device`, with the positions) | | |
-| 11.2: the stop line: raw ppm, slips, gaps, holds | | |
-| 11.2: game audible, Discord absent | | |
-| 11.2: in sync at start, middle and end | | |
-| 11.2: one H.264 and one AAC stream; the row says `Game` | | |
-| 11.2: another preset is refused with the reason (before #238 only) | | |
+| 11.2: the root line names `League of Legends.exe` as the window's owner | Pass | `own backend: game audio from PID 13348, the game window's owner, named League of Legends.exe`, and the same in every recording |
+| 11.2: the QPC answer (`clock qpc` or `clock device`, with the positions) | **qpc** | `game audio clock qpc: the first packet's QPC stamp is real, 10.46 ms before it was taken (QPC position 832131963219, device position 0, taken at 832132067861; 0 earlier packet(s) flagged as timestamp errors)` |
+| 11.2: the stop line: raw ppm, slips, gaps, holds | Pass | `+0.00 ppm`, 0 slips, gaps, overlaps and holds in all five; lead dropped 53–107 ms; padded 0 ms. #237 has the full line |
+| 11.2: game audible, Discord absent | Pass | By ear |
+| 11.2: in sync at start, middle and end | Pass | Ability sounds land on their animations; no drift heard |
+| 11.2: one H.264 and one AAC stream; the row says `Game` | Pass | One H.264, one AAC 48 kHz stereo 160 kb/s; full decode clean |
+| 11.2: another preset is refused with the reason (before #238 only) | Does not apply | #238 had landed |
 
 ### 11.3 The Windows 10 floor test (#237)
 
@@ -1675,9 +1808,9 @@ result worth having, with the notice's text and the `own: recording` line.
 
 | What | Result | Notes |
 |---|---|---|
-| 11.3: `p0c-audio` include on 19045: the game only | | |
-| 11.3: `p0c-audio` exclude on 19045: Discord, no game | | |
-| 11.3: §11.2 on 19045 | | |
+| 11.3: `p0c-audio` include on 19045: the game only | Skipped | No Windows 10 box |
+| 11.3: `p0c-audio` exclude on 19045: Discord, no game | Skipped | No Windows 10 box |
+| 11.3: §11.2 on 19045 | Skipped | No Windows 10 box |
 
 ### 11.4 Resize, minimise, and the game window closing (#240)
 
@@ -1690,32 +1823,32 @@ scales; it does not crop"). Each size change writes
 `worker-devtools.log` (§11.6; the first dozen per recording): paste the lines with the result.
 Play one Practice Tool game per row, or several rows in one game.
 
-- [ ] **The scaling test, on the GPU.** CI's runner has no D3D11 video
+- [x] **The scaling test, on the GPU.** CI's runner has no D3D11 video
       processor, so the test that checks the scaling pixel by pixel only
       skips there. In `src-tauri` on the box, run
       `cargo test the_video_processor_letterboxes_a_resized_frame -- --nocapture`
       and paste the `[own backend test]` line: `RAN … on <GPU>` passes,
       `SKIPPED` with a reason is a finding.
-- [ ] **Alt-tab.** Alt-tab out of the game for ten seconds and back, twice.
+- [x] **Alt-tab.** Alt-tab out of the game for ten seconds and back, twice.
       The file has no gap and no corruption; the time away shows the game as
       WGC saw it (it keeps compositing a window that is not in front).
-- [ ] **A resolution change mid-game.** In-game video settings, change the
+- [x] **A resolution change mid-game.** In-game video settings, change the
       resolution to one of a *different aspect* (1920x1080 to 1280x1024, say),
       play a minute, change it back. The file stays at the starting size, the
       5:4 minute is pillarboxed with **black** bars, not cropped and not
       smeared with stale pixels, and the picture is not stretched. Then change
       to a smaller size of the *same* aspect (1280x720): it fills the frame,
       scaled up.
-- [ ] **Minimise.** Minimise the game (Win+D, or the taskbar) for ten
+- [x] **Minimise.** Minimise the game (Win+D, or the taskbar) for ten
       seconds and restore it. The recording keeps going (no `ended early`
       warning), the file keeps its length, and the minimised stretch is the
       last frame held still. Recording carries on normally after the restore.
-- [ ] **Borderless.** Start a game in borderless: records normally.
-- [ ] **Windowed.** Start a game windowed, and drag the window's border
+- [x] **Borderless.** Start a game in borderless: records normally.
+- [x] **Windowed.** Start a game windowed, and drag the window's border
       mid-game. Records normally at the starting size; the drag scales, and
       the log's size lines stop after a dozen with `(further size changes are
       not logged)`.
-- [ ] **Exclusive fullscreen.** Start a game in fullscreen. **Record what WGC
+- [x] **Exclusive fullscreen.** Start a game in fullscreen. **Record what WGC
       gets**: a normal picture, black, or a frozen frame, and whether
       `start` failed (`no frame from WGC for the game window` in the log).
       Then switch between fullscreen and borderless mid-game and record the
@@ -1735,11 +1868,11 @@ Play one Practice Tool game per row, or several rows in one game.
       warn. A `the game audio capture ended before the recording did` line
       here is expected if process loopback ends with the game's process:
       note which way it went.
-- [ ] **The game crashing.** Kill `League of Legends.exe` in Task Manager
+- [x] **The game crashing.** Kill `League of Legends.exe` in Task Manager
       mid-game: the same line, and the file plays up to the kill and is black
       after it, not frozen. No `ended early` warning, no hang, and the next
       game records.
-- [ ] **The game reconnecting.** Kill `League of Legends.exe` mid-game and
+- [x] **The game reconnecting.** Kill `League of Legends.exe` mid-game and
       press Reconnect in the client (#302). The log has the `window closed`
       line, then, once the new game window is up, `the game window came back
       (PID …); capturing it again` and `the game came back: its audio is
@@ -1755,21 +1888,27 @@ Play one Practice Tool game per row, or several rows in one game.
       plays; the next game records. Skip the row if it cannot be caused; do
       not guess.
 
+**2026-09-25 to 2026-09-26: block I passes except I12** (#240's comments, with
+I10 and I11 on #302/#304 and minimise on #303). Devtools `a4207cd`, then the
+release installer of the combined test build `cdf45fe`, and N8/N9 on
+`40cd157`; Windows 11 Pro 26200, RTX 4080. The game-ends row is left open: it
+passed as a block row, but what it describes did not happen (see its note).
+
 | What | Result | Notes |
 |---|---|---|
-| 11.4: the scaling test runs on the GPU | | |
-| 11.4: alt-tab, twice | | |
-| 11.4: resolution change to another aspect: black bars, not cropped | | |
-| 11.4: resolution change to the same aspect, smaller: fills the frame | | |
-| 11.4: minimise: last frame held, recording continues | | |
-| 11.4: borderless | | |
-| 11.4: windowed, with a border drag | | |
-| 11.4: exclusive fullscreen: what WGC gets | | |
-| 11.4: fullscreen ↔ borderless mid-game: what WGC gets | | |
-| 11.4: game ends: black tail, one log line, no warning | | |
-| 11.4: game killed: plays to the kill, black after, next game records | | |
-| 11.4: game killed and reconnected: black gap, picture and game audio return | | |
-| 11.4: GPU device lost (only if it can be caused) | | |
+| 11.4: the scaling test runs on the GPU | Pass | `[own backend test] RAN the video-processor test on NVIDIA GeForce RTX 4080: scaled and letterboxed` |
+| 11.4: alt-tab, twice | Pass | Block I; again in N8 |
+| 11.4: resolution change to another aspect: black bars, not cropped | Pass | `the game window is now 1280x1024; into the 1920x1080 recording it is scaled to 1350x1080 at (284, 0), black around it`; pillarboxed in N8 |
+| 11.4: resolution change to the same aspect, smaller: fills the frame | Pass | `the game window is now 1280x720; into the 1920x1080 recording it is scaled to 1920x1080 at (0, 0)` |
+| 11.4: minimise: last frame held, recording continues | Pass on `cdf45fe` | `the game window sent a 1x1 frame (minimised or alt-tabbed away); holding the last picture …`. On `a4207cd` it scaled the 1x1 frame into a box (#301, fixed by #303) |
+| 11.4: borderless | Pass | N9 |
+| 11.4: windowed, with a border drag | Pass | N9. The window's title bar is in the picture (#314) |
+| 11.4: exclusive fullscreen: what WGC gets | The picture | N9: records and plays normally |
+| 11.4: fullscreen ↔ borderless mid-game: what WGC gets | The picture, with ~2 s of League's own black | No `window closed` line and no reattach; the cursor is drawn on the black, so those frames are the game's (#304, `cdf45fe`) |
+| 11.4: game ends: black tail, one log line, no warning | Passed as I10, **not as written** | Exit Game leaves the game before its window closes, so the recording stops while the picture is live: no frozen tail and no black tail, and no `window closed` line (#304). The row expects a black tail; it needs rewording or a run that ends another way |
+| 11.4: game killed: plays to the kill, black after, next game records | Pass on `cdf45fe` | Black at the kill, not frozen (#302, fixed by #304). On `a4207cd` it froze on the last frame |
+| 11.4: game killed and reconnected: black gap, picture and game audio return | Pass on `cdf45fe` | `window closed` at 00:04:20.211, `came back (PID 27724); capturing it again (reattach 1 this recording)` at 00:04:25.235, game audio again from the new PID; one file. The restarted audio was pulled in by slips (#313; #319 has not run on hardware) |
+| 11.4: GPU device lost (only if it can be caused) | Skipped | Forcing a GPU reset was not safe to cause |
 
 ### 11.5 Microphone, desktop and application sources, mixed into track 0 (#238)
 
@@ -1787,20 +1926,20 @@ A Practice Tool game of five minutes or more for each block below.
 **Game + mic.** Settings → Audio → **Game + mic**, with the microphone left
 on "Windows default".
 
-- [ ] **The microphone is the one the picker means.** `worker-devtools.log` has
+- [x] **The microphone is the one the picker means.** `worker-devtools.log` has
       `own backend: microphone audio from the default communications
       microphone, <name> (<id>)`, and `<name>` is the device the Settings
       picker marks as the Windows default. Repeat once with a specific
       microphone chosen in the picker: the line then says `the configured
       microphone` and names that one.
-- [ ] **Speak, and check track 0.** Count aloud at the start, the middle and
+- [x] **Speak, and check track 0.** Count aloud at the start, the middle and
       the end, over game sound. In the review player both your voice and the
       game are audible throughout, and your voice is in sync with you (clap
       once on camera if you have one, or speak as you click an ability).
 - [ ] **One audio track, labelled as the mix.** `ffprobe` shows one H.264 and
       one AAC stream, 48000 Hz stereo; the library row's `audio_tracks_json`
       (dev portal → Library) is one track, `Everything`, over two sources.
-- [ ] **The clock lines.** At the first packet, one `microphone audio clock
+- [x] **The clock lines.** At the first packet, one `microphone audio clock
       qpc` or `clock device` line; at stop, a `microphone audio …` line and a
       `game audio …` line, and one `track 0, the mix of game + microphone`
       line with the blocks, the watermark releases and the clipped samples.
@@ -1809,7 +1948,7 @@ on "Windows default".
 **Desktop.** Settings → Audio → **Desktop**. Play something outside the game
 (a video in a browser) for part of it.
 
-- [ ] **The desktop is captured, the game once.** `worker-devtools.log` has `own
+- [x] **The desktop is captured, the game once.** `worker-devtools.log` has `own
       backend: desktop audio from the default output, in loopback, <name>
       (<id>), kept running by a silent stream`, and **no** `game audio from
       PID` line: until #239 the Desktop preset opened the desktop only (it
@@ -1832,13 +1971,13 @@ on "Windows default".
 **Discord via an application source.** Settings → Audio → **Game + mic +
 Discord**, in a voice channel with someone talking.
 
-- [ ] **The root is Discord's own tree.** `worker-devtools.log` has `own backend:
+- [x] **The root is Discord's own tree.** `worker-devtools.log` has `own backend:
       Discord.exe audio from PID <n>, the top of Discord.exe's tree (<k>
       processes)`. Paste it with the Task Manager Details view of the
       Discord processes.
-- [ ] **Discord is in track 0**, alongside the game and your voice, and in
+- [x] **Discord is in track 0**, alongside the game and your voice, and in
       sync.
-- [ ] **Discord not running.** Quit Discord fully (tray → Quit) and record
+- [x] **Discord not running.** Quit Discord fully (tray → Quit) and record
       another game: it records, `worker-devtools.log` has `no Discord.exe audio; it is
       left out of the recording: no Discord.exe process is running`, and
       `audio_tracks_json` is one track, `Everything`, over two sources (game
@@ -1847,7 +1986,7 @@ Discord**, in a voice channel with someone talking.
 **A microphone unplugged mid-game** (the own-backend half of §4's row). On
 Game + mic with a USB microphone or a wireless headset:
 
-- [ ] **Nothing stalls.** Unplug it (or switch the headset off) a minute in.
+- [x] **Nothing stalls.** Unplug it (or switch the headset off) a minute in.
       The game keeps recording, the recording stops normally at the end of
       the game, and it plays to the end with the game audible throughout.
 - [ ] **Logged once.** `worker-devtools.log` has exactly one `the microphone
@@ -1869,24 +2008,31 @@ Game + mic with a USB microphone or a wireless headset:
 - [ ] **Left unplugged**, the voice stops at the unplug and the stop line for
       the microphone says `device lost 1 times (… s silent, the last never
       came back)`.
-- [ ] **The layout still names the microphone**: it was in the mix until it
+- [x] **The layout still names the microphone**: it was in the mix until it
       went, so `audio_tracks_json` is unchanged (`Everything`, two sources).
+
+**2026-09-25: block H, all twelve of its rows pass** (#238's comments), on the
+same devtools build as §11.1, with an Arctis Nova Pro Wireless as output and
+microphone. Four rows here were rewritten afterwards for fixes that came later,
+and stay open until they run: the desktop on QPC (#295, fixed by #316), and
+the device-loss lines, the replug and the left-unplugged stop line (#298,
+fixed by #318). The quiet-stretch row was not exercised.
 
 | What | Result | Notes |
 |---|---|---|
-| 11.5: the default microphone is the picker's Windows default; a chosen one is that one | | |
-| 11.5: Game + mic: voice and game on track 0, in sync | | |
-| 11.5: Game + mic: one AAC stream; the row says `Everything` over two sources | | |
-| 11.5: the microphone's clock lines and the mix line (paste) | | |
-| 11.5: Desktop: desktop captured, game not doubled, no game source opened | | |
-| 11.5: Desktop: silent stretch in sync, keep-alive held packets | | |
-| 11.5: Discord's root line (paste) | | |
-| 11.5: Discord in track 0, in sync | | |
-| 11.5: Discord not running: recorded, left out, logged, row over two sources | | |
-| 11.5: microphone unplugged: no stall, plays to the end | | |
-| 11.5: microphone unplugged: one line with the reason (paste) | | |
-| 11.5: microphone replugged after ~10 s: `came back` line, voice resumes in sync (paste) | | |
-| 11.5: desktop's output device off and on: desktop track follows it back (paste) | | |
+| 11.5: the default microphone is the picker's Windows default; a chosen one is that one | Pass | H1: `microphone audio from the default communications microphone, Microphone (Arctis Nova Pro Wireless) (…)`, the picker's default. H4: `the configured microphone, …`, the same endpoint id |
+| 11.5: Game + mic: voice and game on track 0, in sync | Pass | H2, by ear |
+| 11.5: Game + mic: one AAC stream; the row says `Everything` over two sources | Does not apply | #239 had landed, so every preset writes its stems too; H3 found four AAC streams on Game + mic + Discord with only `a:0` default (§11.7) |
+| 11.5: the microphone's clock lines and the mix line (paste) | Pass | `microphone audio clock qpc` in every recording, stamps 11.9–19.6 ms old; raw drift −1.15, +0.00, +0.00, −2.30, +5.48 ppm; worst residual 0.40–0.46 ms; 0 slips. #237 has the full lines |
+| 11.5: Desktop: desktop captured, game not doubled, no game source opened | Pass | H5/H6: `desktop audio from the default output, in loopback, Headphones (Arctis Nova Pro Wireless) …, kept running by a silent stream`; the game heard once. The game source opens since #239, as the row says |
+| 11.5: Desktop: silent stretch in sync, keep-alive held packets | Not run | System mute does not silence loopback capture, so H6's silent-stretch variant was not exercised |
+| 11.5: Discord's root line (paste) | Pass | `Discord.exe=PID 20984 (the top of Discord.exe's tree (6 processes))` |
+| 11.5: Discord in track 0, in sync | Pass | H8, by ear |
+| 11.5: Discord not running: recorded, left out, logged, row over two sources | Pass | H9: tracks `Everything, Game, Mic`. The start line said `Discord.exe=failed` at WARN; #331 changes it to `left out` at INFO, not yet run |
+| 11.5: microphone unplugged: no stall, plays to the end | Pass | H10: headset off 8 s in; stopped normally; voice up to the drop |
+| 11.5: microphone unplugged: one line with the reason (paste) | Re-run | H11 logged it once, in the wording before #318: `the microphone audio capture ended before the recording did (GetNextPacketSize failed: 0x88890004); …`. The row now asks for #318's `went away (…)` line |
+| 11.5: microphone replugged after ~10 s: `came back` line, voice resumes in sync (paste) | Not run | #318 landed after block H; it has not run on hardware |
+| 11.5: desktop's output device off and on: desktop track follows it back (paste) | Not run | #318, as above |
 
 ### 11.6 The capture worker (#241)
 
@@ -1899,17 +2045,17 @@ Manager's **Details** tab open with the **Command line** column added
 (right-click a column header → Select columns), sorted by name, so the daemon
 and the worker can be told apart: they have the same image name.
 
-- [ ] **No League, no worker.** With the daemon running and no League client,
+- [x] **No League, no worker.** With the daemon running and no League client,
       there is exactly one `ninja-recorder-dev.exe` with `--daemon` and none
       with `--capture-worker`. Note the daemon's memory (Details, "Memory
       (active private working set)") with `scripts/measure.ps1` if the figure
       is wanted: it is the idle figure, and no worker adds to it.
-- [ ] **It appears when the client opens.** Open the League client: within a
+- [x] **It appears when the client opens.** Open the League client: within a
       few seconds a `--capture-worker` process appears. `daemon-devtools.log`
       has `own backend: capture worker up, pid <n>`, and `worker-devtools.log`
       starts with `capture worker, pid <n>` and then the `own backend warm`
       line. Paste both.
-- [ ] **It is gone when the client closes.** Close the League client with no
+- [x] **It is gone when the client closes.** Close the League client with no
       game running: the worker process disappears, and `daemon-devtools.log`
       has `own backend: capture worker pid <n> exited cleanly (code 0)`.
 - [ ] **The client going away mid-game waits for the recording.** Start a
@@ -1920,7 +2066,7 @@ and the worker can be told apart: they have the same image name.
       finalized: the recording plays, and the worker's `exited cleanly` line in
       `daemon-devtools.log` comes after the recording's finish line. Paste the
       lines from the kill to the exit.
-- [ ] **Killing the worker mid-game.** Start a Practice Tool game, play for a
+- [x] **Killing the worker mid-game.** Start a Practice Tool game, play for a
       minute, then end the `--capture-worker` process from Task Manager (End
       task on it, not on the daemon). The daemon stays up: the tray icon is
       still there and the UI stays connected. End the game. The recording
@@ -1928,24 +2074,30 @@ and the worker can be told apart: they have the same image name.
       killed, and scrubs. `daemon-devtools.log` has a line naming the worker's
       pid and its exit code, and `own backend: the capture worker died
       mid-recording; keeping what reached the disk`. Paste both.
-- [ ] **The next game gets a fresh worker.** After that, start another game
+- [x] **The next game gets a fresh worker.** After that, start another game
       without restarting anything: a new `--capture-worker` process (a new
       pid) appears and the game records normally.
-- [ ] **Killing the daemon leaves no worker.** With the client open (so a
+- [x] **Killing the daemon leaves no worker.** With the client open (so a
       worker is running), end the `--daemon` process from Task Manager: the
       `--capture-worker` process disappears with it, within a second or two.
       Then do it mid-game: the same, and after restarting the app the
       recording is recovered at startup (it appears in the library and plays).
 
+**2026-09-25: block J, all eight of its rows pass** (#241's comment), on the
+same devtools build as §11.1, and the worker-kill row again on `3a9f092` after
+#300 (#300's comment). The client-closing-mid-game row ran as a different case
+and stays open. A clean daemon stop killed the worker instead of releasing it
+(#293); #317 releases it and has not run on hardware.
+
 | What | Result | Notes |
 |---|---|---|
-| 11.6: no League, no worker process | | |
-| 11.6: the worker appears when the client opens (paste both lines) | | |
-| 11.6: the worker exits when the client closes | | |
-| 11.6: a client closing mid-game: the worker exits after the finalize | | |
-| 11.6: worker killed mid-game: daemon alive, recording kept, plays and scrubs (paste the lines) | | |
-| 11.6: the next game spawns a fresh worker | | |
-| 11.6: daemon killed: no orphan worker, idle and mid-game | | |
+| 11.6: no League, no worker process | Pass | J1: 0 `--capture-worker` processes with the client closed |
+| 11.6: the worker appears when the client opens (paste both lines) | Pass | J2: pid 41752, 9.8 MB and 28 threads warm and idle. The lines were not pasted |
+| 11.6: the worker exits when the client closes | Pass | J3: `capture worker exiting (Released)`, then `capture worker pid 2984 exited cleanly (code 0)`, after a whole client session of games |
+| 11.6: a client closing mid-game: the worker exits after the finalize | Not run as written | J4 closed the client right *after* a game: the 23 s recording was saved and plays. The row's case, the client's processes ended with the game still running, has not run |
+| 11.6: worker killed mid-game: daemon alive, recording kept, plays and scrubs (paste the lines) | Pass on `3a9f092` | J5/J6 on `a4207cd`: the daemon stayed up and the file played and scrubbed to the kill (`repaired first (89 whole fragments kept, 0 torn bytes cut), then ok in 541 ms`), but the death was noticed only at game end (#299). After #300: `capture worker pid 18348 closed its pipe mid-recording …`, finished at once, card 0:26, a new worker 0.7 s later and a second recording 1.1 s after the death |
+| 11.6: the next game spawns a fresh worker | Pass | J7: new pid 32704 after the killed 23632; 68.9 MB while recording |
+| 11.6: daemon killed: no orphan worker, idle and mid-game | Pass | J8: no orphan either time; mid-game, `remuxed recovered … 4 audio track(s) in 475 ms`, card 0:14 |
 
 ### 11.7 Every stem in one file, encoded directly (#239)
 
@@ -1968,17 +2120,17 @@ stream=index,codec_name,sample_rate,channels:stream_disposition=default
 **Game + mic + Discord**, in a voice channel with someone talking, a Practice
 Tool game of five minutes or more:
 
-- [ ] **Four audio tracks, in §2.5's order.** `ffprobe` shows one H.264
+- [x] **Four audio tracks, in §2.5's order.** `ffprobe` shows one H.264
       stream and four AAC streams, 48000 Hz stereo, and only the first AAC
       stream (`a:0`) has `default=1`. `audio_tracks_json` (dev portal →
       Library) is `Everything`, `Game`, `Mic`, `Discord`, in that order.
-- [ ] **Each stem is isolated.** Extract each with `ffmpeg -i <file> -map 0:a:N
+- [x] **Each stem is isolated.** Extract each with `ffmpeg -i <file> -map 0:a:N
       -c copy aN.m4a` and listen: `a:1` has the game and nothing else, `a:2`
       your voice and nothing else, `a:3` Discord and nothing else, and `a:0`
       all three together. The review player's track switcher plays the same.
-- [ ] **In sync with each other.** Speak as you click an ability: your voice in
+- [x] **In sync with each other.** Speak as you click an ability: your voice in
       `a:0` and in `a:2` lands at the same moment against the video.
-- [ ] **The stop lines.** `worker-devtools.log` has one `audio track N (…)`
+- [x] **The stop lines.** `worker-devtools.log` has one `audio track N (…)`
       line per track, and `own backend: file closed: <n> video frames (<k>
       keyframes, 0 dropped before the first), AAC frames per track [...], <f>
       fragments`, with the four AAC counts equal and `<f>` about one per two
@@ -1987,22 +2139,22 @@ Tool game of five minutes or more:
 
 **Desktop**:
 
-- [ ] **Two tracks.** `ffprobe` shows two AAC streams, `a:0` default;
+- [x] **Two tracks.** `ffprobe` shows two AAC streams, `a:0` default;
       `audio_tracks_json` is `System audio`, `Game`. `worker-devtools.log` now
       has a `game audio from PID` line as well as the desktop's.
-- [ ] **The game is in `a:0` once and alone in `a:1`.** Play something in a
+- [x] **The game is in `a:0` once and alone in `a:1`.** Play something in a
       browser for part of it: `a:0` has the game and the browser, not doubled,
       and `a:1` has the game only.
 
 **A kill at minute five**, on Game + mic + Discord:
 
-- [ ] **Repaired, with every stem.** Five minutes into a game, end the
+- [x] **Repaired, with every stem.** Five minutes into a game, end the
       `--capture-worker` process (§11.6's step). `daemon-devtools.log` has
       `own: remux <file>: repaired first (<n> whole fragments kept, <b> torn
       bytes cut), then ok in <ms> ms`. The recording plays and scrubs to about
       minute five, and `ffprobe` still shows four AAC streams with `a:0`
       default.
-- [ ] **The same through startup recovery.** Repeat, but end the `--daemon`
+- [x] **The same through startup recovery.** Repeat, but end the `--daemon`
       process instead (the worker goes with it), then restart the app.
       `daemon-devtools.log` has `repaired recovered <file>: …` and then the
       remux line; the recording is in the library with every stem.
@@ -2045,39 +2197,44 @@ restart the app when you are done.
 
 **The hardware encoder**:
 
-- [ ] **An NVENC session exists while recording.** During a game, run
+- [x] **An NVENC session exists while recording.** During a game, run
       `nvidia-smi encodersessions` (or `nvidia-smi -q -d ENCODER_STATS`):
       one H.264 session, whose PID is the `--capture-worker` process's. Stop
       the game: it goes. Paste the output from during the game.
-- [ ] **Colour matches libobs.** Record the same Practice Tool scene with the
+- [x] **Colour matches libobs.** Record the same Practice Tool scene with the
       libobs backend and with own, and compare a frame from each side by side
       (the review player, or `ffmpeg -ss 60 -i <file> -frames:v 1 frame.png`).
       Own's is neither washed out (greys lifted, blacks grey) nor crushed
       (shadows black, highlights clipped) against libobs's. `ffprobe
       -show_streams` on the own file reports `color_range=tv` and
       `color_space=bt709`; paste that and libobs's for comparison.
-- [ ] **The asynchronous path's own test.** On the box, from `src-tauri`:
+- [x] **The asynchronous path's own test.** On the box, from `src-tauri`:
       `cargo test hardware_encoder_writes_every_track -- --ignored
       --nocapture`. It passes, and its `RAN the encoding test (hardware)` line
       names the NVIDIA encoder, `asynchronous, driven by its events, texture
       input`. Paste the line.
 
+**2026-09-25 to 2026-09-26: block L passes L1 to L8** (#239's comments), with
+the Desktop and software rows from block N (#287's). The forced-software row
+stays open for #331's wording, and nobody wrote down whether that recording
+played and scrubbed.
+
 | What | Result | Notes |
 |---|---|---|
-| 11.7: the start line, for each block (paste) | | |
-| 11.7: Game + mic + Discord: four AAC streams in order, `a:0` the only default | | |
-| 11.7: Game + mic + Discord: each stem isolated, `a:0` the mix | | |
-| 11.7: Game + mic + Discord: voice in sync across `a:0` and `a:2` | | |
-| 11.7: the stop lines, equal AAC counts, a fragment per GOP (paste) | | |
-| 11.7: Desktop: two tracks, `a:0` default, the game source opened | | |
-| 11.7: Desktop: game once in `a:0`, alone in `a:1` | | |
-| 11.7: worker killed at minute five: repaired, plays, every stem (paste) | | |
-| 11.7: daemon killed: repaired at startup, every stem | | |
-| 11.7: `NINJA_OWN_FORCE_SOFTWARE_ENCODER=1`: a marked fallback in both logs and `diagnostics_json`, synchronous, no NVENC session (paste) | | |
-| 11.7: `NINJA_OWN_FORCE_SOFTWARE_ENCODER=1`: plays and scrubs | | |
-| 11.7: an NVENC session in `nvidia-smi` while recording (paste) | | |
-| 11.7: colour against libobs: not washed out, not crushed; `tv`/`bt709` (paste) | | |
-| 11.7: `hardware_encoder_writes_every_track` on the box (paste) | | |
+| 11.7: the start line, for each block (paste) | Pass | L1: `H.264 8 Mbps CBR, GOP 120, no B-frames, asynchronous, driven by its events, texture input, NV12 textures from the video processor; the encoder refused: no B-frames (The parameter is incorrect. (0x80070057))` |
+| 11.7: Game + mic + Discord: four AAC streams in order, `a:0` the only default | Pass | G6, H3, N5: `Everything [0,1,2]`, `Game [0]`, `Mic [1]`, `Discord [2]` |
+| 11.7: Game + mic + Discord: each stem isolated, `a:0` the mix | Pass | H8, N5, by ear |
+| 11.7: Game + mic + Discord: voice in sync across `a:0` and `a:2` | Pass | L3, by ear |
+| 11.7: the stop lines, equal AAC counts, a fragment per GOP (paste) | Pass | L4: AAC frames `[13886, 13886, 13886, 13886]`; 149 fragments in 296 s |
+| 11.7: Desktop: two tracks, `a:0` default, the game source opened | Pass | N6: H.264 and 2 AAC |
+| 11.7: Desktop: game once in `a:0`, alone in `a:1` | Pass | H6, N6 |
+| 11.7: worker killed at minute five: repaired, plays, every stem (paste) | Pass, killed at 2:58 | L5: `own: remux …: repaired first (89 whole fragments kept, 0 torn bytes cut), then ok in 541 ms`; plays to the kill with all 4 stems |
+| 11.7: daemon killed: repaired at startup, every stem | Pass | L6: `[db] repaired recovered … 7 whole fragment(s) kept, 0 torn byte(s) cut, mfra written`, then `remuxed recovered (ftyp moov (moof mdat) x7 mfra, 4 audio track(s)) in 475 ms` |
+| 11.7: `NINJA_OWN_FORCE_SOFTWARE_ENCODER=1`: a marked fallback in both logs and `diagnostics_json`, synchronous, no NVENC session (paste) | Re-run | N12 on `40cd157`: marked everywhere, no NVENC session, but the line was logged twice and the Settings notice blamed "no usable hardware encoder" (#296). #331 fixes both; not yet run |
+| 11.7: `NINJA_OWN_FORCE_SOFTWARE_ENCODER=1`: plays and scrubs | Not recorded | N12's note does not say |
+| 11.7: an NVENC session in `nvidia-smi` while recording (paste) | Pass | L2, N11: H.264 2560x1440 at 60 fps on the `--capture-worker` pid |
+| 11.7: colour against libobs: not washed out, not crushed; `tv`/`bt709` (paste) | Pass | L7 redone on the same scene: both `yuv420p(tv, bt709)`; ground, HUD, portrait and minimap match |
+| 11.7: `hardware_encoder_writes_every_track` on the box (paste) | Pass | L8: `RAN the encoding test (hardware): 300 ticks via NVIDIA H.264 Encoder MFT (hardware: true), asynchronous, driven by its events, texture input, …; 3 keyframes, 3 fragments, AAC frames [235, 235, 235, 235]`. No ffmpeg on PATH, so its decode step skipped |
 
 ### 11.8 The exit run (#243)
 
@@ -2116,13 +2273,13 @@ the dev portal from a devtools build pointed at the same library, or with
 **A full game.** One full-length game on the **Game** preset, not Practice
 Tool:
 
-- [ ] **It plays, seeks, and the markers land.** The recording is in the
+- [x] **It plays, seeks, and the markers land.** The recording is in the
       library, plays to the end, seeks anywhere without a stall, and clicking
       each kind of marker lands on the event it names.
-- [ ] **The diagnostics name the backend and the encoder.**
+- [x] **The diagnostics name the backend and the encoder.**
       `diagnostics_json.backend` reads `own (ready: <encoder> [VEN_…])`, naming
       the hardware encoder. Paste it.
-- [ ] **A/V end offset under one frame.** Over the whole game, the video and
+- [x] **A/V end offset under one frame.** Over the whole game, the video and
       audio streams end within one frame (16.7 ms at 60 fps) of each other:
       `ffprobe -v error -show_entries stream=index,codec_type,start_time,duration
       <file>`, and the difference between the H.264 stream's end
@@ -2130,19 +2287,19 @@ Tool:
 
 **Isolated audio:**
 
-- [ ] **Game only on the Game preset.** In a Discord call with someone talking
+- [x] **Game only on the Game preset.** In a Discord call with someone talking
       through the game, Discord is audible on the headset and **absent** from
       the file.
-- [ ] **Game + mic + Discord: four tracks, each isolated.** `ffprobe` shows one
+- [x] **Game + mic + Discord: four tracks, each isolated.** `ffprobe` shows one
       H.264 stream and four AAC streams, `a:0` the only `default=1`; `a:1` the
       game alone, `a:2` your voice alone, `a:3` Discord alone, `a:0` all three
       (§11.7's extraction commands).
-- [ ] **Desktop: two tracks, the game not doubled.** `a:0` the desktop with
+- [x] **Desktop: two tracks, the game not doubled.** `a:0` the desktop with
       the game in it once, `a:1` the game alone.
 
 **Kill and recover:**
 
-- [ ] **Killed at minute five.** On Game + mic + Discord, end the
+- [x] **Killed at minute five.** On Game + mic + Discord, end the
       `--capture-worker` process five minutes into a game. The recording is
       recovered (`own: remux <file>: repaired first …`), plays, scrubs to about
       minute five, and has every stem. Then the same with the `--daemon`
@@ -2150,34 +2307,34 @@ Tool:
 
 **Resilience and window modes:**
 
-- [ ] **§4 on own.** Alt-tab, a resolution change mid-recording, a mid-game
+- [x] **§4 on own.** Alt-tab, a resolution change mid-recording, a mid-game
       client reconnect, and the microphone unplugged mid-game: each recording
       continues or recovers and plays.
-- [ ] **Each window mode.** Borderless, windowed (with a border dragged) and
+- [x] **Each window mode.** Borderless, windowed (with a border dragged) and
       exclusive fullscreen, one game each: §11.4's rows, and what WGC gets in
       fullscreen.
-- [ ] **No yellow border** around the game window at any point, in any mode.
+- [x] **No yellow border** around the game window at any point, in any mode.
 
 **The encoder:**
 
-- [ ] **The hardware encoder is used.** `worker.log`'s warm line names the
+- [x] **The hardware encoder is used.** `worker.log`'s warm line names the
       hardware MFT, `nvidia-smi encodersessions` during the game shows one
       H.264 session owned by the `--capture-worker` pid, and nothing says
       `software`.
-- [ ] **The software fallback, once, and surfaced.** Forced on this machine
+- [x] **The software fallback, once, and surfaced.** Forced on this machine
       with the devtools override, exactly as §11.7's "The software fallback,
       forced" block does it: a **devtools** daemon started with
       `NINJA_OWN_FORCE_SOFTWARE_ENCODER=1`, from the devtools installer of
       the same commit (the override is devtools-only, and a release build
       never reads it). Record one Practice Tool game on Own and check all
       three places:
-  - [ ] **the log**: `daemon-devtools.log` has `own backend: software H.264
+  - [x] **the log**: `daemon-devtools.log` has `own backend: software H.264
         encoding with <encoder>: forced by NINJA_OWN_FORCE_SOFTWARE_ENCODER
         (devtools)` at the start, and the start summary line says
         `software fallback: forced by …`;
-  - [ ] **the diagnostics**: `diagnostics_json.backend` reads
+  - [x] **the diagnostics**: `diagnostics_json.backend` reads
         `own (software encoding: <encoder>, because forced by …)`;
-  - [ ] **the UI**: Settings → Advanced shows the notice that recording is
+  - [x] **the UI**: Settings → Advanced shows the notice that recording is
         encoding in software and uses more CPU, both while the client is open
         and after it has closed. The notice is in the flip's PR, not the
         commit before it, so this box is checked on **the flip's**
@@ -2187,7 +2344,7 @@ Tool:
 [measurement.md](measurement.md) §1 for memory and §4 for CPU. Every cell stays
 empty until a run fills it:
 
-- [ ] **Idle and recording RAM**, with
+- [x] **Idle and recording RAM**, with
       [`scripts/measure.ps1`](../scripts/measure.ps1): the daemon
       (`-ArgumentFilter '--daemon'`) idle with no client, and while recording
       the daemon plus the capture worker (`-ArgumentFilter
@@ -2202,16 +2359,16 @@ empty until a run fills it:
       backends in one sitting, **three or more runs each**, every row
       recorded (§4.5). **The software path is a third arm**, `own (software)`,
       on the forced devtools daemon above, alternated with the other two.
-- [ ] **The capture worker exists only while League does.** No
+- [x] **The capture worker exists only while League does.** No
       `--capture-worker` with no client; one within seconds of the client
       opening; none within seconds of it closing (§11.6's first three rows).
 
 **The switch and the flip**, on the **flip's** CI-built installer:
 
-- [ ] **Switching own ↔ libobs in the lobby.** With the client open, switch in
+- [x] **Switching own ↔ libobs in the lobby.** With the client open, switch in
       Settings → Advanced: the next game records on the chosen backend, both
       ways, with one worker process of the right kind (§9's switch row).
-- [ ] **A fresh install records on own.** On a machine with no
+- [x] **A fresh install records on own.** On a machine with no
       `%APPDATA%\com.ninjarecorder.app` folder (or with its `capture_backend`
       row deleted), install and record a game: the row shows
       Own selected and "Automatic: Own, the default.", `daemon.log` has
@@ -2226,10 +2383,16 @@ empty until a run fills it:
       "Automatic: libobs, because …".
 - [ ] **Below 19041, `own` saved: refused.** The same box with `own` saved:
       §9's row. No recording, and the warning.
-- [ ] **A stored `libobs` row stays on libobs.** On the pre-flip build, save
+- [x] **A stored `libobs` row stays on libobs.** On the pre-flip build, save
       libobs with the `sqlite3` line above (`'libobs'` for `'own'`), then
       install the flip's build over it: Settings shows libobs, the log line
       says `(capture_backend = libobs)`, and the next game records on libobs.
+
+**2026-10-03: the boxes above are ticked from the table below**, which was
+filled in on 2026-09-26. Left open: idle CPU (not taken), recording CPU
+(taken in blocks, not alternated as the row asks), and the Windows 10 and
+below-19041 rows (no such box). The forced-software ticks are N12's, before
+#331 changed the notice's wording (§11.7).
 
 | What | Result | Notes |
 |---|---|---|
@@ -2257,9 +2420,9 @@ empty until a run fills it:
 | 11.8: switching own ↔ libobs in the lobby, both ways (the flip's installer) | Pass | Consecutive games recorded on libobs then own; a stored libobs survives a reinstall |
 | 11.8: fresh install records on own (the flip's installer) | Pass | `(capture_backend = unset)`; Settings "Automatic: Own, the default."; recorded on own |
 | 11.8: Windows 10 2004+, nothing saved: records on own (the flip's installer) | Skipped | No Windows 10 box |
-| 11.8: below 19041, nothing saved: records on libobs, the row says why (the flip's installer) | | |
-| 11.8: below 19041, `own` saved: refused with the warning (the flip's installer) | | |
-| 11.8: a stored `libobs` row stays on libobs (the flip's installer) | | |
+| 11.8: below 19041, nothing saved: records on libobs, the row says why (the flip's installer) | Skipped | No box below 19041 |
+| 11.8: below 19041, `own` saved: refused with the warning (the flip's installer) | Skipped | No box below 19041 |
+| 11.8: a stored `libobs` row stays on libobs (the flip's installer) | Pass | N18: survives a reinstall, and the next game records on libobs |
 
 ### 11.9 Capture failures shown in the app (#10)
 
@@ -2301,14 +2464,19 @@ a devtools one. Own backend, Practice Tool, the window open.
       Game preset. Either game audio works (§11.3) or the notice names the
       refused process-loopback activation. Paste whichever it is into #237.
 
+**2026-09-25: block M, all five pass, against the wording of the time** (#287's
+comment; release installer `a4207cd` with Own, M5 on devtools). The rows were
+rewritten afterwards for #331's plainer notices and #318's spans, and that
+wording has not run on hardware, so the boxes stay open.
+
 | What | Result | Notes |
 |---|---|---|
-| 11.9: Discord closed: no notice anywhere | | |
-| 11.9: microphone permission off: toast, strip, row, review (paste the toast) | | |
-| 11.9: microphone unplugged part-way: the row's line | | |
-| 11.9: worker killed: "Recording ended early" with the exit code | | |
-| 11.9: the same in a devtools build | | |
-| 11.9: Windows 10, Game preset: game audio, or the notice (paste) | | |
+| 11.9: Discord closed: no notice anywhere | Pass, but re-run the log half | M1 (release `a4207cd`): no notice in the toast, strip, card or `daemon.log`. The start line then said `Discord.exe=failed`; the row asks for #331's `left out` |
+| 11.9: microphone permission off: toast, strip, row, review (paste the toast) | Re-run | M2 showed all three, in the wording before #331: "…saved without microphone audio (IAudioClient::Initialize (the microphone) failed: Access is denied. (0x80070005)). If this keeps happening, please report it…". The row asks for "Windows is blocking microphone access" and no report |
+| 11.9: microphone unplugged part-way: the row's line | Re-run | M3: "saved without part of the microphone audio (GetNextPacketSize failed: 0x88890004)". The row asks for #331's "(the microphone was disconnected)" and #318's span |
+| 11.9: worker killed: "Recording ended early" with the exit code | Re-run | M4: shown only at game end (#299, since fixed by #300), and repeating the exit code. The row asks for "stopped unexpectedly at <time>" (#331) |
+| 11.9: the same in a devtools build | Pass, M2 only | M5: the same text as M2, word for word |
+| 11.9: Windows 10, Game preset: game audio, or the notice (paste) | Skipped | No Windows 10 box |
 
 ## Outcome
 
